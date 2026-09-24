@@ -172,6 +172,7 @@ import {
 } from './pageTranslation';
 import {normalizeWritingPreferences, type WritingPreferences} from './writing';
 import {DEFAULT_HARNESS_PREFERENCES, normalizeHarnessPreferences, type HarnessPreferences} from './harness';
+import {DEFAULT_COMMENT_PREFERENCES, normalizeCommentPreferences, type CommentPreferences} from './comment';
 import {
     DEFAULT_VIDEO_SUBTITLE_APPEARANCE,
     normalizeVideoSubtitleAppearance,
@@ -542,6 +543,7 @@ export class Config {
     translationCenterLayout: 'list' | 'grid'; // 翻译中心结果列表或并排布局
     writing: WritingPreferences; // 写作助手偏好
     harness: HarnessPreferences; // Harness 学习辅助偏好
+    comment: CommentPreferences; // 划词评论助手偏好
 
     constructor() {
         this.on = true;
@@ -748,6 +750,7 @@ export class Config {
         this.translationCenterLayout = 'list';
         this.writing = normalizeWritingPreferences(undefined);
         this.harness = normalizeHarnessPreferences(DEFAULT_HARNESS_PREFERENCES);
+        this.comment = normalizeCommentPreferences(DEFAULT_COMMENT_PREFERENCES);
     }
 }
 
@@ -1228,6 +1231,7 @@ export function normalizeConfig(value: unknown): Config {
     );
     normalized.writing = normalizeWritingPreferences(source.writing, normalized.customOpenAIProviders);
     normalized.harness = normalizeHarnessPreferences(source.harness, normalized.customOpenAIProviders);
+    normalized.comment = normalizeCommentPreferences(source.comment, normalized.customOpenAIProviders);
 
     if (!isSupportedTranslationService(normalized.service, normalized.customOpenAIProviders)) {
         normalized.service = defaultOption.service;

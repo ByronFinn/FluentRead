@@ -48,6 +48,7 @@ import {localTtsOffscreenAdapter} from '@/src/features/local-tts/background/offs
 import {createSelectionTtsSynthesizer} from '@/src/features/selection-translation/background/selectionTtsSynthesis';
 import {installWritingBackgroundRuntime} from './writingRuntime';
 import {installHarnessBackgroundRuntime} from './harnessRuntime';
+import {installCommentBackgroundRuntime} from './commentRuntime';
 import {createImageGlossaryContext} from './imageGlossaryContext';
 import {createEmbeddedFrameBackgroundHandlers, type EmbeddedFrameBackgroundContext} from '@/src/features/full-page-translation/background/embeddedFrameHandlers';
 import {buildGlossaryRevision} from '@/src/core/glossary';
@@ -84,6 +85,7 @@ export function installBackgroundMessageRuntime(options: BackgroundMessageRuntim
         ...createPersonalCorrectionRuntimeHandlers<BackgroundRuntimeContext>(),
         createTranslationCancelHandler(translationRequestRegistry),
         installHarnessBackgroundRuntime(cancelWriting),
+        installCommentBackgroundRuntime(),
         ...createQqMailFrameBackgroundHandlers({sendTabMessage: (tabId, message, options) => browser.tabs.sendMessage(tabId, message, options)}),
         ...createEmbeddedFrameBackgroundHandlers({sendTabMessage: (tabId, message, options) => browser.tabs.sendMessage(tabId, message, options)}),
         ...createNeteaseMailFrameBackgroundHandlers({sendTabMessage: (tabId, message, options) => browser.tabs.sendMessage(tabId, message, options)}),

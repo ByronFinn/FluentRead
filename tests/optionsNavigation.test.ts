@@ -31,6 +31,7 @@ describe('options navigation view-model', () => {
         label: '专项翻译',
         items: [
           'settings-selection',
+          'settings-comment',
           'settings-image-translation',
           'settings-video',
         ],
@@ -50,6 +51,7 @@ describe('options navigation view-model', () => {
       '翻译设置',
       '界面风格',
       '划词翻译',
+      '评论助手',
       '图片/漫画翻译',
       '视频字幕翻译',
       '写作助手',

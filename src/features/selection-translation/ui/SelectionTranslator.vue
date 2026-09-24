@@ -10,7 +10,7 @@
       <span class="fr-selection-indicator-glyph" aria-hidden="true">译</span>
     </button>
 
-    <section v-if="showTooltip" ref="tooltip-ref" class="fr-translation-tooltip" :class="{ 'fr-dark-theme': isDarkTheme, 'fr-reading-tooltip': readingMode, 'fr-popup-manipulating': popupManipulating }" :data-placement="popupPlacement" :style="[tooltipScaleStyle, tooltipStyle]" role="dialog" aria-label="划词翻译结果" data-presentation="card" @pointerdown.stop="beginPopupGesture" @pointermove="movePopupGesture" @pointerup="stopPopupGesture" @pointercancel="stopPopupGesture" @lostpointercapture="stopPopupGesture">
+    <section v-if="showTooltip" ref="tooltip-ref" class="fr-translation-tooltip" :class="{ 'fr-dark-theme': isDarkTheme, 'fr-reading-tooltip': readingMode || commentMode, 'fr-popup-manipulating': popupManipulating }" :data-placement="popupPlacement" :style="[tooltipScaleStyle, tooltipStyle]" role="dialog" :aria-label="commentMode ? '评论结果' : readingMode ? '阅读理解' : '划词翻译结果'" data-presentation="card" @pointerdown.stop="beginPopupGesture" @pointermove="movePopupGesture" @pointerup="stopPopupGesture" @pointercancel="stopPopupGesture" @lostpointercapture="stopPopupGesture">
       <div class="fr-study-navigation">
         <img class="fr-tooltip-brand-icon" :src="selectionTranslatorIconUrl" alt="" aria-hidden="true" draggable="false" />
         <div class="fr-study-toolbar" role="group" aria-label="划词卡片内容" :title="isWordSelection ? '词典释义 · 按词性分类' : '先看译文，按需深入'" @focusin="handleStudyToolbarFocus">
@@ -21,12 +21,13 @@
           </template>
           <button v-else-if="canEnableFreeReading || freeReadingPending" type="button" :disabled="freeReadingPending" title="B站免费基础读懂/用法，无需 API Key；完整语法、练习和追问可切换 AI 服务" @click="enableFreeReading">{{ freeReadingPending ? '正在启用…' : '免费 AI 讲解' }}</button>
           <button v-else type="button" @click="openSelectionSettings">配置 AI 讲解</button>
+          <button v-if="commentEnabled" type="button" :aria-pressed="commentMode" title="按当前配置生成可粘贴的评论" @click="openComment()">评论</button>
         </div>
         <div ref="reading-tools-target" v-show="readingMode && !readingHistoryOnly" class="fr-study-reading-tools" />
         <div class="fr-tooltip-actions">
           <button v-if="!readingMode && shareCardAvailable && translationResult && !isLoading" class="fr-action-btn fr-share-card-entry" type="button" :title="t('shareCard.create')" :aria-label="t('shareCard.create')" @click="openShareCard({original: selectedText, translation: translationResult})"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3h7v7M21 3l-9 9M10 5H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5" /></svg></button>
           <button
-            v-if="!readingMode && config.vocabularyBookEnabled && selectedText && !isPrivateContext"
+            v-if="!cardMode && config.vocabularyBookEnabled && selectedText && !isPrivateContext"
             class="fr-action-btn fr-vocabulary-btn"
             :class="{ 'fr-saved': isVocabularySaved }"
             type="button"
@@ -42,7 +43,7 @@
       <div v-if="readingSelection" v-show="readingMode" class="fr-tooltip-content fr-reading-content">
         <ReadingPanel ref="reading-panel-ref" :external-navigation="true" :tools-target="readingToolsTarget" @view-change="syncReadingView" :selection="readingSelection" :locate-evidence="locateReadingEvidence" :clear-evidence="clearReadingEvidence" :source-revision="readingSourceRevision" :check-evidence="checkReadingEvidence" :source-translation="{source: selectedText, text: translationResult, pending: isLoading, error}" :preferences="readingPreferences" :service="readingService" :active="readingMode" :initial-action="readingInitialAction" :history-only="readingHistoryOnly" :source-language="effectiveSourceLanguage" :target-language="effectiveTargetLanguage" :playing-source-text="isPlaying && currentAudioKind === 'source' ? currentAudioText : ''" :model-revision="readingModelRevision" :vocabulary-enabled="config.vocabularyBookEnabled" :private-context="isPrivateContext" :animations="config.animations" @play-source="toggleAudio($event, 'source')" @source-change="stopAudio()" @resize="schedulePositionUpdate" />
       </div>
-      <div v-show="!readingMode" class="fr-tooltip-content" aria-live="polite">
+      <div v-show="!readingMode && !commentMode" class="fr-tooltip-content" aria-live="polite">
         <div v-if="isLoading && !translationResult && !wordCard && !wordCardError && !isWordSelection" class="fr-loading-state"><span :class="['fr-loading-spinner', { 'fr-static': !config.animations }]" aria-hidden="true" /><span>正在查询…</span></div>
         <div v-else-if="error && !translationResult && !wordCard" class="fr-error-state"><span>{{ error }}</span><span class="fr-error-actions"><button type="button" @click="retryTranslation">重试</button><button v-if="isAuthenticationErrorCurrent(authenticationError)" type="button" :disabled="!!openingAuthenticationSettings" @click="openAuthenticationSettings">{{ translateLegacy('配置服务') }}</button></span></div>
         <div v-else class="fr-translation-container">
@@ -152,19 +153,9 @@
           <div v-if="error && (translationResult || wordCard)" class="fr-inline-error"><span>{{ error }}</span><span class="fr-error-actions"><button type="button" @click="retryTranslation">重试</button><button v-if="isAuthenticationErrorCurrent(authenticationError)" type="button" :disabled="!!openingAuthenticationSettings" @click="openAuthenticationSettings">{{ translateLegacy('配置服务') }}</button></span></div>
         </div>
       </div>
-      <div class="fr-playing-status" :class="{'is-idle': !isPlaying && !isPreparingAudio}" :aria-hidden="!isPlaying && !isPreparingAudio" :aria-busy="isPreparingAudio" role="status">
-        <template v-if="isPlaying || isPreparingAudio">
-          <span class="fr-playing-label"><template v-if="isPreparingAudio">正在生成语音…</template><template v-else>正在播放{{ currentAudioKind === 'source' ? '原文' : currentAudioKind === 'word' ? '单词' : '译文' }}</template></span>
-          <div class="fr-playback-controls">
-            <span v-if="audioPosition && !isPreparingAudio" class="fr-playback-time" aria-hidden="true">{{ playbackTime(audioPosition.currentTime) }} / {{ playbackTime(audioPosition.duration) }}</span>
-            <template v-if="isPlaying && !isPreparingAudio">
-              <button v-for="control in seekControls" :key="control.offset" class="fr-seek-btn" type="button" :aria-label="control.label" :title="audioPosition ? control.label : '当前语音不支持按秒跳转'" :disabled="!audioPosition || (control.offset < 0 ? audioPosition.currentTime <= 0 : audioPosition.currentTime >= audioPosition.duration)" @click="seekAudio(control.offset)"><svg viewBox="0 0 24 24" aria-hidden="true"><path :d="control.offset < 0 ? 'M4 9a8 8 0 1 1 0 7M4 4v5h5' : 'M20 9a8 8 0 1 0 0 7M20 4v5h-5'" /><text x="12" y="16">5</text></svg></button>
-            </template>
-            <button type="button" :aria-label="isPreparingAudio ? '停止生成语音' : '停止播放'" :title="isPreparingAudio ? '停止生成语音' : '停止播放'" @click="stopAudioFromUi">停止</button>
-          </div>
-        </template>
-      </div>
-      <div v-for="edge in popupResizeEdges" :key="edge" class="fr-popup-resize-handle" :class="`fr-popup-resize-${edge}`" :data-resize-edge="edge" aria-hidden="true" />
+      <template v-if="!cardMode">
+        <div v-for="edge in popupResizeEdges" :key="edge" class="fr-popup-resize-handle" :class="`fr-popup-resize-${edge}`" :data-resize-edge="edge" aria-hidden="true" />
+      </template>
     </section>
 
     <div v-if="noticeMessage" class="fr-action-toast" :class="{ 'fr-dark-theme': isDarkTheme }" role="status"><span>{{ noticeMessage }}</span><button v-if="noticeAction === 'open-vocabulary'" type="button" @click="openVocabularyBook">查看</button><button v-else-if="noticeAction === 'open-local-tts'" type="button" @click="openLocalTtsSettings">设置</button></div>
@@ -200,6 +191,9 @@ import {ReadingPanel} from '@/src/features/reading-assistant/ui/panel/public';
 import {captureReadingSelection, createReadingEvidenceAnchor, type ReadingEvidenceAnchor, type ReadingSelection} from '@/src/features/reading-assistant/public';
 import {HARNESS_ACTIONS, getHarnessModelCacheKey, isReadingActionSupported, isReadingService, normalizeHarnessPreferences, type HarnessActionId} from '@/src/core/config/harness';
 import {services} from '@/src/core/config/catalog';
+import {CommentPanel, captureCommentImages, browserSelectionImageDeps} from '@/src/features/comment-assistant/public';
+import {normalizeCommentPreferences} from '@/src/core/config/comment';
+import {browserCapabilities} from '@/src/platform/browser/capabilities';
 import {useUiI18n} from '@/src/ui/i18n';
 
 const props = defineProps<{
@@ -405,6 +399,18 @@ const readingActions = computed(() => HARNESS_ACTIONS.filter(action => readingPr
 // 仅临时选择当前服务可用的动作；切换服务不会改写用户保存的动作和默认值。
 const readingDefaultAction = computed(() => readingActions.value.find(action => action.id === readingPreferences.value.defaultAction)?.id
   || readingActions.value.find(action => action.id === 'meaning')?.id || readingActions.value[0]?.id || 'meaning');
+const commentModelRevision = ref(0);
+watch(() => {
+  selectionConfigVersion.value;
+  return JSON.stringify(config.comment);
+}, () => { commentModelRevision.value += 1; });
+const cardMode = computed(() => readingMode.value || commentMode.value);
+const commentPreferences = computed(() => {
+  selectionConfigVersion.value;
+  return normalizeCommentPreferences(config.comment, config.customOpenAIProviders);
+});
+// 评论依赖扩展 runtime port，userscript 没有该通道，因此不显示入口。
+const commentEnabled = computed(() => commentPreferences.value.enabled && browserCapabilities.browser !== 'userscript');
 
 watch(() => snapshot.value?.range ?? null, (range) => {
   props.onSelectionRangeChange?.(range);
@@ -821,7 +827,7 @@ watch([readingMode, showTooltip], () => {
 function beginPopupGesture(event: PointerEvent): void {
   const element = tooltipRef.value;
   const target = event.target;
-  if (!event.isTrusted || !event.isPrimary || event.button !== 0 || !element || !(target instanceof HTMLElement)) return;
+  if (!event.isTrusted || !event.isPrimary || event.button !== 0 || cardMode.value || !element || !(target instanceof HTMLElement)) return;
   if (target.closest('button, summary, a, input, textarea, select, [contenteditable]')) return;
   const edge = target.dataset.resizeEdge ?? '';
   const blank = target.matches('.fr-translation-tooltip, .fr-tooltip-content, .fr-translation-container, .fr-text-block');
@@ -982,6 +988,7 @@ function openTooltip(forced = false): void {
   showIndicator.value = true;
   showTooltip.value = true;
   readingMode.value = false;
+  resetCommentCard();
   if (!wasVisible) tooltipStyle.value = {visibility: 'hidden'};
   if (!wasVisible || error.value || !activeContentRequest.value || (!translationResult.value && !isLoading.value && !isWordCardVisible.value)) void requestSelectionContent(snapshot.value.text);
   schedulePositionUpdate();
@@ -1079,8 +1086,36 @@ function openReadingHistory(): void {
   openReadingCard();
 }
 
+/** 评论卡复用划词选区快照；图片异步降采样，完成前允许先按纯文本生成。 */
+function openComment(): void {
+  if (!snapshot.value || !commentEnabled.value) return;
+  cancelSelectionPresentation();
+  cancelSelectionLoss();
+  translationAbortController?.abort();
+  stopAudio();
+  const text = snapshot.value.text;
+  const range = snapshot.value.range;
+  commentCapture?.abort();
+  const capture = new AbortController();
+  commentCapture = capture;
+  const token = ++commentCaptureToken;
+  const wasVisible = showTooltip.value;
+  readingMode.value = false;
+  commentMode.value = true;
+  commentSelection.value = null;
+  showIndicator.value = true;
+  showTooltip.value = true;
+  if (!wasVisible) tooltipStyle.value = {visibility: 'hidden'};
+  schedulePositionUpdate();
+  void captureCommentImages(range, browserSelectionImageDeps, {}, capture.signal).then(
+    (images) => { if (token === commentCaptureToken) commentSelection.value = {text, images}; },
+    () => { if (token === commentCaptureToken) commentSelection.value = {text, images: []}; },
+  );
+}
+
 function openReadingCard(): void {
   if (!snapshot.value || !readingEnabled.value) return;
+  resetCommentCard();
   if (shouldSkipChineseSelection(snapshot.value.text, effectiveTargetLanguage.value)) { hideAll(); return; }
   cancelSelectionPresentation();
   cancelSelectionLoss();
@@ -1877,6 +1912,7 @@ function hideAll(): void {
   manuallyRequestedSelection.value = false;
   readingMode.value = false;
   readingSelection.value = null;
+  resetCommentCard();
   showIndicator.value = false;
   showTooltip.value = false;
   snapshot.value = null;
@@ -1985,7 +2021,7 @@ function handlePageCopy(event: ClipboardEvent): void {
   if (event.isTrusted && selectionSettings.value.autoDismiss && !isInsideUi(event.target)) hideAll();
 }
 function handleSelectionChange(event: Event): void {
-  if (readingMode.value && isInsideUi(document.activeElement)) return;
+  if (cardMode.value && isInsideUi(document.activeElement)) return;
   if (!event.isTrusted) return;
   if (import.meta.env.BROWSER !== 'userscript' && (contextMenuSelection || contextMenuSourceRejected)) return;
   // 新的拖选/双击可以再次选中同一段；单纯点击保留旧选区的按钮不能解除关闭状态。
@@ -2197,7 +2233,7 @@ onMounted(() => {
     if (themeChanged) updateTheme();
     if (!snapshot.value) return;
     if (languageChanged) manuallyRequestedSelection.value = false;
-    if (languageChanged && readingMode.value) { hideAll(); return; }
+    if (languageChanged && cardMode.value) { hideAll(); return; }
     if ((languageChanged || directionEntryChanged) && !manuallyRequestedSelection.value
       && (shouldSkipChineseSelection(snapshot.value.text, config.to)
       && !(selectionSettings.value.bidirectional && selectionReverseTarget(snapshot.value.text, config.to, config.from))
@@ -2220,7 +2256,7 @@ onMounted(() => {
       return;
     }
     if (languageChanged || translationProviderChanged || directionEntryChanged) {
-      if (showTooltip.value && !readingMode.value) void requestSelectionContent(snapshot.value.text);
+      if (showTooltip.value && !cardMode.value) void requestSelectionContent(snapshot.value.text);
     }
     if (previousSettings && nextSettings[9] !== previousSettings[9] && showTooltip.value && isWordSelection.value) {
       const request = currentContentRequest.value;
@@ -2242,6 +2278,8 @@ onBeforeUnmount(() => {
   clearAudioPopupHeightLock();
   // 悬停延迟可能跨过卸载；卸载后不能再按旧选区打开阅读卡片。
   cancelReadingHover();
+  // 图片捕获的 Promise 不会随组件销毁，卸载时一并中止，避免残留监听与解码。
+  resetCommentCard();
   cancelSelectionLoss();
   cancelSelectionPresentation();
   clearCopyFeedback();
@@ -2309,6 +2347,7 @@ onBeforeUnmount(() => {
 .fr-dark-theme .fr-study-toolbar button { background:transparent; color:#cbc2c9; }
 .fr-dark-theme .fr-study-toolbar button[aria-pressed=true], .fr-dark-theme .fr-study-toolbar button:hover { background:#443541; color:#efbdd2; }
 .fr-tooltip-actions { flex: none; display: flex; align-items: center; gap: 2px; }
+.fr-reading-tooltip > .fr-comment-content { flex: 1; min-height: 0; max-height: none; overflow: hidden; padding: 0; }
 .fr-action-btn, .fr-close-btn, .fr-text-audio-btn, .fr-playing-status button { border: 0; background: transparent; color: #777780; cursor: pointer; }
 .fr-action-btn { display: grid; width: 26px; height: 26px; place-items: center; border-radius: 6px; }
 .fr-action-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }

@@ -147,6 +147,9 @@
     <template #advanced><LocalTtsSettings :config="config" :active="viewActive && props.activeSection === 'settings-selection'" :context="config" /></template>
     </SelectionSettings>
   </section>
+  <section v-if="hasVisitedSection('settings-comment')" v-show="props.activeSection === 'settings-comment'" id="settings-comment" class="settings-section">
+    <CommentSettings :config="config" />
+  </section>
   <section v-if="hasVisitedSection('settings-glossary')" v-show="props.activeSection === 'settings-glossary'" id="settings-glossary" class="settings-section">
     <GlossarySettings />
   </section>
@@ -621,6 +624,7 @@ const WritingSettings = import.meta.env.BROWSER === 'userscript' ? null : define
 // 单文件 userscript 没有扩展模型端口，构建期移除不可用组件与下载 UI。
 const InformationHighlightSettings = import.meta.env.BROWSER === 'userscript' ? null : defineAsyncComponent(() => import('./InformationHighlightSettings.vue'));
 const SelectionSettings = defineAsyncComponent(() => import('./SelectionSettings.vue'));
+const CommentSettings = defineAsyncComponent(() => import('./CommentSettings.vue'));
 const GlossarySettings = defineAsyncComponent(() => import('@/src/features/glossary/public').then(module => module.GlossarySettings));
 const FloatingBallSettings = defineAsyncComponent(() => import('./FloatingBallSettings.vue'));
 const SiteAdaptationSettings = defineAsyncComponent(() => import('./SiteAdaptationSettings.vue'));
