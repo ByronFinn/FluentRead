@@ -1,11 +1,11 @@
 /**
  * @file src/core/config/writingReadiness.ts
  * 文件职责：统一写作设置、网页卡片与后台请求的本地配置检查。
- * 主要内容：解析独立或继承的服务模型，区分未选择 AI、缺少模型和缺少必要密钥；网页公开配置仅检查服务模型，完整凭据检查留给可信设置页和后台。
+ * 主要内容：解析独立或继承的服务模型，区分未选择 AI、缺少模型和缺少必要密钥；不在 useToken 名单的本地免密服务不触发凭据检查；网页公开配置仅检查服务模型，完整凭据检查留给可信设置页和后台。
  * 模块边界：只读取传入配置，不检查网络、不暴露凭据，也不把配置齐全表述为服务连接成功。
  */
 import type {Config} from './model';
-import {resolveConfiguredModel} from './catalog';
+import {resolveConfiguredModel, servicesType} from './catalog';
 import {isHarnessService} from './harness';
 import {isApiKeyRequired} from './validation';
 
@@ -14,7 +14,8 @@ export function resolveWritingReadiness(config: Config, checkCredentials = true)
     const model = (config.writing.model || resolveConfiguredModel(config.model[service], config.customModel[service])).trim();
     const supported = isHarnessService(service, config.customOpenAIProviders);
     const issue = !supported ? 'service' : !model ? 'model'
-        : checkCredentials && isApiKeyRequired(service, {...config, model: {...config.model, [service]: model}}) && !config.token[service]?.trim() ? 'credential' : null;
+        // 本地免密服务（如 Ollama）不在 useToken 名单内，与主翻译链路一致不强制密钥。
+    : checkCredentials && servicesType.isUseToken(service) && isApiKeyRequired(service, {...config, model: {...config.model, [service]: model}}) && !config.token[service]?.trim() ? 'credential' : null;
     const message = issue === 'service' ? '请在写作助手设置中选择一个 AI 服务'
         : issue === 'model' ? '请先选择写作模型'
             : issue === 'credential' ? '请先在翻译服务中配置这个服务的 API Key' : '';

@@ -197,6 +197,11 @@ describe('Writing model runtime', () => {
     const result = await createWritingRuntime(() => c, () => { throw new Error('storage'); })(request, controller().signal, progress);
     expect(result).toMatchObject({success: true, model: 'writer'}); expect(mocks.model.mock.calls[0][0].token.openai).toBe('test-key');
   });
+  it('runs keyless local services such as ollama without a token', async () => {
+    const c = config(); c.writing.service = 'ollama'; c.writing.model = 'gemma3:4b';
+    expect(await createWritingRuntime(() => c)(request, controller().signal, vi.fn())).toMatchObject({success: true});
+    expect(mocks.model.mock.calls[0][1]).toBe('ollama');
+  });
   it('stops before dispatch, during streaming and after stream completion', async () => {
     const c = config(); const first = controller(); first.abort(); expect(await createWritingRuntime(() => c)(request, first.signal, vi.fn())).toMatchObject({cancelled: true});
     const second = controller(); mocks.stream.mockImplementation(() => { second.abort(); return stream(); }); expect(await createWritingRuntime(() => c)(request, second.signal, vi.fn())).toMatchObject({cancelled: true});
