@@ -41,6 +41,7 @@ const paths: Record<string, string> = {
   'star': 'M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3l-5.6 2.9 1.1-6.2L3 9.6l6.2-.9L12 3z',
   'shield': 'M12 3l8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6l8-3z M8 12l3 3 5-6',
   'keyboard': 'M4 5h16a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z M7 9h.01 M12 9h.01 M17 9h.01 M7 13h.01 M12 13h.01 M17 13h.01 M8 16h8',
+  'chat': 'M4 5h16a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H10l-4 3v-3H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z M7 9h10 M7 12h6',
 }
 </script>
 <style scoped>

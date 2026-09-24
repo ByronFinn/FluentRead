@@ -104,6 +104,9 @@
   <section v-if="hasVisitedSection('settings-harness')" v-show="props.activeSection === 'settings-harness'" id="settings-harness" class="settings-section">
     <HarnessSettings :config="config" />
   </section>
+  <section v-if="hasVisitedSection('settings-comment')" v-show="props.activeSection === 'settings-comment'" id="settings-comment" class="settings-section">
+    <CommentSettings :config="config" />
+  </section>
   <section v-if="hasVisitedSection('settings-glossary')" v-show="props.activeSection === 'settings-glossary'" id="settings-glossary" class="settings-section">
     <GlossarySettings />
   </section>
@@ -747,6 +750,7 @@ const openInputServiceSettings = (service: string) => { setConfigurationService(
 const openWritingServiceSettings = () => { setConfigurationService(config.value.writing.service || config.value.service); window.location.hash = 'settings-services'; };
 const WritingSettings = defineAsyncComponent(() => import('./WritingSettings.vue'));
 const HarnessSettings = defineAsyncComponent(() => import('./HarnessSettings.vue'));
+const CommentSettings = defineAsyncComponent(() => import('./CommentSettings.vue'));
 const GlossarySettings = defineAsyncComponent(() => import('@/src/features/glossary/public').then(module => module.GlossarySettings));
 const AlwaysTranslateSites = defineAsyncComponent(() => import('./AlwaysTranslateSites.vue'));
 const FloatingBallSettings = defineAsyncComponent(() => import('./FloatingBallSettings.vue'));

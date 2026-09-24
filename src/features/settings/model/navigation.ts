@@ -63,6 +63,12 @@ export const navigationGroups = [
         searchDescription: '翻译卡片、阅读卡、Harness、DeepSeek、读懂、拆句、用法、练习、选区、段落、学习辅助、解释深度、学习程度、学习记忆、记忆开关',
       },
       {
+        id: 'settings-comment', icon: '评', label: '评论助手', description: '选中文本生成可粘贴评论', group: '专项翻译',
+        heading: '评论助手', summary: '选中网页文字后点“评论”，按你的风格指令生成候选评论并逐条复制。',
+        kicker: '专项翻译', title: '评论助手', detail: '配置评论的服务、模型、条数与风格提示词。',
+        searchDescription: '评论、嘴替、选区、社交、粘贴、复制、风格提示词、条数、AI 服务、模型',
+      },
+      {
         id: 'settings-image-translation', icon: '图', label: '图片翻译', description: '网页图片与 OCR', group: '专项翻译',
         heading: '图片翻译', summary: '管理网页图片翻译和本地 OCR 语言包。',
         kicker: '专项翻译', title: '图片翻译', detail: '悬停网页图片，从图片入口识别和翻译文字。',

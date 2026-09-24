@@ -26,6 +26,7 @@ describe('options navigation view-model', () => {
         label: '专项翻译',
         items: [
           'settings-harness',
+          'settings-comment',
           'settings-image-translation',
           'settings-area-translation',
           'settings-video',
@@ -47,6 +48,7 @@ describe('options navigation view-model', () => {
       '翻译设置',
       '界面风格',
       '翻译卡片',
+      '评论助手',
       '图片翻译',
       '圈选翻译',
       '视频字幕翻译',

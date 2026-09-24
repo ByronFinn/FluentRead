@@ -927,6 +927,22 @@ export const localizedLegacyPatterns: readonly LocalizedLegacyPattern[] = [
         'ru-RU': "Перевод: {1}",
         'es-ES': "Traducción: {1}",
     }},
+    {pattern: "^选区包含 (\\d+) 张图片$", localizedCaptures: [], messages: {
+        'en-US': "The selection includes {1} images",
+        'ja-JP': "選択範囲に画像 {1} 枚",
+        'ko-KR': "선택 영역에 이미지 {1}개",
+        'fr-FR': "La sélection contient {1} images",
+        'ru-RU': "В выделении {1} изображений",
+        'es-ES': "La selección incluye {1} imágenes",
+    }},
+    {pattern: "^仅支持大模型；(.+)$", localizedCaptures: [1], messages: {
+        'en-US': "Large language models only; {1}",
+        'ja-JP': "大規模言語モデルのみ対応しています。{1}",
+        'ko-KR': "대규모 언어 모델만 지원됩니다. {1}",
+        'fr-FR': "Uniquement des grands modèles de langage ; {1}",
+        'ru-RU': "Поддерживаются только большие языковые модели; {1}",
+        'es-ES': "Solo modelos de lenguaje grandes; {1}",
+    }},
     {pattern: "^(.+)，已保留普通翻译。$", localizedCaptures: [1], messages: {
         'en-US': "{1}. The standard translation is kept.",
         'ja-JP': "{1}。通常の翻訳はそのまま表示しています。",

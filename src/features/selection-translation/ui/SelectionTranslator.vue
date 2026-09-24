@@ -6,26 +6,27 @@
  -->
 <template>
   <div v-ui-i18n v-show="showIndicator || showTooltip || noticeMessage || copySuccess" class="fr-selection-translator-root" :data-display-delay="selectionSettings.delay" @pointerdown.stop @wheel.stop.passive="handleUiWheel">
-    <div v-if="showIndicator && !showTooltip && readingIndicatorEnabled" ref="reading-indicator-ref" class="fr-reading-indicator" :class="{'fr-dark-theme': isDarkTheme}" :style="readingIndicatorStyle" role="group" aria-label="选区操作" @pointerdown.prevent.stop>
+    <div v-if="showIndicator && !showTooltip && (readingIndicatorEnabled || commentEnabled)" ref="reading-indicator-ref" class="fr-reading-indicator" :class="{'fr-dark-theme': isDarkTheme}" :style="readingIndicatorStyle" role="group" aria-label="选区操作" @pointerdown.prevent.stop>
       <button v-if="selectionSettings.mode !== 'disabled'" type="button" aria-label="打开划词翻译" @click="openTooltip()">翻译</button>
       <button v-for="action in readingActions" :key="action.id" type="button" :class="{'is-default': action.id === readingPreferences.defaultAction}" :data-default-action="action.id === readingPreferences.defaultAction ? 'true' : undefined" :aria-label="`${action.label}选中文本`" @pointerenter="scheduleReadingHover($event, action.id)" @pointerleave="cancelReadingHover" @click="openReading(action.id)">{{ action.label }}</button>
-      <button v-if="!isPrivateContext" class="fr-reading-history-entry" type="button" aria-label="阅读记录" title="阅读记录" @click="openReadingHistory"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M10 5.8V10l2.7 1.8" /></svg><span>记录</span></button>
+      <button v-if="commentEnabled" type="button" aria-label="评论选中文本" @click="openComment()">评论</button>
+      <button v-if="readingEnabled && !isPrivateContext" class="fr-reading-history-entry" type="button" aria-label="阅读记录" title="阅读记录" @click="openReadingHistory"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" /><path d="M10 5.8V10l2.7 1.8" /></svg><span>记录</span></button>
     </div>
     <button v-else-if="showIndicator && !showTooltip" class="fr-selection-indicator" :class="`fr-selection-indicator--${triggerMode}`" :style="indicatorStyle" type="button" aria-label="打开划词翻译" title="打开划词翻译" @pointerdown.prevent.stop @click="openTooltip()">
       <span class="fr-selection-indicator-glyph" aria-hidden="true">↗</span>
     </button>
 
-    <section v-if="showTooltip" ref="tooltip-ref" class="fr-translation-tooltip" :class="{ 'fr-dark-theme': isDarkTheme, 'fr-reading-tooltip': readingMode, 'fr-popup-manipulating': popupManipulating }" :data-placement="popupPlacement" :style="tooltipStyle" role="dialog" :aria-label="readingMode ? '阅读理解' : '划词翻译结果'" @pointerdown.stop="beginPopupGesture" @pointermove="movePopupGesture" @pointerup="stopPopupGesture" @pointercancel="stopPopupGesture" @lostpointercapture="stopPopupGesture">
+    <section v-if="showTooltip" ref="tooltip-ref" class="fr-translation-tooltip" :class="{ 'fr-dark-theme': isDarkTheme, 'fr-reading-tooltip': readingMode || commentMode, 'fr-popup-manipulating': popupManipulating }" :data-placement="popupPlacement" :style="tooltipStyle" role="dialog" :aria-label="commentMode ? '评论结果' : readingMode ? '阅读理解' : '划词翻译结果'" @pointerdown.stop="beginPopupGesture" @pointermove="movePopupGesture" @pointerup="stopPopupGesture" @pointercancel="stopPopupGesture" @lostpointercapture="stopPopupGesture">
       <header class="fr-tooltip-header">
         <div class="fr-tooltip-title">
           <img class="fr-tooltip-brand-icon" :src="selectionTranslatorIconUrl" alt="" aria-hidden="true" />
-          <span>{{ readingMode ? '阅读理解' : isWordSelection ? '单词学习卡' : '翻译结果' }}</span>
+          <span>{{ commentMode ? '评论' : readingMode ? '阅读理解' : isWordSelection ? '单词学习卡' : '翻译结果' }}</span>
         </div>
         <div class="fr-tooltip-actions">
-          <button v-if="readingEnabled && !readingMode" class="fr-mode-btn" type="button" @click="openReading()">{{ readingDefaultActionLabel }}</button>
-          <button v-if="readingMode && selectionSettings.mode !== 'disabled'" class="fr-mode-btn" type="button" @click="openTooltip()">翻译</button>
+          <button v-if="readingEnabled && !readingMode && !commentMode" class="fr-mode-btn" type="button" @click="openReading()">{{ readingDefaultActionLabel }}</button>
+          <button v-if="(readingMode || commentMode) && selectionSettings.mode !== 'disabled'" class="fr-mode-btn" type="button" @click="openTooltip()">翻译</button>
           <button
-            v-if="!readingMode && config.vocabularyBookEnabled && isWordSelection && !isPrivateContext"
+            v-if="!cardMode && config.vocabularyBookEnabled && isWordSelection && !isPrivateContext"
             class="fr-action-btn fr-vocabulary-btn"
             :class="{ 'fr-saved': isVocabularySaved }"
             type="button"
@@ -39,10 +40,16 @@
         </div>
       </header>
 
+      <div v-if="commentMode && !commentSelection" class="fr-tooltip-content fr-comment-content">
+        <div class="fr-loading-state"><span :class="['fr-loading-spinner', { 'fr-static': !config.animations }]" aria-hidden="true" /><span>正在准备选区素材…</span></div>
+      </div>
+      <div v-else-if="commentSelection" v-show="commentMode" class="fr-tooltip-content fr-comment-content">
+        <CommentPanel :selection="commentSelection" :active="commentMode" :model-revision="commentModelRevision" @resize="schedulePositionUpdate" />
+      </div>
       <div v-if="readingSelection" v-show="readingMode" class="fr-tooltip-content fr-reading-content">
         <ReadingPanel :selection="readingSelection" :preferences="readingPreferences" :active="readingMode" :initial-action="readingInitialAction" :history-only="readingHistoryOnly" :source-language="selectionSettings.from" :target-language="selectionSettings.to" :playing-source-text="isPlaying && currentAudioKind === 'source' ? currentAudioText : ''" :model-revision="readingModelRevision" :vocabulary-enabled="config.vocabularyBookEnabled" :private-context="isPrivateContext" :animations="config.animations" @play-source="toggleAudio($event, 'source')" @source-change="stopAudio()" @resize="schedulePositionUpdate" />
       </div>
-      <div v-show="!readingMode" class="fr-tooltip-content" aria-live="polite">
+      <div v-show="!readingMode && !commentMode" class="fr-tooltip-content" aria-live="polite">
         <div v-if="isLoading && !translationResult && !wordCard && !wordCardError" class="fr-loading-state"><span :class="['fr-loading-spinner', { 'fr-static': !config.animations }]" aria-hidden="true" /><span>正在查询…</span></div>
         <div v-else-if="error && !translationResult && !wordCard" class="fr-error-state"><span>{{ error }}</span><button type="button" @click="retryTranslation">重试</button></div>
         <div v-else class="fr-translation-container">
@@ -152,7 +159,7 @@
           <div v-if="isPlaying" class="fr-playing-status"><span>正在播放{{ currentAudioKind === 'source' ? '原文' : currentAudioKind === 'word' ? '单词' : '译文' }}</span><button type="button" aria-label="停止播放" title="停止播放" @click="stopAudioFromUi">停止</button></div>
         </div>
       </div>
-      <template v-if="!readingMode">
+      <template v-if="!cardMode">
         <div v-for="edge in popupResizeEdges" :key="edge" class="fr-popup-resize-handle" :class="`fr-popup-resize-${edge}`" :data-resize-edge="edge" aria-hidden="true" />
       </template>
     </section>
@@ -178,7 +185,10 @@ import { createSelectionTtsContentController } from '@/src/features/selection-tr
 import { setSelectionContextMenuHandler } from '@/src/features/selection-translation/content/contextMenuBridge';
 import { VOCABULARY_BOOK_CHANGED_MESSAGE, VOCABULARY_BOOK_MESSAGE, type VocabularyBookResponse } from '@/src/features/vocabulary/protocol';
 import {ReadingPanel, captureReadingSelection, type ReadingSelection} from '@/src/features/reading-assistant/public';
+import {CommentPanel, captureCommentImages, browserSelectionImageDeps} from '@/src/features/comment-assistant/public';
+import {normalizeCommentPreferences} from '@/src/core/config/comment';
 import {HARNESS_ACTIONS, getHarnessModelCacheKey, normalizeHarnessPreferences, type HarnessActionId} from '@/src/core/config/harness';
+import {browserCapabilities} from '@/src/platform/browser/capabilities';
 import {useUiI18n} from '@/src/ui/i18n';
 
 const props = defineProps<{
@@ -207,6 +217,19 @@ const readingMode = ref(false);
 const readingInitialAction = ref<HarnessActionId>('meaning');
 const readingHistoryOnly = ref(false);
 const readingSelection = ref<ReadingSelection | null>(null);
+const commentMode = ref(false);
+const commentSelection = ref<{text: string; images: string[]} | null>(null);
+let commentCaptureToken = 0;
+let commentCapture: AbortController | null = null;
+
+/** 离开评论卡时一并作废在途的图片捕获，避免迟到结果填满已经隐藏的面板。 */
+function resetCommentCard(): void {
+  commentCapture?.abort();
+  commentCapture = null;
+  commentCaptureToken += 1;
+  commentMode.value = false;
+  commentSelection.value = null;
+}
 const copySuccess = ref(false);
 const copiedTextKind = ref<CopyKind | null>(null);
 const isDarkTheme = ref(false);
@@ -277,10 +300,23 @@ watch(() => {
   selectionConfigVersion.value;
   return getHarnessModelCacheKey(config);
 }, () => { readingModelRevision.value += 1; });
+// 评论配置只失效评论卡：改评论服务或提示词不应清空读懂缓存或打断在途回答。
+const commentModelRevision = ref(0);
+watch(() => {
+  selectionConfigVersion.value;
+  return JSON.stringify(config.comment);
+}, () => { commentModelRevision.value += 1; });
+const cardMode = computed(() => readingMode.value || commentMode.value);
 const readingEnabled = computed(() => readingPreferences.value.enabled);
 const readingIndicatorEnabled = computed(() => readingEnabled.value && readingPreferences.value.trigger !== 'shortcut');
 const readingActions = computed(() => HARNESS_ACTIONS.filter(action => readingPreferences.value.actions.includes(action.id)));
 const readingDefaultActionLabel = computed(() => HARNESS_ACTIONS.find(action => action.id === readingPreferences.value.defaultAction)!.label);
+const commentPreferences = computed(() => {
+  selectionConfigVersion.value;
+  return normalizeCommentPreferences(config.comment, config.customOpenAIProviders);
+});
+// 评论依赖扩展 runtime port，userscript 没有该通道，因此不显示入口。
+const commentEnabled = computed(() => commentPreferences.value.enabled && browserCapabilities.browser !== 'userscript');
 
 watch(() => snapshot.value?.range ?? null, (range) => {
   props.onSelectionRangeChange?.(range);
@@ -595,7 +631,7 @@ function applyManualPopupGeometry(): void {
 function beginPopupGesture(event: PointerEvent): void {
   const element = tooltipRef.value;
   const target = event.target;
-  if (!event.isTrusted || !event.isPrimary || event.button !== 0 || readingMode.value || !element || !(target instanceof HTMLElement)) return;
+  if (!event.isTrusted || !event.isPrimary || event.button !== 0 || cardMode.value || !element || !(target instanceof HTMLElement)) return;
   if (target.closest('button, a, input, textarea, select, [contenteditable]')) return;
   const edge = target.dataset.resizeEdge ?? '';
   const blank = target.matches('.fr-translation-tooltip, .fr-tooltip-content, .fr-translation-container, .fr-text-block');
@@ -634,7 +670,7 @@ function movePopupGesture(event: PointerEvent): void {
   applyManualPopupGeometry();
 }
 
-watch(readingMode, resetPopupGeometry);
+watch(cardMode, resetPopupGeometry);
 
 function updatePosition(refreshSelection = true): void {
   const current = snapshot.value;
@@ -658,8 +694,8 @@ function updatePosition(refreshSelection = true): void {
   if (showTooltip.value) void nextTick(() => {
     const tooltip = tooltipRef.value;
     if (!tooltip || !snapshot.value) return;
-    if (!readingMode.value && manualPopupPosition) { applyManualPopupGeometry(); return; }
-    if (readingMode.value) {
+    if (!cardMode.value && manualPopupPosition) { applyManualPopupGeometry(); return; }
+    if (cardMode.value) {
       const layout = calculateReadingPopupLayout(snapshot.value.anchor, {width: window.innerWidth, height: window.innerHeight});
       tooltipStyle.value = {left: `${layout.left}px`, top: `${layout.top}px`, width: `${layout.width}px`, height: `${layout.height}px`, visibility: 'visible'};
       popupPlacement.value = layout.placement;
@@ -686,6 +722,7 @@ function openTooltip(forced = false): void {
   showIndicator.value = true;
   showTooltip.value = true;
   readingMode.value = false;
+  resetCommentCard();
   tooltipStyle.value = {left: tooltipStyle.value.left, top: tooltipStyle.value.top, visibility: wasVisible ? 'visible' : 'hidden'};
   if (!wasVisible || error.value || !activeContentRequest.value) void requestSelectionContent(snapshot.value.text);
   schedulePositionUpdate();
@@ -721,8 +758,36 @@ function openReadingHistory(): void {
   openReadingCard();
 }
 
+/** 评论卡复用划词选区快照；图片异步降采样，完成前允许先按纯文本生成。 */
+function openComment(): void {
+  if (!snapshot.value || !commentEnabled.value) return;
+  cancelSelectionPresentation();
+  cancelSelectionLoss();
+  translationAbortController?.abort();
+  stopAudio();
+  const text = snapshot.value.text;
+  const range = snapshot.value.range;
+  commentCapture?.abort();
+  const capture = new AbortController();
+  commentCapture = capture;
+  const token = ++commentCaptureToken;
+  const wasVisible = showTooltip.value;
+  readingMode.value = false;
+  commentMode.value = true;
+  commentSelection.value = null;
+  showIndicator.value = true;
+  showTooltip.value = true;
+  if (!wasVisible) tooltipStyle.value = {visibility: 'hidden'};
+  schedulePositionUpdate();
+  void captureCommentImages(range, browserSelectionImageDeps, {}, capture.signal).then(
+    (images) => { if (token === commentCaptureToken) commentSelection.value = {text, images}; },
+    () => { if (token === commentCaptureToken) commentSelection.value = {text, images: []}; },
+  );
+}
+
 function openReadingCard(): void {
   if (!snapshot.value || !readingEnabled.value) return;
+  resetCommentCard();
   if (shouldSkipChineseSelection(snapshot.value.text, config.to)) { hideAll(); return; }
   cancelSelectionPresentation();
   cancelSelectionLoss();
@@ -1286,6 +1351,7 @@ function hideAll(): void {
   resetSelectionContentState(true);
   readingMode.value = false;
   readingSelection.value = null;
+  resetCommentCard();
   showIndicator.value = false;
   showTooltip.value = false;
   snapshot.value = null;
@@ -1354,7 +1420,7 @@ function handlePointerCancel(event: PointerEvent): void {
   hideAll();
 }
 function handleSelectionChange(event: Event): void {
-  if (readingMode.value && isInsideUi(document.activeElement)) return;
+  if (cardMode.value && isInsideUi(document.activeElement)) return;
   if (!event.isTrusted) return;
   // 新的拖选/双击可以再次选中同一段；单纯点击保留旧选区的按钮不能解除关闭状态。
   if (isSelecting && dismissedSelection) {
@@ -1492,7 +1558,7 @@ onMounted(() => {
       || nextSettings[8] !== previousSettings[8];
     if (themeChanged) updateTheme();
     if (!snapshot.value) return;
-    if (languageChanged && readingMode.value) { hideAll(); return; }
+    if (languageChanged && cardMode.value) { hideAll(); return; }
     if (languageChanged && (shouldSkipChineseSelection(snapshot.value.text, config.to)
       || (!readingEnabled.value && isSelectionInTargetLanguage(snapshot.value.text)))) { hideAll(); return; }
     if (languageChanged || translationProviderChanged) resetSelectionContentState();
@@ -1513,7 +1579,7 @@ onMounted(() => {
       return;
     }
     if (languageChanged || translationProviderChanged) {
-      if (showTooltip.value && !readingMode.value) void requestSelectionContent(snapshot.value.text);
+      if (showTooltip.value && !cardMode.value) void requestSelectionContent(snapshot.value.text);
     }
     if (previousSettings && nextSettings[9] !== previousSettings[9] && showTooltip.value && isWordSelection.value) {
       const request = currentContentRequest.value;
@@ -1530,6 +1596,8 @@ onBeforeUnmount(() => {
   if (positionFrame !== null) window.cancelAnimationFrame(positionFrame);
   // 悬停延迟可能跨过卸载；卸载后不能再按旧选区打开阅读卡片。
   cancelReadingHover();
+  // 图片捕获的 Promise 不会随组件销毁，卸载时一并中止，避免残留监听与解码。
+  resetCommentCard();
   cancelSelectionLoss();
   cancelSelectionPresentation();
   clearCopyFeedback();
@@ -1592,6 +1660,7 @@ onBeforeUnmount(() => {
 .fr-reading-tooltip { display: flex; flex-direction: column; height: min(520px, calc(100vh - 24px)); }
 .fr-reading-tooltip > .fr-tooltip-header { flex: none; }
 .fr-reading-tooltip > .fr-reading-content { flex: 1; min-height: 0; max-height: none; overflow: hidden; padding: 0; }
+.fr-reading-tooltip > .fr-comment-content { flex: 1; min-height: 0; max-height: none; overflow: hidden; padding: 0; }
 .fr-tooltip-header { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 7px; border-bottom: 1px solid rgba(44, 43, 53, .08); font-size: 15px; font-weight: 750; }
 .fr-tooltip-title { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .fr-tooltip-brand-icon { display: block; flex: none; width: 18px; height: 18px; border-radius: 5px; object-fit: contain; opacity: .78; }

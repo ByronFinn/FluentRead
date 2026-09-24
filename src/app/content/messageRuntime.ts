@@ -79,7 +79,7 @@ export function createContentRuntimeMessageHandler(ctx: ContentScriptContext, st
             if (mode !== 'disabled' && mode !== 'bilingual' && mode !== 'translation-only') return false;
             config.selectionTranslatorMode = mode;
             config.disableSelectionTranslator = mode === 'disabled';
-            if ((mode === 'disabled' && !config.harness?.enabled) || config.on === false) unmountSelectionTranslator();
+            if ((mode === 'disabled' && !config.harness?.enabled && !config.comment?.enabled) || config.on === false) unmountSelectionTranslator();
             else if (!document.getElementById('fluent-read-selection-translator-container')) {
                 void mountSelectionTranslator(ctx);
             }

@@ -1,7 +1,7 @@
 /**
  * @file src/core/i18n/messages/runtime-feedback.ts
  * 文件职责：集中维护后台、Offscreen、翻译服务和各功能运行期反馈的精确中文文案译文，让错误提示、页内通知和设置状态在六种非中文界面语言中不回显中文。
- * 主要内容：按“中文原文 + English、日本語、한국어、Français、Русский、Español”七列登记翻译链路、服务商、配置备份、媒体与本地模型、学习工具的反馈文案，createRuntimeFeedbackLegacyText 按语言展开为旧文案词典。
+ * 主要内容：按“中文原文 + English、日本語、한국어、Français、Русский、Español”七列登记翻译链路、服务商、配置备份、媒体与本地模型、学习工具和划词评论的反馈文案，createRuntimeFeedbackLegacyText 按语言展开为旧文案词典。
  * 模块边界：只提供纯数据，不读取配置、不访问浏览器；协议字段校验、开发日志和发送给模型的提示词不属于界面反馈，不在这里登记；参数化模板由 runtime-feedback-patterns.ts 维护。
  */
 import type {RegisteredUiLanguage} from '../types';
@@ -598,6 +598,27 @@ const learningToolRows: readonly RuntimeFeedbackRow[] = [
     ['恢复原文', 'Restore original', '原文に戻す', '원문 복원', 'Restaurer l’original', 'Вернуть оригинал', 'Restaurar original'],
 ];
 
+/** 划词卡片评论页签与评论后台的运行期反馈。 */
+const commentRows: readonly RuntimeFeedbackRow[] = [
+    ['无效的评论请求', 'Invalid comment request', 'コメントリクエストが無効です', '댓글 요청이 올바르지 않습니다', 'Demande de commentaire non valide', 'Некорректный запрос комментария', 'Solicitud de comentario no válida'],
+    ['正在处理其他评论请求，请稍后再试', 'Another comment request is in progress. Try again later.', '他のコメントリクエストを処理中です。しばらくしてから再試行してください', '다른 댓글 요청을 처리 중입니다. 잠시 후 다시 시도하세요', 'Une autre demande de commentaire est en cours. Réessayez plus tard.', 'Обрабатывается другой запрос комментария; повторите попытку позже.', 'Hay otra solicitud de comentario en curso. Vuelve a intentarlo más tarde.'],
+    ['评论请求未完成，请重试', 'The comment request did not finish. Try again.', 'コメントリクエストが完了しませんでした。再試行してください', '댓글 요청이 완료되지 않았습니다. 다시 시도하세요', 'La demande de commentaire n’a pas abouti. Réessayez.', 'Запрос комментария не завершён; повторите попытку.', 'La solicitud de comentario no terminó. Inténtalo de nuevo.'],
+    ['评论连接已中断，请重试', 'The comment connection was interrupted. Try again.', 'コメントの接続が中断されました。再試行してください', '댓글 연결이 중단되었습니다. 다시 시도하세요', 'La connexion de commentaire a été interrompue. Réessayez.', 'Соединение для комментария прервано; повторите попытку.', 'Se interrumpió la conexión del comentario. Inténtalo de nuevo.'],
+    ['评论连接已断开，请重试。', 'The comment connection was lost. Try again.', 'コメントとの接続が切れました。再試行してください', '댓글 연결이 끊어졌습니다. 다시 시도하세요', 'La connexion au commentaire a été perdue. Réessayez.', 'Соединение с комментарием потеряно; повторите попытку.', 'Se perdió la conexión del comentario. Inténtalo de nuevo.'],
+    ['评论请求未能发出，请重新选择文字后再试。', 'The comment request could not be sent. Select the text again and try once more.', 'コメントリクエストを送信できませんでした。テキストを再選択してやり直してください', '댓글 요청을 전송하지 못했습니다. 텍스트를 다시 선택해 시도하세요', 'La demande de commentaire n’a pas pu être envoyée. Sélectionnez de nouveau le texte et réessayez.', 'Запрос комментария не отправлен. Выделите текст заново и повторите попытку.', 'No se pudo enviar la solicitud de comentario. Selecciona otra vez el texto e inténtalo de nuevo.'],
+    ['评论功能已停用', 'Comments are turned off', 'コメントは無効になっています', '댓글이 꺼져 있습니다', 'Les commentaires sont désactivés', 'Комментарии отключены', 'Los comentarios están desactivados'],
+    ['选中内容不适合作为评论素材', 'The selected content is not suitable for a comment', '選択した内容はコメントに適していません', '선택한 내용은 댓글에 적합하지 않습니다', 'Le contenu sélectionné ne convient pas à un commentaire', 'Выделенное содержимое не подходит для комментария', 'El contenido seleccionado no sirve para un comentario'],
+    ['图片数量超出限制', 'Too many images', '画像が多すぎます', '이미지 수가 제한을 초과했습니다', 'Trop d’images', 'Слишком много изображений', 'Demasiadas imágenes'],
+    ['图片格式不支持', 'Unsupported image format', '画像の形式はサポートされていません', '이미지 형식은 지원되지 않습니다', 'Format d’image non pris en charge', 'Неподдерживаемый формат изображения', 'Formato de imagen no admitido'],
+    ['请先在评论设置中选择一个 AI 服务', 'Choose an AI service in the comment settings first', 'まずコメント設定で AI サービスを選択してください', '먼저 댓글 설정에서 AI 서비스를 선택하세요', 'Choisissez d’abord un service IA dans les réglages des commentaires', 'Сначала выберите ИИ-сервис в настройках комментариев', 'Primero elige un servicio de IA en los ajustes de comentarios'],
+    ['请先为评论选择一个模型', 'Choose a model for comments first', 'まずコメント用のモデルを選択してください', '먼저 댓글용 모델을 선택하세요', 'Choisissez d’abord un modèle pour les commentaires', 'Сначала выберите модель для комментариев', 'Primero elige un modelo para los comentarios'],
+    ['当前服务尚未配置 API 密钥', 'This service has no API key configured', 'このサービスには API キーが設定されていません', '이 서비스에는 API 키가 설정되지 않았습니다', 'Aucune clé API n’est configurée pour ce service', 'Для этого сервиса не настроен API-ключ', 'Este servicio no tiene clave API configurada'],
+    ['模型未按要求提交评论，请重试', 'The model did not submit comments as required. Try again.', 'モデルが要求どおりにコメントを送信しませんでした。再試行してください', '모델이 요구대로 댓글을 제출하지 않았습니다. 다시 시도하세요', 'Le modèle n’a pas soumis les commentaires demandés. Réessayez.', 'Модель не отправила комментарии, как требовалось; повторите попытку.', 'El modelo no envió los comentarios solicitados. Inténtalo de nuevo.'],
+    ['模型返回的评论结构不完整，请重试', 'The comments returned by the model are incomplete. Try again.', 'モデルが返したコメントの構成が不完全です。再試行してください', '모델이 반환한 댓글 구조가 불완전합니다. 다시 시도하세요', 'La structure des commentaires renvoyés est incomplète. Réessayez.', 'Структура возвращённых комментариев неполная; повторите попытку.', 'La estructura de los comentarios devueltos está incompleta. Inténtalo de nuevo.'],
+    ['评论请求失败，请重试', 'The comment request failed. Try again.', 'コメントリクエストに失敗しました。再試行してください', '댓글 요청에 실패했습니다. 다시 시도하세요', 'La demande de commentaire a échoué. Réessayez.', 'Запрос комментария не выполнен; повторите попытку.', 'Falló la solicitud de comentario. Inténtalo de nuevo.'],
+    ['[输出已过滤：检测到异常内容]', '[Output filtered: unusual content detected]', '[出力をフィルタリングしました：異常な内容を検出]', '[출력 필터링: 비정상 내용 감지]', '[Sortie filtrée : contenu inhabituel détecté]', '[Вывод отфильтрован: обнаружено необычное содержимое]', '[Salida filtrada: se detectó contenido inusual]'],
+];
+
 const runtimeFeedbackRows: readonly RuntimeFeedbackRow[] = [
     ...translationRows,
     ...providerRows,
@@ -606,6 +627,7 @@ const runtimeFeedbackRows: readonly RuntimeFeedbackRow[] = [
     ...imageDocumentRows,
     ...videoRows,
     ...learningToolRows,
+    ...commentRows,
 ];
 
 const LANGUAGE_COLUMNS: Readonly<Record<RegisteredUiLanguage, 1 | 2 | 3 | 4 | 5 | 6>> = {

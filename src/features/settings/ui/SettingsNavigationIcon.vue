@@ -14,6 +14,7 @@ const icons: Record<string, string> = {
   'settings-services': 'plug',
   'settings-translation': 'translate',
   'settings-harness': 'card',
+  'settings-comment': 'chat',
   'settings-image-translation': 'image',
   'settings-area-translation': 'scan',
   'settings-video': 'captions',

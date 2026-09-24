@@ -270,6 +270,8 @@ const BUILD_ONLY_SRC_ALLOWLIST = new Set([
     'src/features/local-translation/offscreen/translation.ts',
     'src/features/local-translation/offscreen/translation.worker.ts',
     'src/features/settings/ui/LocalTranslationModelSettings.vue',
+    // 选区图片捕获的浏览器依赖只装配真实 Image/Canvas 对象；收集、缩放、超时与取消规则全部在 selectionImages.ts 并由其严格覆盖测试验证。
+    'src/features/comment-assistant/content/imageDeps.ts',
     // 本地 TTS 绑定 Offscreen Worker、Cache Storage 与 Kokoro/ONNX 运行时；策略、协议、后台消息与适配器已严格覆盖。
     'src/features/local-tts/background/runtime.ts',
     'src/features/local-tts/offscreen/modelCache.ts',

@@ -272,7 +272,15 @@
       "tests/languageTechnicalTokens.test.ts",
       "tests/languageScripts.test.ts",
       "tests/languageStatistical.test.ts",
-      "tests/languageIdentification.test.ts"
+      "tests/languageIdentification.test.ts",
+      "tests/commentCore.test.ts",
+      "tests/commentConfig.test.ts",
+      "tests/commentRuntime.test.ts",
+      "tests/commentBackground.test.ts",
+      "tests/commentStreamPort.test.ts",
+      "tests/commentClient.test.ts",
+      "tests/commentSelectionImages.test.ts",
+      "tests/commentAppRuntime.test.ts"
     ],
     "functional": [
       "tests/resourceSafeRunner.test.ts",
@@ -331,6 +339,7 @@
       "tests/imageTranslationOffscreenRuntime.test.ts",
       "tests/siteAdaptationRuntime.test.ts",
       "tests/readingPanelLifecycle.test.ts",
+      "tests/commentPanelLifecycle.test.ts",
       "tests/learningMemoryRepository.test.ts",
       "tests/optionsAppNavigationLifecycle.test.ts",
       "tests/myMemoryProvider.test.ts",

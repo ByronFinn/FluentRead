@@ -18,6 +18,11 @@ let mountRequestId = 0;
 let contentScriptContext: ContentScriptContext | null = null;
 let modalDialogHost: ReturnType<typeof createModalDialogHostController> | null = null;
 
+/** 划词卡片本体是否应该存在；评论等共用宿主的功能另行判断。 */
+function selectionCardWanted(current: typeof config): boolean {
+    return Boolean(current.harness?.enabled) || !(current.disableSelectionTranslator || current.selectionTranslatorMode === 'disabled');
+}
+
 /**
  * 挂载选词翻译组件
  */
@@ -25,7 +30,7 @@ export function mountSelectionTranslator(ctx?: ContentScriptContext) {
   if (ctx) contentScriptContext = ctx;
 
   // 如果已存在实例或配置禁用了此功能，则不创建
-  if (selectionTranslatorInstance || mountingPromise || (!config.harness?.enabled && (config.disableSelectionTranslator || config.selectionTranslatorMode === 'disabled'))) {
+  if (selectionTranslatorInstance || mountingPromise || (!selectionCardWanted(config) && !config.comment?.enabled)) {
     return mountingPromise;
   }
 
@@ -47,7 +52,7 @@ export function mountSelectionTranslator(ctx?: ContentScriptContext) {
     },
   }).then((ui) => {
     // 异步创建结束后复核代次和开关，旧请求不得覆盖较新的挂载状态。
-    if (requestId !== mountRequestId || (!config.harness?.enabled && (config.disableSelectionTranslator || config.selectionTranslatorMode === 'disabled'))) {
+    if (requestId !== mountRequestId || (!selectionCardWanted(config) && !config.comment?.enabled)) {
       ui.remove();
       return null;
     }
