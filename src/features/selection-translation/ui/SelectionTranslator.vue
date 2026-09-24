@@ -1,7 +1,7 @@
 <!--
  * @file src/features/selection-translation/ui/SelectionTranslator.vue
  * 文件职责：实现划词翻译的主要页面组件，覆盖选区捕获、图标/小点/悬停/快捷键/仅右键菜单/直接弹出、原生菜单可信选区恢复与重复请求复用、翻译与词卡展示、免费 AI 讲解的显式启用、朗读、收藏选中的单词/表达/句子、双语分享卡片、鉴权服务配置入口、重试和关闭。
- * 主要内容：相同译文保留原文且不重复展示；组件管理可信手势、已关闭选区与选择丢失宽限、继续阅读或复制原文时自动收起、请求 token、按既有错误种类显示有限提示并仅为当前鉴权失败提供通用设置入口、行内代码保护与纯文本安全渲染、按标签页页面缩放补偿的弹窗定位、空白拖动、边角缩放、主题及可换行的多语言标题；普通译文先于完整原文，单行可横向滚动的导航与右侧固定分享、收藏、关闭及更多操作把高度留给正文，次级菜单按可见窗口覆盖显示；指针移动按帧合并并在结束时提交最后位置，已定位卡片不重复读取选区几何；富文本 UTF-16 跟读偏移一次计算并复用；默认过滤同语言选区，按配置开放中英反向入口，翻译方向始终按现有语言配置判断；统一卡片默认显示翻译并以同一导航进入学习；首次定位后保持弹窗锚点，手动尺寸下内容与播放状态变化只影响内部布局；闲置语音栏不占空间，自动卡生成与播放期间用独立临时高度保持外框，停止恢复自然尺寸；学习短回答自然收拢、长回答受高度上限约束，完整原文和译文按需对照并允许翻译继续完成；单词先展示原文与可用词卡，再补充辅助释义，以紧凑状态提示等待、未命中与网络失败；关闭或更换选区取消等待并阻止旧响应覆盖新结果；区分语音生成和播放，按实际音频时钟或浏览器词边界显示完整词高亮，并提供真实音频时间与前后 5 秒跳转。
+ * 主要内容：相同译文保留原文且不重复展示；组件管理可信手势、已关闭选区与选择丢失宽限、继续阅读或复制原文时自动收起、请求 token、按既有错误种类显示有限提示并仅为当前鉴权失败提供通用设置入口、行内代码保护与纯文本安全渲染、按标签页页面缩放补偿的弹窗定位、空白拖动、边角缩放、主题及可换行的多语言标题；普通译文先于完整原文，单行可横向滚动的导航与右侧固定分享、收藏、关闭及更多操作把高度留给正文，次级菜单按可见窗口覆盖显示；指针移动按帧合并并在结束时提交最后位置，已定位卡片不重复读取选区几何；富文本 UTF-16 跟读偏移一次计算并复用；默认过滤同语言选区，按配置开放中英反向入口，翻译方向始终按现有语言配置判断；评论入口与读懂并列放行——仅评论开启也展示指示条，中文/目标语言选区在评论可用时不被统一过滤吞掉；统一卡片默认显示翻译并以同一导航进入学习；首次定位后保持弹窗锚点，手动尺寸下内容与播放状态变化只影响内部布局；闲置语音栏不占空间，自动卡生成与播放期间用独立临时高度保持外框，停止恢复自然尺寸；学习短回答自然收拢、长回答受高度上限约束，完整原文和译文按需对照并允许翻译继续完成；单词先展示原文与可用词卡，再补充辅助释义，以紧凑状态提示等待、未命中与网络失败；关闭或更换选区取消等待并阻止旧响应覆盖新结果；区分语音生成和播放，按实际音频时钟或浏览器词边界显示完整词高亮，并提供真实音频时间与前后 5 秒跳转。
  * 模块边界：组件只通过公共客户端和 runtime 消息触达后台及现有设置入口，不直接持有 provider、IndexedDB 或 Offscreen 资源；纯选区算法在 core，活动 Range 通过回调交给 content/runtime 管理 modal 挂载所有权；扩展 PDF 文档页通过可选来源适配器复用同一卡片、标题和阅读上下文，来源失效时取消当前请求，词书协议独立维护；阅读依据的 DOM 锚点只属于当前选区，关闭、换区或卸载释放临时绘制和监听。
  -->
 <template>
@@ -179,7 +179,7 @@ import { matchesConfiguredHotkey, matchesModifierOnlyHotkey, resolveConfiguredHo
 import {describePartOfSpeech} from '@/src/core/language/partOfSpeech';
 import type { WordCardData, WordPronunciation } from '@/src/features/selection-translation/services/wordDictionary';
 import { isSingleEnglishWord, normalizeEnglishWord } from '@/src/features/selection-translation/services/wordNormalization';
-import { calculateSelectionPopupPosition, chooseSelectionRect, getSelectionPresentationDelayRemaining, readSelectionParts, translateSelectionParts, normalizeSpeechLanguage, reconcileSelectionPresentation, resolveSelectionDictionaryFallback, resolveSelectionVocabularyAnswer, selectionReverseTarget, SelectionRequestTokenGate, shouldIgnoreSelection, summarizeSelectionContext, type SelectionAnswerCandidate, type SelectionContentRequest, type SelectionRect, type SelectionTextPart } from '@/src/features/selection-translation/core';
+import { calculateSelectionPopupPosition, chooseSelectionRect, getSelectionPresentationDelayRemaining, readSelectionParts, translateSelectionParts, normalizeSpeechLanguage, reconcileSelectionPresentation, resolveSelectionDictionaryFallback, resolveSelectionVocabularyAnswer, selectionReverseTarget, SelectionRequestTokenGate, shouldIgnoreSelection, shouldSkipSelectionEntry, summarizeSelectionContext, type SelectionAnswerCandidate, type SelectionContentRequest, type SelectionRect, type SelectionTextPart } from '@/src/features/selection-translation/core';
 import {
   createSelectionTtsClientRequestId,
 } from '@/src/features/selection-translation/protocol';
@@ -399,6 +399,20 @@ const readingActions = computed(() => HARNESS_ACTIONS.filter(action => readingPr
 // 仅临时选择当前服务可用的动作；切换服务不会改写用户保存的动作和默认值。
 const readingDefaultAction = computed(() => readingActions.value.find(action => action.id === readingPreferences.value.defaultAction)?.id
   || readingActions.value.find(action => action.id === 'meaning')?.id || readingActions.value[0]?.id || 'meaning');
+const commentMode = ref(false);
+const commentSelection = ref<{text: string; images: string[]} | null>(null);
+let commentCaptureToken = 0;
+let commentCapture: AbortController | null = null;
+
+/** 离开评论卡时一并作废在途的图片捕获，避免迟到结果填满已经隐藏的面板。 */
+function resetCommentCard(): void {
+  commentCapture?.abort();
+  commentCapture = null;
+  commentCaptureToken += 1;
+  commentMode.value = false;
+  commentSelection.value = null;
+}
+// 评论配置只失效评论卡：改评论服务或提示词不应清空读懂缓存或打断在途回答。
 const commentModelRevision = ref(0);
 watch(() => {
   selectionConfigVersion.value;
@@ -411,6 +425,8 @@ const commentPreferences = computed(() => {
 });
 // 评论依赖扩展 runtime port，userscript 没有该通道，因此不显示入口。
 const commentEnabled = computed(() => commentPreferences.value.enabled && browserCapabilities.browser !== 'userscript');
+// 评论开启时选中即要展示入口指示，不再等待快捷键等手动触发；仅评论开启时同样放行。
+const selectionActionsEnabled = computed(() => commentEnabled.value);
 
 watch(() => snapshot.value?.range ?? null, (range) => {
   props.onSelectionRangeChange?.(range);
@@ -445,6 +461,7 @@ const selectionShortcut = computed(() => {
 });
 const triggerMode = computed<SelectionTrigger>(() => {
   if (selectionSettings.value.trigger === 'contextMenu') return 'contextMenu';
+  if (selectionSettings.value.mode === 'disabled' && (readingEnabled.value || commentEnabled.value)) return 'icon';
   if (selectionShortcut.value) return 'shortcut';
   if (selectionSettings.value.trigger === 'direct' || selectionSettings.value.trigger === 'dot') return selectionSettings.value.trigger;
   return 'icon';
@@ -695,8 +712,7 @@ function applySelection(next: SelectionSnapshot | null, shortcutTriggered = fals
   dismissedSelection = null;
   cancelSelectionLoss();
   // 右键菜单是用户明确下达的指令：即使选区已是目标语言也照常出卡片，不静默丢弃。
-  if (!forced && shouldSkipChineseSelection(next.text, config.to)
-    && !(selectionSettings.value.bidirectional && selectionReverseTarget(next.text, config.to, config.from))) { hideAll(); return; }
+  if (!forced && shouldSkipSelectionEntry({chineseOnly: shouldSkipChineseSelection(next.text, config.to) && !(selectionSettings.value.bidirectional && selectionReverseTarget(next.text, config.to, config.from)), inTargetLanguage: false, readingEnabled: readingEnabled.value, commentEnabled: commentEnabled.value})) { hideAll(); return; }
   if (isSameSelection(snapshot.value, next)) {
     if (forced) manuallyRequestedSelection.value = true;
     if (readingTriggered) openReading();
@@ -704,7 +720,7 @@ function applySelection(next: SelectionSnapshot | null, shortcutTriggered = fals
     else if (shortcutTriggered) scheduleSelectionPresentation('tooltip');
     return;
   }
-  if (!forced && isSelectionInTargetLanguage(next.text)) { hideAll(); return; }
+  if (!forced && shouldSkipSelectionEntry({chineseOnly: false, inTargetLanguage: isSelectionInTargetLanguage(next.text), readingEnabled: readingEnabled.value, commentEnabled: commentEnabled.value})) { hideAll(); return; }
   cancelSelectionPresentation();
   selectionSettledAt = performance.now();
   resetSelectionContentState();
@@ -714,7 +730,7 @@ function applySelection(next: SelectionSnapshot | null, shortcutTriggered = fals
   resetPopupGeometry();
   snapshot.value = next;
   selectedText.value = next.text;
-  const waitingForManualTrigger = !shortcutTriggered && (triggerMode.value === 'shortcut' || triggerMode.value === 'contextMenu' || selectionSettings.value.mode === 'disabled');
+  const waitingForManualTrigger = !shortcutTriggered && !selectionActionsEnabled.value && (triggerMode.value === 'shortcut' || triggerMode.value === 'contextMenu' || selectionSettings.value.mode === 'disabled');
   showIndicator.value = false;
   showTooltip.value = false;
   updatePosition(false);
@@ -980,7 +996,12 @@ function handleViewportResize(): void {
 }
 
 function openTooltip(forced = false): void {
-  if (selectionSettings.value.mode === 'disabled') { hideAll(); return; }
+  if (selectionSettings.value.mode === 'disabled') {
+    // 划词翻译关闭时显式入口只剩读懂/评论；快捷键等直接弹出请求也走同一重定向。
+    if (readingEnabled.value) { openReading(); return; }
+    if (commentEnabled.value) { openComment(); return; }
+    hideAll(); return;
+  }
   if (!snapshot.value || (!forced && isSelectionInTargetLanguage(snapshot.value.text))) { hideAll(); return; }
   if (forced) manuallyRequestedSelection.value = true;
   cancelSelectionPresentation();
@@ -2115,7 +2136,8 @@ function handleKeydown(event: KeyboardEvent): void {
   selectionShortcutHeld = true;
   const currentSelection = readSelectionSnapshot();
   if (currentSelection) {
-    if (isSelectionInTargetLanguage(currentSelection.text)) { hideAll(); return; }
+    // 评论开启时目标语言选区仍允许走快捷键入口（由 openTooltip 重定向到评论卡）。
+    if (!commentEnabled.value && isSelectionInTargetLanguage(currentSelection.text)) { hideAll(); return; }
     event.preventDefault();
     event.stopPropagation();
     applySelection(currentSelection, true);
@@ -2235,9 +2257,9 @@ onMounted(() => {
     if (languageChanged) manuallyRequestedSelection.value = false;
     if (languageChanged && cardMode.value) { hideAll(); return; }
     if ((languageChanged || directionEntryChanged) && !manuallyRequestedSelection.value
-      && (shouldSkipChineseSelection(snapshot.value.text, config.to)
-      && !(selectionSettings.value.bidirectional && selectionReverseTarget(snapshot.value.text, config.to, config.from))
-      || (!readingEnabled.value && isSelectionInTargetLanguage(snapshot.value.text)))) { hideAll(); return; }
+      && shouldSkipSelectionEntry({chineseOnly: shouldSkipChineseSelection(snapshot.value.text, config.to)
+      && !(selectionSettings.value.bidirectional && selectionReverseTarget(snapshot.value.text, config.to, config.from)),
+      inTargetLanguage: isSelectionInTargetLanguage(snapshot.value.text), readingEnabled: readingEnabled.value, commentEnabled: commentEnabled.value})) { hideAll(); return; }
     if (languageChanged || translationProviderChanged || directionEntryChanged) resetSelectionContentState();
     if (triggerChanged) {
       const nextPresentation = reconcileSelectionPresentation({
