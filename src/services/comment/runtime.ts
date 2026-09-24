@@ -1,7 +1,7 @@
 /**
  * @file src/services/comment/runtime.ts
  * 文件职责：把评论请求组装为一次强制工具调用的模型生成，并把结果校验、清洗为可展示的评论列表。
- * 主要内容：偏好与服务的最终规范化、安全壳提示词与选区包装、submit_comments 工具的 zod 严格契约、
+ * 主要内容：偏好与服务的最终规范化（本地免密服务不强制密钥）、安全壳提示词与选区包装、submit_comments 工具的 zod 严格契约、
  * toolChoice required 的 generateText 调用、按条数裁剪与泄漏清洗、模型用量事件上报，以及供应商错误的统一归一。
  * 模块边界：只在后台执行，不读取网页 DOM、不管理取消与并发（由 feature handler 负责）、不持久化评论结果。
  */
@@ -9,6 +9,7 @@ import {generateText, tool, type LanguageModel} from 'ai';
 import {z} from 'zod';
 import {buildCommentSystemPrompt, buildCommentUserText, sanitizeComments} from '@/src/core/comment/prompts';
 import {COMMENT_MAX_IMAGE_CHARS, COMMENT_MAX_IMAGES, COMMENT_MAX_TEXT, normalizeCommentPreferences, resolveCommentModel} from '@/src/core/config/comment';
+import {servicesType} from '@/src/core/config/catalog';
 import {isHarnessService} from '@/src/core/config/harness';
 import {isApiKeyRequired} from '@/src/core/config/validation';
 import {createHarnessUsageEvent} from '@/src/services/harness/usage';
@@ -50,7 +51,11 @@ export function createCommentRuntime(getConfig: () => Config, createModel: Comme
             const {service, model} = resolveCommentModel(config);
             if (!isHarnessService(service, config.customOpenAIProviders)) return failure('请先在评论设置中选择一个 AI 服务');
             if (!model) return failure('请先为评论选择一个模型');
-            if (isApiKeyRequired(service, config) && !config.token[service]?.trim()) return failure('当前服务尚未配置 API 密钥');
+            // 本地免密服务（如 Ollama）不在 useToken 名单内，与主翻译链路一致不强制密钥；
+            // 其余服务按"服务 + 评论实际使用模型"的开关判定，密钥开关跟随所选模型。
+            if (servicesType.isUseToken(service)
+                && isApiKeyRequired(service, {...config, model: {...config.model, [service]: model}})
+                && !config.token[service]?.trim()) return failure('当前服务尚未配置 API 密钥');
             const system = buildCommentSystemPrompt(preferences.prompt, preferences.count, config.to);
             const userText = buildCommentUserText(request.text, request.images.length);
             const content = request.images.length

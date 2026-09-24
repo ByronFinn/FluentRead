@@ -69,6 +69,14 @@ describe('comment model runtime', () => {
         expect(failure(await runtime.run(request(), freshSignal())).error).toContain('API 密钥');
     });
 
+    it('runs keyless local services such as ollama without a token', async () => {
+        config.service = 'ollama';
+        config.model = {ollama: 'gemma3:4b'};
+        config.token = {};
+        mocks.generateText.mockResolvedValue(okResult([{content: '本地评论', translation: null}]));
+        await expect(runtime.run(request(), freshSignal())).resolves.toMatchObject({success: true});
+    });
+
     it('sends a required tool call with images and returns sanitized comments', async () => {
         mocks.generateText.mockResolvedValue(okResult([
             {content: ' 评论一 ', translation: undefined},
