@@ -11,7 +11,6 @@
       <p v-if="selection.images.length" class="fr-comment-source-images">选区包含 {{ selection.images.length }} 张图片</p>
     </div>
     <div class="fr-comment-actions" role="group" aria-label="评论操作">
-      <span class="fr-comment-action-pill">评论</span>
       <button type="button" class="fr-comment-regenerate" :disabled="!selection.text" @click="generate">{{ busy ? '取消并重新生成' : '重新生成' }}</button>
     </div>
     <div class="fr-comment-scroll" aria-live="polite">
@@ -156,8 +155,7 @@ onBeforeUnmount(() => {
 .fr-comment-source { flex-shrink: 0; margin-bottom: 8px; }
 .fr-comment-source-text { margin: 0; color: #666570; font-size: 12px; line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; user-select: text; }
 .fr-comment-source-images { margin: 4px 0 0; color: #9e5d71; font-size: 10.5px; font-weight: 700; }
-.fr-comment-actions { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.fr-comment-action-pill { padding: 3px 10px; border-radius: 7px; background: #f8e4ed; color: #923758; font-size: 12px; font-weight: 650; }
+.fr-comment-actions { flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-bottom: 6px; }
 .fr-comment-regenerate { border: 1px solid rgba(126, 113, 121, .16); border-radius: 8px; background: #fff; color: #826573; font-size: 11.5px; font-weight: 650; padding: 4px 9px; cursor: pointer; }
 .fr-comment-regenerate:hover:not(:disabled) { color: #d63f76; border-color: rgba(214, 63, 118, .35); }
 .fr-comment-regenerate:disabled { opacity: .5; cursor: default; }
@@ -181,5 +179,4 @@ onBeforeUnmount(() => {
 :global(.fr-dark-theme) .fr-comment { color: #e8e3e8; --fr-comment-line: #4a4149; --fr-comment-muted: #b7aeb5; --fr-comment-soft: #322c34; }
 :global(.fr-dark-theme) .fr-comment-source-text { color: #b9b2ba; }
 :global(.fr-dark-theme) .fr-comment-regenerate, :global(.fr-dark-theme) .fr-comment-copy { background: transparent; border-color: #544351; color: #d9c7d1; }
-:global(.fr-dark-theme) .fr-comment-action-pill { background: #583344; color: #ffd6e6; }
 </style>

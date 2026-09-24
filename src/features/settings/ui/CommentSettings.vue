@@ -6,7 +6,7 @@
 -->
 <template>
   <SettingsGroup title="启用与服务" description="选中网页文字后点“评论”，生成可直接粘贴的社交评论。使用已配置的大模型服务和密钥。">
-    <FeatureEnableCard v-model="config.comment.enabled" title="启用评论助手" description="在划词卡片的页签条中显示“评论”；评论结果不写入学习记录。" />
+    <FeatureEnableCard v-model="config.comment.enabled" title="启用评论助手" description="在翻译卡片头部显示「评论」动作，选区指示条同步提供入口；评论结果不写入学习记录。" />
   </SettingsGroup>
 
   <SettingsGroup title="评论设置">
