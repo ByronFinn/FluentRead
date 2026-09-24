@@ -18,10 +18,13 @@ describe('comment prompt core', () => {
         expect(withStyle).toContain(COMMENT_SECURITY_RULES);
         expect(withStyle).toContain('毒舌一点');
         expect(withStyle).toContain('恰好 3 条');
+        expect(withStyle).toContain('content 必须使用与选区相同的语言书写');
         expect(withStyle).toContain('translation 使用语言代码 en');
+        expect(withStyle).toContain('每条 translation 必须给出非空译文供双语展示');
         expect(withStyle).toContain(COMMENT_OUTPUT_CONTRACT);
         const fallback = buildCommentSystemPrompt('   ', 2, '  ');
         expect(fallback).toContain(DEFAULT_COMMENT_PROMPT);
+        expect(fallback).toContain('content 必须使用与选区相同的语言书写');
         expect(fallback).toContain('translation 通常为 null');
         expect(fallback).toContain(COMMENT_TASK_RULES.replace('{{count}}', '2'));
     });

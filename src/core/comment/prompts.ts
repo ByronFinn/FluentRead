@@ -1,7 +1,7 @@
 /**
  * @file src/core/comment/prompts.ts
  * 文件职责：定义评论助手的不可编辑安全壳、默认风格指令、占位符目录、选区包装与输出清洗纯规则。
- * 主要内容：系统安全规则、任务与输出契约、用户风格指令渲染、选中内容 bracket 包装、图片数量说明和提示词泄漏检测。
+ * 主要内容：系统安全规则、任务与输出契约、用户风格指令渲染、双语输出语言约束（正文跟随选区语言、译文跟随目标语言）、选中内容 bracket 包装、图片数量说明和提示词泄漏检测。
  * 模块边界：本文件只处理领域数据，不读取配置存储、不调用模型、不接触 DOM；用户提示词只能替换风格指令段，安全壳与输出契约由代码固定。
  */
 
@@ -41,8 +41,8 @@ export function renderCommentPrompt(template: string, variables: {count: number}
 export function buildCommentSystemPrompt(userPrompt: string, count: number, targetLanguage: string): string {
     const style = userPrompt.trim() || DEFAULT_COMMENT_PROMPT;
     const language = targetLanguage.trim()
-        ? `translation 使用语言代码 ${targetLanguage.trim().slice(0, 35)} 对应的语言；该语言与评论语言一致时 translation 为 null。`
-        : 'translation 通常为 null，除非选区语言与用户界面明显不同。';
+        ? `content 必须使用与选区相同的语言书写；translation 使用语言代码 ${targetLanguage.trim().slice(0, 35)} 对应的语言。评论语言与该语言不同时每条 translation 必须给出非空译文供双语展示；一致时 translation 为 null。`
+        : 'content 必须使用与选区相同的语言书写；translation 通常为 null，除非选区语言与用户界面明显不同。';
     return [
         COMMENT_SECURITY_RULES,
         renderCommentPrompt(style, {count}),
