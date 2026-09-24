@@ -16,6 +16,7 @@ import {
     resolveSelectionVocabularyAnswer,
     SelectionRequestTokenGate,
     shouldIgnoreSelection,
+    shouldSkipSelectionEntry,
     summarizeSelectionContext,
 } from '@/src/features/selection-translation/core';
 import {
@@ -201,6 +202,27 @@ describe('selection translator presentation stability', () => {
         expect(reconcileSelectionPresentation(openTooltip, 'icon', true)).toEqual({showIndicator: true, showTooltip: false});
         expect(reconcileSelectionPresentation(openTooltip, 'dot', true)).toEqual({showIndicator: true, showTooltip: false});
         expect(reconcileSelectionPresentation(openTooltip, 'shortcut', true)).toEqual({showIndicator: false, showTooltip: false});
+    });
+});
+
+describe('selection entry guards', () => {
+    it('纯中文选区仅在评论入口可用时放行', () => {
+        expect(shouldSkipSelectionEntry({chineseOnly: true, inTargetLanguage: false, readingEnabled: false, commentEnabled: false})).toBe(true);
+        expect(shouldSkipSelectionEntry({chineseOnly: true, inTargetLanguage: false, readingEnabled: true, commentEnabled: false})).toBe(true);
+        expect(shouldSkipSelectionEntry({chineseOnly: true, inTargetLanguage: false, readingEnabled: false, commentEnabled: true})).toBe(false);
+        expect(shouldSkipSelectionEntry({chineseOnly: true, inTargetLanguage: false, readingEnabled: true, commentEnabled: true})).toBe(false);
+    });
+
+    it('目标语言选区在读懂或评论任一可用时放行', () => {
+        expect(shouldSkipSelectionEntry({chineseOnly: false, inTargetLanguage: true, readingEnabled: false, commentEnabled: false})).toBe(true);
+        expect(shouldSkipSelectionEntry({chineseOnly: false, inTargetLanguage: true, readingEnabled: true, commentEnabled: false})).toBe(false);
+        expect(shouldSkipSelectionEntry({chineseOnly: false, inTargetLanguage: true, readingEnabled: false, commentEnabled: true})).toBe(false);
+        expect(shouldSkipSelectionEntry({chineseOnly: false, inTargetLanguage: true, readingEnabled: true, commentEnabled: true})).toBe(false);
+    });
+
+    it('普通选区不做入口抑制', () => {
+        expect(shouldSkipSelectionEntry({chineseOnly: false, inTargetLanguage: false, readingEnabled: false, commentEnabled: false})).toBe(false);
+        expect(shouldSkipSelectionEntry({chineseOnly: false, inTargetLanguage: false, readingEnabled: true, commentEnabled: true})).toBe(false);
     });
 });
 

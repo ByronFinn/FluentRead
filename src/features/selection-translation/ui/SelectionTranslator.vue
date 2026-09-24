@@ -1,7 +1,7 @@
 <!--
  * @file src/features/selection-translation/ui/SelectionTranslator.vue
  * 文件职责：实现划词翻译的主要页面组件，覆盖选区捕获、图标/小点/快捷键/直接弹出、翻译与词卡展示、朗读、收藏词书、重试和关闭。
- * 主要内容：组件管理可信手势、已关闭选区与选择丢失宽限、请求 token、弹窗定位、空白拖动、边角缩放和主题，以纯中文选区过滤统一划词和翻译卡片入口，其他文本保留保守同语言预检，以独立点击、延迟悬停和快捷键复用选区入口打开 Harness 阅读卡，按模型相关配置刷新阅读缓存，协调翻译、词典与 TTS，并把滚轮交互限制在自身 Shadow UI 内。
+ * 主要内容：组件管理可信手势、已关闭选区与选择丢失宽限、请求 token、弹窗定位、空白拖动、边角缩放和主题，以纯中文选区过滤统一划词和翻译卡片入口，其他文本保留保守同语言预检，以独立点击、延迟悬停和快捷键复用选区入口打开 Harness 阅读卡，评论入口与读懂并列放行——仅评论开启也展示指示条，中文/目标语言选区在评论可用时不被统一过滤吞掉，按模型相关配置刷新阅读缓存，协调翻译、词典与 TTS，并把滚轮交互限制在自身 Shadow UI 内。
  * 模块边界：组件只通过公共客户端和 runtime 消息触达后台，不直接持有 provider、IndexedDB 或 Offscreen 资源；纯选区算法在 core，活动 Range 通过回调交给 content/runtime 管理 modal 挂载所有权，词书协议独立维护。
  -->
 <template>
@@ -177,7 +177,7 @@ import { translateText } from '@/src/app/translation/client';
 import {detectlang, shouldSkipChineseSelection, shouldSkipTranslationForTarget} from '@/src/core/language/detect';
 import { matchesConfiguredHotkey, matchesModifierOnlyHotkey, resolveConfiguredHotkey } from '@/src/core/hotkey';
 import { isSingleEnglishWord, normalizeEnglishWord, type WordCardData, type WordPronunciation } from '@/src/features/selection-translation/services/wordDictionary';
-import { calculateReadingPopupLayout, calculateSelectionPopupPosition, chooseSelectionRect, getSelectionPresentationDelayRemaining, readSelectionText, normalizeSpeechLanguage, reconcileSelectionPresentation, resolveSelectionDictionaryFallback, resolveSelectionVocabularyAnswer, SelectionRequestTokenGate, shouldIgnoreSelection, summarizeSelectionContext, type SelectionAnswerCandidate, type SelectionContentRequest, type SelectionRect } from '@/src/features/selection-translation/core';
+import { calculateReadingPopupLayout, calculateSelectionPopupPosition, chooseSelectionRect, getSelectionPresentationDelayRemaining, readSelectionText, normalizeSpeechLanguage, reconcileSelectionPresentation, resolveSelectionDictionaryFallback, resolveSelectionVocabularyAnswer, SelectionRequestTokenGate, shouldIgnoreSelection, shouldSkipSelectionEntry, summarizeSelectionContext, type SelectionAnswerCandidate, type SelectionContentRequest, type SelectionRect } from '@/src/features/selection-translation/core';
 import {
   createSelectionTtsClientRequestId,
 } from '@/src/features/selection-translation/protocol';
@@ -317,6 +317,8 @@ const commentPreferences = computed(() => {
 });
 // 评论依赖扩展 runtime port，userscript 没有该通道，因此不显示入口。
 const commentEnabled = computed(() => commentPreferences.value.enabled && browserCapabilities.browser !== 'userscript');
+// 指示条只要还有一个可用动作（读懂或评论）就要展示与定位；仅评论开启时同样放行。
+const selectionActionsEnabled = computed(() => readingIndicatorEnabled.value || commentEnabled.value);
 
 watch(() => snapshot.value?.range ?? null, (range) => {
   props.onSelectionRangeChange?.(range);
@@ -348,7 +350,7 @@ const selectionShortcut = computed(() => {
   return resolved === 'none' ? '' : resolved;
 });
 const triggerMode = computed<SelectionTrigger>(() => {
-  if (selectionSettings.value.mode === 'disabled' && readingEnabled.value) return 'icon';
+  if (selectionSettings.value.mode === 'disabled' && (readingEnabled.value || commentEnabled.value)) return 'icon';
   if (selectionShortcut.value) return 'shortcut';
   if (selectionSettings.value.trigger === 'direct' || selectionSettings.value.trigger === 'dot') return selectionSettings.value.trigger;
   return 'icon';
@@ -561,14 +563,14 @@ function applySelection(next: SelectionSnapshot | null, shortcutTriggered = fals
   dismissedSelection = null;
   cancelSelectionLoss();
   // 右键菜单是用户明确下达的指令：即使选区已是目标语言也照常出卡片，不静默丢弃。
-  if (!forced && shouldSkipChineseSelection(next.text, config.to)) { hideAll(); return; }
+  if (!forced && shouldSkipSelectionEntry({chineseOnly: shouldSkipChineseSelection(next.text, config.to), inTargetLanguage: false, readingEnabled: readingEnabled.value, commentEnabled: commentEnabled.value})) { hideAll(); return; }
   if (isSameSelection(snapshot.value, next)) {
     if (readingTriggered) openReading();
     else if (forced) openTooltip(true);
     else if (shortcutTriggered) scheduleSelectionPresentation('tooltip');
     return;
   }
-  if (!forced && !readingEnabled.value && isSelectionInTargetLanguage(next.text)) { hideAll(); return; }
+  if (!forced && shouldSkipSelectionEntry({chineseOnly: false, inTargetLanguage: isSelectionInTargetLanguage(next.text), readingEnabled: readingEnabled.value, commentEnabled: commentEnabled.value})) { hideAll(); return; }
   cancelSelectionPresentation();
   selectionSettledAt = performance.now();
   resetSelectionContentState();
@@ -578,7 +580,7 @@ function applySelection(next: SelectionSnapshot | null, shortcutTriggered = fals
   resetPopupGeometry();
   snapshot.value = next;
   selectedText.value = next.text;
-  const waitingForShortcut = !shortcutTriggered && !readingIndicatorEnabled.value
+  const waitingForShortcut = !shortcutTriggered && !selectionActionsEnabled.value
     && (triggerMode.value === 'shortcut' || selectionSettings.value.mode === 'disabled');
   showIndicator.value = false;
   showTooltip.value = false;
@@ -684,7 +686,7 @@ function updatePosition(refreshSelection = true): void {
   if (!anchor) return;
   current.anchor = anchor;
   indicatorStyle.value = { left: `${anchor.right}px`, top: `${anchor.bottom}px` };
-  if (showIndicator.value && !showTooltip.value && readingEnabled.value) void nextTick(() => {
+  if (showIndicator.value && !showTooltip.value && selectionActionsEnabled.value) void nextTick(() => {
     const indicator = readingIndicatorRef.value;
     if (!indicator || !snapshot.value) return;
     const rect = indicator.getBoundingClientRect();
@@ -715,7 +717,12 @@ function schedulePositionUpdate(): void {
 }
 
 function openTooltip(forced = false): void {
-  if (selectionSettings.value.mode === 'disabled' && readingEnabled.value) { openReading(); return; }
+  if (selectionSettings.value.mode === 'disabled') {
+    // 划词翻译关闭时显式入口只剩读懂/评论；快捷键等直接弹出请求也走同一重定向。
+    if (readingEnabled.value) { openReading(); return; }
+    if (commentEnabled.value) { openComment(); return; }
+    hideAll(); return;
+  }
   if (!snapshot.value || (!forced && isSelectionInTargetLanguage(snapshot.value.text))) { hideAll(); return; }
   cancelSelectionPresentation();
   const wasVisible = showTooltip.value;
@@ -1465,7 +1472,8 @@ function handleKeydown(event: KeyboardEvent): void {
   selectionShortcutHeld = true;
   const currentSelection = readSelectionSnapshot();
   if (currentSelection) {
-    if (isSelectionInTargetLanguage(currentSelection.text)) { hideAll(); return; }
+    // 评论开启时目标语言选区仍允许走快捷键入口（由 openTooltip 重定向到评论卡）。
+    if (!commentEnabled.value && isSelectionInTargetLanguage(currentSelection.text)) { hideAll(); return; }
     event.preventDefault();
     event.stopPropagation();
     applySelection(currentSelection, true);
@@ -1559,8 +1567,7 @@ onMounted(() => {
     if (themeChanged) updateTheme();
     if (!snapshot.value) return;
     if (languageChanged && cardMode.value) { hideAll(); return; }
-    if (languageChanged && (shouldSkipChineseSelection(snapshot.value.text, config.to)
-      || (!readingEnabled.value && isSelectionInTargetLanguage(snapshot.value.text)))) { hideAll(); return; }
+    if (languageChanged && shouldSkipSelectionEntry({chineseOnly: shouldSkipChineseSelection(snapshot.value.text, config.to), inTargetLanguage: isSelectionInTargetLanguage(snapshot.value.text), readingEnabled: readingEnabled.value, commentEnabled: commentEnabled.value})) { hideAll(); return; }
     if (languageChanged || translationProviderChanged) resetSelectionContentState();
     if (triggerChanged) {
       const nextPresentation = reconcileSelectionPresentation({
