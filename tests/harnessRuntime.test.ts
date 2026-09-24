@@ -306,6 +306,14 @@ describe('Harness runtime', () => {
         const ready = await createHarnessRuntime(() => config()).run({type: 'fluentReadHarness', action: 'run', requestId: 'history', intent: 'meaning', question: 'Why?', selection: {text: 'x', context: '', sentence: ''}, history: [{question: '', answer: 'bad'}, {question: 'q', answer: ''}]}, new AbortController().signal);
         expect(ready.success).toBe(true);
     });
+
+    it('lets keyless local services such as ollama run without an API key', async () => {
+        const current = config();
+        current.harness = {...current.harness, service: 'ollama', model: 'gemma3:4b'};
+        generateText.mockResolvedValueOnce({text: 'ok', toolCalls: [], response: {messages: [{role: 'assistant', content: 'ok'}]}});
+        const result = await createHarnessRuntime(() => current).run({type: 'fluentReadHarness', action: 'run', requestId: 'ollama', intent: 'meaning', question: '', selection: {text: 'x', context: '', sentence: ''}, history: []}, new AbortController().signal);
+        expect(result.success).toBe(true);
+    });
     it('records every model step with real response model and isolates statistics failures', async () => {
         const request = {type: 'fluentReadHarness', action: 'run', requestId: 'usage', intent: 'meaning', question: '', selection: {text: 'selected', context: 'paragraph', sentence: ''}} as const;
         const record = vi.fn();

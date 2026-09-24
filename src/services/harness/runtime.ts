@@ -1,14 +1,14 @@
 /**
  * @file src/services/harness/runtime.ts
  * 文件职责：把 FluentRead 的阅读任务、配置快照和 AI SDK 模型接入供应商无关的 Harness 会话循环。
- * 主要内容：解析继承模型、限制选区与历史、直接提供已授权段落以兼容不主动调用工具的模型、根据提示词快照构建学习指令和只读段落工具，将原生模型消息转换为内核事件，并统一处理取消及供应商错误。
+ * 主要内容：解析继承模型与本地免密服务放行（不在 useToken 名单的服务不强制密钥）、限制选区与历史、直接提供已授权段落以兼容不主动调用工具的模型、根据提示词快照构建学习指令和只读段落工具，将原生模型消息转换为内核事件，并统一处理取消及供应商错误。
  * 模块边界：只在后台执行，不读取网页 DOM、不使用翻译缓存，不接受页面指定密钥或服务；显示与长期收藏分别归阅读卡和单词本。
  */
 import {streamText, tool, type LanguageModel, type ModelMessage, type ToolSet} from 'ai';
 import {z} from 'zod';
 import type {Config} from '@/src/core/config/model';
 import {resolveHarnessPrompt, renderHarnessPrompt, isHarnessService, type HarnessActionId} from '@/src/core/config/harness';
-import {resolveConfiguredModel} from '@/src/core/config/catalog';
+import {resolveConfiguredModel, servicesType} from '@/src/core/config/catalog';
 import {isApiKeyRequired} from '@/src/core/config/validation';
 import {createHarnessLanguageModel, normalizeHarnessModelError} from './modelGateway';
 import type {ReadingProgress, ReadingRequest, ReadingResponse} from '@/src/features/reading-assistant/types';
@@ -101,7 +101,9 @@ export function createHarnessRuntime(getConfig: () => Config, createUsageSink?: 
             const modelId = prefs.model || resolveConfiguredModel(current.model[service], current.customModel[service]);
             if (!isHarnessService(service, current.customOpenAIProviders)) return {success: false, error: '当前默认服务不支持阅读理解，请在专项翻译的“翻译卡片”设置中选择 AI 服务。'};
             if (!modelId.trim()) return {success: false, error: '请先在设置中选择阅读理解模型。'};
-            if (isApiKeyRequired(service, {...current, model: {...current.model, [service]: modelId}}) && !current.token[service]?.trim()) return {success: false, error: '这个模型服务尚未配置 API Key，请在翻译服务中完成配置。'};
+            // 本地免密服务（如 Ollama）不在 useToken 名单内，与主翻译链路一致不强制密钥。
+            if (servicesType.isUseToken(service)
+                && isApiKeyRequired(service, {...current, model: {...current.model, [service]: modelId}}) && !current.token[service]?.trim()) return {success: false, error: '这个模型服务尚未配置 API Key，请在翻译服务中完成配置。'};
             const history = question && Array.isArray(request.history) ? request.history.slice(-MAX_HISTORY).flatMap(turn => {
                 const q = bounded(turn?.question, MAX_TURN);
                 const a = bounded(turn?.answer, MAX_TURN);

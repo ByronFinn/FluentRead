@@ -1,7 +1,7 @@
 /**
  * @file src/services/writing/runtime.ts
  * 文件职责：通过共享 Harness 内核生成写作草稿或会话回答。
- * 主要内容：冻结服务与回复语言，以独立语言约束覆盖草稿、改写要求和自定义偏好的语言；按所选身份组织回应重点并纠正旧稿立场，隔离忠实翻译与写作风格篇幅要求、引用资料、只读工具循环、可选学习记忆、逐步用量及凭据错误。
+ * 主要内容：冻结服务与回复语言，以独立语言约束覆盖草稿、改写要求和自定义偏好的语言；按所选身份组织回应重点并纠正旧稿立场，隔离忠实翻译与写作风格篇幅要求、引用资料、只读工具循环、可选学习记忆、逐步用量、本地免密服务放行及凭据错误。
  * 模块边界：只在后台运行，不复用翻译提示词，工具只访问本次参考快照和主动保存的学习记忆，不读取网页、不写入记忆或发送回复。
  */
 import {streamText, tool, type ModelMessage, type ToolSet} from 'ai';
@@ -11,7 +11,7 @@ import type {HarnessMessage} from '@/src/core/harness/surface';
 import {readMemory, type HarnessMemoryReader} from '@/src/services/harness/memoryRecall';
 import type {Config} from '@/src/core/config/model';
 import {isHarnessService} from '@/src/core/config/harness';
-import {resolveConfiguredModel} from '@/src/core/config/catalog';
+import {resolveConfiguredModel, servicesType} from '@/src/core/config/catalog';
 import {isApiKeyRequired} from '@/src/core/config/validation';
 import {WRITING_LANGUAGES, WRITING_TONES, WRITING_STYLES, WRITING_ROLES, normalizeWritingLength, resolveWritingLanguage, type WritingIntent, type WritingLength} from '@/src/core/config/writing';
 import {createHarnessLanguageModel, normalizeHarnessModelError} from '@/src/services/harness/modelGateway';
@@ -52,7 +52,9 @@ export function createWritingRuntime(getConfig: () => Config, record?: (event: M
         const modelId = current.writing.model || resolveConfiguredModel(current.model[service], current.customModel[service]);
         if (!isHarnessService(service, current.customOpenAIProviders)) return {success: false, error: '请在写作助手设置中选择一个 AI 服务'};
         if (!modelId.trim()) return {success: false, error: '请先选择写作模型'};
-        if (isApiKeyRequired(service, {...current, model: {...current.model, [service]: modelId}}) && !current.token[service]?.trim()) return {success: false, error: '请先在翻译服务中配置这个服务的 API Key'};
+        // 本地免密服务（如 Ollama）不在 useToken 名单内，与主翻译链路一致不强制密钥。
+        if (servicesType.isUseToken(service)
+            && isApiKeyRequired(service, {...current, model: {...current.model, [service]: modelId}}) && !current.token[service]?.trim()) return {success: false, error: '请先在翻译服务中配置这个服务的 API Key'};
         if (['polish', 'continue', 'shorten', 'translate'].includes(request.intent) && !request.draft.trim()) return {success: false, error: '请先输入草稿'};
         if (!request.instruction.trim() && !request.draft.trim() && !request.context.trim()) return {success: false, error: '请先写下要求或提供参考内容'};
         const language = resolveWritingLanguage(request.language, current.to);
