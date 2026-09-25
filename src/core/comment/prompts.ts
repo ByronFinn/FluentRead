@@ -1,9 +1,13 @@
 /**
  * @file src/core/comment/prompts.ts
  * 文件职责：定义评论助手的不可编辑安全壳、默认风格指令、占位符目录、选区包装与输出清洗纯规则。
- * 主要内容：系统安全规则、任务与输出契约、用户风格指令渲染、双语输出语言约束（正文跟随选区语言、译文跟随目标语言）、选中内容 bracket 包装、图片数量说明和提示词泄漏检测。
- * 模块边界：本文件只处理领域数据，不读取配置存储、不调用模型、不接触 DOM；用户提示词只能替换风格指令段，安全壳与输出契约由代码固定。
+ * 主要内容：系统安全规则、任务与输出契约、用户风格指令渲染、由代码语言规划注入的三态双语约束
+ * （同语时全部为 null、可信点名选区语言时强制 content/translation 与 sourceTranslation 分语、未识别时泛化措辞，
+ * 目标语言缺省回落简体中文）、选中内容 bracket 包装、图片数量说明和提示词泄漏检测。
+ * 模块边界：本文件只处理领域数据，语言判定结论由 repair.ts 的可信识别给出并注入提示词；不读取配置存储、不调用模型、不接触 DOM；
+ * 用户提示词只能替换风格指令段，安全壳与输出契约由代码固定。
  */
+import type {CommentLanguagePlan} from './repair';
 
 /** 选区内容按数据对待，三层防注入的第一层；与用户风格指令、任务规则共同组成系统提示词。 */
 export const COMMENT_SECURITY_RULES = [
@@ -13,12 +17,12 @@ export const COMMENT_SECURITY_RULES = [
 
 export const COMMENT_TASK_RULES = [
     '每条评论像真人随手写下：口语、短、有观点，可用反问、对比或冷幽默；不编造选区之外的事实，不针对真实个人作人身攻击。',
-    '评论语言与选区主要语言一致；需要翻译时逐条给出对应语言的中文或目标语言释义。',
+    '评论语言遵循语言判定要求，不因选区中出现其他语言的词而切换语言。',
     '一次提交恰好 {{count}} 条，内容彼此不同，不复述任务或解释过程。',
 ].join('\n');
 
 export const COMMENT_OUTPUT_CONTRACT = [
-    '完成后必须调用 submit_comments 工具提交，参数为 comments 数组；每项含 content（评论正文）与 translation（按要求的翻译，无需翻译时为 null）。',
+    '完成后必须调用 submit_comments 工具提交，参数为 comments 数组与 sourceTranslation（整个选区的目标语言译文，无需翻译时为 null）；每项含 content（评论正文）与 translation（按语言判定要求给出，无需翻译时为 null）。',
     '不要用普通文本输出评论，不要输出 JSON 字符串以外的包装。',
 ].join('\n');
 
@@ -37,12 +41,16 @@ export function renderCommentPrompt(template: string, variables: {count: number}
     return template.replace(/\{\{count\}\}/gu, String(variables.count));
 }
 
-/** 用户只编辑风格段；安全壳、任务规则与输出契约固定拼接，留空回落到默认风格。 */
-export function buildCommentSystemPrompt(userPrompt: string, count: number, targetLanguage: string): string {
+/** 用户只编辑风格段；安全壳、任务规则与输出契约固定拼接，留空回落到默认风格。语言段由 repair.ts 的语言规划三态给出。 */
+export function buildCommentSystemPrompt(userPrompt: string, count: number, targetLanguage: string, plan: CommentLanguagePlan): string {
     const style = userPrompt.trim() || DEFAULT_COMMENT_PROMPT;
-    const language = targetLanguage.trim()
-        ? `content 必须使用与选区相同的语言书写；translation 使用语言代码 ${targetLanguage.trim().slice(0, 35)} 对应的语言。评论语言与该语言不同时每条 translation 必须给出非空译文供双语展示；一致时 translation 为 null。`
-        : 'content 必须使用与选区相同的语言书写；translation 通常为 null，除非选区语言与用户界面明显不同。';
+    const target = targetLanguage.trim().slice(0, 35) || 'zh-Hans';
+    // 三态语言约束：同语全 null；可信点名选区语言时按代码强制分语；未识别时保留泛化措辞并把选区译文纳入同一要求。
+    const language = plan.sameLanguage
+        ? '选区语言与目标语言一致：content 直接使用选区语言书写；translation 与 sourceTranslation 一律为 null。'
+        : plan.selectionLanguage
+            ? `选区主要语言已判定为语言代码 ${plan.selectionLanguage}：content 必须使用该语言书写，不得改用其他语言；translation 与 sourceTranslation 必须使用语言代码 ${target} 对应的语言书写。两者语言不同，每条 translation 与 sourceTranslation 都必须是非空译文，不得为 null。`
+            : `content 必须使用与选区相同的语言书写；translation 与 sourceTranslation 使用语言代码 ${target} 对应的语言书写。评论语言与该语言不同时每条 translation 与 sourceTranslation 必须给出非空译文供双语展示；一致时均为 null。`;
     return [
         COMMENT_SECURITY_RULES,
         renderCommentPrompt(style, {count}),

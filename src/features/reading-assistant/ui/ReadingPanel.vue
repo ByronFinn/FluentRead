@@ -1,7 +1,7 @@
 <!--
  * @file src/features/reading-assistant/ui/ReadingPanel.vue
- * 文件职责：在原有划词卡内提供读懂、拆句、用法、练习和连续追问，保持阅读上下文与原生选区体验。
- * 主要内容：按原文与配置复用各学习动作的已完成回答，显式重新生成；统一呈现 Markdown、原文朗读、句子收藏和 30 天问答记录，以局部主题变量保持正文、状态和操作文字的对比度，并以代次隔离过期请求。
+ * 文件职责：在原有划词卡内提供读懂、拆句、用法、练习和连续追问，保持阅读上下文与原生选区体验，并把「评论」动作透传给划词卡切换页签。
+ * 主要内容：按原文与配置复用各学习动作的已完成回答，显式重新生成；动作行在学习方式后按需显示「评论」入口；统一呈现 Markdown、原文朗读、句子收藏和 30 天问答记录，以局部主题变量保持正文、状态和操作文字的对比度，并以代次隔离过期请求。
  * 模块边界：不持有模型密钥、不扫描页面、不直接请求供应商；记录由后台会话仓库保存，父划词组件负责选区、位置和 Shadow UI 生命周期。
  -->
 <template>
@@ -43,6 +43,7 @@
     </div>
     <div class="fr-reading-actions" role="group" aria-label="学习方式">
       <button v-for="action in actions" :key="action.id" type="button" :aria-pressed="intent === action.id" @click="startAction(action.id)">{{ action.label }}</button>
+      <button v-if="commentEnabled" type="button" @click="emit('open-comment')">评论</button>
       <button type="button" class="fr-reading-regenerate" :disabled="busy" title="重新生成当前学习方式的回答" @click="regenerate">重新生成</button>
     </div>
     <div ref="answerScroll" class="fr-reading-scroll fr-reading-result" aria-live="polite" aria-atomic="false">
@@ -105,11 +106,12 @@ const props = defineProps<{
   vocabularyEnabled: boolean;
   privateContext: boolean;
   animations: boolean;
+  commentEnabled: boolean;
   playingSourceText?: string;
   sourceLanguage?: string;
   modelRevision?: number;
 }>();
-const emit = defineEmits<{resize: []; 'play-source': [text: string]; 'source-change': [text: string]}>();
+const emit = defineEmits<{resize: []; 'play-source': [text: string]; 'source-change': [text: string]; 'open-comment': []}>();
 const intent = ref<HarnessActionId>(props.initialAction || props.preferences.defaultAction);
 const wholeSentence = ref(false);
 const historicalText = ref('');

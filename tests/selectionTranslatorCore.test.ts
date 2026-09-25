@@ -377,17 +377,36 @@ describe('selection translator text and speech language normalization', () => {
         expect(shouldIgnoreSelection(range())).toBe(true);
     });
 
+    it('允许文字选区跨越内联图片但继续拒绝可见视频控件', () => {
+        const {document} = parseHTML('<html><body><p>Read the tweet <img alt="emoji" src="emoji.png"> now.</p></body></html>');
+        const paragraph = document.querySelector('p')!;
+        const range = () => mockRange(paragraph.firstChild, paragraph.lastChild, {
+            commonAncestor: paragraph, intersectingNodes: [...paragraph.querySelectorAll('*')],
+        });
+        const geometry = () => paragraph.querySelectorAll('*').forEach(element => {
+            element.getClientRects = () => [{width: 10, height: 10}] as unknown as DOMRectList;
+        });
+        // emoji/内联图片不再是排除元素，跨它的文字选区必须照常出卡。
+        geometry();
+        expect(shouldIgnoreSelection(range())).toBe(false);
+        paragraph.innerHTML = 'Read the clip <video src="clip.mp4"></video> now';
+        geometry();
+        expect(shouldIgnoreSelection(range())).toBe(true);
+    });
+
     it('classifies atomic and interactive elements as non-text selections', () => {
-        for (const tagName of ['img', 'svg', 'video', 'canvas', 'button', 'input', 'textarea', 'select', 'code', 'pre']) {
+        for (const tagName of ['svg', 'video', 'canvas', 'button', 'input', 'textarea', 'select', 'code', 'pre']) {
             expect(isSelectionExcludedTagName(tagName)).toBe(true);
         }
+        // img 已从排除集合移除：跨内联图片/emoji 图片的文字选区仍需出卡。
+        expect(isSelectionExcludedTagName('img')).toBe(false);
         expect(isSelectionExcludedTagName('p')).toBe(false);
         expect(isSelectionExcludedTagName('span')).toBe(false);
     });
 
     it('忽略交互、可编辑和 FluentRead 自身 UI 内的选区', () => {
         expect(shouldIgnoreSelection(mockRange(
-            new MockElement({tagName: 'IMG'}) as unknown as Node,
+            new MockElement({tagName: 'VIDEO'}) as unknown as Node,
             new MockElement() as unknown as Node,
         ))).toBe(true);
         expect(shouldIgnoreSelection(mockRange(

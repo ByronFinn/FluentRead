@@ -1,7 +1,7 @@
 <!--
  * @file src/features/selection-translation/ui/SelectionTranslator.vue
  * 文件职责：实现划词翻译的主要页面组件，覆盖选区捕获、图标/小点/快捷键/直接弹出、翻译与词卡展示、朗读、收藏词书、重试和关闭。
- * 主要内容：组件管理可信手势、已关闭选区与选择丢失宽限、请求 token、弹窗定位、空白拖动、边角缩放和主题，以纯中文选区过滤统一划词和翻译卡片入口，其他文本保留保守同语言预检，以独立点击、延迟悬停和快捷键复用选区入口打开 Harness 阅读卡，评论作为卡片头部动作与读懂并列——翻译卡片和指示条都能进入评论页，中文/目标语言选区在评论可用时不被统一过滤吞掉，按模型相关配置刷新阅读缓存，协调翻译、词典与 TTS，并把滚轮交互限制在自身 Shadow UI 内。
+ * 主要内容：组件管理可信手势、已关闭选区与选择丢失宽限、请求 token、弹窗定位、空白拖动、边角缩放和主题，以纯中文选区过滤统一划词和翻译卡片入口，其他文本保留保守同语言预检，以独立点击、延迟悬停和快捷键复用选区入口打开 Harness 阅读卡，评论作为卡片头部动作并在读懂动作行中透传给阅读面板——翻译卡片、指示条和阅读卡动作行都能进入评论页，中文/目标语言选区在评论可用时不被统一过滤吞掉，按模型相关配置刷新阅读缓存，协调翻译、词典与 TTS，并把滚轮交互限制在自身 Shadow UI 内。
  * 模块边界：组件只通过公共客户端和 runtime 消息触达后台，不直接持有 provider、IndexedDB 或 Offscreen 资源；纯选区算法在 core，活动 Range 通过回调交给 content/runtime 管理 modal 挂载所有权，词书协议独立维护。
  -->
 <template>
@@ -48,7 +48,7 @@
         <CommentPanel :selection="commentSelection" :active="commentMode" :model-revision="commentModelRevision" @resize="schedulePositionUpdate" />
       </div>
       <div v-if="readingSelection" v-show="readingMode" class="fr-tooltip-content fr-reading-content">
-        <ReadingPanel :selection="readingSelection" :preferences="readingPreferences" :active="readingMode" :initial-action="readingInitialAction" :history-only="readingHistoryOnly" :source-language="selectionSettings.from" :target-language="selectionSettings.to" :playing-source-text="isPlaying && currentAudioKind === 'source' ? currentAudioText : ''" :model-revision="readingModelRevision" :vocabulary-enabled="config.vocabularyBookEnabled" :private-context="isPrivateContext" :animations="config.animations" @play-source="toggleAudio($event, 'source')" @source-change="stopAudio()" @resize="schedulePositionUpdate" />
+        <ReadingPanel :selection="readingSelection" :preferences="readingPreferences" :active="readingMode" :initial-action="readingInitialAction" :history-only="readingHistoryOnly" :source-language="selectionSettings.from" :target-language="selectionSettings.to" :playing-source-text="isPlaying && currentAudioKind === 'source' ? currentAudioText : ''" :model-revision="readingModelRevision" :vocabulary-enabled="config.vocabularyBookEnabled" :private-context="isPrivateContext" :animations="config.animations" :comment-enabled="commentEnabled" @open-comment="openComment" @play-source="toggleAudio($event, 'source')" @source-change="stopAudio()" @resize="schedulePositionUpdate" />
       </div>
       <div v-show="!readingMode && !commentMode" class="fr-tooltip-content" aria-live="polite">
         <div v-if="isLoading && !translationResult && !wordCard && !wordCardError" class="fr-loading-state"><span :class="['fr-loading-spinner', { 'fr-static': !config.animations }]" aria-hidden="true" /><span>正在查询…</span></div>

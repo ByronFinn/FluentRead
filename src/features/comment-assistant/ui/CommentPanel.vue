@@ -1,13 +1,13 @@
 <!--
  * @file src/features/comment-assistant/ui/CommentPanel.vue
- * 文件职责：在划词卡片内呈现「评论」页签面板，负责自动发起生成、结果流展示、逐条与整体复制、停止与重试。
- * 主要内容：原文预览与图片数量提示、重新生成动作行、评论条目（正文、译文、复制这条）、复制全部页脚、加载与错误状态；面板与读懂卡同构。
- * 模块边界：只经公共客户端触达后台，不组装提示词、不读取配置存储、不访问模型；选区与图片由划词卡片捕获后以纯数据传入。
+ * 文件职责：在划词卡片内呈现「评论」页签面板，负责自动发起生成、结果流展示、逐条与整体复制、停止与重试，并把「设置」入口跳转到设置页的翻译卡片分区。
+ * 主要内容：顶部译文区（选区译文优先展示，后台未给出译文或选区即目标语言时回落原文）与图片数量提示、重新生成动作行、评论条目（正文、译文、复制这条）、复制全部页脚、加载与错误状态；底部状态条说明评论不保存到记录，并提供与读懂卡一致的「设置」按钮，经后台打开设置页翻译卡片分区，失败时走提示行降级，暗色沿用读懂卡的粉调变量。
+ * 模块边界：只经公共客户端触达后台；评论偏好统一在设置页翻译卡片分区编辑，本面板不读写共享配置、不组装提示词、不访问模型；选区与图片由划词卡片捕获后以纯数据传入。
 -->
 <template>
   <div class="fr-comment">
     <div class="fr-comment-source">
-      <p class="fr-comment-source-text">{{ selection.text }}</p>
+      <p class="fr-comment-source-text">{{ sourceTranslation ?? selection.text }}</p>
       <p v-if="selection.images.length" class="fr-comment-source-images">选区包含 {{ selection.images.length }} 张图片</p>
     </div>
     <div class="fr-comment-actions" role="group" aria-label="评论操作">
@@ -30,17 +30,18 @@
       <p v-else class="fr-comment-hint">选中文字后自动开始；不满意时点“重新生成”。</p>
       <p v-if="notice" class="fr-comment-hint">{{ notice }}</p>
     </div>
-    <p class="fr-comment-meta">提示词与条数在设置中修改 · 评论不保存到记录</p>
     <footer v-if="comments.length && !busy" class="fr-comment-footer">
       <button type="button" class="fr-comment-copy" :class="{'fr-copied': copied === 'all'}" @click="copy('all', comments.map(comment => comment.content).join('\n\n'))">
         {{ copied === 'all' ? '已复制' : `复制全部 ${comments.length} 条` }}
       </button>
     </footer>
+    <div class="fr-comment-context"><span>评论不保存到记录</span><button type="button" aria-label="打开翻译卡片设置" @click="openSettings">设置</button></div>
   </div>
 </template>
 
 <script setup lang="ts">
 import {onBeforeUnmount, ref, watch} from 'vue';
+import browser from 'webextension-polyfill';
 import {requestComments} from '../client';
 import {createSelectionTtsClientRequestId} from '@/src/features/selection-translation/protocol';
 import type {CommentItem} from '../types';
@@ -53,6 +54,8 @@ const props = defineProps<{
 const emit = defineEmits<{(event: 'resize'): void}>();
 
 const comments = ref<CommentItem[]>([]);
+// 顶部选区译文：选区需要翻译且后台成功产出时为译文字符串，否则为 null（选区即目标语言、补译失败等），模板据此回落显示原文。
+const sourceTranslation = ref<string | null>(null);
 const busy = ref(false);
 const error = ref('');
 const copied = ref('');
@@ -84,6 +87,8 @@ function generate(): void {
   busy.value = true;
   error.value = '';
   notice.value = '';
+  // 新请求先重置顶部译文：新结果到达前顶部回落显示原文，语义简单可预测。
+  sourceTranslation.value = null;
   emit('resize');
   try {
     handle = requestComments({type: 'fluentReadComment', action: 'run', requestId, text: props.selection.text, images: props.selection.images}, {
@@ -91,7 +96,12 @@ function generate(): void {
       if (token !== generation) return;
       handle = null;
       busy.value = false;
-      if (response.success) comments.value = response.comments;
+      if (response.success) {
+        comments.value = response.comments;
+        // 旧格式消息可能不带 sourceTranslation，统一按 null 处理（顶部回落原文）。
+        sourceTranslation.value = response.sourceTranslation ?? null;
+        notice.value = response.notice ?? '';
+      }
       else if (!response.cancelled) error.value = response.error;
       emit('resize');
     },
@@ -129,16 +139,29 @@ function copy(key: string, text: string): void {
   }
 }
 
+// 与读懂卡一致：设置统一在设置页的翻译卡片分区编辑，卡内按钮只负责跳转过去。
+async function openSettings(): Promise<void> {
+  try {
+    const response = await browser.runtime.sendMessage({type: 'openOptionsPage', section: 'settings-harness'}) as {success?: unknown} | undefined;
+    if (response?.success !== true) throw new Error('打开设置失败');
+  } catch { notice.value = '打开设置失败，请从专项翻译进入“翻译卡片”。'; }
+}
+
 watch(() => [props.active, props.selection] as const, ([active]) => {
-  if (!active) { stop(); return; }
+  if (!active) {
+    stop();
+    return;
+  }
   if (selectionKey() !== lastKey) generate();
 }, {flush: 'post', immediate: true});
 
 // 与读懂卡一致：改配置只让现有结果失效，由用户显式再生成。
+// 这里只清空面板状态，绝不反向写配置，否则设置页改配置会经 modelRevision 形成写循环。
 watch(() => props.modelRevision, () => {
   if (!props.active || (!comments.value.length && !busy.value && !error.value)) return;
   stop();
   comments.value = [];
+  sourceTranslation.value = null;
   error.value = '';
   notice.value = '设置已更新，重新生成可使用新的设置。';
   emit('resize');
@@ -174,9 +197,20 @@ onBeforeUnmount(() => {
 .fr-comment-error { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 9px 1px; color: #c43b63; font-size: 12px; }
 .fr-comment-error button { border: 1px solid currentColor; border-radius: 6px; padding: 2px 7px; background: transparent; color: inherit; cursor: pointer; font-size: 11px; }
 .fr-comment-hint { margin: 9px 1px; color: var(--fr-comment-muted); font-size: 11.5px; }
-.fr-comment-meta { flex-shrink: 0; margin: 4px 1px 6px; color: #aaa1a6; font-size: 10px; }
 .fr-comment-footer { flex-shrink: 0; display: flex; justify-content: flex-end; padding-top: 8px; border-top: 1px solid var(--fr-comment-line); }
-:global(.fr-dark-theme) .fr-comment { color: #e8e3e8; --fr-comment-line: #4a4149; --fr-comment-muted: #b7aeb5; --fr-comment-soft: #322c34; }
-:global(.fr-dark-theme) .fr-comment-source-text { color: #b9b2ba; }
-:global(.fr-dark-theme) .fr-comment-regenerate, :global(.fr-dark-theme) .fr-comment-copy { background: transparent; border-color: #544351; color: #d9c7d1; }
+/* 底部状态条与读懂卡的设置入口同构：说明记录行为，按钮跳转设置页翻译卡片分区。 */
+.fr-comment-context { flex-shrink: 0; display: flex; align-items: center; gap: 8px; margin-top: 7px; font-size: 10px; color: var(--fr-comment-muted); }
+.fr-comment-context button { margin-left: auto; border: 0; background: transparent; color: #a64b6e; cursor: pointer; font: inherit; font-size: 10px; padding: 2px 1px; }
+.fr-comment-context button:focus-visible { outline: 2px solid rgba(214, 63, 118, .45); outline-offset: 1px; border-radius: 6px; }
+/* 暗色与读懂卡同一粉调：祖先 .fr-dark-theme 挂在划词卡根节点上，用普通后代选择器让 scoped 编译保留完整匹配链。 */
+.fr-dark-theme .fr-comment { color: #e6e0e8; --fr-comment-line: #514651; --fr-comment-muted: #b6a9b5; --fr-comment-soft: #322c34; }
+.fr-dark-theme .fr-comment-source-text { color: #b5aab6; }
+.fr-dark-theme .fr-comment-source-images { color: #e4a0bc; }
+.fr-dark-theme .fr-comment-regenerate, .fr-dark-theme .fr-comment-copy { background: transparent; border-color: #544351; color: #d9c7d1; }
+.fr-dark-theme .fr-comment-regenerate:hover:not(:disabled) { color: #e4a0bc; border-color: #6b5566; }
+.fr-dark-theme .fr-comment-copy:hover, .fr-dark-theme .fr-comment-copy.fr-copied { background: #50313f; border-color: #6b5566; color: #f1b6ce; }
+.fr-dark-theme .fr-comment-translation { color: #b5aab6; }
+.fr-dark-theme .fr-comment-status button { color: #e4a0bc; }
+.fr-dark-theme .fr-comment-error { background: #482e35; color: #f5acb6; padding: 8px 10px; border-radius: 9px; }
+.fr-dark-theme .fr-comment-context button { color: #e4a0bc; }
 </style>

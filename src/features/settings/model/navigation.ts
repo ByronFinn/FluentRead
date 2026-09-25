@@ -57,16 +57,10 @@ export const navigationGroups = [
     label: '专项翻译',
     items: [
       {
-        id: 'settings-harness', icon: '文', label: '翻译卡片', description: '选区学习辅助', group: '专项翻译',
-        heading: '翻译卡片', summary: '选中文本后按需调用 AI，帮助理解、拆句、掌握用法和练习。',
-        kicker: '专项翻译', title: '翻译卡片', detail: '配置选区学习辅助的服务、上下文范围和回答偏好。',
-        searchDescription: '翻译卡片、阅读卡、Harness、DeepSeek、读懂、拆句、用法、练习、选区、段落、学习辅助、解释深度、学习程度、学习记忆、记忆开关',
-      },
-      {
-        id: 'settings-comment', icon: '评', label: '评论助手', description: '选中文本生成可粘贴评论', group: '专项翻译',
-        heading: '评论助手', summary: '选中网页文字后点“评论”，按你的风格指令生成候选评论并逐条复制。',
-        kicker: '专项翻译', title: '评论助手', detail: '配置评论的服务、模型、条数与风格提示词。',
-        searchDescription: '评论、嘴替、选区、社交、粘贴、复制、风格提示词、条数、AI 服务、模型',
+        id: 'settings-harness', icon: '文', label: '翻译卡片', description: '选区学习辅助与评论', group: '专项翻译',
+        heading: '翻译卡片', summary: '选中文本后按需调用 AI，帮助理解、拆句、掌握用法、练习或生成评论。',
+        kicker: '专项翻译', title: '翻译卡片', detail: '配置选区学习辅助与评论的服务、上下文范围和回答偏好。',
+        searchDescription: '翻译卡片、阅读卡、Harness、DeepSeek、读懂、拆句、用法、练习、评论、嘴替、社交评论、风格提示词、条数、选区、段落、学习辅助、解释深度、学习程度、学习记忆、记忆开关',
       },
       {
         id: 'settings-image-translation', icon: '图', label: '图片翻译', description: '网页图片与 OCR', group: '专项翻译',

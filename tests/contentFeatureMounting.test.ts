@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
         disableSelectionTranslator: false,
         selectionTranslatorMode: 'bilingual',
         selectionAreaEnabled: true,
+        comment: undefined as {enabled: boolean} | undefined,
     },
     createVueShadowUi: vi.fn(),
     createModalDialogHostController: vi.fn(),
@@ -52,6 +53,7 @@ beforeEach(() => {
     mocks.config.disableSelectionTranslator = false;
     mocks.config.selectionTranslatorMode = 'bilingual';
     mocks.config.selectionAreaEnabled = true;
+    mocks.config.comment = undefined;
     vi.stubGlobal('document', {getElementById: vi.fn(() => null)});
 });
 
@@ -158,6 +160,33 @@ describe('划词翻译挂载生命周期', () => {
         mocks.config.selectionTranslatorMode = 'disabled';
         expect(runtime.mountSelectionTranslator({} as never)).toBeNull();
         expect(mocks.createVueShadowUi).not.toHaveBeenCalled();
+    });
+
+    it('评论启用时仅为评论保留卡片，评论关闭后与选区翻译一同彻底关闭', async () => {
+        const runtime = await import('@/src/features/selection-translation/content/runtime');
+
+        // 选区翻译关闭、评论开启：卡片仅为评论挂载。
+        mocks.config.disableSelectionTranslator = true;
+        mocks.config.comment = {enabled: true};
+        const mountedUi = ui();
+        mocks.createVueShadowUi.mockResolvedValueOnce(mountedUi);
+        await expect(runtime.mountSelectionTranslator({} as never)).resolves.toEqual({feature: 'mounted'});
+        runtime.unmountSelectionTranslator();
+
+        // 选区翻译与评论都关闭：不再挂载。
+        mocks.config.comment = {enabled: false};
+        expect(runtime.mountSelectionTranslator({} as never)).toBeNull();
+
+        // 挂载在途时评论关闭：迟到的界面同样被移除。
+        const pending = pendingUi();
+        const late = ui();
+        mocks.config.comment = {enabled: true};
+        mocks.createVueShadowUi.mockReturnValueOnce(pending.promise);
+        const request = runtime.mountSelectionTranslator({} as never);
+        mocks.config.comment = {enabled: false};
+        pending.resolve(late);
+        await expect(request).resolves.toBeNull();
+        expect(late.remove).toHaveBeenCalledOnce();
     });
 
     it('只创建一个关闭 Shadow DOM，并在卸载时清理', async () => {

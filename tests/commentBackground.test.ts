@@ -75,7 +75,7 @@ describe('comment background handler', () => {
         const second = handler.handle(runRequest({requestId: 'r5', text: '新选区'}) as never, sender());
         await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(3));
         expect(failure(await first).cancelled).toBe(true);
-        release({success: true, comments: []});
+        release({success: true, comments: [], sourceTranslation: null});
         expect((await second).success).toBe(true);
 
         const tab2 = handler.handle(runRequest({requestId: 'r9', text: '另一页'}) as never, sender({tab: {id: 2}}));
@@ -195,7 +195,7 @@ describe('comment background handler', () => {
         await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
         expect(failure(await handler.handle({type: 'fluentReadComment', action: 'cancel', requestId: 'r1'} as never, frame1)).cancelled).toBe(true);
         expect(await second).toEqual({success: true, comments: []});
-        releaseFirst({success: true, comments: [{content: '迟到的答案', translation: null}]});
+        releaseFirst({success: true, comments: [{content: '迟到的答案', translation: null}], sourceTranslation: null});
         expect(failure(await first).cancelled).toBe(true);
     });
 
@@ -216,10 +216,10 @@ describe('comment background handler', () => {
         await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
         const frameB = handler.handle(runRequest() as never, senderB);
         await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
-        releaseA({success: true, comments: [{content: 'A', translation: null}]});
-        expect(await frameA).toEqual({success: true, comments: [{content: 'A', translation: null}]});
+        releaseA({success: true, comments: [{content: 'A', translation: null}], sourceTranslation: null});
+        expect(await frameA).toEqual({success: true, comments: [{content: 'A', translation: null}], sourceTranslation: null});
         expect(failure(await handler.handle({type: 'fluentReadComment', action: 'cancel', requestId: 'r1'} as never, senderB)).cancelled).toBe(true);
-        releaseB({success: true, comments: [{content: 'B', translation: null}]});
+        releaseB({success: true, comments: [{content: 'B', translation: null}], sourceTranslation: null});
         expect(failure(await frameB).cancelled).toBe(true);
     });
 
@@ -236,10 +236,10 @@ describe('comment background handler', () => {
         await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
         const current = handler.handle(runRequest({requestId: 'rB'}) as never, sender());
         await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
-        releaseStale({success: true, comments: [{content: '迟到的旧答案', translation: null}]});
+        releaseStale({success: true, comments: [{content: '迟到的旧答案', translation: null}], sourceTranslation: null});
         expect(failure(await stale).cancelled).toBe(true);
         expect(failure(await handler.handle({type: 'fluentReadComment', action: 'cancel', requestId: 'rB'} as never, sender())).cancelled).toBe(true);
-        releaseCurrent({success: true, comments: [{content: '不该出现', translation: null}]});
+        releaseCurrent({success: true, comments: [{content: '不该出现', translation: null}], sourceTranslation: null});
         expect(failure(await current).cancelled).toBe(true);
     });
 });

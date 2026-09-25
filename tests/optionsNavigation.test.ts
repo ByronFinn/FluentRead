@@ -26,7 +26,6 @@ describe('options navigation view-model', () => {
         label: '专项翻译',
         items: [
           'settings-harness',
-          'settings-comment',
           'settings-image-translation',
           'settings-area-translation',
           'settings-video',
@@ -48,7 +47,6 @@ describe('options navigation view-model', () => {
       '翻译设置',
       '界面风格',
       '翻译卡片',
-      '评论助手',
       '图片翻译',
       '圈选翻译',
       '视频字幕翻译',
@@ -158,6 +156,12 @@ describe('options navigation view-model', () => {
     expect(filterNavigationItems('')).toEqual([])
     expect(filterNavigationItems('不存在的设置项')).toEqual([])
     expect(filterNavigationItems('Harness')).toEqual([
+      expect.objectContaining({ id: 'settings-harness' }),
+    ])
+    expect(filterNavigationItems('嘴替')).toEqual([
+      expect.objectContaining({ id: 'settings-harness' }),
+    ])
+    expect(filterNavigationItems('社交评论')).toEqual([
       expect.objectContaining({ id: 'settings-harness' }),
     ])
   })

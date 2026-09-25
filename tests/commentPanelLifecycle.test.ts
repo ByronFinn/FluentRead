@@ -1,7 +1,7 @@
 /**
  * @file tests/commentPanelLifecycle.test.ts
- * 文件职责：在纯 node 环境下挂载评论面板，验证自动发起、停止与迟到的结果、配置修订失效、复制降级和卸载清理。
- * 主要内容：用 Vite ssrLoadModule 加载 CommentPanel.vue，桩掉评论客户端与 Clipboard API，断言请求次数、取消调用与面板状态迁移。
+ * 文件职责：在纯 node 环境下挂载评论面板，验证自动发起、停止与迟到的结果、配置修订失效、顶部译文展示与回落、复制降级、底部设置跳转与卸载清理。
+ * 主要内容：用 Vite ssrLoadModule 加载 CommentPanel.vue，桩掉评论客户端与 webextension-polyfill 的 runtime 消息及 Clipboard API，断言请求次数、取消调用、面板状态迁移（含顶部选区译文的赋值、重置与缺失回落），以及「设置」按钮经 openOptionsPage 跳转翻译卡片分区、失败时降级为面板提示。
  * 模块边界：只验证面板自身的所有权与状态机，不触达后台 handler、模型服务或真实浏览器扩展 runtime。
  */
 import {createRequire} from 'node:module';
@@ -36,16 +36,21 @@ async function mountPanel(overrides: Record<string, unknown> = {}) {
             calls.push(call);
             return {cancel: call.cancel};
         },
+        // 面板的「设置」按钮只经 runtime 消息请求打开设置页分区；单测替换实现模拟成功与失败。
+        sendMessage: async (_message: unknown) => ({success: true}) as unknown,
     };
     (globalThis as Record<string, unknown>)[TEST_KEY] = state;
     const mocks: Plugin = {
         name: 'comment-panel-mocks', enforce: 'pre',
         resolveId(id, importer) {
             if (id === '../client' && importer?.includes('/comment-assistant/ui/')) return '\0comment-client';
+            // 面板经 polyfill 触达后台消息；polyfill 只在浏览器扩展环境可用，这里桩掉。
+            if (id === 'webextension-polyfill') return '\0comment-panel-browser';
             return null;
         },
         load(id) {
             if (id === '\0comment-client') return `export const requestComments = (...args) => globalThis.${TEST_KEY}.requestComments(...args);`;
+            if (id === '\0comment-panel-browser') return `const browser = {runtime: {sendMessage: (...args) => globalThis.${TEST_KEY}.sendMessage(...args)}};\nexport default browser;`;
             return null;
         },
     };
@@ -71,10 +76,12 @@ async function mountPanel(overrides: Record<string, unknown> = {}) {
     app.mount({}); unmount = () => app.unmount();
     await runtime.nextTick();
     const finish = (response: CommentResponse, call = calls.at(-1)!) => call.callbacks.result(response);
-    return {panel, props, calls, finish, tick: runtime.nextTick};
+    return {panel, props, calls, state, finish, tick: runtime.nextTick};
 }
 
-const okComments = (content: string): CommentResponse => ({success: true, comments: [{content, translation: null}]});
+// 成功响应统一带上选区译文：默认 null（顶部回落原文），需要的用例按断言传入译文字符串。
+const okComments = (content: string, sourceTranslation: string | null = null): CommentResponse =>
+    ({success: true, comments: [{content, translation: null}], sourceTranslation});
 
 describe('comment panel ownership and lifecycle', () => {
     it('generates once per selection and ignores a result that arrives after stop', async () => {
@@ -106,6 +113,36 @@ describe('comment panel ownership and lifecycle', () => {
         expect(calls).toHaveLength(3);
         panel.generate();
         expect(calls).toHaveLength(4);
+    });
+
+    // 挂载设施不渲染真实 DOM，顶部展示契约是模板表达式 sourceTranslation ?? selection.text，这里断言驱动它的状态。
+    it('shows the source translation at the top when the response carries one', async () => {
+        const {panel, props, finish} = await mountPanel();
+        finish(okComments('Ship it!', '这是选区的中文译文'));
+        expect(panel.sourceTranslation).toBe('这是选区的中文译文');
+        // 译文优先：顶部不再显示选区原文文本。
+        expect(panel.sourceTranslation ?? props.selection.text).not.toBe(props.selection.text);
+    });
+
+    it('falls back to the raw selection at the top when no translation is provided', async () => {
+        const {panel, props, finish} = await mountPanel();
+        // 选区即目标语言等情况后台会回 null，顶部回落显示原文。
+        finish(okComments('中文选区'));
+        expect(panel.sourceTranslation).toBe(null);
+        expect(panel.sourceTranslation ?? props.selection.text).toBe('Ship it Friday.');
+    });
+
+    it('resets the top translation while regenerating and shows the new one on arrival', async () => {
+        const {panel, props, calls, finish} = await mountPanel();
+        finish(okComments('First', '第一版译文'));
+        expect(panel.sourceTranslation).toBe('第一版译文');
+        panel.generate();
+        expect(panel.busy).toBe(true);
+        // 忙碌期间新请求已重置译文，顶部回落为选区原文。
+        expect(panel.sourceTranslation).toBe(null);
+        expect(panel.sourceTranslation ?? props.selection.text).toBe('Ship it Friday.');
+        finish(okComments('Second', '第二版译文'), calls[1]);
+        expect(panel.sourceTranslation).toBe('第二版译文');
     });
 
     it('keeps a settings revision from silently spending another request', async () => {
@@ -213,5 +250,25 @@ describe('comment panel ownership and lifecycle', () => {
         await tick();
         expect(panel.busy).toBe(false);
         expect(panel.error).toContain('未能发出');
+    });
+
+    it('opens the translation card settings section from the bottom bar and degrades on background failure', async () => {
+        const {panel, state, tick} = await mountPanel();
+        // 卡内折叠编辑器已删除：设置统一在设置页翻译卡片分区，卡内只剩跳转按钮，失败走面板提示行。
+        expect(panel.draft).toBeUndefined();
+        expect(panel.settingsSummary).toBeUndefined();
+        const sent: unknown[] = [];
+        state.sendMessage = async (message: unknown) => { sent.push(message); return {success: true}; };
+        await panel.openSettings();
+        await tick();
+        expect(sent).toEqual([{type: 'openOptionsPage', section: 'settings-harness'}]);
+        expect(panel.notice).toBe('');
+        state.sendMessage = async () => undefined;
+        await panel.openSettings();
+        await tick();
+        expect(panel.notice).toBe('打开设置失败，请从专项翻译进入“翻译卡片”。');
+        state.sendMessage = async () => { throw new Error('background stopped'); };
+        await panel.openSettings();
+        expect(panel.notice).toBe('打开设置失败，请从专项翻译进入“翻译卡片”。');
     });
 });

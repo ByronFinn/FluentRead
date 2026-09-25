@@ -1138,4 +1138,33 @@ describe('options UI composition architecture', () => {
     expect(page).not.toContain(':hover > .fluent-read-bilingual-content::before')
     expect(page).not.toContain(':has(> .fluent-read-bilingual-content[data-fr-translation-owned="true"]):hover')
   })
+
+  it('keeps comment settings inside the translation card section without a standalone page', () => {
+    const sections = source('src/features/settings/ui/SettingsSections.vue')
+    const harness = source('src/features/settings/ui/HarnessSettings.vue')
+    const navigation = source('src/features/settings/model/navigation.ts')
+    const icons = source('src/features/settings/ui/SettingsNavigationIcon.vue')
+
+    expect(sections).toContain('<HarnessSettings :config="config" />')
+    expect(sections).not.toContain('settings-comment')
+    expect(sections).not.toContain('CommentSettings')
+    expect(navigation).not.toContain('settings-comment')
+    expect(navigation).not.toContain('评论助手')
+    expect(navigation).toContain("description: '选区学习辅助与评论'")
+    expect(navigation.match(/'settings-harness'[^}]*searchDescription: '([^']+)'/u)?.[1]).toContain('评论')
+    expect(icons).not.toContain('settings-comment')
+
+    // 评论是翻译卡片分区内与读懂并列的动作：启用开关、服务、模型、条数与风格提示词都编辑同一份 config.comment。
+    expect(harness).toContain('v-model="config.comment.enabled"')
+    expect(harness).toContain('title="启用评论助手"')
+    expect(harness).toContain('description="在翻译卡片「读懂」动作行与卡片头部显示「评论」动作，选区指示条同步提供入口；评论结果不写入学习记录。"')
+    expect(harness).toContain('v-model="config.comment.service"')
+    expect(harness).toContain('v-model="config.comment.model"')
+    expect(harness).toContain('v-model="config.comment.count"')
+    expect(harness).toContain('v-model="config.comment.prompt"')
+    expect(harness).toContain('COMMENT_PROMPT_MAX_LENGTH')
+    expect(harness).toContain('COMMENT_PROMPT_VARIABLES')
+    expect(harness).toContain('DEFAULT_COMMENT_PROMPT')
+    expect(harness.match(/v-model="config\.comment\.[a-z]+"/gu)).toHaveLength(5)
+  })
 })

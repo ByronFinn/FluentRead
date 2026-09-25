@@ -1,7 +1,7 @@
 /**
  * @file src/features/selection-translation/core.ts
  * 文件职责：集中划词翻译的纯交互与内容算法，包括请求代次、词典回退、触发展示状态、选区过滤、上下文摘要、弹窗锚点和语音语言规范化。
- * 主要内容：定义 SelectionRequestTokenGate、Presentation 状态机、选区/视口类型，处理同语种判断、文本清理、公式单份文本提取、敏感区域排除、多矩形选择、弹窗定位、选区入口抑制判定及仅用于朗读的普通话语言别名。
+ * 主要内容：定义 SelectionRequestTokenGate、Presentation 状态机、选区/视口类型，处理同语种判断、文本清理、公式单份文本提取、敏感区域排除（img 不再排除，跨内联图片的文字选区仍出卡）、多矩形选择、弹窗定位、选区入口抑制判定及仅用于朗读的普通话语言别名。
  * 模块边界：本模块不监听 document selection、不发消息、不渲染 Vue 或播放音频；组件负责连接 DOM，词典和 TTS 由 services/background 提供，函数保持确定性以供单元测试。
  */
 import {getElementTagName, isTopLevelApplicationShell} from '@/src/core/translation/public';
@@ -230,8 +230,10 @@ function isInlineSelectionFormulaPart(element: Element): boolean {
     return !isSelectionExcludedElement(outer.parentElement);
 }
 
+// img 不再排除：文字选区跨越内联图片或 emoji 图片（如 X 的 twemoji）时仍需出卡，
+// 纯图片选区因快照读不到文本会自然跳过，无需在此拦截。
 const selectionExcludedTagNames = new Set([
-    'audio', 'button', 'canvas', 'code', 'embed', 'iframe', 'img', 'input',
+    'audio', 'button', 'canvas', 'code', 'embed', 'iframe', 'input',
     'kbd', 'math', 'object', 'option', 'picture', 'pre', 'samp', 'select',
     'svg', 'template', 'textarea', 'var', 'video',
 ]);
@@ -333,8 +335,9 @@ function hasNonZeroClientRect(element: Element): boolean {
 }
 
 /**
- * 划词翻译只处理页面正文，不处理原子内容或交互控件。这里同时检查选区两端
- * 与实时 DOM 中相交且具有可见几何的排除元素，避免隐藏控件误伤浏览器生成的段落选区。
+ * 划词翻译只处理页面正文，不处理原子内容或交互控件；内联图片与 emoji 图片不算原子内容，
+ * 跨越它们的文字选区仍会出卡。这里同时检查选区两端与实时 DOM 中相交且具有可见几何的
+ * 排除元素，避免隐藏控件误伤浏览器生成的段落选区。
  */
 export function shouldIgnoreSelection(range: Range): boolean {
     const boundaries = [
