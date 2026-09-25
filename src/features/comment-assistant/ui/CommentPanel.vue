@@ -176,7 +176,7 @@ onBeforeUnmount(() => {
 <style scoped>
 .fr-comment { --fr-comment-line: #eee8ec; --fr-comment-muted: #756a74; --fr-comment-soft: #faf7f9; display: flex; flex-direction: column; height: 100%; min-height: 0; box-sizing: border-box; padding: 10px 14px; overflow: hidden; color: #35333c; font: 13px/1.7 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 .fr-comment-source { flex-shrink: 0; margin-bottom: 8px; }
-.fr-comment-source-text { margin: 0; color: #666570; font-size: 12px; line-height: 1.6; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; user-select: text; }
+.fr-comment-source-text { margin: 0; color: #666570; font-size: 12px; line-height: 1.6; max-height: 4.8em; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; overflow-wrap: anywhere; user-select: text; }
 .fr-comment-source-images { margin: 4px 0 0; color: #9e5d71; font-size: 10.5px; font-weight: 700; }
 .fr-comment-actions { flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-bottom: 6px; }
 .fr-comment-regenerate { border: 1px solid rgba(126, 113, 121, .16); border-radius: 8px; background: #fff; color: #826573; font-size: 11.5px; font-weight: 650; padding: 4px 9px; cursor: pointer; }
@@ -186,7 +186,11 @@ onBeforeUnmount(() => {
 .fr-comment-turn { padding: 9px 1px; border-bottom: 1px solid var(--fr-comment-line); }
 .fr-comment-turn:last-child { border-bottom: 0; }
 .fr-comment-text { margin: 0; overflow-wrap: anywhere; user-select: text; }
-.fr-comment-translation { margin: 3px 0 0; color: #9a7f89; font-size: 11.5px; line-height: 1.5; overflow-wrap: anywhere; user-select: text; }
+/* 顶部译文与条目译文限高滚动：长译文不撑爆卡片，也不像 line-clamp 那样裁断后无法看全；滚动条收窄为细条避免挤占小卡空间。 */
+.fr-comment-translation { margin: 3px 0 0; color: #9a7f89; font-size: 11.5px; line-height: 1.5; max-height: 4.5em; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; overflow-wrap: anywhere; user-select: text; }
+.fr-comment-source-text::-webkit-scrollbar, .fr-comment-translation::-webkit-scrollbar { width: 4px; }
+.fr-comment-source-text::-webkit-scrollbar-thumb { background: rgba(102, 101, 112, .35); border-radius: 2px; }
+.fr-comment-translation::-webkit-scrollbar-thumb { background: rgba(154, 127, 137, .4); border-radius: 2px; }
 .fr-comment-turn-tools { display: flex; justify-content: flex-end; margin-top: 5px; }
 .fr-comment-copy { display: inline-flex; align-items: center; justify-content: center; min-height: 24px; padding: 0 8px; border: 1px solid rgba(126, 113, 121, .12); border-radius: 9px; background: rgba(255, 255, 255, .45); color: #8c8188; cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; line-height: 1; white-space: nowrap; transition: background .14s ease, border-color .14s ease, color .14s ease, transform .14s ease; }
 .fr-comment-copy:hover, .fr-comment-copy.fr-copied { border-color: rgba(214, 63, 118, .35); background: #fff; color: #d63f76; }
