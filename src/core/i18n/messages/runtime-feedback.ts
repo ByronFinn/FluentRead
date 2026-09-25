@@ -659,6 +659,7 @@ const learningToolRows: readonly RuntimeFeedbackRow[] = [
 const popupMailRows: readonly RuntimeFeedbackRow[] = [
     ['邮件翻译', 'Email translation', 'メール翻訳', '메일 번역', 'Traduction des e-mails', 'Перевод писем', 'Traducción de correos'],
     ['请先打开一封邮件，然后重试翻译', 'Open an email, then try translating again', 'メールを開いてから、もう一度翻訳してください', '메일을 연 다음 다시 번역해 주세요', 'Ouvrez un e-mail, puis réessayez de le traduire', 'Откройте письмо и повторите попытку перевода', 'Abre un correo y vuelve a intentar traducirlo'],
+];
 
 /** 划词卡片评论页签与评论后台的运行期反馈。 */
 const commentRows: readonly RuntimeFeedbackRow[] = [

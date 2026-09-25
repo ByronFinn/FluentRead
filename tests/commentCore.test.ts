@@ -14,19 +14,35 @@ describe('comment prompt core', () => {
     });
 
     it('builds system prompt with fixed security shell around user style', () => {
-        const withStyle = buildCommentSystemPrompt('毒舌一点', 3, 'en');
+        // 泛化态：未识别选区只约束"与选区相同语言"，并把选区译文纳入同一要求；空目标回落语言代码 zh-Hans。
+        const generic = {sameLanguage: false, selectionLanguage: undefined};
+        const withStyle = buildCommentSystemPrompt('毒舌一点', 3, 'en', generic);
         expect(withStyle).toContain(COMMENT_SECURITY_RULES);
         expect(withStyle).toContain('毒舌一点');
         expect(withStyle).toContain('恰好 3 条');
         expect(withStyle).toContain('content 必须使用与选区相同的语言书写');
-        expect(withStyle).toContain('translation 使用语言代码 en');
-        expect(withStyle).toContain('每条 translation 必须给出非空译文供双语展示');
+        expect(withStyle).toContain('translation 与 sourceTranslation 使用语言代码 en');
+        expect(withStyle).toContain('每条 translation 与 sourceTranslation 必须给出非空译文供双语展示');
         expect(withStyle).toContain(COMMENT_OUTPUT_CONTRACT);
-        const fallback = buildCommentSystemPrompt('   ', 2, '  ');
+        const fallback = buildCommentSystemPrompt('   ', 2, '  ', generic);
         expect(fallback).toContain(DEFAULT_COMMENT_PROMPT);
         expect(fallback).toContain('content 必须使用与选区相同的语言书写');
-        expect(fallback).toContain('translation 通常为 null');
+        expect(fallback).toContain('translation 与 sourceTranslation 使用语言代码 zh-Hans');
+        expect(fallback).toContain('每条 translation 与 sourceTranslation 必须给出非空译文供双语展示');
         expect(fallback).toContain(COMMENT_TASK_RULES.replace('{{count}}', '2'));
+    });
+
+    it('injects the code-decided language plan as the three-state bilingual contract', () => {
+        // 同语态：评论与选区译文都无需跨语言，一律为 null。
+        const sameLanguage = buildCommentSystemPrompt('', 2, 'zh-Hans', {sameLanguage: true, selectionLanguage: undefined});
+        expect(sameLanguage).toContain('选区语言与目标语言一致：content 直接使用选区语言书写');
+        expect(sameLanguage).toContain('translation 与 sourceTranslation 一律为 null');
+        // 点名态：可信识别出选区语言时按代码强制分语，译文不得为 null。
+        const named = buildCommentSystemPrompt('', 2, 'zh-Hans', {sameLanguage: false, selectionLanguage: 'ja'});
+        expect(named).toContain('选区主要语言已判定为语言代码 ja');
+        expect(named).toContain('content 必须使用该语言书写，不得改用其他语言');
+        expect(named).toContain('translation 与 sourceTranslation 必须使用语言代码 zh-Hans 对应的语言书写');
+        expect(named).toContain('每条 translation 与 sourceTranslation 都必须是非空译文，不得为 null');
     });
 
     it('frames selection as data and describes images', () => {
@@ -54,6 +70,10 @@ describe('comment prompt core', () => {
     it('exposes prompt budget and variables', () => {
         expect(COMMENT_PROMPT_MAX_LENGTH).toBe(2000);
         expect(COMMENT_PROMPT_VARIABLES.map(variable => variable.token)).toEqual(['{{count}}']);
+        // 输出契约携带选区译文字段：comments 数组与 sourceTranslation 一起提交。
+        expect(COMMENT_OUTPUT_CONTRACT).toContain('comments 数组与 sourceTranslation');
+        expect(COMMENT_OUTPUT_CONTRACT).toContain('整个选区的目标语言译文');
+        expect(COMMENT_TASK_RULES).toContain('评论语言遵循语言判定要求');
     });
 
   it('中和选区里的围栏，页面文本不能提前闭合素材包装', () => {

@@ -1,7 +1,7 @@
 <!--
  * @file src/features/reading-assistant/ui/ReadingPanel.vue
- * 文件职责：在划词卡内以内容为主呈现学习回答，复用父卡片导航、把次级操作送入顶栏固定槽、按需展开的原文译文对照与连续追问。
- * 主要内容：相同译文保留原文且不重复展示；按原文与配置复用各学习动作的已完成回答，显式重新生成；历史问答按轮次与问题摘要逐条展开，区分当前问答与旧回答，切换回答时收起历史；统一导航的学习卡默认收起原文与匹配译文，查看原文后可返回当前阅读，短回答不再保留一屏空白；独立面板仍在滚动区顶部展示对照内容，进入回答时滚过原文，译文晚到时保持回答位置，关闭局部浏览器滚动锚定以避免流式格式变化移动阅读位置；流式正文只更新内部滚动内容，回答出现或消失及状态变化才通知父卡片检查布局；重复点击当前动作保留位置和待发送追问；把原文朗读和 30 天问答记录收进次级操作，在回答下方区分原文收藏与学习笔记；原文收藏仅保存对应译文，笔记保存不依赖 AI 参考开关，让多语言动作标签按空间换行，统一呈现 Markdown，以局部主题变量保持正文、状态和操作文字的对比度，并以代次隔离过期请求；冻结每轮许可原文身份，显示就近引用和来源状态，历史恢复保留引文而不授予当前网页定位权限，回写前核查页面归属。
+ * 文件职责：在划词卡内以内容为主呈现学习回答，复用父卡片导航、把次级操作送入顶栏固定槽、按需展开的原文译文对照与连续追问，并把「评论」动作透传给划词卡切换页签。
+ * 主要内容：相同译文保留原文且不重复展示；按原文与配置复用各学习动作的已完成回答，显式重新生成；独立面板动作行在学习方式后按需显示「评论」入口；历史问答按轮次与问题摘要逐条展开，区分当前问答与旧回答，切换回答时收起历史；统一导航的学习卡默认收起原文与匹配译文，查看原文后可返回当前阅读，短回答不再保留一屏空白；独立面板仍在滚动区顶部展示对照内容，进入回答时滚过原文，译文晚到时保持回答位置，关闭局部浏览器滚动锚定以避免流式格式变化移动阅读位置；流式正文只更新内部滚动内容，回答出现或消失及状态变化才通知父卡片检查布局；重复点击当前动作保留位置和待发送追问；把原文朗读和 30 天问答记录收进次级操作，在回答下方区分原文收藏与学习笔记；原文收藏仅保存对应译文，笔记保存不依赖 AI 参考开关，让多语言动作标签按空间换行，统一呈现 Markdown，以局部主题变量保持正文、状态和操作文字的对比度，并以代次隔离过期请求；冻结每轮许可原文身份，显示就近引用和来源状态，历史恢复保留引文而不授予当前网页定位权限，回写前核查页面归属。
  * 模块边界：不持有模型密钥、不扫描页面、不直接请求供应商；双布局复用追问节点而不加容器，保留父 scoped 样式、Vue 输入法指令及键盘边界；按有效服务限制B站为基础读懂/用法，隐藏且拒绝未验证的追问，临时默认动作不改保存偏好；历史回答保留原动作与追问，按当前服务限制重试/再生成，父导航回写不重新请求；记录由后台会话仓库保存，日期格式器只在本组件同步模板每轮渲染内复用并在下轮重解系统默认值，父划词组件负责选区、位置和 Shadow UI 生命周期。
  -->
 <template>
@@ -36,6 +36,7 @@
     <div v-if="!externalNavigation" class="fr-reading-toolbar">
       <div class="fr-reading-actions" role="group" aria-label="学习方式">
         <button v-for="action in actions" :key="action.id" type="button" :aria-label="action.label" :title="action.label" :aria-pressed="active && Boolean(currentTurnKey) && intent === action.id" @click="chooseAction(action.id)">{{ action.id === 'grammar' ? '句法' : action.label }}</button>
+        <button v-if="commentEnabled" type="button" @click="emit('open-comment')">评论</button>
       </div>
       <ReadingTools />
     </div>
@@ -133,6 +134,7 @@ const props = defineProps<{
   vocabularyEnabled: boolean;
   privateContext: boolean;
   animations: boolean;
+  commentEnabled: boolean;
   playingSourceText?: string;
   sourceLanguage?: string;
   modelRevision?: number;
@@ -142,7 +144,7 @@ const props = defineProps<{
   sourceRevision?: number;
   sourceTranslation?: {source: string; text: string; pending?: boolean; error?: string};
 }>();
-const emit = defineEmits<{resize: []; 'play-source': [text: string]; 'source-change': [text: string]; 'view-change': [view: {action: HarnessActionId; history: boolean}]}>();
+const emit = defineEmits<{resize: []; 'play-source': [text: string]; 'source-change': [text: string]; 'view-change': [view: {action: HarnessActionId; history: boolean}]; 'open-comment': []}>();
 const effectiveService = computed(() => props.service || props.preferences.service);
 const actions = computed(() => HARNESS_ACTIONS.filter(action => props.preferences.actions.includes(action.id) && isReadingActionSupported(effectiveService.value, action.id)));
 const effectiveDefaultAction = computed(() => actions.value.find(action => action.id === props.preferences.defaultAction)?.id

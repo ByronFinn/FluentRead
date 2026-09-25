@@ -84,7 +84,7 @@ describe('comment stream port', () => {
     });
 
     it('drops a result that arrives after the port already closed', async () => {
-        let finish!: (response: {success: true; comments: never[]}) => void;
+        let finish!: (response: {success: true; comments: never[]; sourceTranslation: null}) => void;
         handler.handle.mockImplementation((message: {action: string}) => (message.action === 'cancel'
             ? Promise.resolve({success: false, error: '已取消', cancelled: true})
             : new Promise((resolve) => { finish = resolve; })));
@@ -93,7 +93,7 @@ describe('comment stream port', () => {
         port.fire({requestId: 'r8'});
         await vi.waitFor(() => expect(handler.handle).toHaveBeenCalledOnce());
         port.drop();
-        finish({success: true, comments: []});
+        finish({success: true, comments: [], sourceTranslation: null});
         await vi.waitFor(() => expect(handler.handle).toHaveBeenCalledTimes(2));
         expect(port.postMessage).not.toHaveBeenCalled();
     });

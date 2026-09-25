@@ -1,8 +1,8 @@
 <!--
  * @file src/features/settings/ui/HarnessSettings.vue
- * 文件职责：作为划词翻译的学习子设置，用示例说明 AI 讲解，并明确原文范围、学习笔记和自定义指令的用途。
- * 主要内容：左侧用真实回答组件预览学习动作，右侧配置服务、模型、动作与回答偏好；B站仅预览基础读懂和用法、禁用暂不可用动作，默认动作临时回退而保留用户偏好，明确免费免密钥并展示固定模型，其他服务恢复完整动作与模型选择；多行偏好使用完整单列控件保持左侧对齐，窄屏下默认动作也纵向排列；独立展示上下文和记忆分区，提供学习中心入口；关闭讲解保留偏好，示例不发送请求。
- * 模块边界：只编辑传入 Config 的 harness 字段；记录由学习中心管理，不发起模型请求、不拥有网页选区。
+ * 文件职责：作为划词翻译的学习子设置，用示例说明 AI 讲解，明确原文范围、学习笔记和自定义指令的用途，并配置评论动作。
+ * 主要内容：左侧用真实回答组件预览学习动作，右侧配置服务、模型、动作与回答偏好；B站仅预览基础读懂和用法、禁用暂不可用动作，默认动作临时回退而保留用户偏好，明确免费免密钥并展示固定模型，其他服务恢复完整动作与模型选择；多行偏好使用完整单列控件保持左侧对齐，窄屏下默认动作也纵向排列；独立展示上下文和记忆分区，提供学习中心入口；随后提供评论设置（启用开关、评论服务、模型、条数和风格提示词编辑器）；关闭讲解保留偏好，示例不发送请求。
+ * 模块边界：只编辑传入 Config 的 harness 与 comment 字段；评论仅在卡内展示、不写入学习记录；阅读记录由学习中心管理，不发起模型请求、不拥有网页选区。
  -->
 <template>
   <SettingsGroup data-settings-anchor="learning" data-settings-anchor-label="AI 深入讲解" title="AI 深入讲解" description="切换左侧示例了解学习动作；在网页卡片中触发学习动作后，才向所选 AI 服务发送请求">
@@ -70,6 +70,54 @@
     <div class="harness-memory-footer"><p>只使用你主动保存的内容，可在学习中心查看、编辑或删除</p><button type="button" @click="emit('navigate', 'settings-vocabulary')">打开学习中心 →</button></div>
   </SettingsGroup>
   <HarnessPromptSettings :preferences="config.harness" />
+  <SettingsGroup title="评论" description="选中网页文字后点“评论”，生成可直接粘贴的社交评论。使用已配置的大模型服务和密钥。">
+    <FeatureEnableCard v-model="config.comment.enabled" title="启用评论助手" description="在翻译卡片「读懂」动作行与卡片头部显示「评论」动作，选区指示条同步提供入口；评论结果不写入学习记录。" />
+  </SettingsGroup>
+
+  <SettingsGroup title="评论设置">
+    <div class="harness-provider-row">
+      <div class="harness-provider-field">
+        <label>评论服务</label>
+        <div class="harness-service-control">
+          <el-select v-model="config.comment.service" class="harness-select" clearable filterable aria-label="评论服务" placeholder="跟随当前默认服务" @change="config.comment.model = ''">
+            <el-option v-for="item in commentServiceOptions" :key="item.value" :label="item.label" :value="item.value" />
+          </el-select>
+          <small class="harness-provider-help">仅支持大模型；{{ effectiveCommentServiceUsable ? '' : '当前默认服务不可用，请在这里选择一个 AI 服务。' }}</small>
+        </div>
+      </div>
+      <div class="harness-provider-field">
+        <label>模型</label>
+        <el-select v-model="config.comment.model" class="harness-select" clearable filterable allow-create default-first-option aria-label="评论模型" placeholder="跟随服务模型">
+          <el-option v-for="model in commentModelOptions" :key="model" :label="model" :value="model" />
+        </el-select>
+        <small class="harness-provider-help">默认沿用服务的模型，也可以选择或输入模型名称。</small>
+      </div>
+    </div>
+    <SettingsItem label="评论条数" description="每次生成的候选数量；模型必须按该数量提交，超出会被裁剪。">
+      <el-input-number v-model="config.comment.count" :min="1" :max="5" controls-position="right" aria-label="评论条数" />
+    </SettingsItem>
+  </SettingsGroup>
+
+  <SettingsGroup title="评论风格提示词" description="自定义风格指令；安全规则、选区包装与输出契约固定内置，用户内容不会覆盖它们。">
+    <details class="harness-comment-prompts">
+      <summary>编辑风格指令</summary>
+      <div class="harness-comment-prompt-body">
+        <div class="harness-comment-prompt-toolbar">
+          <small>选中文本与图片会自动提供，无需写入提示词。留空使用默认风格。</small>
+          <button type="button" @click="restoreCommentPrompt">恢复默认</button>
+        </div>
+        <textarea ref="commentPromptEditor" v-model="config.comment.prompt" data-i18n-ignore :maxlength="COMMENT_PROMPT_MAX_LENGTH"
+          :placeholder="DEFAULT_COMMENT_PROMPT" aria-label="评论风格提示词" spellcheck="false" />
+        <div class="harness-comment-prompt-variables">
+          <span>点击插入占位符</span>
+          <button v-for="variable in COMMENT_PROMPT_VARIABLES" :key="variable.token" type="button" @mousedown.prevent @click="insertCommentVariable(variable.token)">
+            <code data-i18n-ignore>{{ variable.token }}</code><span>{{ variable.label }}</span>
+          </button>
+        </div>
+        <small class="harness-comment-prompt-count" data-i18n-ignore>{{ config.comment.prompt.length }} / {{ COMMENT_PROMPT_MAX_LENGTH }}</small>
+      </div>
+    </details>
+  </SettingsGroup>
 </template>
 <script setup lang="ts">
 import HarnessPromptSettings from './HarnessPromptSettings.vue';
@@ -77,10 +125,12 @@ import SettingsPreviewLayout from './components/SettingsPreviewLayout.vue';
 import {ReadingAnswer} from '@/src/features/reading-assistant/ui/answer/public';
 import {sentenceSource, sentenceTranslation, sentenceAnalysis, learningPreviewAnswers} from '@/src/core/config/selectionPreview';
 import FeatureEnableCard from '@/src/ui/components/FeatureEnableCard.vue';
-import {computed, ref, toRef, watch} from 'vue'
+import {computed, nextTick, ref, toRef, watch} from 'vue'
 import {models, options, services} from '@/src/core/config/catalog'
 import {getCustomOpenAIProviderLabel, getCustomOpenAIProviderModels, isCustomOpenAIProviderId} from '@/src/core/config/customOpenAI'
 import {HARNESS_ACTIONS, isReadingActionSupported, isReadingService, resolveHarnessModel, type HarnessActionId} from '@/src/core/config/harness'
+import {isCommentServiceUsable} from '@/src/core/config/comment'
+import {COMMENT_PROMPT_MAX_LENGTH, COMMENT_PROMPT_VARIABLES, DEFAULT_COMMENT_PROMPT} from '@/src/core/comment/prompts'
 import type {Config} from '@/src/core/config/model'
 import SettingsGroup from './components/SettingsGroup.vue'
 import SettingsItem from './components/SettingsItem.vue'
@@ -102,6 +152,17 @@ const modelOptions = computed(() => {
   const service = config.value.harness.service || config.value.service
   return (isCustomOpenAIProviderId(service) ? getCustomOpenAIProviderModels(config.value.customOpenAIProviders, service) : models.get(service) || []).filter((model) => model !== '自定义模型')
 })
+// 评论服务候选沿用 Harness 白名单并补充未与目录重名的自定义 OpenAI 供应商，与已删除的评论助手设置页保持同一规则。
+const commentServiceOptions = computed(() => [
+  ...options.services.filter((item) => !item.disabled && isReadingService(item.value)),
+  ...config.value.customOpenAIProviders.filter((provider) => !options.services.some((item) => item.value === provider.id)).map((provider) => ({value: provider.id, label: getCustomOpenAIProviderLabel(config.value.customOpenAIProviders, provider.id)})),
+])
+// 空服务跟随当前默认服务；空模型跟随服务的已配置模型。
+const commentModelOptions = computed(() => {
+  const service = config.value.comment.service || config.value.service
+  return (isCustomOpenAIProviderId(service) ? getCustomOpenAIProviderModels(config.value.customOpenAIProviders, service) : models.get(service) || []).filter((model) => model !== '自定义模型')
+})
+const effectiveCommentServiceUsable = computed(() => isCommentServiceUsable(config.value.comment.service || config.value.service, config.value.customOpenAIProviders))
 const effectiveServiceSupportsHarness = computed(() => isReadingService(config.value.harness.service || config.value.service, config.value.customOpenAIProviders))
 const effectiveModel = computed(() => resolveHarnessModel(config.value))
 const isBilibiliReading = computed(() => effectiveModel.value.service === services.bilibili)
@@ -123,6 +184,19 @@ function toggleAction(id: HarnessActionId) {
   const actions = config.value.harness.actions.includes(id) ? config.value.harness.actions.filter((item) => item !== id) : [...config.value.harness.actions, id]
   config.value.harness.actions = actions.includes('meaning') ? actions : ['meaning', ...actions]
   if (!config.value.harness.actions.includes(config.value.harness.defaultAction)) config.value.harness.defaultAction = 'meaning'
+}
+const commentPromptEditor = ref<HTMLTextAreaElement | null>(null)
+function restoreCommentPrompt(): void { config.value.comment.prompt = DEFAULT_COMMENT_PROMPT }
+async function insertCommentVariable(token: string): Promise<void> {
+  const field = commentPromptEditor.value
+  const current = config.value.comment.prompt
+  if (!field || current.length + token.length > COMMENT_PROMPT_MAX_LENGTH) return
+  const start = field.selectionStart
+  const end = field.selectionEnd
+  config.value.comment.prompt = current.slice(0, start) + token + current.slice(end)
+  await nextTick()
+  field.focus()
+  field.setSelectionRange(start + token.length, start + token.length)
 }
 </script>
 
@@ -155,5 +229,20 @@ function toggleAction(id: HarnessActionId) {
 .harness-memory-footer p { flex:1; min-width:180px; margin:0; color:var(--muted); font-size:12px; line-height:1.6; }
 .harness-memory-footer button { padding:8px 12px; border:1px solid var(--line); border-radius:8px; color:var(--brand); background:var(--surface); font:inherit; font-size:12px; cursor:pointer; }
 button:focus-visible { outline:2px solid var(--brand); outline-offset:3px; }
+.harness-comment-prompts { padding:16px; color:var(--ink); }
+.harness-comment-prompts summary { cursor:pointer; font-size:13px; font-weight:700; }
+.harness-comment-prompts summary:focus-visible { outline:2px solid var(--brand); outline-offset:4px; }
+.harness-comment-prompt-body { display:grid; gap:12px; margin-top:16px; }
+.harness-comment-prompt-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.harness-comment-prompt-toolbar small { color:var(--muted); font-size:11px; line-height:1.6; }
+.harness-comment-prompts button { border:1px solid var(--line); border-radius:8px; padding:6px 10px; color:var(--ink); background:var(--surface); cursor:pointer; font:inherit; font-size:11px; }
+.harness-comment-prompt-toolbar button { flex-shrink:0; color:var(--brand); }
+.harness-comment-prompts textarea { display:block; width:100%; min-height:150px; max-height:440px; resize:vertical; border:1px solid var(--line); border-radius:10px; padding:14px; background:var(--surface-soft); color:var(--ink); font:12px/1.8 ui-monospace,monospace; }
+.harness-comment-prompts textarea:focus { outline:2px solid color-mix(in srgb,var(--brand) 45%,transparent); outline-offset:1px; }
+.harness-comment-prompt-variables { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+.harness-comment-prompt-variables > span { color:var(--muted); font-size:11px; }
+.harness-comment-prompt-variables button { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
+.harness-comment-prompt-variables code { color:var(--brand); }
+.harness-comment-prompt-count { justify-self:end; color:var(--muted); font-size:10px; }
 @media(max-width:480px) { .harness-provider-row, .harness-actions { grid-template-columns:minmax(0,1fr); } .harness-preferences :deep(.settings-item.harness-default-action) { grid-template-columns:minmax(0,1fr); align-items:stretch; } .harness-memory-footer { padding:14px 12px; } }
 </style>
