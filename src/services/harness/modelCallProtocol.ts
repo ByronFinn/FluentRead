@@ -5,7 +5,8 @@
  * 后台代理与 Offscreen 执行器之间的消息形状、事件判别联合、错误保真字段集以及可独立单测的纯函数。
  * 主要内容：MODEL_CALL_START_OFFSCREEN / MODEL_CALL_CANCEL_OFFSCREEN 消息常量与 ModelCallStartMessage、
  * ModelCallCancelMessage 请求类型；'fluentReadModelCallEvent' 事件推送类型与 ModelCallEvent 判别联合；
- * stripAbortSignal、createModelCallRequestId、serializeModelCallError、restoreModelCallError 纯函数和
+ * stripAbortSignal、createModelCallRequestId、serializeModelCallError、restoreModelCallError 纯函数、
+ * restoreModelCallTimestamps 结果契约还原（把消息边界 JSON 化的 response.timestamp 重建为 Date）、
  * MODEL_CALL_HEARTBEAT_INTERVAL_MS 心跳间隔。
  * 模块边界：本文件只包含类型、常量与纯函数，零浏览器 API、零 'ai' 运行时依赖（仅 type import）；
  * 不构建 provider、不发送消息、不管理生命周期——执行由 modelExecutor 完成，通断与 SW 保活由宿主端口承担。
@@ -183,4 +184,40 @@ export function restoreModelCallError(fields: ModelCallErrorFields): RestoredMod
     if (fields.statusCode !== undefined) enriched.statusCode = fields.statusCode;
     if (fields.responseBodyText !== undefined) enriched.responseBody = fields.responseBodyText;
     return enriched;
+}
+
+/**
+ * 单个时间戳的还原规则：Date 保真返回；字符串可解析则重建 Date；有限数字按毫秒重建；
+ * 其余（含无法解析的字符串、undefined、异形态）一律置 undefined——AI SDK 对缺失的
+ * timestamp 有 new Date() 兜底，而字符串会使其遥测属性构造以裸 TypeError 崩溃。
+ */
+function parseModelCallTimestamp(value: unknown): Date | undefined {
+    if (value instanceof Date) return value;
+    if (typeof value === 'string' && value.trim()) {
+        const parsed = new Date(value);
+        if (!Number.isNaN(parsed.getTime())) return parsed;
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) return new Date(value);
+    return undefined;
+}
+
+/**
+ * 在消息边界落地处把结果契约中的 Date 字段还原为 Date 实例。LanguageModelV3 契约里唯一的
+ * Date 字段是响应元数据 timestamp：doGenerate 挂在 result.response 上，流式挂在
+ * 'response-metadata' 分片顶层。runtime 消息的结构化克隆保真 Date，但任一跳通道若发生
+ * JSON 序列化（Date → ISO 字符串），SDK 的遥测属性对象（在遥测开关判定前急切求值）就会以
+ * 「timestamp.toISOString is not a function」崩溃并把英文栈信息直出面板。后台代理不信任
+ * 不透明载荷，落地时统一收敛：命中已知形状且带 timestamp 才重建，其余字段不感知、不改写。
+ */
+export function restoreModelCallTimestamps(payload: unknown): unknown {
+    if (typeof payload !== 'object' || payload === null) return payload;
+    const candidate = payload as {type?: unknown; timestamp?: unknown; response?: unknown};
+    if (candidate.type === 'response-metadata' && 'timestamp' in candidate) {
+        return {...candidate, timestamp: parseModelCallTimestamp(candidate.timestamp)};
+    }
+    const response = candidate.response;
+    if (typeof response === 'object' && response !== null && 'timestamp' in response) {
+        return {...candidate, response: {...response, timestamp: parseModelCallTimestamp((response as {timestamp?: unknown}).timestamp)}};
+    }
+    return payload;
 }

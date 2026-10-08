@@ -9,7 +9,8 @@
  * 主要内容：OffscreenModelClientPorts 端口接口（惰性 OffscreenClient、runtime 事件订阅、
  * 可注入时钟）、MODEL_CALL_SILENCE_TIMEOUT_MS 静默安全网常量、按 ports 共享的事件
  * dispatcher（Map<requestId, handler> 分发、迟到与未知 requestId 直接忽略）、
- * openModelCallChannel 调用通道引擎（受理、本地取消、静默计时、清理），以及
+ * openModelCallChannel 调用通道引擎（受理、本地取消、静默计时、清理）、结果落地时的
+ * 契约还原（restoreModelCallTimestamps 把 JSON 化的 timestamp 重建为 Date），以及
  * createOffscreenHarnessLanguageModel 代理模型工厂（与 modelGateway 的直连版同形）。
  * 模块边界：本文件不 import 浏览器对象——全部浏览器能力经端口注入且只在调用时经惰性
  * getter 求值（node 测试环境无 chrome，模块顶层求值会炸）；不构建 provider、不解析配置、
@@ -32,6 +33,7 @@ import {
     MODEL_CALL_START_OFFSCREEN_MESSAGE_TYPE,
     createModelCallRequestId,
     restoreModelCallError,
+    restoreModelCallTimestamps,
     stripAbortSignal,
     type ModelCallCancelMessage,
     type ModelCallEvent,
@@ -271,7 +273,9 @@ export function createOffscreenHarnessLanguageModel(
                     onEvent: (event, complete) => {
                         if (event.kind === 'result') {
                             complete();
-                            resolve(event.result as ModelGenerateResult);
+                            // 落地即还原结果契约：通道任一跳 JSON 化都会把 response.timestamp
+                            // 变成字符串，SDK 遥测会因此以裸 TypeError 崩溃，这里收敛为 Date。
+                            resolve(restoreModelCallTimestamps(event.result) as ModelGenerateResult);
                             return;
                         }
                         if (event.kind === 'error') {
@@ -303,7 +307,9 @@ export function createOffscreenHarnessLanguageModel(
                     },
                     onEvent: (event, complete) => {
                         if (event.kind === 'part') {
-                            streamController.enqueue(event.part as ModelStreamPart);
+                            // 分片同样落地还原：'response-metadata' 分片顶层携带 timestamp，
+                            // JSON 化后同样会让消费端遥测崩溃。
+                            streamController.enqueue(restoreModelCallTimestamps(event.part) as ModelStreamPart);
                             return;
                         }
                         if (event.kind === 'end') {

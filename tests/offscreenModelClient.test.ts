@@ -170,6 +170,27 @@ describe('offscreen model proxy doGenerate', () => {
         await expect(pending).resolves.toBe(result);
     });
 
+    it('rebuilds a JSON-serialized response timestamp when landing the result event', async () => {
+        const harness = createHarness();
+        const model = harness.createModel();
+        const pending = model.doGenerate(callOptions());
+        harness.sends[0].resolve();
+        // 模拟通道 JSON 化：结果契约里的 response.timestamp 已退化为 ISO 字符串。
+        harness.dispatch(harness.sends[0].message.requestId, {
+            kind: 'result',
+            result: {
+                content: [],
+                finishReason: {unified: 'stop'},
+                usage: {inputTokens: {total: 1}, outputTokens: {total: 2}},
+                response: {id: 'resp-1', timestamp: '2026-10-08T12:00:00.000Z', modelId: 'gpt-test'},
+            },
+        });
+        const resolved = await pending;
+        const response = resolved.response as {id?: string; timestamp: Date; modelId?: string};
+        expect(response.timestamp).toBeInstanceOf(Date);
+        expect(response.timestamp.toISOString()).toBe('2026-10-08T12:00:00.000Z');
+    });
+
     it('rejects with a restored plain error event', async () => {
         const harness = createHarness();
         const model = harness.createModel();
@@ -403,6 +424,28 @@ describe('offscreen model proxy doStream', () => {
             {type: 'text-delta', id: 't1', delta: '你'},
             {type: 'text-delta', id: 't1', delta: '好'},
         ]);
+    });
+
+    it('rebuilds JSON-serialized response-metadata timestamps when landing stream parts', async () => {
+        const harness = createHarness();
+        const model = harness.createModel();
+        const pending = model.doStream(callOptions());
+        harness.sends[0].resolve();
+        const {stream} = await pending;
+        const requestId = harness.sends[0].message.requestId;
+
+        harness.dispatch(requestId, {kind: 'part', part: {type: 'text-delta', id: 't1', delta: '你'}});
+        // 模拟通道 JSON 化：response-metadata 的 Date 已退化为 ISO 字符串。
+        harness.dispatch(requestId, {
+            kind: 'part',
+            part: {type: 'response-metadata', timestamp: '2026-10-08T08:30:00.000Z', modelId: 'gpt-test'},
+        });
+        harness.dispatch(requestId, {kind: 'end'});
+
+        const received = await readStream(stream);
+        expect(received.parts[1]).toMatchObject({type: 'response-metadata', modelId: 'gpt-test'});
+        expect((received.parts[1] as {timestamp: Date}).timestamp).toBeInstanceOf(Date);
+        expect((received.parts[1] as {timestamp: Date}).timestamp.toISOString()).toBe('2026-10-08T08:30:00.000Z');
     });
 
     it('errors the stream after delivered parts when an error event arrives', async () => {

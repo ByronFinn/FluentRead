@@ -172,6 +172,7 @@ WXT 会把 `entrypoints/` 下零层或一层的入口作为构建输入，并在
 - `extensionDomClient` 只选择文档容器，并共用 `createOffscreenClient` 的准备、握手、截止时间、取消和重建。Firefox 特有代码仅负责 iframe 创建、查询和移除，不另写 feature handler、算法或配置。
 - `offscreenDocument` 仅表示原生 API 与权限；`extensionDom` 表示共享运行时可用。Firefox 的图片、区域、本地字幕和扩展朗读可用，但 Chrome Translator 仍单独受 `chromeTranslation` 约束；Firefox MV3 尚未开放此适配。
 - Harness 模型调用（阅读/写作/评论）经宿主开关分流：默认 `harnessCallHost='offscreen'` 时后台只构建代理 LanguageModel，`doGenerate`/`doStream` 经协议（`modelCallProtocol`）、执行器（`modelExecutor`）、宿主（`modelExecutorHost`）三层转发到常驻 DOM 运行时执行，执行器内建心跳防中断；`harnessCallHost='background'` 回滚为后台直连，无原生 Offscreen 能力的环境（Firefox MV2、node 测试、未知浏览器）也强制直连兜底。直连工厂 `createHarnessLanguageModelDirect` 同时是 Offscreen 执行器的模型构建器——Offscreen 内不得注入带切换的入口，否则会再次代理回后台形成递归。
+- 代理不信任回传的不透明载荷：错误经 `restoreModelCallError` 按 name/message/url/statusCode/responseBody 重建，结果契约中的 Date 字段（`doGenerate` 的 `response.timestamp` 与流式 `'response-metadata'` 分片的 `timestamp`）经 `restoreModelCallTimestamps` 落地还原——通道任一跳若把 Date JSON 化成字符串，AI SDK 遥测属性构造（急切求值，未配置遥测也执行）会以裸 TypeError 崩溃。归一层 `normalizeHarnessModelError` 另把契约类内部 TypeError（`is not a function` 结尾）映射为可执行的中文提示。
 - content 生命周期使用 WXT `ContentScriptContext` 与 `AbortSignal`，扩展失效后不得继续回写页面。默认关闭的输入翻译和段落复制不挂载监听器，由独立子 signal 随配置启停；图片悬浮的连续 pointermove 每帧仅检测最新事件，关闭和卸载时取消待处理帧。
 
 参考：[WXT Entrypoints](https://wxt.dev/guide/essentials/entrypoints)、[Content Scripts](https://wxt.dev/guide/essentials/content-scripts)、[Project Structure](https://wxt.dev/guide/essentials/project-structure)。

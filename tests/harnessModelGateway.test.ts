@@ -218,6 +218,22 @@ describe('harness model gateway', () => {
     expect(sanitizeHarnessModelMessage('https://x.test/?token=raw&ok=1')).toBe('https://x.test/?token=[已隐藏]&ok=1');
   });
 
+  it('maps contract-internal TypeErrors to actionable Chinese guidance', () => {
+    // 事故形态：消息边界 JSON 化后 SDK 遥测以裸 TypeError 崩溃，英文栈信息不可直出面板。
+    const crash = new TypeError('zo.timestamp.toISOString is not a function');
+    const normalized = normalizeHarnessModelError(crash, services.openai);
+    expect(normalized.message).not.toContain('zo.timestamp');
+    expect(normalized.message).toContain('模型调用遇到内部数据格式错误');
+    expect(normalized.message).toContain('后台直连');
+  });
+
+  it('keeps network TypeError messages out of the contract mapping', () => {
+    // 网络层 TypeError（Failed to fetch）以「is not a function」结尾才命中映射；这里不命中，保留网络文案。
+    const normalized = normalizeHarnessModelError(new TypeError('Failed to fetch'), services.openai);
+    expect(normalized.message).not.toContain('模型调用遇到内部数据格式错误');
+    expect(normalized.message).toContain('网络连接失败');
+  });
+
   it('propagates cancellation through runtime fetch', async () => {
     const config = new Config();
     const controller = new AbortController();

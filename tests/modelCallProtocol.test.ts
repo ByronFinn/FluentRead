@@ -7,6 +7,7 @@ import {
     MODEL_CALL_START_OFFSCREEN_MESSAGE_TYPE,
     createModelCallRequestId,
     restoreModelCallError,
+    restoreModelCallTimestamps,
     serializeModelCallError,
     stripAbortSignal,
     type ModelCallOptions,
@@ -169,5 +170,56 @@ describe('restoreModelCallError', () => {
         expect(restored.url).toBe(original.url);
         expect(restored.statusCode).toBe(original.statusCode);
         expect(restored.responseBody).toBe(original.responseBody);
+    });
+});
+
+describe('restoreModelCallTimestamps', () => {
+    it('rebuilds a JSON-serialized response timestamp into a Date instance', () => {
+        const restored = restoreModelCallTimestamps({
+            content: [],
+            response: {id: 'resp-1', timestamp: '2026-10-08T12:00:00.000Z', modelId: 'test-model'},
+        }) as {response: {timestamp: Date}};
+        expect(restored.response.timestamp).toBeInstanceOf(Date);
+        expect(restored.response.timestamp.toISOString()).toBe('2026-10-08T12:00:00.000Z');
+    });
+
+    it('rebuilds a JSON-serialized response-metadata stream part timestamp', () => {
+        const restored = restoreModelCallTimestamps({
+            type: 'response-metadata',
+            timestamp: '2026-10-08T08:30:00.000Z',
+            modelId: 'test-model',
+        }) as {type: string; timestamp: Date};
+        expect(restored.type).toBe('response-metadata');
+        expect(restored.timestamp).toBeInstanceOf(Date);
+        expect(restored.timestamp.toISOString()).toBe('2026-10-08T08:30:00.000Z');
+    });
+
+    it('keeps Date instances untouched when the channel preserved them', () => {
+        const original = new Date('2026-10-08T00:00:00.000Z');
+        const restored = restoreModelCallTimestamps({response: {timestamp: original}}) as {response: {timestamp: Date}};
+        expect(restored.response.timestamp).toBe(original);
+    });
+
+    it('drops unparsable timestamps to undefined so the SDK falls back to new Date()', () => {
+        const restored = restoreModelCallTimestamps({response: {timestamp: 'not-a-date'}}) as {response: {timestamp?: Date}};
+        expect(restored.response.timestamp).toBeUndefined();
+    });
+
+    it('rebuilds finite millisecond numbers as Date instances', () => {
+        const restored = restoreModelCallTimestamps({response: {timestamp: 1760000000000}}) as {response: {timestamp: Date}};
+        expect(restored.response.timestamp).toBeInstanceOf(Date);
+        expect(restored.response.timestamp.getTime()).toBe(1760000000000);
+    });
+
+    it('returns non-object payloads and unknown shapes unchanged', () => {
+        expect(restoreModelCallTimestamps('late-result')).toBe('late-result');
+        expect(restoreModelCallTimestamps(null)).toBeNull();
+        const resultOnly = {content: [], finishReason: {unified: 'stop'}};
+        expect(restoreModelCallTimestamps(resultOnly)).toBe(resultOnly);
+        const metadataWithoutTimestamp = {type: 'response-metadata', modelId: 'test-model'};
+        expect(restoreModelCallTimestamps(metadataWithoutTimestamp)).toBe(metadataWithoutTimestamp);
+        const responseWithoutTimestamp = {response: {id: 'resp-1', modelId: 'test-model'}};
+        expect(restoreModelCallTimestamps(responseWithoutTimestamp)).toBe(responseWithoutTimestamp);
+        expect(restoreModelCallTimestamps({response: 'not-an-object'})).toEqual({response: 'not-an-object'});
     });
 });

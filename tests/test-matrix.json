@@ -98,6 +98,7 @@
       "tests/modelCallProtocol.test.ts",
       "tests/modelExecutor.test.ts",
       "tests/modelExecutorHost.test.ts",
+      "tests/offscreenModelCallPipeline.test.ts",
       "tests/offscreenModelClient.test.ts",
       "tests/harnessRuntime.test.ts",
       "tests/harnessUsage.test.ts",

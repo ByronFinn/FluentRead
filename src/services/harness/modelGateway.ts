@@ -3,7 +3,9 @@
  * 文件职责：把已配置的 FluentRead AI 服务适配为 Harness 可消费的 LanguageModel，并按宿主
  * 开关（config.harnessCallHost + 浏览器能力）在直连与后台代理两个入口之间分流。
  * 主要内容：解析 OpenAI 兼容端点、注入凭据与供应商头、保留 tools/messages/system
- * 语义，并对 DeepSeek Responses 配置和机器翻译服务给出明确错误；createHarnessLanguageModelDirect
+ * 语义，并对 DeepSeek Responses 配置和机器翻译服务给出明确错误；normalizeHarnessModelError
+ * 额外把契约类内部 TypeError（is not a function 结尾）映射为可执行的中文提示，避免英文栈
+ * 信息直出面板；createHarnessLanguageModelDirect
  * 是在当前进程内直接构建并执行 provider 的直连工厂（含多 Key 轮换 Proxy），既是
  * harnessCallHost='background' 的回滚入口，也是 Offscreen 执行宿主
  * （src/app/offscreen/modelExecutorHost.ts）注入的构建器——绝不能在 Offscreen 内注入带
@@ -103,8 +105,21 @@ export function sanitizeHarnessModelMessage(message: string): string {
   );
 }
 
+/**
+ * 契约类内部 TypeError 的判别：方法调用在失真对象上崩溃（如 timestamp.toISOString is not
+ * a function）时，归一后的消息会以英文栈信息直出面板。仅匹配以「is not a function」结尾的
+ * TypeError——网络层 TypeError（Failed to fetch）不命中，保留既有网络分支文案。
+ */
+const INTERNAL_CONTRACT_TYPEERROR_PATTERN = /\bis not a function\s*$/iu;
+
+const INTERNAL_CONTRACT_TYPEERROR_MESSAGE =
+  '模型调用遇到内部数据格式错误，请重试；若持续出现，请在设置中把「模型调用执行位置」切换为后台直连。';
+
 export function normalizeHarnessModelError(error: unknown, service: string, apiKey = '', customHeaders?: string): Error {
   const normalized = normalizeAiSdkError(service, error, [apiKey, ...Object.values(parseCustomHeaders(customHeaders) ?? {})]);
+  if (error instanceof Error && error.name === 'TypeError' && INTERNAL_CONTRACT_TYPEERROR_PATTERN.test(error.message)) {
+    normalized.message = INTERNAL_CONTRACT_TYPEERROR_MESSAGE;
+  }
   const sanitized = sanitizeHarnessModelMessage(normalized.message);
   normalized.message = sanitized;
   return normalized;
