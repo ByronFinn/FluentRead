@@ -1,10 +1,11 @@
 /**
  * @file src/features/comment-assistant/background.ts
  * 文件职责：为评论请求建立按标签页、frame 和 document 隔离的后台取消与并发边界。
- * 主要内容：校验选区文本与 data URL 图片白名单、处理先取消后启动、替换同页旧请求、限制并发，并在配置停用或超时后丢弃迟到结果。
- * 模块边界：不读取浏览器或密钥，不选择模型也不执行提示词组装；配置就绪、站点资格与真实模型调用由应用组合根注入。
+ * 主要内容：校验选区文本与 data URL 图片白名单、处理先取消后启动、替换同页旧请求、限制并发，在配置停用或超时后丢弃迟到结果，并在请求活跃期持有注入的 service worker 保活引用。
+ * 模块边界：不读取浏览器或密钥，不选择模型也不执行提示词组装，也不实现保活节拍器本身；配置就绪、站点资格、真实模型调用与保活实例由应用组合根注入。
  */
 import {COMMENT_MAX_IMAGE_CHARS, COMMENT_MAX_IMAGES, COMMENT_MAX_TEXT} from '@/src/core/config/comment';
+import type {CommentKeepAlive} from './keepalive';
 import type {CommentRequest, CommentResponse} from './types';
 
 export interface CommentSender {
@@ -19,13 +20,16 @@ export interface CommentHandlerDependencies {
     ready: Promise<unknown>;
     eligibility(sender: CommentSender): string | undefined;
     run(request: CommentRequest, signal: AbortSignal): Promise<CommentResponse>;
+    /** 可选注入的 service worker 保活：请求活跃期维持后台存活；缺省（如测试环境）时不保活。 */
+    keepAlive?: CommentKeepAlive;
 }
 interface ActiveComment {requestId: string; sender: CommentSender; controller: AbortController}
 const CANCELLED: CommentResponse = {success: false, error: '已取消', cancelled: true};
 const INVALID: CommentResponse = {success: false, error: '无效的评论请求'};
 const LIMIT = 2;
 const HISTORY_LIMIT = 64;
-const REQUEST_TIMEOUT = 60_000;
+// 保活让 MV3 service worker 可以长存：云端思考模型的非流式生成加补译常超 60 秒，而超时只表现为静默取消，因此放宽到 120 秒。
+const REQUEST_TIMEOUT = 120_000;
 const isRecord = (value: unknown): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 
 /** 页面只能提交文本与 data URL 图片；数量、长度和字符集在此一次性收紧，越界即拒绝而非截断。 */
@@ -89,9 +93,12 @@ export function createCommentHandler(deps: CommentHandlerDependencies) {
             if (!previous && active.size >= LIMIT) return {success: false, error: '正在处理其他评论请求，请稍后再试'};
             const controller = new AbortController();
             active.set(owner, {requestId: message.requestId, sender, controller});
+            // 只有成功接管请求才占用保活引用；INVALID、重复与超限等提前返回路径未 acquire，也绝不能 release。
+            const releaseKeepAlive = deps.keepAlive?.acquire();
             const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
             const cleanup = () => {
                 clearTimeout(timer);
+                releaseKeepAlive?.();
                 if (active.get(owner)?.controller === controller) active.delete(owner);
                 remember(key);
             };

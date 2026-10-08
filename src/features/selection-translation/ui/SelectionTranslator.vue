@@ -43,6 +43,12 @@
       <div v-if="readingSelection" v-show="readingMode" class="fr-tooltip-content fr-reading-content">
         <ReadingPanel ref="reading-panel-ref" :external-navigation="true" :tools-target="readingToolsTarget" @view-change="syncReadingView" :selection="readingSelection" :locate-evidence="locateReadingEvidence" :clear-evidence="clearReadingEvidence" :source-revision="readingSourceRevision" :check-evidence="checkReadingEvidence" :source-translation="{source: selectedText, text: translationResult, pending: isLoading, error}" :preferences="readingPreferences" :service="readingService" :active="readingMode" :initial-action="readingInitialAction" :history-only="readingHistoryOnly" :source-language="effectiveSourceLanguage" :target-language="effectiveTargetLanguage" :playing-source-text="isPlaying && currentAudioKind === 'source' ? currentAudioText : ''" :model-revision="readingModelRevision" :vocabulary-enabled="config.vocabularyBookEnabled" :private-context="isPrivateContext" :animations="config.animations" :comment-enabled="commentEnabled" @open-comment="openComment" @play-source="toggleAudio($event, 'source')" @source-change="stopAudio()" @resize="schedulePositionUpdate" />
       </div>
+      <div v-if="commentMode && !commentSelection" class="fr-tooltip-content fr-comment-content">
+        <div class="fr-loading-state"><span :class="['fr-loading-spinner', { 'fr-static': !config.animations }]" aria-hidden="true" /><span>正在准备选区素材…</span></div>
+      </div>
+      <div v-else-if="commentSelection" v-show="commentMode" class="fr-tooltip-content fr-comment-content">
+        <CommentPanel :selection="commentSelection" :active="commentMode" :model-revision="commentModelRevision" @resize="schedulePositionUpdate" />
+      </div>
       <div v-show="!readingMode && !commentMode" class="fr-tooltip-content" aria-live="polite">
         <div v-if="isLoading && !translationResult && !wordCard && !wordCardError && !isWordSelection" class="fr-loading-state"><span :class="['fr-loading-spinner', { 'fr-static': !config.animations }]" aria-hidden="true" /><span>正在查询…</span></div>
         <div v-else-if="error && !translationResult && !wordCard" class="fr-error-state"><span>{{ error }}</span><span class="fr-error-actions"><button type="button" @click="retryTranslation">重试</button><button v-if="isAuthenticationErrorCurrent(authenticationError)" type="button" :disabled="!!openingAuthenticationSettings" @click="openAuthenticationSettings">{{ translateLegacy('配置服务') }}</button></span></div>
@@ -151,6 +157,7 @@
             <pre><template v-for="(part, index) in sourceTextParts" :key="index"><code v-if="part.kind === 'code'" class="fr-inline-code">{{ part.text }}</code><SpeechFollowText v-else :text="part.text" :offset="part.offset" :progress="sourceAudioProgress" /></template></pre>
           </div>
           <div v-if="error && (translationResult || wordCard)" class="fr-inline-error"><span>{{ error }}</span><span class="fr-error-actions"><button type="button" @click="retryTranslation">重试</button><button v-if="isAuthenticationErrorCurrent(authenticationError)" type="button" :disabled="!!openingAuthenticationSettings" @click="openAuthenticationSettings">{{ translateLegacy('配置服务') }}</button></span></div>
+          <div v-if="isPlaying" class="fr-playing-status"><span>正在播放{{ currentAudioKind === 'source' ? '原文' : currentAudioKind === 'word' ? '单词' : '译文' }}</span><button type="button" aria-label="停止播放" title="停止播放" @click="stopAudioFromUi">停止</button></div>
         </div>
       </div>
       <template v-if="!cardMode">
@@ -164,7 +171,7 @@
 </template>
 
 <script setup lang="ts">
-import {audioSpeechProgress, boundarySpeechProgress, parseSpeechCues, parseSpeechProgress, parseSpeechPlaybackPosition, seekSpeechTime, type SpeechProgress, type SpeechPlaybackPosition, type SpeechCue} from '@/src/core/tts/speechProgress';
+import {audioSpeechProgress, boundarySpeechProgress, parseSpeechCues, parseSpeechProgress, parseSpeechPlaybackPosition, type SpeechProgress, type SpeechPlaybackPosition, type SpeechCue} from '@/src/core/tts/speechProgress';
 import SpeechFollowText from './SpeechFollowText.vue';
 import {hasDistinctTranslation} from '@/src/core/translation/result';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, useTemplateRef, watch } from 'vue';
@@ -292,7 +299,6 @@ const isPlaying = ref(false);
 const isPreparingAudio = ref(false);
 const audioProgress = ref<SpeechProgress | null>(null);
 const audioPosition = ref<SpeechPlaybackPosition | null>(null);
-const seekControls = [{offset:-5, label:'后退 5 秒'}, {offset:5, label:'前进 5 秒'}] as const;
 const audioTextOffset = ref(0);
 // 一次遍历计算 UTF-16 偏移；音频每帧更新只复用这些片段，不重新切片累计。
 function textPartsWithOffsets(parts: readonly SelectionTextPart[] | undefined) {
@@ -1517,30 +1523,7 @@ function followPageAudio(nextAudio: HTMLAudioElement, text: string, cues: readon
   tick();
 }
 
-function playbackTime(seconds: number): string {
-  const whole = Math.floor(seconds);
-  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
-}
 
-async function seekAudio(offsetSeconds: -5 | 5): Promise<void> {
-  if (!isPlaying.value || isPreparingAudio.value || !audioPosition.value) return;
-  if (audio) {
-    const time = seekSpeechTime(audio.currentTime, audio.duration, offsetSeconds);
-    if (time === null) return;
-    try { audio.currentTime = time; audio.ontimeupdate?.(new Event('timeupdate')); }
-    catch { showNotice('语音跳转失败，请重试'); }
-    return;
-  }
-  const clientRequestId = ttsContentController.getState().activeClientRequestId;
-  if (!clientRequestId) return;
-  const generation = ttsContentController.currentGeneration();
-  try {
-    const response = await browser.runtime.sendMessage({type: 'selectionTtsSeek', clientRequestId, offsetSeconds}) as {success?: boolean};
-    if (ttsContentController.isCurrentGeneration(generation) && !response?.success) showNotice('语音跳转失败，请重试');
-  } catch {
-    if (ttsContentController.isCurrentGeneration(generation)) showNotice('语音跳转失败，请重试');
-  }
-}
 
 function stopAudio(notifyRemote = true): void {
   ttsContentController.stop(notifyRemote);

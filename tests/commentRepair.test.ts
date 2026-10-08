@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import {
-    buildCommentTranslationRepairPrompt, isCommentTranslationRedundant, parseCommentRepairOutput, resolveCommentLanguagePlan,
+    buildCommentTranslationRepairPrompt, isCommentTranslationRedundant, parseCommentRepairOutput,
+    realignCommentLanguages, resolveCommentLanguagePlan,
 } from '@/src/core/comment/repair';
 
 // 选区与内容语言均已在本地实证：中文长句识别 zh-Hans，英文长句识别 en，
@@ -55,6 +56,68 @@ describe('comment language plan and repair core', () => {
         // 空串与纯表情按未识别放行。
         expect(isCommentTranslationRedundant('', 'zh-Hans')).toBe(false);
         expect(isCommentTranslationRedundant('😂🔥', 'zh-Hans')).toBe(false);
+    });
+
+    it('keeps comments untouched for same-language or unnamed plans', () => {
+        const comments = [{content: CHINESE, translation: null}];
+        // 同语规划与未点名选区语言：语言对齐不生效，原数组原样返回且不丢弃。
+        const same = realignCommentLanguages(comments, {sameLanguage: true, selectionLanguage: undefined}, 'zh-Hans');
+        expect(same).toEqual({comments, dropped: 0});
+        expect(same.comments).toBe(comments);
+        const unnamed = realignCommentLanguages(comments, {sameLanguage: false, selectionLanguage: undefined}, 'zh-Hans');
+        expect(unnamed).toEqual({comments, dropped: 0});
+        expect(unnamed.comments).toBe(comments);
+    });
+
+    it('keeps unidentified content and content matching the named selection language', () => {
+        // 不可信识别（纯表情、短文本）：没有正向证据可否决，一律保留。
+        expect(realignCommentLanguages([{content: '😂🔥', translation: null}, {content: '原文', translation: null}],
+            {sameLanguage: false, selectionLanguage: 'en'}, 'zh-Hans'))
+            .toEqual({comments: [{content: '😂🔥', translation: null}, {content: '原文', translation: null}], dropped: 0});
+        // 正文可信识别命中选区语言：语言合规，原样保留。
+        expect(realignCommentLanguages([{content: ENGLISH, translation: '译文'}],
+            {sameLanguage: false, selectionLanguage: 'en'}, 'zh-Hans'))
+            .toEqual({comments: [{content: ENGLISH, translation: '译文'}], dropped: 0});
+    });
+
+    it('swaps content and translation when the model wrote the body in the target language', () => {
+        // 正文可信识别为目标语言且译文恰为选区语言：两者交换救回双语展示。
+        expect(realignCommentLanguages([{content: CHINESE, translation: ENGLISH}],
+            {sameLanguage: false, selectionLanguage: 'en'}, 'zh-Hans'))
+            .toEqual({comments: [{content: ENGLISH, translation: CHINESE}], dropped: 0});
+        // 目标语言空白回落简体中文，与 resolveCommentLanguagePlan 的处理一致。
+        expect(realignCommentLanguages([{content: CHINESE, translation: ENGLISH}],
+            {sameLanguage: false, selectionLanguage: 'en'}, '  '))
+            .toEqual({comments: [{content: ENGLISH, translation: CHINESE}], dropped: 0});
+    });
+
+    it('drops target-language bodies without a rescuable translation and counts them', () => {
+        // 正文写错语言且译文缺失：丢弃该条并计数；目标空白回落简体中文同样丢弃。
+        expect(realignCommentLanguages([{content: CHINESE, translation: null}],
+            {sameLanguage: false, selectionLanguage: 'en'}, 'zh-Hans'))
+            .toEqual({comments: [], dropped: 1});
+        // 译文存在但不是选区语言（这里是日文）：同样救不回，丢弃。
+        expect(realignCommentLanguages([{content: CHINESE, translation: '今日は良い天気です。私たちの考えが必要です。'}],
+            {sameLanguage: false, selectionLanguage: 'en'}, 'zh-Hans'))
+            .toEqual({comments: [], dropped: 1});
+        // 多条坏正文逐条计数，好条目保留；译文存在但不可信识别（短文本）同样救不回。
+        expect(realignCommentLanguages([
+            {content: CHINESE, translation: null},
+            {content: ENGLISH, translation: '译文'},
+            {content: CHINESE, translation: ENGLISH},
+            {content: CHINESE, translation: '原文'},
+        ], {sameLanguage: false, selectionLanguage: 'en'}, 'zh-Hans'))
+            .toEqual({comments: [
+                {content: ENGLISH, translation: '译文'},
+                {content: ENGLISH, translation: CHINESE},
+            ], dropped: 2});
+    });
+
+    it('keeps third-language content that matches neither selection nor target', () => {
+        // 既不命中选区也不命中目标（第三语言）：无否决证据，原样保留。
+        expect(realignCommentLanguages([{content: '今日は良い天気です。私たちの考えが必要です。', translation: '译文'}],
+            {sameLanguage: false, selectionLanguage: 'en'}, 'zh-Hans'))
+            .toEqual({comments: [{content: '今日は良い天気です。私たちの考えが必要です。', translation: '译文'}], dropped: 0});
     });
 
     it('builds the repair prompt with the target language, JSON object contract and simplified Chinese fallback', () => {

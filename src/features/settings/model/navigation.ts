@@ -115,7 +115,6 @@ export const navigationGroups = [
         kicker: '专项翻译', title: '图片/漫画翻译', detail: '一次开启漫画翻译，滚动阅读时自动继续，随时切回原图',
         searchDescription: '漫画、漫画翻译、MANGA Plus、连续翻译、图片翻译、圈选翻译、区域翻译、截图、识图、视觉、Shift+Z、OCR、语言包、中文、英文、日文、下载',
       },
-      },
       {
         id: 'settings-video', icon: 'CC', label: '视频字幕翻译', description: 'YouTube/X 边看边译', group: '专项翻译',
         heading: '视频字幕翻译', summary: '设置视频与网页会议的双语字幕、翻译服务和显示样式',

@@ -1,8 +1,8 @@
 <!--
  * @file src/features/settings/ui/HarnessSettings.vue
- * 文件职责：作为划词翻译的学习子设置，用示例说明 AI 讲解，明确原文范围、学习笔记和自定义指令的用途，并配置评论动作。
- * 主要内容：左侧用真实回答组件预览学习动作，右侧配置服务、模型、动作与回答偏好；B站仅预览基础读懂和用法、禁用暂不可用动作，默认动作临时回退而保留用户偏好，明确免费免密钥并展示固定模型，其他服务恢复完整动作与模型选择；多行偏好使用完整单列控件保持左侧对齐，窄屏下默认动作也纵向排列；独立展示上下文和记忆分区，提供学习中心入口；随后提供评论设置（启用开关、评论服务、模型、条数和风格提示词编辑器）；关闭讲解保留偏好，示例不发送请求。
- * 模块边界：只编辑传入 Config 的 harness 与 comment 字段；评论仅在卡内展示、不写入学习记录；阅读记录由学习中心管理，不发起模型请求、不拥有网页选区。
+ * 文件职责：作为划词翻译的学习子设置，用示例说明 AI 讲解，明确原文范围、学习笔记和自定义指令的用途，并配置评论动作与模型调用执行位置。
+ * 主要内容：左侧用真实回答组件预览学习动作，右侧配置服务、模型、动作、回答偏好与模型调用执行位置（离屏常驻运行时（推荐）/ 后台直连（回滚），绑定 config.harnessCallHost）；B站仅预览基础读懂和用法、禁用暂不可用动作，默认动作临时回退而保留用户偏好，明确免费免密钥并展示固定模型，其他服务恢复完整动作与模型选择；多行偏好使用完整单列控件保持左侧对齐，窄屏下默认动作也纵向排列；独立展示上下文和记忆分区，提供学习中心入口；随后提供评论设置（启用开关、评论服务、模型、条数和风格提示词编辑器）；风格指令编辑器声明提示词契约（只影响语气、视角与风格，语言与条数由代码决定），并内置以未识别选区语言场景实时拼装的系统提示词预览；关闭讲解保留偏好，示例不发送请求。
+ * 模块边界：只编辑传入 Config 的 harness、comment 与 harnessCallHost 字段；评论仅在卡内展示、不写入学习记录；阅读记录由学习中心管理，不发起模型请求、不拥有网页选区。
  -->
 <template>
   <SettingsGroup data-settings-anchor="learning" data-settings-anchor-label="AI 深入讲解" title="AI 深入讲解" description="切换左侧示例了解学习动作；在网页卡片中触发学习动作后，才向所选 AI 服务发送请求">
@@ -62,6 +62,10 @@
     <SettingsItem v-if="config.harness.contextMode === 'paragraph'" label="段落长度上限" description="限制补充段落的长度；不会修改你的选区">
       <SettingsNumberInput v-model="config.harness.maxContextChars" unit="字符" :min="500" :max="4000" :step="100" aria-label="上下文上限" />
     </SettingsItem>
+
+    <SettingsItem label="模型调用执行位置" description="离屏执行防止后台休眠中断长生成；后台直连为回滚路径。">
+      <SegmentedControl v-model="config.harnessCallHost" :options="harnessCallHostOptions" label="模型调用执行位置" />
+    </SettingsItem>
   </SettingsGroup>
   <SettingsGroup class="harness-memory-settings" :title="t('learning.memory')" :description="t('learning.memoryDescription')" data-settings-anchor="memory" :data-settings-anchor-label="t('learning.memory')">
     <SettingsItem :label="t('settings.memoryEnabled')" :description="t('settings.memoryDescription')">
@@ -103,8 +107,9 @@
       <summary>编辑风格指令</summary>
       <div class="harness-comment-prompt-body">
         <div class="harness-comment-prompt-toolbar">
-          <small>选中文本与图片会自动提供，无需写入提示词。留空使用默认风格。</small>
+          <small>选中文本与图片会自动提供，无需写入提示词。提示词只影响语气、视角与风格；评论语言由目标语言设置与选区语言判定决定，条数由上方计数器决定，均不受提示词影响。留空使用默认风格。</small>
           <button type="button" @click="restoreCommentPrompt">恢复默认</button>
+          <button type="button" :aria-expanded="showCommentPromptPreview" aria-controls="harness-comment-prompt-preview" @click="showCommentPromptPreview = !showCommentPromptPreview">{{ showCommentPromptPreview ? '收起预览' : '预览系统提示词' }}</button>
         </div>
         <textarea ref="commentPromptEditor" v-model="config.comment.prompt" data-i18n-ignore :maxlength="COMMENT_PROMPT_MAX_LENGTH"
           :placeholder="DEFAULT_COMMENT_PROMPT" aria-label="评论风格提示词" spellcheck="false" />
@@ -113,6 +118,10 @@
           <button v-for="variable in COMMENT_PROMPT_VARIABLES" :key="variable.token" type="button" @mousedown.prevent @click="insertCommentVariable(variable.token)">
             <code data-i18n-ignore>{{ variable.token }}</code><span>{{ variable.label }}</span>
           </button>
+        </div>
+        <div v-if="showCommentPromptPreview" id="harness-comment-prompt-preview" class="harness-comment-prompt-preview">
+          <pre class="harness-comment-prompt-preview-text" data-i18n-ignore>{{ commentPromptPreview }}</pre>
+          <small class="harness-comment-prompt-preview-note">以未识别选区语言的场景预览；实际语言段会按选区语言自动判定注入。</small>
         </div>
         <small class="harness-comment-prompt-count" data-i18n-ignore>{{ config.comment.prompt.length }} / {{ COMMENT_PROMPT_MAX_LENGTH }}</small>
       </div>
@@ -130,7 +139,7 @@ import {models, options, services} from '@/src/core/config/catalog'
 import {getCustomOpenAIProviderLabel, getCustomOpenAIProviderModels, isCustomOpenAIProviderId} from '@/src/core/config/customOpenAI'
 import {HARNESS_ACTIONS, isReadingActionSupported, isReadingService, resolveHarnessModel, type HarnessActionId} from '@/src/core/config/harness'
 import {isCommentServiceUsable} from '@/src/core/config/comment'
-import {COMMENT_PROMPT_MAX_LENGTH, COMMENT_PROMPT_VARIABLES, DEFAULT_COMMENT_PROMPT} from '@/src/core/comment/prompts'
+import {buildCommentSystemPrompt, COMMENT_PROMPT_MAX_LENGTH, COMMENT_PROMPT_VARIABLES, DEFAULT_COMMENT_PROMPT} from '@/src/core/comment/prompts'
 import type {Config} from '@/src/core/config/model'
 import SettingsGroup from './components/SettingsGroup.vue'
 import SettingsItem from './components/SettingsItem.vue'
@@ -178,6 +187,11 @@ watch(visibleActions, (actions) => { if (!actions.some(action => action.id === p
 const contextModeOptions = [{value: 'paragraph', label: '可参考本段'}, {value: 'selection', label: '仅选中文字'}]
 const explanationDepthOptions = [{value: 'concise', label: '简洁'}, {value: 'detailed', label: '详细'}]
 const learningLevelOptions = [{value: 'beginner', label: '初级'}, {value: 'intermediate', label: '中级'}, {value: 'advanced', label: '高级'}]
+// 模型调用执行位置：默认经离屏常驻运行时执行（防止 MV3 后台休眠中断长生成），后台直连为回滚开关。
+const harnessCallHostOptions = [
+  {value: 'offscreen', label: '离屏常驻运行时（推荐）'},
+  {value: 'background', label: '后台直连（回滚）'},
+]
 
 function toggleAction(id: HarnessActionId) {
   if (id === 'meaning' || !isReadingActionSupported(effectiveModel.value.service, id)) return
@@ -186,6 +200,12 @@ function toggleAction(id: HarnessActionId) {
   if (!config.value.harness.actions.includes(config.value.harness.defaultAction)) config.value.harness.defaultAction = 'meaning'
 }
 const commentPromptEditor = ref<HTMLTextAreaElement | null>(null)
+// 预览固定按「未识别选区语言」的三态场景拼装；实际运行时语言段由代码按可信识别结果注入。
+const showCommentPromptPreview = ref(false)
+const commentPromptPreview = computed(() => buildCommentSystemPrompt(
+  config.value.comment.prompt, config.value.comment.count, config.value.to,
+  {sameLanguage: false, selectionLanguage: undefined},
+))
 function restoreCommentPrompt(): void { config.value.comment.prompt = DEFAULT_COMMENT_PROMPT }
 async function insertCommentVariable(token: string): Promise<void> {
   const field = commentPromptEditor.value
@@ -244,5 +264,8 @@ button:focus-visible { outline:2px solid var(--brand); outline-offset:3px; }
 .harness-comment-prompt-variables button { display:flex; flex-wrap:wrap; align-items:center; gap:6px; }
 .harness-comment-prompt-variables code { color:var(--brand); }
 .harness-comment-prompt-count { justify-self:end; color:var(--muted); font-size:10px; }
+.harness-comment-prompt-preview { display:grid; gap:8px; }
+.harness-comment-prompt-preview-text { margin:0; max-height:280px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; border:1px solid var(--line); border-radius:10px; padding:14px; background:var(--surface-soft); color:var(--ink); font:12px/1.8 ui-monospace,monospace; }
+.harness-comment-prompt-preview-note { color:var(--muted); font-size:10.5px; line-height:1.6; }
 @media(max-width:480px) { .harness-provider-row, .harness-actions { grid-template-columns:minmax(0,1fr); } .harness-preferences :deep(.settings-item.harness-default-action) { grid-template-columns:minmax(0,1fr); align-items:stretch; } .harness-memory-footer { padding:14px 12px; } }
 </style>

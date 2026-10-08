@@ -1399,6 +1399,7 @@ describe('options UI composition architecture', () => {
     expect(writing).toContain('<SettingsItem label="AI 服务">')
     expect(speech).not.toContain(' stacked')
     expect(floatingBall).toContain('.floating-ball-settings :deep(.site-rules-editor)')
+  })
 
   it('keeps comment settings inside the translation card section without a standalone page', () => {
     const sections = source('src/features/settings/ui/SettingsSections.vue')

@@ -187,10 +187,11 @@ WXT 会把 `entrypoints/` 下零层或一层的入口作为构建输入，并在
 - 软件语言搜索在各类结果合并后将已有通用设置入口排在首项；其他结果内容与相对顺序保持原有过滤规则，点击复用原选择器定位与焦点，不创建第二份语言设置。同次搜索计算内复用原查询、小写值和语言判断，页内分类继续匹配原始查询，公共导航保留自己的 trim/NFKC 规则；不跨查询、语言资源更新或点击缓存结果。
 - ONNX Runtime 的 WASM 随扩展以原始 `.wasm` 保存，由发布 ZIP 统一压缩，避免 Edge Partner Center 拒绝包内嵌套 `.gz` 文件。首次模型初始化时读取并校验 WASM 后注入 `env.wasm.wasmBinary`；静态 MJS 仍从扩展自身加载，CSP 不允许远程代码或 blob 脚本。CPU 和 WebGPU 初始化共用这个入口，成功或失败后都释放注入的二进制引用。OPUS/Whisper 使用 ORT 1.22 的 JSEP pair，Kokoro 使用其 Transformers 精确依赖 ORT 1.26 的 Asyncify pair；两者不能混用版本或 WASM/MJS 类型。wllama 是另一套独立引擎。打包方式不改变模型及原有 GPU 启用策略；共享加载器仍兼容旧 gzip 资源。
 - PDF 文本导出字体作为静态数据按需下载，固定已发布的提交路径并校验容量与 SHA-256；按浏览器语言排序，简体中文优先 JSDMirror / onmicrosoft 镜像，其他语言优先 jsDelivr / GitHub Raw，不判断用户所在地，失败时自动切换来源。成功校验后写入扩展 CacheStorage，后续导出先读取并校验本机缓存；请求不带文档、译文或凭据。维护源与测试夹具保留在 `assets/pdf-fonts/`，不进入扩展安装包；运行时代码与字体授权说明仍随包提供。
-- MV3 background 是 service worker，内存状态必须允许重启；需要持久化的数据进入 storage/IndexedDB。
+- MV3 background 是 service worker，内存状态必须允许重启；需要持久化的数据进入 storage/IndexedDB。SW 空闲约 30 秒即被终止且进行中的 fetch 不重置空闲计时器，长时模型调用（评论生成）在请求活跃期由后台按 20 秒节奏调用一次扩展 API（`runtime.getPlatformInfo` 探测）保活，请求结束即停止；该机制以引用计数保活器（`src/features/comment-assistant/keepalive.ts`）经 handler 依赖注入，纯计时逻辑不触碰浏览器 API。
 - 扩展自有 DOM 运行时由 background 管理，content 和 UI 只通过类型化消息协议请求能力。Chrome/Edge MV3 使用原生 Offscreen，Firefox MV2 使用后台页面中的隐藏扩展 iframe；两者加载同一个 `offscreen.html`，复用同一份消息路由、OCR、图片/区域绘制、字幕推理和 TTS 播放逻辑。
 - `extensionDomClient` 只选择文档容器，并共用 `createOffscreenClient` 的准备、握手、截止时间、取消和重建。Firefox 特有代码仅负责 iframe 创建、查询和移除，不另写 feature handler、算法或配置。
 - `offscreenDocument` 仅表示原生 API 与权限；`extensionDom` 表示共享运行时可用。Firefox 的图片、区域、本地字幕和扩展朗读可用，但 Chrome Translator 仍单独受 `chromeTranslation` 约束；Firefox MV3 尚未开放此适配。
+- Harness 模型调用（阅读/写作/评论）经宿主开关分流：默认 `harnessCallHost='offscreen'` 时后台只构建代理 LanguageModel，`doGenerate`/`doStream` 经协议（`modelCallProtocol`）、执行器（`modelExecutor`）、宿主（`modelExecutorHost`）三层转发到常驻 DOM 运行时执行，执行器内建心跳防中断；`harnessCallHost='background'` 回滚为后台直连，无原生 Offscreen 能力的环境（Firefox MV2、node 测试、未知浏览器）也强制直连兜底。直连工厂 `createHarnessLanguageModelDirect` 同时是 Offscreen 执行器的模型构建器——Offscreen 内不得注入带切换的入口，否则会再次代理回后台形成递归。
 - content 生命周期使用 WXT `ContentScriptContext` 与 `AbortSignal`，扩展失效后不得继续回写页面。上下文失效核查在可见页每秒运行，后台页降为每 5 秒，往返缓存暂停时停止，恢复前先核查；受支持 iframe 的状态通知合并为单个在途读取，并以失效代次拒绝迟到响应。默认关闭的输入翻译和段落复制不挂载监听器，由独立子 signal 随配置启停；图片悬浮的连续 pointermove 每帧仅检测最新事件，关闭和卸载时取消待处理帧。
 
 参考：[WXT Entrypoints](https://wxt.dev/guide/essentials/entrypoints)、[Content Scripts](https://wxt.dev/guide/essentials/content-scripts)、[Project Structure](https://wxt.dev/guide/essentials/project-structure)。
