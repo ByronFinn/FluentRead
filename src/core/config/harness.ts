@@ -1,8 +1,8 @@
 /**
  * @file src/core/config/harness.ts
  * 文件职责：定义 Harness 学习辅助功能的动作注册表、配置类型、默认值与纯规范化规则。
- * 主要内容：提供 HarnessActionId/HarnessPreferences、动作注册表、支持服务判断和规范化函数，限制触发方式、快捷键、悬停延迟、服务/模型覆盖和动作白名单、上下文长度和学习难度，并定义可编辑提示词、默认模板、占位符替换规则和阅读模型缓存的配置标识。
- * 模块边界：本文件只处理领域数据，不读取浏览器存储、不发起 AI 请求，也不决定选区或网页生命周期。
+ * 主要内容：提供 HarnessActionId/HarnessPreferences、动作注册表、支持服务判断和规范化函数，限制触发方式、快捷键、悬停延迟、服务/模型覆盖和动作白名单、上下文长度和学习难度，并定义可编辑提示词、默认模板、占位符替换规则、阅读模型缓存的配置标识，以及 HarnessCallHost 模型调用执行宿主（offscreen 常驻运行时 / background 直连回滚）的联合类型、默认值与非法值回落。
+ * 模块边界：本文件只处理领域数据，不读取浏览器存储、不发起 AI 请求，也不决定选区或网页生命周期；执行宿主的最终裁决由 services/harness/modelGateway 结合浏览器能力完成。
  */
 import {DEFAULT_HARNESS_ACTION_PROMPTS, DEFAULT_HARNESS_SYSTEM_PROMPT, HARNESS_PROMPT_MAX_LENGTH} from '../harness/prompts';
 export {DEFAULT_HARNESS_ACTION_PROMPTS, DEFAULT_HARNESS_SYSTEM_PROMPT, HARNESS_PROMPT_MAX_LENGTH, HARNESS_PROMPT_VARIABLES, getDefaultHarnessPrompt, resolveHarnessPrompt, renderHarnessPrompt, type HarnessPromptKind} from '../harness/prompts';
@@ -20,6 +20,22 @@ export const HARNESS_ACTIONS = [
 export type HarnessActionId = typeof HARNESS_ACTIONS[number]['id'];
 export type HarnessContextMode = 'paragraph' | 'selection';
 export type HarnessExplanationDepth = 'concise' | 'detailed';
+
+/**
+ * Harness 模型调用的执行宿主：'offscreen' 经后台代理 LanguageModel 把调用转发到常驻
+ * DOM 运行时执行（协议/执行器/宿主三层）；'background' 在后台进程内直连执行，是显式
+ * 回滚开关。网关会再叠加浏览器能力裁决：无 offscreen 能力的环境（Firefox MV2、node
+ * 测试、未知浏览器）即使配置 offscreen 也强制回落 background。
+ */
+export type HarnessCallHost = 'offscreen' | 'background';
+
+/** 默认经离屏常驻执行，防止 MV3 service worker 空闲休眠中断长生成；旧配置无此键时同样落到该默认值。 */
+export const DEFAULT_HARNESS_CALL_HOST: HarnessCallHost = 'offscreen';
+
+/** 非法值（含旧配置缺失、未知字符串）一律回落离屏默认，与 deeplApiPlan 等现有枚举键的收敛方式一致。 */
+export function normalizeHarnessCallHost(value: unknown): HarnessCallHost {
+    return value === 'background' ? 'background' : DEFAULT_HARNESS_CALL_HOST;
+}
 
 export interface HarnessPreferences {
     enabled: boolean;

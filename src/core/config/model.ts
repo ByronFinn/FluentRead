@@ -2,7 +2,7 @@
  * @file src/core/config/model.ts
  *
  * 文件职责：定义 FluentRead 完整配置模型、默认值及各项设置的合法范围，是配置读取、保存、迁移和 UI 绑定共同依赖的领域契约。
- * 主要内容：包含正文/全部节点识别范围；统一中文简繁标识及历史配置别名，并保存常用服务顺序，包含 Config 接口、defaultConfig、字幕和翻译模式类型、延迟与字号范围、默认 API 地址及多项功能开关，使新增配置项在一个位置获得类型和初始语义；归一化时把仍停留在历史默认值的翻译提示词升级为当前默认提示词。 可核对的公开符号包括 DeepSeekApiType、DeepSeekThinkingMode、VideoSubtitleDisplayMode、FullPageTranslationMode、DEFAULT_VIDEO_SUBTITLE_FONT_SIZE、DEFAULT_NEW_API_URL、DEFAULT_MOUSE_HOVER_TRANSLATION_DELAY。
+ * 主要内容：包含正文/全部节点识别范围；统一中文简繁标识及历史配置别名，并保存常用服务顺序，包含 Config 接口、defaultConfig、字幕和翻译模式类型、延迟与字号范围、默认 API 地址及多项功能开关，使新增配置项在一个位置获得类型和初始语义；归一化时把仍停留在历史默认值的翻译提示词升级为当前默认提示词。 可核对的公开符号包括 DeepSeekApiType、DeepSeekThinkingMode、VideoSubtitleDisplayMode、FullPageTranslationMode、HarnessCallHost、DEFAULT_VIDEO_SUBTITLE_FONT_SIZE、DEFAULT_NEW_API_URL、DEFAULT_MOUSE_HOVER_TRANSLATION_DELAY。
  * 模块边界：本文件属于 core 领域层，只定义规则、类型与纯转换；不直接读写浏览器存储、不发起网络请求、不挂载 Vue/WXT 入口，持久化、协议调用和界面编排分别由 services、providers 与 features 承担。
  */
 
@@ -156,7 +156,14 @@ import {
     normalizeMinTranslationTextLength,
 } from './pageTranslation';
 import {normalizeWritingPreferences, type WritingPreferences} from './writing';
-import {DEFAULT_HARNESS_PREFERENCES, normalizeHarnessPreferences, type HarnessPreferences} from './harness';
+import {
+    DEFAULT_HARNESS_CALL_HOST,
+    DEFAULT_HARNESS_PREFERENCES,
+    normalizeHarnessCallHost,
+    normalizeHarnessPreferences,
+    type HarnessCallHost,
+    type HarnessPreferences,
+} from './harness';
 import {DEFAULT_COMMENT_PREFERENCES, normalizeCommentPreferences, type CommentPreferences} from './comment';
 import {
     DEFAULT_VIDEO_SUBTITLE_APPEARANCE,
@@ -471,6 +478,7 @@ export class Config {
     writing: WritingPreferences; // 写作助手偏好
     harness: HarnessPreferences; // Harness 学习辅助偏好
     comment: CommentPreferences; // 划词评论助手偏好
+    harnessCallHost: HarnessCallHost; // Harness 模型调用执行宿主：offscreen 常驻运行时（默认）或 background 直连回滚
 
     constructor() {
         this.on = true;
@@ -640,6 +648,7 @@ export class Config {
         this.writing = normalizeWritingPreferences(undefined);
         this.harness = normalizeHarnessPreferences(DEFAULT_HARNESS_PREFERENCES);
         this.comment = normalizeCommentPreferences(DEFAULT_COMMENT_PREFERENCES);
+        this.harnessCallHost = DEFAULT_HARNESS_CALL_HOST; // 默认经离屏常驻运行时执行 Harness 模型调用
     }
 }
 
@@ -1085,6 +1094,8 @@ export function normalizeConfig(value: unknown): Config {
     normalized.writing = normalizeWritingPreferences(source.writing, normalized.customOpenAIProviders);
     normalized.harness = normalizeHarnessPreferences(source.harness, normalized.customOpenAIProviders);
     normalized.comment = normalizeCommentPreferences(source.comment, normalized.customOpenAIProviders);
+    // 旧配置无此键按离屏默认处理，无需迁移；非法值在规范化边界收敛。
+    normalized.harnessCallHost = normalizeHarnessCallHost(source.harnessCallHost);
 
     if (!isSupportedTranslationService(normalized.service, normalized.customOpenAIProviders)) {
         normalized.service = defaultOption.service;

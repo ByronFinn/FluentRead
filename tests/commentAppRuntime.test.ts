@@ -5,11 +5,11 @@ const mocks = vi.hoisted(() => ({
     subscribe: vi.fn(), createHandler: vi.fn(), createRuntime: vi.fn(), attachPort: vi.fn(),
     handler: {handle: vi.fn(), cancelAll: vi.fn(), cancelDisallowed: vi.fn(), cancelTab: vi.fn()},
     runtime: {run: vi.fn()},
-    connect: vi.fn(), removed: vi.fn(), updated: vi.fn(),
+    connect: vi.fn(), removed: vi.fn(), updated: vi.fn(), platformInfo: vi.fn(),
     usageRepo: {captureGeneration: vi.fn(() => 7), recordMany: vi.fn(async () => undefined)},
 }));
 vi.mock('webextension-polyfill', () => ({default: {
-    runtime: {id: 'ext', onConnect: {addListener: mocks.connect}},
+    runtime: {id: 'ext', onConnect: {addListener: mocks.connect}, getPlatformInfo: mocks.platformInfo},
     tabs: {onRemoved: {addListener: mocks.removed}, onUpdated: {addListener: mocks.updated}},
 }}));
 vi.mock('@/src/services/config/store', () => ({config: mocks.config, configReady: Promise.resolve(), subscribeConfig: mocks.subscribe}));
@@ -23,6 +23,7 @@ vi.mock('@/src/services/harness/modelGateway', () => ({createHarnessLanguageMode
 vi.mock('@/src/platform/storage/modelUsageRepository', () => ({modelUsageRepository: mocks.usageRepo}));
 vi.mock('@/src/core/site-rules/domain', () => ({isExtensionDisabledOnSite: (url: string) => url.includes('blocked')}));
 
+import browser from 'webextension-polyfill';
 import {installCommentBackgroundRuntime} from '@/src/app/background/commentRuntime';
 
 describe('comment background composition', () => {
@@ -53,6 +54,37 @@ describe('comment background composition', () => {
         expect(await router.handle({requestId: 'r'} as never, {sender: {id: 'ext', tab: {id: 1}}})).toEqual({success: true, comments: []});
         await router.handle({requestId: 'r'} as never, {});
         expect(mocks.handler.handle).toHaveBeenLastCalledWith({requestId: 'r'}, {});
+    });
+
+    it('injects a keepalive that probes platform info every 20 seconds while a request is held', async () => {
+        mocks.platformInfo.mockReset();
+        mocks.platformInfo.mockResolvedValue({os: 'win', arch: 'x86-64'});
+        installCommentBackgroundRuntime();
+        const deps = mocks.createHandler.mock.calls[0][0];
+        expect(deps.keepAlive).toBeDefined();
+        vi.useFakeTimers();
+        try {
+            const release = deps.keepAlive.acquire();
+            expect(mocks.platformInfo).not.toHaveBeenCalled();
+            vi.advanceTimersByTime(20_000);
+            expect(mocks.platformInfo).toHaveBeenCalledOnce();
+            mocks.platformInfo.mockRejectedValueOnce(new Error('探测失败')); // 异步失败被吞掉，不影响节拍。
+            vi.advanceTimersByTime(20_000);
+            expect(mocks.platformInfo).toHaveBeenCalledTimes(2);
+            mocks.platformInfo.mockImplementationOnce(() => { throw new Error('接口异常'); }); // 同步抛错同样被吞掉。
+            vi.advanceTimersByTime(20_000);
+            expect(mocks.platformInfo).toHaveBeenCalledTimes(3);
+            const original = browser.runtime.getPlatformInfo;
+            browser.runtime.getPlatformInfo = undefined as never; // API 缺失时探测静默跳过。
+            vi.advanceTimersByTime(20_000);
+            browser.runtime.getPlatformInfo = original;
+            expect(mocks.platformInfo).toHaveBeenCalledTimes(3);
+            release();
+            vi.advanceTimersByTime(60_000);
+            expect(mocks.platformInfo).toHaveBeenCalledTimes(3); // 引用归零后节拍停止。
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('eligibility follows global switch, feature preference and site rules', () => {

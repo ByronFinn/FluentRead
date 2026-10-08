@@ -1,17 +1,25 @@
 /**
  * @file src/app/offscreen/messageRouter.ts
  * 文件职责：解析并分派发送到扩展自有 DOM 页面的可信运行时消息，为 Chrome 翻译、本地模型、TTS、远程图片读取、OCR 语言包、整图和区域翻译提供统一响应纪律。
- * 主要内容：提供 ready 握手，校验文本、语言码、图片与 OCR 语言包请求并分派依赖；以共用的可取消请求表管理取消与单次回复，保留 Chrome 待准备语言对、模型不可用和本地 TTS 错误码。
- * 模块边界：路由器不创建 Audio/Worker、不调用 browser.offscreen，也不实现翻译算法；资源实例由 offscreen runtime 构造，具体能力来自 translation、ttsPlayback 和 feature services。
+ * 主要内容：提供 ready 握手，校验文本、语言码、图片与 OCR 语言包请求并分派依赖；以共用的可取消请求表管理取消与单次回复，保留 Chrome 待准备语言对、模型不可用和本地 TTS 错误码；
+ * 受理 Harness 模型调用的开始/取消消息——校验字段形状后同步回执 accepted，执行转交可选 modelCall 宿主（装配见 runtime + modelExecutorHost），结果只经 'fluentReadModelCallEvent' 事件通道异步返回。
+ * 模块边界：路由器不创建 Audio/Worker、不调用 browser.offscreen，也不实现翻译算法；资源实例由 offscreen runtime 构造，具体能力来自 translation、ttsPlayback、modelExecutorHost 和 feature services。
  */
 import type {AreaTranslationSelection} from '@/src/features/area-translation/protocol';
 import {isLocalTranslationModel} from '@/src/core/config/localTranslation';
+import type {Config} from '@/src/core/config/model';
 import {
     IMAGE_OCR_LANGUAGE_PACKS,
     normalizeImageOcrLanguageCodes,
     type ImageOcrLanguageCode,
 } from '@/src/features/image-translation/ocrLanguages';
 import {localTtsErrorCode} from '@/src/features/local-tts/protocol';
+import {
+    MODEL_CALL_CANCEL_OFFSCREEN_MESSAGE_TYPE,
+    MODEL_CALL_START_OFFSCREEN_MESSAGE_TYPE,
+    type ModelCallOptionsPayload,
+    type ModelCallStartMessage,
+} from '@/src/services/harness/modelCallProtocol';
 import type {SelectionTtsPlayer} from './ttsPlayback';
 import {isChromePreparationRequiredError, parseLanguageCode} from './translation';
 import {
@@ -71,6 +79,11 @@ export interface OffscreenMessageDependencies {
         status(): Promise<unknown>;
         removeModel(request: Record<string, unknown>): Promise<void>;
         dispose?(): void;
+    };
+    /** Harness 模型调用宿主（modelExecutorHost 装配）；缺省时受理返回不可用，取消幂等成功。 */
+    readonly modelCall?: {
+        start(request: ModelCallStartMessage): void;
+        cancel(requestId: string): void;
     };
 }
 
@@ -148,6 +161,31 @@ function parseOcrLanguages(value: unknown): ImageOcrLanguageCode[] {
         throw new TypeError('Offscreen OCR languages 包含不支持的语言');
     }
     return normalizeImageOcrLanguageCodes(value);
+}
+
+/**
+ * 校验并收敛模型调用开始消息。路由层只做形状校验（requestId/service/model 非空字符串、
+ * kind 属于协议判别、options/config 为可克隆对象），不解析配置语义、不唤醒执行——
+ * 执行由 modelCall 宿主 fire-and-forget 继续，结果只经事件通道返回。
+ */
+function parseModelCallStart(message: Record<string, unknown>): ModelCallStartMessage {
+    const requestId = requiredString(message.requestId, 'requestId');
+    const service = requiredString(message.service, 'service');
+    const model = requiredString(message.model, 'model');
+    if (message.kind !== 'generate' && message.kind !== 'stream') {
+        throw new TypeError('Offscreen kind 必须是 generate 或 stream');
+    }
+    if (!isRecord(message.options)) throw new TypeError('Offscreen options 必须是对象');
+    if (!isRecord(message.config)) throw new TypeError('Offscreen config 必须是对象');
+    return {
+        type: MODEL_CALL_START_OFFSCREEN_MESSAGE_TYPE,
+        requestId,
+        service,
+        model,
+        kind: message.kind,
+        config: message.config as unknown as Config,
+        options: message.options as unknown as ModelCallOptionsPayload,
+    };
 }
 
 function resultRecord(value: unknown, operation: string): Record<string, unknown> {
@@ -549,6 +587,31 @@ export function createOffscreenMessageListener(dependencies: OffscreenMessageDep
                     () => ({success: true}),
                 );
                 return true;
+            case MODEL_CALL_START_OFFSCREEN_MESSAGE_TYPE: {
+                if (!dependencies.modelCall) { sendResponse({success: false, error: '模型调用未启用'}); return true; }
+                try {
+                    const request = parseModelCallStart(message);
+                    // 受理即回执，不等执行：重复 requestId 的幂等、执行与失败表达全部由
+                    // 宿主/执行器经 'fluentReadModelCallEvent' 事件通道异步完成。
+                    dependencies.modelCall.start(request);
+                    sendResponse({accepted: true, requestId: request.requestId});
+                } catch (error) {
+                    sendResponse({success: false, error: errorMessage(error)});
+                }
+                return true;
+            }
+            case MODEL_CALL_CANCEL_OFFSCREEN_MESSAGE_TYPE: {
+                // 对齐 VIDEO_AI_CANCEL 先例：宿主未装配时取消幂等成功；宿主在途时同样
+                // 立即回执——后台代理在发取消前已用本地 signal 结束调用方等待。
+                if (!dependencies.modelCall) { sendResponse({success: true}); return true; }
+                try {
+                    dependencies.modelCall.cancel(requiredString(message.requestId, 'requestId'));
+                    sendResponse({success: true});
+                } catch (error) {
+                    sendResponse({success: false, error: errorMessage(error)});
+                }
+                return true;
+            }
             default:
                 return false;
         }

@@ -1,11 +1,13 @@
 /**
  * @file src/core/comment/repair.ts
- * 文件职责：为评论双语输出生成选区级与条目级的语言规划，并负责定向补译的系统提示词构建与补译输出解析。
+ * 文件职责：为评论双语输出生成选区级与条目级的语言规划，负责定向补译的系统提示词构建与补译输出解析，并对写错语言的评论做条目级语言对齐。
  * 主要内容：resolveCommentLanguagePlan 只采信可信识别（identified）结论判定选区与目标语言是否同语并给出可点名的选区语言代码，
  * 未识别、混合与空文本一律不点名（提示词走泛化措辞，绝不用统计猜测去点名语言）；isCommentTranslationRedundant 用同一套规则
- * 对单条评论内容做补译门控——可信命中目标或中文家族对中文目标视为补译重复，其余一律放行补译（宁可多补不可漏补）；
+ * 对单条评论内容做补译门控——可信命中目标或中文家族对中文目标视为补译重复，其余一律放行补译（宁可多不可漏补）；
  * buildCommentTranslationRepairPrompt 生成把缺失评论译文与选区译文一次补齐的中文系统提示词（空目标回落简体中文）；
- * parseCommentRepairOutput 以宽容候选切片解析 {"source","comments"} JSON 对象（容忍代码围栏与前后缀说明）。
+ * parseCommentRepairOutput 以宽容候选切片解析 {"source","comments"} JSON 对象（容忍代码围栏与前后缀说明）；
+ * realignCommentLanguages 在代码点名了选区语言且与目标不同语时逐条对齐——正文可信识别为目标语言的条目属写错语言，
+ * 译文恰为选区语言时交换两者，否则丢弃；不可信、命中选区与第三语言的条目一律保留。
  * 模块边界：纯规则模块，只依赖语言识别与语言代码规范化的可信结论，不用统计猜测做否决；不调用模型、不读取配置存储、不接触浏览器 API。
  */
 import {isTextInLanguage} from '@/src/core/language/detect';
@@ -58,6 +60,42 @@ export function isCommentTranslationRedundant(content: string, targetLanguage: s
     if (languages.length === 0) return false;
     const contentChinese = languages.every(code => normalizeDetectedLanguageCode(code).startsWith('zh'));
     return contentChinese && normalizeLanguageCode(target).startsWith('zh');
+}
+
+/**
+ * 仅在代码点名了选区语言且与目标不同语时生效：正文可信识别为目标语言的条目属写错语言——译文恰为选区语言时
+ * 交换两者，否则丢弃该条；正文不可信识别（未识别/混合）、命中选区语言或属第三语言的条目一律保留（只采信正向证据做否决）。
+ * 返回对齐后的条目列表与被丢弃的条数；未点名选区语言或同语时原样返回 dropped 0。
+ */
+export function realignCommentLanguages(comments: Array<{content: string; translation: string | null}>,
+    plan: CommentLanguagePlan, targetLanguage: string): {comments: Array<{content: string; translation: string | null}>; dropped: number} {
+    const selectionLanguage = plan.selectionLanguage;
+    if (plan.sameLanguage || selectionLanguage === undefined) return {comments, dropped: 0};
+    const target = targetLanguage.trim() || 'zh-Hans';
+    const realigned: Array<{content: string; translation: string | null}> = [];
+    let dropped = 0;
+    for (const comment of comments) {
+        const contentLanguages = trustedLanguages(comment.content);
+        // 不可信识别与命中选区语言：正文语言合规，保留原条目。
+        if (contentLanguages.length === 0
+            || contentLanguages.some(code => isLanguageCodeMatch(code, selectionLanguage))) {
+            realigned.push(comment);
+            continue;
+        }
+        // 既不命中选区也不命中目标（第三语言/混合正文）：无正向证据可否决，保留。
+        if (!contentLanguages.some(code => isLanguageCodeMatch(code, target))) {
+            realigned.push(comment);
+            continue;
+        }
+        // 正文可信识别为目标语言：模型写错了语言。译文恰为选区语言时交换两者救回双语，否则丢弃。
+        if (comment.translation !== null
+            && trustedLanguages(comment.translation).some(code => isLanguageCodeMatch(code, selectionLanguage))) {
+            realigned.push({content: comment.translation, translation: comment.content});
+        } else {
+            dropped += 1;
+        }
+    }
+    return {comments: realigned, dropped};
 }
 
 /**

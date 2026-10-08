@@ -8,6 +8,10 @@ import {
     OFFSCREEN_READY_MESSAGE_TYPE,
 } from '@/src/platform/offscreen/client';
 import {translateImageTextsInExtension} from '@/src/features/image-translation/services/offscreenRuntime';
+import {
+    MODEL_CALL_CANCEL_OFFSCREEN_MESSAGE_TYPE,
+    MODEL_CALL_START_OFFSCREEN_MESSAGE_TYPE,
+} from '@/src/services/harness/modelCallProtocol';
 
 const mocks = {
     downloadOcrLanguages: vi.fn(async () => undefined),
@@ -533,6 +537,68 @@ describe('Offscreen 消息静态路由', () => {
         cancel('repeat-before-start');
         for (let index = 0; index <= 512; index += 1) cancel(`bounded-offscreen-${index}`);
 
+    });
+
+    it('模型调用受理校验字段后同步回执 accepted，并把执行转交宿主', async () => {
+        const modelCall = {start: vi.fn(), cancel: vi.fn()};
+        const handler = createOffscreenMessageListener({
+            ...mocks, ttsPlayer: {play: mocks.play, stop: mocks.stop}, modelCall,
+        });
+        const request = {
+            type: MODEL_CALL_START_OFFSCREEN_MESSAGE_TYPE,
+            requestId: 'model-call-router-1',
+            service: 'openai',
+            model: 'gpt-test',
+            kind: 'generate',
+            config: {token: {}},
+            options: {prompt: []},
+        };
+        await expect(dispatch(request, handler)).resolves.toEqual({
+            handled: true,
+            response: {accepted: true, requestId: 'model-call-router-1'},
+        });
+        expect(modelCall.start).toHaveBeenCalledWith({
+            type: MODEL_CALL_START_OFFSCREEN_MESSAGE_TYPE,
+            requestId: 'model-call-router-1',
+            service: 'openai',
+            model: 'gpt-test',
+            kind: 'generate',
+            config: {token: {}},
+            options: {prompt: []},
+        });
+
+        await expect(dispatch({...request, kind: 'stream', requestId: 'model-call-router-2'}, handler))
+            .resolves.toEqual({handled: true, response: {accepted: true, requestId: 'model-call-router-2'}});
+        expect(modelCall.start).toHaveBeenCalledTimes(2);
+
+        for (const invalid of [
+            {requestId: ' '}, {requestId: 1}, {service: ''}, {model: null}, {kind: 'gen'},
+            {options: null}, {options: []}, {config: null}, {config: 'x'},
+        ]) {
+            expect((await dispatch({...request, ...invalid}, handler)).response)
+                .toMatchObject({success: false, error: expect.any(String)});
+        }
+        expect(modelCall.start).toHaveBeenCalledTimes(2);
+        // 宿主未装配时给出明确不可用回执，不占死消息通道。
+        await expect(dispatch(request)).resolves.toMatchObject({
+            handled: true,
+            response: {success: false, error: '模型调用未启用'},
+        });
+    });
+
+    it('模型调用取消透传 requestId 并对宿主缺失幂等成功', async () => {
+        const modelCall = {start: vi.fn(), cancel: vi.fn()};
+        const handler = createOffscreenMessageListener({
+            ...mocks, ttsPlayer: {play: mocks.play, stop: mocks.stop}, modelCall,
+        });
+        await expect(dispatch({type: MODEL_CALL_CANCEL_OFFSCREEN_MESSAGE_TYPE, requestId: 'model-call-router-1'}, handler))
+            .resolves.toEqual({handled: true, response: {success: true}});
+        expect(modelCall.cancel).toHaveBeenCalledWith('model-call-router-1');
+        await expect(dispatch({type: MODEL_CALL_CANCEL_OFFSCREEN_MESSAGE_TYPE, requestId: ' '}, handler))
+            .resolves.toEqual({handled: true, response: {success: false, error: 'Offscreen requestId 必须是非空字符串'}});
+        // 对齐 VIDEO_AI_CANCEL 先例：宿主未装配时取消幂等成功。
+        await expect(dispatch({type: MODEL_CALL_CANCEL_OFFSCREEN_MESSAGE_TYPE, requestId: 'model-call-router-1'}))
+            .resolves.toEqual({handled: true, response: {success: true}});
     });
 });
 

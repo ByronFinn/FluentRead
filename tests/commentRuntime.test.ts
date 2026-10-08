@@ -17,6 +17,8 @@ import type {Config} from '@/src/core/config/model';
 const IMAGE = 'data:image/png;base64,AAAA';
 // 可信识别为 zh-Hans 的中文选区：默认目标语言（空回落简体中文）下与目标同语。
 const CHINESE_SELECTION = '这是一个用来验证语言检测行为的中文句子。';
+// 可信识别为 ja 与简体混合的日文选区：跨语言但不可点名选区语言（语言对齐不生效）。
+const JAPANESE_MIXED_SELECTION = '皆さん、この新機能についてどう思いますか。同志们も待っていたようです。';
 const ENGLISH = 'I really need a fucking job but none of the job postings are real I literally do not know what to do';
 const baseConfig = () => ({
     on: true,
@@ -34,6 +36,8 @@ const request = (overrides = {}) => ({type: 'fluentReadComment' as const, action
 const okResult = (comments: unknown[], sourceTranslation?: string | null) => ({
     toolCalls: [{toolName: 'submit_comments', input: sourceTranslation === undefined ? {comments} : {comments, sourceTranslation}}],
 });
+// 模型未调用工具时的纯文本输出结果：ai@6 的 text 类型是 string，mock 用 Promise 也与 await 兼容。
+const textResult = (text: string) => ({toolCalls: [], text: Promise.resolve(text)});
 const repairResult = (text: string) => ({text,
     usage: Promise.resolve({inputTokens: 3, outputTokens: 7, totalTokens: 10}),
     response: Promise.resolve({modelId: 'deepseek-chat'})});
@@ -112,22 +116,130 @@ describe('comment model runtime', () => {
         mocks.generateText.mockResolvedValue(okResult([{content: 'a', translation: null}, {content: 'b', translation: null}]));
         const response = await runtime.run(request(), freshSignal());
         expect(response.success && response.comments).toHaveLength(2);
+        // 中文选区 20 字符：输出预算 = 2000 + 2 条×1200 + ceil(20*2) = 4440（固定分量覆盖思考模型的 reasoning token）。
+        expect(mocks.generateText.mock.calls[0][0].maxOutputTokens).toBe(4440);
         config.comment.count = 1;
         const trimmed = await runtime.run(request(), freshSignal());
         expect(trimmed.success && trimmed.comments).toHaveLength(1);
         expect(typeof mocks.generateText.mock.calls[0][0].messages[0].content).toBe('string');
     });
 
-    it('fails when the model does not call the tool or returns an invalid shape', async () => {
-        mocks.generateText.mockResolvedValue({toolCalls: []});
-        expect(failure(await runtime.run(request(), freshSignal())).error).toContain('未按要求提交');
-        mocks.generateText.mockResolvedValue(okResult([{content: '', translation: null}]));
-        expect(failure(await runtime.run(request(), freshSignal())).error).toContain('结构不完整');
-        mocks.generateText.mockResolvedValue(okResult([{content: 'x', translation: 'y', evil: 1}]));
-        expect(failure(await runtime.run(request(), freshSignal())).error).toContain('结构不完整');
+    it('retries format failures once and surfaces the matching error when both attempts fail', async () => {
+        // 未调用工具且纯文本也不是 JSON：仅格式类失败自动重试一次，两次都失败报"未按要求提交"。
+        mocks.generateText.mockResolvedValue(textResult('抱歉，我无法按工具要求完成任务。'));
+        expect(failure(await runtime.run(request({requestId: 'f1'}), freshSignal())).error).toBe('模型未按要求提交评论，请重试');
+        expect(mocks.generateText).toHaveBeenCalledTimes(2);
+        // 工具输入清洗后没有任何有效条目：两次尝试后报"结构不完整"。
+        mocks.generateText.mockClear();
+        mocks.generateText.mockResolvedValue(okResult([{content: '   ', translation: null}]));
+        expect(failure(await runtime.run(request({requestId: 'f2'}), freshSignal())).error).toBe('模型返回的评论结构不完整，请重试');
+        expect(mocks.generateText).toHaveBeenCalledTimes(2);
     });
 
-    it('maps cancellation and provider errors', async () => {
+    it('tolerates unknown keys in tool input instead of failing the whole request', async () => {
+        // 旧 .strict() 响应校验会把多余字段判为结构失败；宽容归一化只忽略未知键。
+        mocks.generateText.mockResolvedValue({toolCalls: [{toolName: 'submit_comments',
+            input: {comments: [{content: ' 评论一 ', translation: null, evil: 1}], unexpected: true}}]});
+        const response = await runtime.run(request({requestId: 'x1'}), freshSignal());
+        expect(response).toEqual({success: true, comments: [{content: '评论一', translation: null}], sourceTranslation: null});
+        expect(mocks.generateText).toHaveBeenCalledTimes(1);
+    });
+
+    it('succeeds from plain text output when the tool is not called', async () => {
+        // 模型把工具负载直接写进正文：文本兜底解析 + 宽容归一化救回成功，无需重试。
+        mocks.generateText.mockResolvedValue(textResult(
+            '{"comments":[{"content":"ghost jobs tbh","translation":"幽灵岗位"}],"sourceTranslation":"整段选区译文"}'));
+        const response = await runtime.run(request({requestId: 't1', text: ENGLISH}), freshSignal());
+        expect(response).toEqual({success: true, sourceTranslation: '整段选区译文', comments: [
+            {content: 'ghost jobs tbh', translation: '幽灵岗位'},
+        ]});
+        expect(mocks.generateText).toHaveBeenCalledTimes(1);
+    });
+
+    it('recovers when the first attempt is malformed but the retry succeeds', async () => {
+        // 第一次格式坏、第二次好：成功返回，且两次尝试各记一次 success 用量事件（译文齐全不再触发补译）。
+        // 递增时钟下断言每次尝试独立计时：相邻事件时长相同（各 1000ms），起点递增；
+        // 旧实现沿用请求级起点会让第二件事件的时长含第一次尝试（2000ms/4000ms），此断言即失效。
+        let clock = 0;
+        const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 1000));
+        try {
+            const sink = vi.fn();
+            const withSink = createCommentRuntime(() => config, createModel, () => sink);
+            mocks.generateText
+                .mockResolvedValueOnce(okResult([{content: ''}]))
+                .mockResolvedValueOnce({...okResult([{content: 'a', translation: '甲'}], '整段译文'),
+                    usage: Promise.resolve({inputTokens: 10, outputTokens: 5, totalTokens: 15}),
+                    response: Promise.resolve({modelId: 'deepseek-chat'})});
+            const response = await withSink.run(request({requestId: 'r1', text: ENGLISH}), freshSignal());
+            expect(response).toMatchObject({success: true, sourceTranslation: '整段译文', comments: [{content: 'a', translation: '甲'}]});
+            expect(mocks.generateText).toHaveBeenCalledTimes(2);
+            expect(sink).toHaveBeenCalledTimes(2);
+            expect(sink.mock.calls.every(([{outcome}]) => outcome === 'success')).toBe(true);
+            const events = sink.mock.calls.map(([{startedAt, durationMs}]) => ({startedAt, durationMs}));
+            expect(events[1]!.startedAt).toBeGreaterThan(events[0]!.startedAt);
+            expect(events[1]!.durationMs).toBe(events[0]!.durationMs);
+        } finally { nowSpy.mockRestore(); }
+    });
+
+    it('fails with the language error when both attempts write the wrong language', async () => {
+        // 点名 en 的选区：两次尝试都把正文写成目标中文且没有可救译文，语言对齐全丢弃后报语言错误。
+        mocks.generateText.mockResolvedValue(okResult([{content: '这是中文评论正文', translation: null}]));
+        expect(failure(await runtime.run(request({requestId: 'l1', text: ENGLISH}), freshSignal())).error)
+            .toBe('模型未按要求的语言生成评论，请重试');
+        expect(mocks.generateText).toHaveBeenCalledTimes(2);
+    });
+
+    it('swaps or drops target-language bodies to realign bilingual comments', async () => {
+        // 第一条正文写成目标中文、译文恰为选区语言：交换救回双语；第二条中文无译文：丢弃但保留其余成功并附提示。
+        mocks.generateText.mockResolvedValue(okResult([
+            {content: '这是一个用来验证语言检测行为的中文句子。', translation: ENGLISH},
+            {content: '这是中文评论', translation: null},
+        ], '整段选区译文'));
+        const response = await runtime.run(request({requestId: 'l2', text: ENGLISH}), freshSignal());
+        expect(response).toEqual({success: true, sourceTranslation: '整段选区译文', comments: [
+            {content: ENGLISH, translation: '这是一个用来验证语言检测行为的中文句子。'},
+        ], notice: '部分评论的语言与选区不符已丢弃，可重新生成。'});
+        expect(mocks.generateText).toHaveBeenCalledTimes(1);
+    });
+
+    it('recovers when the first attempt writes the wrong language and the retry succeeds', async () => {
+        // 混合失败语义：第一次全错语言（丢弃后为空）触发重试，第二次按选区语言书写则成功返回。
+        mocks.generateText
+            .mockResolvedValueOnce(okResult([{content: '这是中文评论正文', translation: null}]))
+            .mockResolvedValueOnce(okResult([{content: ENGLISH, translation: '中文译文'}], '整段译文'));
+        const response = await runtime.run(request({requestId: 'l3', text: ENGLISH}), freshSignal());
+        expect(response).toMatchObject({success: true, sourceTranslation: '整段译文',
+            comments: [{content: ENGLISH, translation: '中文译文'}]});
+        expect(mocks.generateText).toHaveBeenCalledTimes(2);
+    });
+
+    it('caps the output budget at the hard maximum for max-length selections', async () => {
+        // 8192 字符选区的线性预算远超 16000：主调用与补译调用都封顶，思考模型不再挤占正文预算。
+        config.comment.count = 5;
+        mocks.generateText.mockResolvedValue(okResult([{content: '评论', translation: null}]));
+        const sameLanguage = await runtime.run(request({requestId: 'cap1', text: '好'.repeat(COMMENT_MAX_TEXT)}), freshSignal());
+        expect(sameLanguage.success).toBe(true);
+        expect(mocks.generateText.mock.calls[0][0].maxOutputTokens).toBe(16_000);
+        mocks.generateText.mockClear();
+        mocks.generateText
+            .mockResolvedValueOnce(okResult([{content: 'a', translation: null}]))
+            .mockResolvedValueOnce(repairResult('{"source":"选区译文","comments":["甲"]}'));
+        const crossLanguage = await runtime.run(request({requestId: 'cap2', text: 'x'.repeat(COMMENT_MAX_TEXT)}), freshSignal());
+        expect(crossLanguage.success).toBe(true);
+        expect(mocks.generateText.mock.calls[0][0].maxOutputTokens).toBe(16_000);
+        expect(mocks.generateText.mock.calls[1][0].maxOutputTokens).toBe(16_000);
+    });
+
+    it('returns cancelled without retrying when the attempt itself is aborted', async () => {
+        // 尝试期间的取消属于外层一次性处理：直接返回取消，不进入第二次尝试。
+        const controller = new AbortController();
+        mocks.generateText.mockImplementation(() => { controller.abort(); return Promise.reject(new Error('stop')); });
+        expect(await runtime.run(request({requestId: 'a1'}), controller.signal))
+            .toEqual({success: false, error: '已取消', cancelled: true});
+        expect(mocks.generateText).toHaveBeenCalledTimes(1);
+    });
+
+    it('maps cancellation and provider errors without re-entering the retry loop', async () => {
         const controller = new AbortController();
         mocks.generateText.mockImplementation(() => { controller.abort(); return Promise.reject(new Error('boom')); });
         expect(await runtime.run(request(), controller.signal)).toEqual({success: false, error: '已取消', cancelled: true});
@@ -137,6 +249,8 @@ describe('comment model runtime', () => {
         expect(mocks.normalizeError.mock.calls[0][2]).toBe('sk-test');
         mocks.normalizeError.mockReturnValue({message: ''});
         expect(failure(await runtime.run(request(), freshSignal())).error).toBe('评论请求失败，请重试');
+        // 三次运行各只调用一次模型：供应商错误与取消绝不触发格式类重试。
+        expect(mocks.generateText).toHaveBeenCalledTimes(3);
     });
 
     it('rejects blank content after trimming and reports keyless provider failures', async () => {
@@ -227,23 +341,26 @@ describe('comment model runtime', () => {
         expect(JSON.parse(repairOptions.messages[0].content)).toEqual({source: ENGLISH, comments: ['ghost jobs tbh']});
         expect(repairOptions.maxRetries).toBe(0);
         expect(repairOptions.toolChoice).toBeUndefined();
+        // 补译预算按（待译源字符, 待译条数）估算：源 100 字符 + 1 条 = 2000 + 1200 + ceil(100*2) = 3400。
+        expect(repairOptions.maxOutputTokens).toBe(3400);
     });
 
     it('excludes target-language comment content from the repair payload', async () => {
-        // 模型把第二条评论写成了中文且没有译文：该条补译属于重复劳动，不进 payload，译文保持 null。
+        // 不可点名的混合日文选区：语言对齐不生效（否则中文正文会被丢弃），条目级门控仍然把
+        // "正文已是目标语言"的缺失译文排除出补译 payload，译文保持 null。
         mocks.generateText
             .mockResolvedValueOnce(okResult([
                 {content: 'ghost jobs tbh', translation: null},
                 {content: '这是中文评论', translation: null},
             ]))
             .mockResolvedValueOnce(repairResult('{"source":"选区译文","comments":["幽灵岗位罢了"]}'));
-        const response = await runtime.run(request({requestId: 'b2', text: ENGLISH}), freshSignal());
+        const response = await runtime.run(request({requestId: 'b2', text: JAPANESE_MIXED_SELECTION}), freshSignal());
         expect(response).toEqual({success: true, sourceTranslation: '选区译文', comments: [
             {content: 'ghost jobs tbh', translation: '幽灵岗位罢了'},
             {content: '这是中文评论', translation: null},
         ]});
         const repairOptions = mocks.generateText.mock.calls[1][0];
-        expect(JSON.parse(repairOptions.messages[0].content)).toEqual({source: ENGLISH, comments: ['ghost jobs tbh']});
+        expect(JSON.parse(repairOptions.messages[0].content)).toEqual({source: JAPANESE_MIXED_SELECTION, comments: ['ghost jobs tbh']});
     });
 
     it('repairs only the selection translation when comment translations are complete', async () => {

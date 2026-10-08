@@ -1,17 +1,22 @@
 /**
  * @file src/services/comment/runtime.ts
- * 文件职责：把评论请求组装为一次强制工具调用的模型生成，并把结果校验、清洗为可展示的双语评论列表与选区译文。
+ * 文件职责：把评论请求组装为一次强制工具调用的模型生成，并把结果解析、清洗为可展示的双语评论列表与选区译文。
  * 主要内容：偏好与服务的最终规范化（本地免密服务不强制密钥）、安全壳提示词与选区包装、语言判定前置
- * （resolveCommentLanguagePlan 的结论注入提示词三态语言段）、submit_comments 工具的 zod 严格契约（含 sourceTranslation）、
- * toolChoice required 的 generateText 调用、按条数裁剪、同语时译文强制 null、按条目内容门控（isCommentTranslationRedundant）
- * 的定向补译与选区译文补齐调用与取消透传、补译失败降级 notice、泄漏清洗、模型用量事件上报，以及供应商错误的统一归一。
+ * （resolveCommentLanguagePlan 的结论注入提示词三态语言段）、submit_comments 工具的 zod 契约（仅对模型描述输入形状，
+ * 响应侧由宽容归一化接管）、toolChoice required 的 generateText 调用（带 maxOutputTokens 输出预算）、
+ * 输出容错降级链（工具输入或纯文本兜底解析 → normalizeModelComments 宽容归一化 → realignCommentLanguages 语言对齐，
+ * 仅格式类失败自动重试一次，供应商错误与取消绝不重试）、按条目内容门控（isCommentTranslationRedundant）的定向补译
+ * 与选区译文补齐调用与取消透传、补译失败与语言对齐丢弃的降级 notice、泄漏清洗、模型用量事件上报（每次尝试独立计时），
+ * 以及供应商错误的统一归一。
  * 模块边界：只在后台执行，不读取网页 DOM、不管理取消与并发（由 feature handler 负责）、不持久化评论结果。
  */
 import {generateText, tool, type LanguageModel} from 'ai';
 import {z} from 'zod';
 import {buildCommentSystemPrompt, buildCommentUserText, sanitizeComments} from '@/src/core/comment/prompts';
+import {normalizeModelComments, parseCommentsFromText} from '@/src/core/comment/parse';
 import {
-    buildCommentTranslationRepairPrompt, isCommentTranslationRedundant, parseCommentRepairOutput, resolveCommentLanguagePlan,
+    buildCommentTranslationRepairPrompt, isCommentTranslationRedundant, parseCommentRepairOutput,
+    realignCommentLanguages, resolveCommentLanguagePlan,
 } from '@/src/core/comment/repair';
 import {COMMENT_MAX_IMAGE_CHARS, COMMENT_MAX_IMAGES, COMMENT_MAX_TEXT, normalizeCommentPreferences, resolveCommentModel} from '@/src/core/config/comment';
 import {servicesType} from '@/src/core/config/catalog';
@@ -36,8 +41,19 @@ export type CommentUsageSink = (event: ModelUsageEvent) => void;
 
 function failure(error: string): CommentResponse { return {success: false, error}; }
 
+/** 单次评论生成的输出硬上限：防止模型失控输出无上限 token。 */
+const COMMENT_MAX_OUTPUT_TOKENS = 16_000;
+
+/** 系统指令、条目输出与云端思考模型 reasoning token 的固定预算（count 条正文加译文的最坏量），再按源文本 2 token/字符留足译文空间，防止无上限的失控输出。 */
+function commentOutputBudget(sourceChars: number, commentCount: number): number {
+    return Math.min(COMMENT_MAX_OUTPUT_TOKENS, 2_000 + commentCount * 1_200 + Math.ceil(sourceChars * 2));
+}
+
 /** 定向补译失败时的降级提示：评论照常展示，译文由用户重新生成补救。 */
 const TRANSLATION_REPAIR_NOTICE = '部分评论的译文生成失败，可点击重新生成。';
+
+/** 语言对齐丢弃条目的降级提示：其余评论照常展示，由用户决定是否重新生成补足条数。 */
+const DROPPED_LANGUAGE_NOTICE = '部分评论的语言与选区不符已丢弃，可重新生成。';
 
 /** 页面输入不可信：文本与 data URL 图片在入口再校验一次，与 handler 共用同一组上限常量。 */
 function validateRequest(request: CommentRequest): string | undefined {
@@ -78,35 +94,57 @@ export function createCommentRuntime(getConfig: () => Config, createModel: Comme
             };
             const startedAt = Date.now();
             try {
-                const result = await generateText({
-                    model: createModel(config, service, model),
-                    system,
-                    messages: [{role: 'user', content}],
-                    tools: {submit_comments: tool({description: '提交生成的评论列表。', inputSchema: COMMENT_INPUT})},
-                    toolChoice: 'required',
-                    maxRetries: 0,
-                    abortSignal: signal,
-                });
-                const usage = await result.usage;
-                const response = await result.response;
-                record(createHarnessUsageEvent({service, model, actualModel: response?.modelId, startedAt,
-                    durationMs: Date.now() - startedAt, usage, outcome: 'success'}));
-                const call = result.toolCalls.find(toolCall => toolCall.toolName === 'submit_comments');
-                if (!call) return failure('模型未按要求提交评论，请重试');
-                const parsed = COMMENT_INPUT.safeParse(call.input);
-                if (!parsed.success) return failure('模型返回的评论结构不完整，请重试');
-                const comments: CommentItem[] = parsed.data.comments.slice(0, preferences.count)
-                    .map(comment => ({
-                        content: comment.content.trim(),
-                        // 同语选区即使模型给出了译文也不展示：与选区重复的译文没有信息量。
-                        translation: plan.sameLanguage ? null : (comment.translation?.trim() || null),
+                // 输出容错降级链：最多 2 次尝试，仅格式类失败（未提交工具/结构无效/语言全错）自动重试一次；
+                // 供应商错误与用户取消在 generateText 抛错时直接冲出循环，由外层 catch 一次性处理，绝不重试。
+                let prepared: {comments: CommentItem[]; sourceTranslation: string} | undefined;
+                let droppedCount = 0;
+                // 循环不变量：任何未产出 prepared 的路径都会覆写该文案，声明处默认值仅满足类型收窄。
+                let formatError = '模型未按要求提交评论，请重试';
+                for (let attempt = 0; attempt < 2 && !prepared; attempt += 1) {
+                    // 每次尝试独立计时：格式类失败后的重试若沿用请求级起点，会把失败尝试的耗时计入成功事件。
+                    const attemptStartedAt = Date.now();
+                    const result = await generateText({
+                        model: createModel(config, service, model),
+                        system,
+                        messages: [{role: 'user', content}],
+                        tools: {submit_comments: tool({description: '提交生成的评论列表。', inputSchema: COMMENT_INPUT})},
+                        toolChoice: 'required',
+                        maxRetries: 0,
+                        maxOutputTokens: commentOutputBudget(request.text.length, preferences.count),
+                        abortSignal: signal,
+                    });
+                    const usage = await result.usage;
+                    const response = await result.response;
+                    record(createHarnessUsageEvent({service, model, actualModel: response?.modelId, startedAt: attemptStartedAt,
+                        durationMs: Date.now() - attemptStartedAt, usage, outcome: 'success'}));
+                    // 工具未被调用时兜底解析纯文本输出；调用成功则直接取工具输入，两者统一交给宽容归一化。
+                    const call = result.toolCalls.find(toolCall => toolCall.toolName === 'submit_comments');
+                    const raw = call ? call.input : parseCommentsFromText(await result.text);
+                    const normalized = raw === undefined ? undefined : normalizeModelComments(raw, preferences.count);
+                    if (!normalized) {
+                        formatError = call ? '模型返回的评论结构不完整，请重试' : '模型未按要求提交评论，请重试';
+                        continue;
+                    }
+                    let comments: CommentItem[] = normalized.comments.map(comment => ({
+                        content: comment.content,
+                        // 同语选区即使模型给出译文也不展示：与选区重复的译文没有信息量。
+                        translation: plan.sameLanguage ? null : comment.translation,
                     }));
-                if (comments.some(comment => !comment.content)) return failure('模型返回的评论结构不完整，请重试');
-                let sourceTranslation = typeof parsed.data.sourceTranslation === 'string' ? parsed.data.sourceTranslation.trim() : '';
-                let notice: string | undefined;
+                    if (!plan.sameLanguage && plan.selectionLanguage) {
+                        const realigned = realignCommentLanguages(comments, plan, config.to);
+                        comments = realigned.comments;
+                        droppedCount = realigned.dropped;
+                        if (comments.length === 0) { formatError = '模型未按要求的语言生成评论，请重试'; continue; }
+                    }
+                    prepared = {comments, sourceTranslation: normalized.sourceTranslation ?? ''};
+                }
+                if (!prepared) return failure(formatError);
+                let sourceTranslation = prepared.sourceTranslation;
+                // 部分丢弃与补译失败可能同时发生：两句各自带句号直接拼接，一次告知用户。
+                let notice = droppedCount > 0 ? DROPPED_LANGUAGE_NOTICE : undefined;
                 if (!plan.sameLanguage) {
                     // 条目级门控：内容确属目标语言的缺失译文是重复劳动，不进补译；其余宁可多补不可漏补。
-                    const missing = comments.filter(comment => !comment.translation
+                    const missing = prepared.comments.filter(comment => !comment.translation
                         && !isCommentTranslationRedundant(comment.content, config.to));
                     const needsSource = !sourceTranslation;
                     if (needsSource || missing.length > 0) {
@@ -118,6 +156,7 @@ export function createCommentRuntime(getConfig: () => Config, createModel: Comme
                                 system: buildCommentTranslationRepairPrompt(config.to),
                                 messages: [{role: 'user', content: JSON.stringify(payload)}],
                                 maxRetries: 0,
+                                maxOutputTokens: commentOutputBudget(needsSource ? request.text.length : 0, missing.length),
                                 abortSignal: signal,
                             });
                             const repairUsage = await repair.usage;
@@ -129,20 +168,20 @@ export function createCommentRuntime(getConfig: () => Config, createModel: Comme
                                 missing.forEach((comment, index) => { comment.translation = repaired.comments[index]!; });
                                 if (repaired.source) sourceTranslation = repaired.source;
                             } else {
-                                notice = TRANSLATION_REPAIR_NOTICE;
+                                notice = `${notice ?? ''}${TRANSLATION_REPAIR_NOTICE}`;
                             }
                         } catch (repairError) {
                             // 用户取消必须继续向外抛，让外层统一走取消路径；其余补译失败只降级提示，不丢已生成的评论。
                             if (signal.aborted) throw repairError;
                             record(createHarnessUsageEvent({service, model, startedAt: repairStartedAt,
                                 durationMs: Date.now() - repairStartedAt, outcome: 'error'}));
-                            notice = TRANSLATION_REPAIR_NOTICE;
+                            notice = `${notice ?? ''}${TRANSLATION_REPAIR_NOTICE}`;
                         }
                     }
                 }
                 // 纯成功路径不能携带 notice 键：面板与测试都依赖成功响应的可选字段语义。
                 // 同语选区的选区译文没有跨语言价值，一律为 null；跨语言时模型译文或补译结果缺一即为 null。
-                return {success: true, comments: sanitizeComments(comments),
+                return {success: true, comments: sanitizeComments(prepared.comments),
                     sourceTranslation: plan.sameLanguage ? null : (sourceTranslation || null),
                     ...(notice ? {notice} : {})};
             } catch (error) {

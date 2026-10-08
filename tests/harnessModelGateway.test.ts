@@ -1,17 +1,41 @@
 /**
  * @file tests/harnessModelGateway.test.ts
- * 文件职责：验证 Harness 模型网关的服务边界、端点、凭据、取消和工具调用请求协议。
- * 主要内容：使用真实 AI SDK provider 加 mock fetch 检查 OpenAI-compatible payload。
- * 模块边界：测试不访问真实网络，不覆盖 UI、会话、Config 持久化或背景路由。
+ * 文件职责：验证 Harness 模型网关的服务边界、端点、凭据、取消、工具调用请求协议与宿主开关分流。
+ * 主要内容：使用真实 AI SDK provider 加 mock fetch 检查 OpenAI-compatible payload；宿主开关用
+ * 可变能力桩（vi.hoisted）与 offscreenModelClient 工厂桩覆盖 resolveHarnessModelCallHost 全分支、
+ * offscreen 分支的共享 ports 代理与 background/能力缺失分支的直连回归。
+ * 模块边界：测试不访问真实网络，不覆盖 UI、会话、Config 持久化或背景路由；能力桩默认
+ * offscreenDocument=false，与 node 环境实测的 browserCapabilities 一致，既有直连断言语义不变。
  */
 import {afterEach, describe, expect, it, vi} from 'vitest';
-import {generateText, streamText, tool} from 'ai';
+import {generateText, streamText, tool, type LanguageModel} from 'ai';
 import {z} from 'zod';
 import {reactive} from 'vue';
-import {Config} from '@/src/core/config/model';
+import {Config, normalizeConfig} from '@/src/core/config/model';
 import {currentModelIds, services} from '@/src/core/config/catalog';
-import {createHarnessLanguageModel, normalizeHarnessModelError, sanitizeHarnessModelMessage} from '@/src/services/harness/modelGateway';
+import {createHarnessLanguageModel, normalizeHarnessModelError, resolveHarnessModelCallHost, sanitizeHarnessModelMessage} from '@/src/services/harness/modelGateway';
+import type {OffscreenModelClientPorts} from '@/src/services/harness/offscreenModelClient';
 import {setRuntimeFetch} from '@/src/platform/http/runtime';
+
+// 宿主开关专属桩：能力默认与 node 实测一致（无浏览器 → offscreenDocument=false → 强制直连），
+// 仅在 offscreen 分支用例内切换为 true，throwOnRead 模拟 browserCapabilities 读取抛错；代理工厂
+// 用 vi.fn 桩替换，断言网关分流与 ports 装配而不触发消息通道。
+const hostCapabilities = vi.hoisted(() => ({offscreenDocument: false, throwOnRead: false}));
+const offscreenModelClientMock = vi.hoisted(() => ({factory: vi.fn(), ports: [] as unknown[]}));
+vi.mock('@/src/platform/browser/capabilities', () => ({
+  get browserCapabilities(): {offscreenDocument?: boolean} {
+    if (hostCapabilities.throwOnRead) throw new Error('capability read failure');
+    return hostCapabilities;
+  },
+}));
+vi.mock('@/src/services/harness/offscreenModelClient', () => ({
+  // 捕获网关注入的 ports（跨 mockReset 保留，网关侧工厂带模块级 memo），再交给可重置的
+  // 工厂桩断言分流次数。
+  createOffscreenHarnessLanguageModel: (ports: unknown) => {
+    offscreenModelClientMock.ports.push(ports);
+    return offscreenModelClientMock.factory(ports);
+  },
+}));
 
 function response(body: unknown): Response {
   return new Response(JSON.stringify(body), {status: 200, headers: {'content-type': 'application/json'}});
@@ -314,4 +338,99 @@ it('网关拒绝非法头并遮罩错误回显，头配置快照不随后续编�
         return response({choices: [{message: {role: 'assistant', content: 'done'}, finish_reason: 'stop'}]});
     });
     try { await generateText({model, prompt: 'fixture'}); } finally { setRuntimeFetch(); }
+});
+
+describe('harness model call host switch', () => {
+  afterEach(() => {
+    setRuntimeFetch();
+    hostCapabilities.offscreenDocument = false;
+    hostCapabilities.throwOnRead = false;
+    offscreenModelClientMock.factory.mockReset();
+    vi.unstubAllGlobals();
+  });
+
+  it('harnessCallHost 默认离屏、显式 background 保留、非法值回落离屏', () => {
+    expect(new Config().harnessCallHost).toBe('offscreen');
+    expect(normalizeConfig({harnessCallHost: 'background'}).harnessCallHost).toBe('background');
+    expect(normalizeConfig({harnessCallHost: 'unknown-host'}).harnessCallHost).toBe('offscreen');
+    // 旧配置无此键无需迁移，直接落到离屏默认值。
+    expect(normalizeConfig({}).harnessCallHost).toBe('offscreen');
+  });
+
+  it('resolveHarnessModelCallHost 覆盖显式回滚、能力齐备走离屏、能力缺失强制直连', () => {
+    const offscreenConfig = new Config();
+    const backgroundConfig = new Config();
+    backgroundConfig.harnessCallHost = 'background';
+    expect(resolveHarnessModelCallHost(backgroundConfig, {offscreenDocument: true})).toBe('background');
+    expect(resolveHarnessModelCallHost(offscreenConfig, {offscreenDocument: true})).toBe('offscreen');
+    expect(resolveHarnessModelCallHost(offscreenConfig, {offscreenDocument: false})).toBe('background');
+    // 字段缺失（node 测试、未知环境）与显式 false 一样兜底直连。
+    expect(resolveHarnessModelCallHost(offscreenConfig, {})).toBe('background');
+  });
+
+  it('能力齐备时统一入口经共享 ports 返回代理模型', () => {
+    hostCapabilities.offscreenDocument = true;
+    const proxyModel = {proxy: true} as unknown as LanguageModel;
+    const proxied: Array<[string, string]> = [];
+    offscreenModelClientMock.factory.mockImplementation(() => (_config: unknown, service: string, model: string) => {
+      proxied.push([service, model]);
+      return proxyModel;
+    });
+    const config = new Config();
+    expect(createHarnessLanguageModel(config, services.openai, 'gpt-test')).toBe(proxyModel);
+    expect(createHarnessLanguageModel(config, services.claude, 'claude-test')).toBe(proxyModel);
+    expect(proxied).toEqual([[services.openai, 'gpt-test'], [services.claude, 'claude-test']]);
+    // 共享 ports 只装配一次：同一进程内全部模型复用唯一的代理工厂与事件订阅。
+    expect(offscreenModelClientMock.factory).toHaveBeenCalledTimes(1);
+    const ports = offscreenModelClientMock.ports[0] as OffscreenModelClientPorts;
+    expect(ports).toBeTruthy();
+    expect(typeof ports.subscribe).toBe('function');
+    // getClient 惰性解引用 extensionDomClient，node 下不触碰 chrome 也能返回客户端。
+    expect(ports.getClient()).toBeTruthy();
+    expect(ports.now()).toBeGreaterThanOrEqual(0);
+  });
+
+  it('回滚显式 background 或能力缺失时统一入口仍走直连 provider', async () => {
+    const fetchMock = vi.fn(async () => response({choices: [{message: {role: 'assistant', content: 'ok'}, finish_reason: 'stop'}]}));
+    setRuntimeFetch(fetchMock);
+    // node 能力缺失：默认 offscreen 配置也被强制直连（既有调用方在测试环境的语义）。
+    await generateText({model: createHarnessLanguageModel(new Config(), services.openai, 'gpt-test'), prompt: 'hello'});
+    // 能力齐备但显式回滚：尊重 background 直连。
+    hostCapabilities.offscreenDocument = true;
+    const rollback = new Config();
+    rollback.harnessCallHost = 'background';
+    await generateText({model: createHarnessLanguageModel(rollback, services.openai, 'gpt-test'), prompt: 'hello'});
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(offscreenModelClientMock.factory).not.toHaveBeenCalled();
+  });
+
+  it('ports 订阅包装 runtime.onMessage，listener 恒返回 undefined 不占响应通道', () => {
+    hostCapabilities.offscreenDocument = true;
+    offscreenModelClientMock.factory.mockImplementation(() => () => ({proxy: true} as unknown as LanguageModel));
+    createHarnessLanguageModel(new Config(), services.openai, 'gpt-test');
+    // 网关侧工厂带模块级 memo：无论本用例是否首次触发装配，ports[0] 都是共享端口实例。
+    const ports = offscreenModelClientMock.ports[0] as OffscreenModelClientPorts;
+    expect(ports).toBeTruthy();
+    const registered: Array<(message: unknown) => unknown> = [];
+    const removeListener = vi.fn();
+    vi.stubGlobal('chrome', {runtime: {onMessage: {
+      addListener: (listener: (message: unknown) => unknown) => {registered.push(listener);},
+      removeListener,
+    }}});
+    const seen: unknown[] = [];
+    const unsubscribe = ports.subscribe(message => {seen.push(message);});
+    expect(registered).toHaveLength(1);
+    // P2 订阅契约：包装层把消息原样转交 listener，返回值恒为 undefined。
+    expect(registered[0]!({type: 'unrelated'})).toBeUndefined();
+    expect(seen).toEqual([{type: 'unrelated'}]);
+    unsubscribe();
+    expect(removeListener).toHaveBeenCalledWith(registered[0]);
+  });
+
+  it('browserCapabilities 读取抛错时视为无能力并兜底直连', async () => {
+    hostCapabilities.throwOnRead = true;
+    setRuntimeFetch(async () => response({choices: [{message: {role: 'assistant', content: 'ok'}, finish_reason: 'stop'}]}));
+    await generateText({model: createHarnessLanguageModel(new Config(), services.openai, 'gpt-test'), prompt: 'hello'});
+    expect(offscreenModelClientMock.factory).not.toHaveBeenCalled();
+  });
 });

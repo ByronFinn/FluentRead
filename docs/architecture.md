@@ -167,10 +167,11 @@ WXT 会把 `entrypoints/` 下零层或一层的入口作为构建输入，并在
 - content 和仅包含 popup/options/unlisted-page 的构建组将配置存储解析为远端运行时，Dexie、加密仓库和旧配置迁移由 background 持有；配置写入仍经过后台权威持久化协议。包含 background 的构建组不进行替换，保留 Firefox MV2 后台页面的数据库能力。非中文界面语言包（含 legacy 精确文案与动态模板）作为 `i18n/<lang>.json` 按需 fetch，不进入 content 主包。内容脚本不能 `import()` 以 `use_dynamic_url` 暴露的扩展脚本：动态 ID 地址不满足隔离环境的 `script-src 'self'`，而固定地址会让网页探测扩展，因此 Defuddle 仍随内容脚本打包。
 - Options 首次只挂载当前设置分区，访问后的分区保留实例和编辑状态；学习中心与设置表单的 `KeepAlive` 必须使用不同缓存键。表单挂载前等待配置和界面语言就绪，避免默认值闪现及额外重渲染。Popup/Options 按实际使用的 Element Plus 组件引入样式。
 - ONNX Runtime 的 WASM 随扩展以原始 `.wasm` 保存，由发布 ZIP 统一压缩，避免 Edge Partner Center 拒绝包内嵌套 `.gz` 文件。首次模型初始化时读取并校验 WASM 后注入 `env.wasm.wasmBinary`；静态 MJS 仍从扩展自身加载，CSP 不允许远程代码或 blob 脚本。CPU 和 WebGPU 初始化共用这个入口，成功或失败后都释放注入的二进制引用。OPUS/Whisper 使用 ORT 1.22 的 JSEP pair，Kokoro 使用其 Transformers 精确依赖 ORT 1.26 的 Asyncify pair；两者不能混用版本或 WASM/MJS 类型。wllama 是另一套独立引擎。打包方式不改变模型及原有 GPU 启用策略；共享加载器仍兼容旧 gzip 资源。
-- MV3 background 是 service worker，内存状态必须允许重启；需要持久化的数据进入 storage/IndexedDB。
+- MV3 background 是 service worker，内存状态必须允许重启；需要持久化的数据进入 storage/IndexedDB。SW 空闲约 30 秒即被终止且进行中的 fetch 不重置空闲计时器，长时模型调用（评论生成）在请求活跃期由后台按 20 秒节奏调用一次扩展 API（`runtime.getPlatformInfo` 探测）保活，请求结束即停止；该机制以引用计数保活器（`src/features/comment-assistant/keepalive.ts`）经 handler 依赖注入，纯计时逻辑不触碰浏览器 API。
 - 扩展自有 DOM 运行时由 background 管理，content 和 UI 只通过类型化消息协议请求能力。Chrome/Edge MV3 使用原生 Offscreen，Firefox MV2 使用后台页面中的隐藏扩展 iframe；两者加载同一个 `offscreen.html`，复用同一份消息路由、OCR、图片/区域绘制、字幕推理和 TTS 播放逻辑。
 - `extensionDomClient` 只选择文档容器，并共用 `createOffscreenClient` 的准备、握手、截止时间、取消和重建。Firefox 特有代码仅负责 iframe 创建、查询和移除，不另写 feature handler、算法或配置。
 - `offscreenDocument` 仅表示原生 API 与权限；`extensionDom` 表示共享运行时可用。Firefox 的图片、区域、本地字幕和扩展朗读可用，但 Chrome Translator 仍单独受 `chromeTranslation` 约束；Firefox MV3 尚未开放此适配。
+- Harness 模型调用（阅读/写作/评论）经宿主开关分流：默认 `harnessCallHost='offscreen'` 时后台只构建代理 LanguageModel，`doGenerate`/`doStream` 经协议（`modelCallProtocol`）、执行器（`modelExecutor`）、宿主（`modelExecutorHost`）三层转发到常驻 DOM 运行时执行，执行器内建心跳防中断；`harnessCallHost='background'` 回滚为后台直连，无原生 Offscreen 能力的环境（Firefox MV2、node 测试、未知浏览器）也强制直连兜底。直连工厂 `createHarnessLanguageModelDirect` 同时是 Offscreen 执行器的模型构建器——Offscreen 内不得注入带切换的入口，否则会再次代理回后台形成递归。
 - content 生命周期使用 WXT `ContentScriptContext` 与 `AbortSignal`，扩展失效后不得继续回写页面。默认关闭的输入翻译和段落复制不挂载监听器，由独立子 signal 随配置启停；图片悬浮的连续 pointermove 每帧仅检测最新事件，关闭和卸载时取消待处理帧。
 
 参考：[WXT Entrypoints](https://wxt.dev/guide/essentials/entrypoints)、[Content Scripts](https://wxt.dev/guide/essentials/content-scripts)、[Project Structure](https://wxt.dev/guide/essentials/project-structure)。
