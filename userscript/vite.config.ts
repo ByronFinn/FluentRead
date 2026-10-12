@@ -50,9 +50,10 @@ function installedVersion(name: string): string {
 }
 
 // 脚本管理器在安装时缓存固定版本的通用库；仓库资源固定到已发布提交，更新资源时同步换提交。
-const userscriptResourceCommit = '184a3d74f61b9d2a8d47080787f7e0180b98414d';
+// 1cd92296 是上游首个同时携带当前 64.png 与 vueElementPlusBridge.v1.js 的提交（184a3d74 早于两者，属过期钉扎）。
+const userscriptResourceCommit = '1cd92296ef25e89a411193894a1225db582e4a17';
 // 语言文件的内容哈希来自合并后的消息目录，固定到首次包含这些文件的提交。
-const userscriptLanguageResourceCommit = '240cbc42de9d1141c679fb595afea055397ac656';
+const userscriptLanguageResourceCommit = 'cfc534d6d0b1a7e8af198d421e5348452f4af55e';
 const pinnedIconUrl = `https://cdn.jsdelivr.net/gh/FluentRead/FluentRead@${userscriptResourceCommit}/public/icon/64.png`;
 const iconMetaUrl = greasyForkSource ? pinnedIconUrl : iconDataUrl;
 const uiRequires = [
