@@ -1,12 +1,12 @@
 /**
  * @file src/core/config/comment.ts
  * 文件职责：定义评论助手偏好的类型、默认值与纯规范化规则。
- * 主要内容：启用开关、可选服务与模型覆盖、评论条数、可编辑风格提示词，以及沿用 Harness 服务白名单的规范化边界。
+ * 主要内容：启用开关、可选服务与模型覆盖、评论条数、可编辑风格提示词及其输入上限（COMMENT_PROMPT_MAX_LENGTH），
+ * 以及沿用 Harness 服务白名单的规范化边界。
  * 模块边界：本文件只处理领域数据，不读写浏览器存储、不调用模型，也不决定选区或页面生命周期。
  */
 import {customModelString, resolveConfiguredModel} from './catalog';
 import {isHarnessService} from './harness';
-import {COMMENT_PROMPT_MAX_LENGTH} from '../comment/prompts';
 import type {CustomOpenAIProvider} from './customOpenAI';
 
 export interface CommentPreferences {
@@ -35,6 +35,9 @@ export const COMMENT_MAX_IMAGES = 4;
 export const COMMENT_MAX_IMAGE_CHARS = 512_000;
 export const COMMENT_COUNT_MIN = 1;
 export const COMMENT_COUNT_MAX = 5;
+// 风格提示词的输入上限归配置层所有：规范化要在这里截断，功能层（comment/prompts.ts）反向引用本常量，
+// 避免 config -> 功能实现的依赖边把提示词构建链（进而语言检测）拉进设置页的静态依赖图。
+export const COMMENT_PROMPT_MAX_LENGTH = 2000;
 
 export function normalizeCommentPreferences(value: unknown, customProviders: readonly CustomOpenAIProvider[] = []): CommentPreferences {
     const source = value && typeof value === 'object' && !Array.isArray(value)

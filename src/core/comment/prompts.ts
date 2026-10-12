@@ -5,6 +5,7 @@
  * （同语时全部为 null、可信点名选区语言时强制 content/translation 与 sourceTranslation 分语、未识别时泛化措辞，
  * 目标语言缺省回落简体中文）、选中内容 bracket 包装、图片数量说明和提示词泄漏检测。
  * 模块边界：本文件只处理领域数据，语言判定结论由 repair.ts 的可信识别给出并注入提示词；不读取配置存储、不调用模型、不接触 DOM；
+ * 风格提示词输入上限归 config/comment.ts 所有，此处仅按 feature -> config 方向引用再导出；
  * 用户提示词只能替换风格指令段，安全壳与输出契约由代码固定。
  */
 import type {CommentLanguagePlan} from './repair';
@@ -31,7 +32,9 @@ export const DEFAULT_COMMENT_PROMPT = [
     '锋利但不刻薄，温暖但不谄媚；像朋友群里随手发出去的那句，能让人会心一笑或停下来想一秒。',
 ].join('\n');
 
-export const COMMENT_PROMPT_MAX_LENGTH = 2000;
+// 风格提示词输入上限归配置层所有（规范化截断在 config/comment.ts），这里按 feature -> config 方向引用并再导出，
+// 让设置页继续从本文件一并取用提示词相关常量。
+export {COMMENT_PROMPT_MAX_LENGTH} from '../config/comment';
 export const COMMENT_PROMPT_VARIABLES = [
     {token: '{{count}}', label: '评论条数'},
 ] as const;
