@@ -98,7 +98,7 @@
       </div>
     </div>
     <SettingsItem label="评论条数" description="每次生成的候选数量；模型必须按该数量提交，超出会被裁剪。">
-      <el-input-number v-model="config.comment.count" :min="1" :max="5" controls-position="right" aria-label="评论条数" />
+      <SettingsNumberInput v-model="config.comment.count" unit="条" :min="1" :max="5" :step="1" aria-label="评论条数" />
     </SettingsItem>
   </SettingsGroup>
 
