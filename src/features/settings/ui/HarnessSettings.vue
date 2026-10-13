@@ -161,9 +161,10 @@ const modelOptions = computed(() => {
   const service = config.value.harness.service || config.value.service
   return (isCustomOpenAIProviderId(service) ? getCustomOpenAIProviderModels(config.value.customOpenAIProviders, service) : models.get(service) || []).filter((model) => model !== '自定义模型')
 })
-// 评论服务候选沿用 Harness 白名单并补充未与目录重名的自定义 OpenAI 供应商，与已删除的评论助手设置页保持同一规则。
+// 评论服务候选按评论运行时自己的可用判定（isCommentServiceUsable，即 Harness AI 白名单，含自定义 OpenAI 兼容供应商）过滤，
+// 不再包含阅读层专用的 B站（运行时 isHarnessService 检查本就会拒绝它），与 effectiveCommentServiceUsable 保持同一规则。
 const commentServiceOptions = computed(() => [
-  ...options.services.filter((item) => !item.disabled && isReadingService(item.value)),
+  ...options.services.filter((item) => !item.disabled && isCommentServiceUsable(item.value, config.value.customOpenAIProviders)),
   ...config.value.customOpenAIProviders.filter((provider) => !options.services.some((item) => item.value === provider.id)).map((provider) => ({value: provider.id, label: getCustomOpenAIProviderLabel(config.value.customOpenAIProviders, provider.id)})),
 ])
 // 空服务跟随当前默认服务；空模型跟随服务的已配置模型。
