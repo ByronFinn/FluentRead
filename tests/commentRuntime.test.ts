@@ -116,7 +116,7 @@ describe('comment model runtime', () => {
         mocks.generateText.mockResolvedValue(okResult([{content: 'a', translation: null}, {content: 'b', translation: null}]));
         const response = await runtime.run(request(), freshSignal());
         expect(response.success && response.comments).toHaveLength(2);
-        // 中文选区 20 字符：输出预算 = 2000 + 2 条×1200 + ceil(20*2) = 4440（固定分量覆盖思考模型的 reasoning token）。
+        // 中文选区 20 字符：输出预算 = 2000 + 2 条×1200 + ceil(20*2) = 4440（动态护栏按最坏合法输出推导，思考模型另有加成）。
         expect(mocks.generateText.mock.calls[0][0].maxOutputTokens).toBe(4440);
         config.comment.count = 1;
         const trimmed = await runtime.run(request(), freshSignal());
@@ -145,6 +145,117 @@ describe('comment model runtime', () => {
         expect(mocks.generateText).toHaveBeenCalledTimes(1);
     });
 
+    it('rescues a schema-invalid tool call whose input still parses as an object', async () => {
+        // invalid 工具调用的 input 在 JSON 合法时是解析后的对象（如缺字段/错类型触发 zod 失败）：
+        // 对象直接交宽容归一化抢救，不需要重试。这里模拟模型漏写 translation 触发 schema 失败。
+        mocks.generateText.mockResolvedValue({toolCalls: [{toolName: 'submit_comments', invalid: true,
+            error: new Error('Invalid input: translation required'),
+            input: {comments: [{content: ' 结构失败但可救回 '}]}}]});
+        const response = await runtime.run(request({requestId: 'iv1'}), freshSignal());
+        expect(response).toEqual({success: true, comments: [{content: '结构失败但可救回', translation: null}], sourceTranslation: null});
+        expect(mocks.generateText).toHaveBeenCalledTimes(1);
+    });
+
+    it('routes a schema-invalid string input through the plain-text fallback', async () => {
+        // invalid 且 input 是原始字符串（JSON 解析都失败，如 thinking 后接负载被截断）：
+        // 转纯文本兜底的花括号切片仍能救回前缀完整对象。
+        mocks.generateText.mockResolvedValue({toolCalls: [{toolName: 'submit_comments', invalid: true,
+            error: new Error('Unexpected token'),
+            input: '{"comments":[{"content":"切片救回","translation":null}],"sourceTranslation":null} 后面是被截断的垃圾'}]});
+        const response = await runtime.run(request({requestId: 'iv2'}), freshSignal());
+        expect(response).toEqual({success: true, comments: [{content: '切片救回', translation: null}], sourceTranslation: null});
+        expect(mocks.generateText).toHaveBeenCalledTimes(1);
+    });
+
+    it('feeds only the zod issues from an invalid call into the repair hint', async () => {
+        // ai@6 的 InvalidToolInputError.message = 前缀 + "Value: <输入全文回显>\nError message: <zod 逐字段问题>"：
+        // 纠偏指令只要尾部的问题列表，不要模型自身输入的回显（回显会挤占提示词并误导模型复述坏结构）。
+        mocks.generateText
+            .mockResolvedValueOnce({toolCalls: [{toolName: 'submit_comments', invalid: true,
+                error: new Error('Invalid input for tool submit_comments: Type validation failed: Value: {"comments":[]}.'
+                    + '\nError message: comments: Array must contain 1 or more elements'),
+                input: {comments: []}}], text: Promise.resolve('')})
+            .mockResolvedValueOnce(okResult([{content: 'a', translation: null}]));
+        const response = await runtime.run(request({requestId: 'iv3'}), freshSignal());
+        expect(response).toMatchObject({success: true});
+        const hint = mocks.generateText.mock.calls[1][0].system;
+        expect(hint).toContain('Array must contain 1 or more elements');
+        expect(hint).not.toContain('{"comments":[]}');
+    });
+
+    it('shrinks the budget and retries when the endpoint rejects it as above the model cap', async () => {
+        // 输出预算超过模型硬上限的 400（各端点上限无法预知）：收缩到 4096 重试一次成功；被拒尝试记 error 事件。
+        const sink = vi.fn();
+        const withSink = createCommentRuntime(() => config, createModel, () => sink);
+        mocks.generateText
+            .mockRejectedValueOnce(Object.assign(new Error("'max_tokens' is too large: 24384. This model supports at most 16384"), {statusCode: 400}))
+            .mockResolvedValueOnce(okResult([{content: 'a', translation: null}]));
+        const response = await withSink.run(request({requestId: 'bt1'}), freshSignal());
+        expect(response).toMatchObject({success: true});
+        expect(mocks.generateText).toHaveBeenCalledTimes(2);
+        expect(mocks.generateText.mock.calls[1][0].maxOutputTokens).toBe(4_096);
+        expect(mocks.generateText.mock.calls[1][0].toolChoice).toBe('required');
+        expect(sink.mock.calls.map(([{outcome}]) => outcome)).toEqual(['error', 'success']);
+    });
+
+    it('never enlarges the budget when a small request is rejected by a lower-cap endpoint', async () => {
+        // 本次预算本就低于收缩目标时保持原值（不反向放大）；第二次仍被拒则按供应商错误上抛。
+        mocks.normalizeError.mockReturnValue({message: '上限过低'});
+        mocks.generateText
+            .mockRejectedValueOnce(Object.assign(new Error('max_tokens must be less than 3000'), {statusCode: 400}))
+            .mockRejectedValueOnce(Object.assign(new Error('max_tokens must be less than 3000'), {statusCode: 400}));
+        expect(failure(await runtime.run(request({requestId: 'bt2'}), freshSignal())).error).toBe('上限过低');
+        expect(mocks.generateText).toHaveBeenCalledTimes(2);
+        // 中文选区 20 字符、2 条：本次预算 4440，收缩后仍是 4440（min(4096, 4440) 应取 4096——
+        // 收缩目标小于原预算，因此一定变小；这里断言它确实降到了 4096）。
+        expect(mocks.generateText.mock.calls[1][0].maxOutputTokens).toBe(4_096);
+    });
+
+    it('escalates the budget and injects a truncation hint when the output is cut off', async () => {
+        // 截断（finishReason length）且工具未提交：重试预算升级到护栏上限 32768，system 注入截断纠偏指令，
+        // 失败尝试记 error 事件。
+        const sink = vi.fn();
+        const withSink = createCommentRuntime(() => config, createModel, () => sink);
+        mocks.generateText
+            .mockResolvedValueOnce({...textResult('{"comments":[{"content":"被截断的评'), finishReason: 'length'})
+            .mockResolvedValueOnce(okResult([{content: 'a', translation: null}]));
+        const response = await withSink.run(request({requestId: 'tr1'}), freshSignal());
+        expect(response).toMatchObject({success: true});
+        expect(mocks.generateText).toHaveBeenCalledTimes(2);
+        expect(mocks.generateText.mock.calls[1][0].maxOutputTokens).toBe(32_768);
+        expect(mocks.generateText.mock.calls[1][0].system).toContain('被截断');
+        expect(sink.mock.calls.map(([{outcome}]) => outcome)).toEqual(['error', 'success']);
+    });
+
+    it('downgrades toolChoice to auto when the endpoint rejects it with a tool-related 400', async () => {
+        // 部分端点对 toolChoice required 直接回 400：首试降级 auto 再试一次，第二次成功则正常返回；
+        // 被拒的首试同样记 error 事件（调用确实发生过），与"每次尝试独立计时"的约定一致。
+        const sink = vi.fn();
+        const withSink = createCommentRuntime(() => config, createModel, () => sink);
+        mocks.generateText
+            .mockRejectedValueOnce(Object.assign(new Error('tool_choice is not supported by this endpoint'), {statusCode: 400}))
+            .mockResolvedValueOnce(okResult([{content: 'a', translation: null}]));
+        const response = await withSink.run(request({requestId: 'tc1'}), freshSignal());
+        expect(response).toMatchObject({success: true});
+        expect(mocks.generateText).toHaveBeenCalledTimes(2);
+        expect(mocks.generateText.mock.calls[0][0].toolChoice).toBe('required');
+        expect(mocks.generateText.mock.calls[1][0].toolChoice).toBe('auto');
+        expect(sink.mock.calls.map(([{outcome}]) => outcome)).toEqual(['error', 'success']);
+    });
+
+    it('fails fast on non-tool 400 errors without downgrading toolChoice', async () => {
+        // 与 toolChoice 无关的 400（如上下文超限）、模型整体不支持工具的 400（降级 auto 仍带同一套 tools，重试注定失败）
+        // 都不降级、不重试，直接走供应商错误路径。
+        mocks.normalizeError.mockReturnValue({message: '上下文长度超限'});
+        mocks.generateText.mockRejectedValue(Object.assign(new Error('context length exceeded'), {statusCode: 400}));
+        expect(failure(await runtime.run(request({requestId: 'tc2'}), freshSignal())).error).toBe('上下文长度超限');
+        mocks.generateText.mockClear();
+        mocks.generateText.mockRejectedValue(Object.assign(new Error('This model does not support tools'), {statusCode: 400}));
+        expect(failure(await runtime.run(request({requestId: 'tc3'}), freshSignal())).error).toBeTruthy();
+        expect(mocks.generateText).toHaveBeenCalledTimes(1);
+        expect(mocks.generateText.mock.calls[0][0].toolChoice).toBe('required');
+    });
+
     it('succeeds from plain text output when the tool is not called', async () => {
         // 模型把工具负载直接写进正文：文本兜底解析 + 宽容归一化救回成功，无需重试。
         mocks.generateText.mockResolvedValue(textResult(
@@ -157,7 +268,7 @@ describe('comment model runtime', () => {
     });
 
     it('recovers when the first attempt is malformed but the retry succeeds', async () => {
-        // 第一次格式坏、第二次好：成功返回，且两次尝试各记一次 success 用量事件（译文齐全不再触发补译）。
+        // 第一次格式坏、第二次好：成功返回，失败尝试记 error、成功尝试记 success（各自独立计时）。
         // 递增时钟下断言每次尝试独立计时：相邻事件时长相同（各 1000ms），起点递增；
         // 旧实现沿用请求级起点会让第二件事件的时长含第一次尝试（2000ms/4000ms），此断言即失效。
         let clock = 0;
@@ -174,10 +285,13 @@ describe('comment model runtime', () => {
             expect(response).toMatchObject({success: true, sourceTranslation: '整段译文', comments: [{content: 'a', translation: '甲'}]});
             expect(mocks.generateText).toHaveBeenCalledTimes(2);
             expect(sink).toHaveBeenCalledTimes(2);
-            expect(sink.mock.calls.every(([{outcome}]) => outcome === 'success')).toBe(true);
+            expect(sink.mock.calls.map(([{outcome}]) => outcome)).toEqual(['error', 'success']);
             const events = sink.mock.calls.map(([{startedAt, durationMs}]) => ({startedAt, durationMs}));
             expect(events[1]!.startedAt).toBeGreaterThan(events[0]!.startedAt);
             expect(events[1]!.durationMs).toBe(events[0]!.durationMs);
+            // 重试的 system 追加了针对"工具参数未通过校验"的纠偏指令，避免模型不知错而原样重复。
+            expect(mocks.generateText.mock.calls[1][0].system).toContain('未通过校验');
+            expect(mocks.generateText.mock.calls[0][0].system).not.toContain('未通过校验');
         } finally { nowSpy.mockRestore(); }
     });
 
@@ -213,21 +327,30 @@ describe('comment model runtime', () => {
         expect(mocks.generateText).toHaveBeenCalledTimes(2);
     });
 
-    it('caps the output budget at the hard maximum for max-length selections', async () => {
-        // 8192 字符选区的线性预算远超 16000：主调用与补译调用都封顶，思考模型不再挤占正文预算。
+    it('scales the output budget with the selection instead of a low hard cap', async () => {
+        // 8192 字符选区 + 5 条：线性预算 2000 + 5×1200 + ceil(8192*2) = 24384，远超旧 16000 封顶（截断即失败的根因）；
+        // 补译调用按（待译源字符, 待译条数）单独推导 = 2000 + 1200 + 16384 = 19584。
         config.comment.count = 5;
         mocks.generateText.mockResolvedValue(okResult([{content: '评论', translation: null}]));
         const sameLanguage = await runtime.run(request({requestId: 'cap1', text: '好'.repeat(COMMENT_MAX_TEXT)}), freshSignal());
         expect(sameLanguage.success).toBe(true);
-        expect(mocks.generateText.mock.calls[0][0].maxOutputTokens).toBe(16_000);
+        expect(mocks.generateText.mock.calls[0][0].maxOutputTokens).toBe(24_384);
         mocks.generateText.mockClear();
         mocks.generateText
             .mockResolvedValueOnce(okResult([{content: 'a', translation: null}]))
             .mockResolvedValueOnce(repairResult('{"source":"选区译文","comments":["甲"]}'));
         const crossLanguage = await runtime.run(request({requestId: 'cap2', text: 'x'.repeat(COMMENT_MAX_TEXT)}), freshSignal());
         expect(crossLanguage.success).toBe(true);
-        expect(mocks.generateText.mock.calls[0][0].maxOutputTokens).toBe(16_000);
-        expect(mocks.generateText.mock.calls[1][0].maxOutputTokens).toBe(16_000);
+        expect(mocks.generateText.mock.calls[0][0].maxOutputTokens).toBe(24_384);
+        expect(mocks.generateText.mock.calls[1][0].maxOutputTokens).toBe(19_584);
+    });
+
+    it('adds a thinking allowance to the output budget for reasoning models', async () => {
+        // 云端思考模型的 reasoning 与正文共享输出预算：按"服务 + 评论实际使用模型"判定后护栏加 8000。
+        (config as unknown as {modelThinking: unknown}).modelThinking = {deepseek: {'deepseek-chat': true}};
+        mocks.generateText.mockResolvedValue(okResult([{content: 'a', translation: null}]));
+        await runtime.run(request(), freshSignal());
+        expect(mocks.generateText.mock.calls[0][0].maxOutputTokens).toBe(12_440);
     });
 
     it('returns cancelled without retrying when the attempt itself is aborted', async () => {

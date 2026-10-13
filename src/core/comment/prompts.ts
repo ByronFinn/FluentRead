@@ -3,7 +3,7 @@
  * 文件职责：定义评论助手的不可编辑安全壳、默认风格指令、占位符目录、选区包装与输出清洗纯规则。
  * 主要内容：系统安全规则、任务与输出契约、用户风格指令渲染、由代码语言规划注入的三态双语约束
  * （同语时全部为 null、可信点名选区语言时强制 content/translation 与 sourceTranslation 分语、未识别时泛化措辞，
- * 目标语言缺省回落简体中文）、选中内容 bracket 包装、图片数量说明和提示词泄漏检测。
+ * 目标语言缺省回落简体中文）、选中内容 bracket 包装、图片数量说明、提示词泄漏检测与格式类失败重试的纠偏指令构建。
  * 模块边界：本文件只处理领域数据，语言判定结论由 repair.ts 的可信识别给出并注入提示词；不读取配置存储、不调用模型、不接触 DOM；
  * 风格提示词输入上限归 config/comment.ts 所有，此处仅按 feature -> config 方向引用再导出；
  * 用户提示词只能替换风格指令段，安全壳与输出契约由代码固定。
@@ -61,6 +61,27 @@ export function buildCommentSystemPrompt(userPrompt: string, count: number, targ
         language,
         COMMENT_OUTPUT_CONTRACT,
     ].join('\n\n');
+}
+
+/** 格式失败的分类：决定重试时注入哪一段纠偏指令，与运行时的失败判定一一对应。 */
+export type CommentFormatFailureKind = 'missing_tool' | 'invalid_tool' | 'truncated' | 'language';
+
+/**
+ * 格式类失败重试的纠偏指令：针对上一轮的具体失败方式给出可执行的修正要求，
+ * 避免盲目重试（模型不知道哪里错了，同样的输出只会再来一次）。detail 是给 invalid_tool 的 zod 校验摘要。
+ */
+export function buildCommentFormatRepairHint(kind: CommentFormatFailureKind, detail?: string): string {
+    switch (kind) {
+        case 'missing_tool':
+            return ['上一轮你没有调用 submit_comments 工具。', '现在必须调用该工具提交全部评论，不要输出普通文本、代码块或 JSON 字符串。'].join('\n');
+        case 'invalid_tool':
+            return ['上一轮 submit_comments 工具参数未通过校验：', detail || '参数结构与要求不一致。',
+                '严格遵守字段契约：comments 数组恰好包含要求的条数，每项含非空 content；字段值使用字符串或 null，不要嵌套对象或多余包装。'].join('\n');
+        case 'truncated':
+            return ['上一轮输出因长度被截断，评论没有提交完整。', '请减少思考篇幅，尽快调用 submit_comments 工具；每条评论保持简短，先提交再完善。'].join('\n');
+        case 'language':
+            return ['上一轮评论语言不符合语言判定要求，全部被丢弃。', '请严格按上方语言约束书写 content 与 translation，语言代码必须与要求一致。'].join('\n');
+    }
 }
 
 // 页面文本可以自带 >>> 提前闭合围栏，因此先把成串尖括号换成全角，再拼进包装。
