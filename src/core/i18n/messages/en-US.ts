@@ -7,6 +7,8 @@
  * 模块边界：资源只描述扩展自己的界面文本；不会翻译网页正文、用户输入、提示词或翻译结果。
  */
 import videoLearningText from './video-learning/en-US.json';
+import {compositeTranslationMessages, compositeTranslationLegacyText} from './compositeTranslation';
+import {aiRequestTimeoutMessages} from './aiRequestTimeout';
 import {pdfReadingMessages} from './pdfReading';
 import {informationHighlightMessages} from './informationHighlight';
 import reencounterText from './reencounter/en-US.json';
@@ -15,8 +17,7 @@ import brandTaglines from './brand-taglines.json';
 import {onboardingEnglishMessages} from './onboarding';
 import googleDriveText from './google-drive/en-US.json';
 import cloudBackupText from './cloud-backup/en-US.json';
-import type {
-MessageCatalog} from '../types';
+import type {MessageCatalog} from '../types';
 import {legacyTextOverrides} from './legacy-overrides';
 import {createLegacyCorrectionText} from './legacy-corrections';
 import {createRuntimeFeedbackLegacyText} from './runtime-feedback';
@@ -25,9 +26,11 @@ import {translationStatsEnglishMessages} from './translationStats';
 import {localTranslationEnglishMessages} from './localTranslation';
 
 export const enUSMessages = {
+    "document.config.loadFailed": "Could not load settings. Reload and try again.",
     "popup.compact.translate": "Translate",
     "popup.compact.restore": "Restore",
     ...videoLearningText,
+    ...compositeTranslationMessages['en-US'],
     ...pdfReadingMessages['en-US'],
     ...informationHighlightMessages['en-US'],
     ...reencounterText,
@@ -533,6 +536,7 @@ export const enUSMessages = {
     "settings.requestLimits.modelTitle": "Model request limits",
     "settings.requestLimits.globalTitle": "Request limits",
     "settings.requestLimits.globalHelp": "Services and models without custom settings share these limits.",
+    ...aiRequestTimeoutMessages["en-US"],
     "settings.requestLimits.retryIntervals": "Retry intervals",
     "settings.requestLimits.apiKeyRecovery": "Failed key cooldown",
     "settings.requestLimits.apiKeyRecoveryHelp": "Temporarily skip a key after an authentication, quota, or rate-limit failure. A server-provided Retry-After takes priority.",
@@ -720,7 +724,7 @@ export const enUSMessages = {
     "paragraphCopy.notice.noPointer": "Point at a paragraph first, then press the copy shortcut",
     "paragraphCopy.notice.failed": "Copy failed. Select the text and copy it manually.",
     "sectionTranslation.picker.title": "Section translation",
-    "sectionTranslation.picker.instruction": "Click to select the part of the page you want to translate",
+    "sectionTranslation.picker.instruction": "Click or drag to select the parts you want to translate",
     "sectionTranslation.picker.keys": "↑/↓ adjust · Enter confirm · Esc exit",
     "sectionTranslation.picker.locked": "Selection locked. Adjust if needed, then confirm",
     "sectionTranslation.picker.expand": "Expand selection",
@@ -728,12 +732,14 @@ export const enUSMessages = {
     "sectionTranslation.picker.reselect": "Reselect",
     "sectionTranslation.picker.confirm": "Translate selected section",
     "sectionTranslation.picker.restore": "Restore original",
-    "sectionTranslation.picker.preview": "Move the pointer to preview; click to select",
+    "sectionTranslation.picker.preview": "Move to preview; click or drag to select",
     "sectionTranslation.scope.paragraph": "Paragraph",
     "sectionTranslation.scope.list": "List",
     "sectionTranslation.scope.table": "Table",
     "sectionTranslation.scope.article": "Article",
     "sectionTranslation.scope.region": "Region",
+    "sectionTranslation.picker.dragging": "Drag to select; release to confirm",
+    "sectionTranslation.scope.selected": "{count} selected regions",
     "sectionTranslation.picker.close": "Exit section translation",
     "sectionTranslation.label.inspecting": "Checking…",
     "sectionTranslation.label.translate": "Translate · {count} paragraphs",
@@ -763,7 +769,7 @@ export const enUSMessages = {
     "sectionTranslation.settings.hotkeySet": "Section translation shortcut set to {shortcut}",
     "sectionTranslation.settings.hotkeyConflict": "{feature} already uses this shortcut. Please choose another combination.",
     "popup.sectionTranslation": "Section",
-    "popup.sectionTranslationTitle": "Section translation: hover to preview, click to select, then confirm to translate",
+    "popup.sectionTranslationTitle": "Section translation: click or drag to select, then confirm",
     "popup.sectionTranslationShortcut": "Shortcut: {shortcut}",
     "popup.sectionTranslationUnavailable": "Section translation is not available on this page. Refresh and try again.",
     "area.settings.service": "Area translation service",
@@ -1640,7 +1646,8 @@ export const enUSMessages = {
     'settings.services.deepl.proxyOverride': 'A custom API URL is in use. Changing the plan will not override it.',
     'settings.services.azure.endpoint': 'Azure endpoint',
     "settings.services.deeplx.endpoint": "Service URL",
-    "settings.services.deeplx.endpointHelp": "Enter the full translation endpoint (usually ending in /translate). Paths are not added automatically. Leave blank to use the default public endpoint.",
+    "settings.services.deeplx.defaultRoute": "Direct to DeepL by default",
+    "settings.services.deeplx.endpointHelp": "Without an API key, the default connects directly to DeepL, then tries the public endpoint on failure. Custom URLs need the full path (usually ending in /translate); paths are not added automatically.",
     "settings.services.deeplx.tokenHelp": "Enter only the Token value in API Key, without a Bearer prefix. It is sent in the request header by default. If your site requires a Token in the URL, use the format specified by the site below.",
     "settings.services.deeplx.queryToken": "Query parameter:",
     "settings.services.deeplx.pathToken": "URL path:",
@@ -2419,6 +2426,7 @@ const enUSLegacyTextBase: Readonly<Record<string, string>> = {
 
 export const enUSLegacyText: Readonly<Record<string, string>> = {
     ...googleDriveText.legacy,
+    ...compositeTranslationLegacyText['en-US'],
     ...cloudBackupText.legacy,
     "腾讯交互翻译": "Tencent TranSmart",
     "火山翻译": "Volcengine Translate",
@@ -2692,6 +2700,10 @@ export const enUSLegacyText: Readonly<Record<string, string>> = {
     "翻译卡片模型": "Translation card model",
     "跟随服务模型": "Use service model",
     "默认沿用服务的模型，也可以选择或输入模型名称": "Uses the service model by default; you can select or enter another model name.",
+    "默认沿用服务的模型，也可以选择或输入模型名称。": "Uses the service model by default; you can select or enter another model name.",
+    "按当前配置生成可粘贴的评论": "Generate a paste-ready comment from the current settings.",
+    "翻译卡片、按需学习与评论": "Translation card, on-demand learning and comments",
+    "划词翻译、普通翻译、卡片模式、词性、句法、冠词、名词、触发、朗读、翻译卡片、阅读卡、Harness、DeepSeek、读懂、拆句、用法、练习、选区、段落、学习辅助、解释深度、学习程度、学习记忆、记忆开关、评论、嘴替、社交评论、评论风格": "Selection and normal translation, card mode, word classes, syntax, articles, nouns, triggers, speech, translation and reading cards, Harness, DeepSeek, understand, analyze, usage, practice, selection, paragraph, study aids, explanation depth, learning level, learning memory, memory toggle, comments, ghostwriter, social comments, comment styles",
     "选中网页文字，直接点“读懂”或“拆句”。回答留在原文旁边，读完就继续浏览。": "Select webpage text and choose Understand or Analyze sentence. Read the answer beside the original, then keep browsing.",
     "选中后显示的动作": "Actions shown after selection",
     "保留“读懂”，其他动作可按需隐藏；网页浮条和上方示例同步变化。": "Understand stays available; other actions can be hidden. The webpage toolbar and preview update together.",

@@ -15,6 +15,7 @@ import {createUserscriptInlineCssCompressionPlugin} from './inlineCssPlugin';
 import {createUserscriptAboutImagesCompressionPlugin} from './aboutImagesPlugin';
 import {createUserscriptServiceBrandIconsCompressionPlugin} from './serviceBrandIconsPlugin';
 import {UI_LANGUAGE_BUNDLES, zhCNMessages} from './languageBundles';
+import {createDeepLXRuntimeBuildPlugin} from '../scripts/testing/deeplx-runtime-build';
 
 const root = resolve(__dirname, '..');
 const packageJson = JSON.parse(fs.readFileSync(resolve(root, 'package.json'), 'utf8')) as {
@@ -53,7 +54,7 @@ function installedVersion(name: string): string {
 // 1cd92296 是上游首个同时携带当前 64.png 与 vueElementPlusBridge.v1.js 的提交（184a3d74 早于两者，属过期钉扎）。
 const userscriptResourceCommit = '1cd92296ef25e89a411193894a1225db582e4a17';
 // 语言文件的内容哈希来自合并后的消息目录，固定到首次包含这些文件的提交。
-const userscriptLanguageResourceCommit = 'cfc534d6d0b1a7e8af198d421e5348452f4af55e';
+const userscriptLanguageResourceCommit = '6112632a8ced3de4f104cab445eefdbc9f23bdb7';
 const pinnedIconUrl = `https://cdn.jsdelivr.net/gh/FluentRead/FluentRead@${userscriptResourceCommit}/public/icon/64.png`;
 const iconMetaUrl = greasyForkSource ? pinnedIconUrl : iconDataUrl;
 const uiRequires = [
@@ -135,7 +136,13 @@ export function createUserscriptCatalogCompressionPlugin(): Plugin {
         },
         load(id) {
             if (id === externalChineseMessagesId) {
-                if (greasyForkSource) return 'export const zhCNMessages = globalThis.__FLUENTREAD_USERSCRIPT_DATA__.zhCNMessages;';
+                if (greasyForkSource) {
+                    const deeplxCopy = {
+                        'settings.services.deeplx.defaultRoute': zhCNMessages['settings.services.deeplx.defaultRoute'],
+                        'settings.services.deeplx.endpointHelp': zhCNMessages['settings.services.deeplx.endpointHelp'],
+                    };
+                    return `export const zhCNMessages = {...globalThis.__FLUENTREAD_USERSCRIPT_DATA__.zhCNMessages,...${JSON.stringify(deeplxCopy)}};`;
+                }
                 const contents = serializeUiMessages(userscriptPageMessages(zhCNMessages));
                 const compressed = Buffer.from(gzipUiMessages(Buffer.from(contents), {level: 9})).toString('base64');
                 return [
@@ -534,7 +541,7 @@ export const userscriptAliases = [
 export default defineConfig({
     root,
     publicDir: false,
-    plugins: [unwrapWxtEntrypoints(), createUserscriptCatalogCompressionPlugin(), createUserscriptCharacterDataCompressionPlugin(root, !greasyForkSource), createUserscriptFrancDataCompressionPlugin(root, bundleLibraries && !greasyForkSource), createUserscriptTldtsDataCompressionPlugin(root, bundleLibraries && !greasyForkSource), createUserscriptAboutImagesCompressionPlugin(root, bundleLibraries && !greasyForkSource), createUserscriptServiceBrandIconsCompressionPlugin(root, bundleLibraries && !greasyForkSource), injectUserscriptBrowserShim(), vue(), bundleUserscriptCss(), createUserscriptInlineCssCompressionPlugin(root, !greasyForkSource)],
+    plugins: [createDeepLXRuntimeBuildPlugin(root), unwrapWxtEntrypoints(), createUserscriptCatalogCompressionPlugin(), createUserscriptCharacterDataCompressionPlugin(root, !greasyForkSource), createUserscriptFrancDataCompressionPlugin(root, !greasyForkSource), createUserscriptTldtsDataCompressionPlugin(root, bundleLibraries && !greasyForkSource), createUserscriptAboutImagesCompressionPlugin(root, bundleLibraries && !greasyForkSource), createUserscriptServiceBrandIconsCompressionPlugin(root, bundleLibraries && !greasyForkSource), injectUserscriptBrowserShim(), vue(), bundleUserscriptCss(), createUserscriptInlineCssCompressionPlugin(root, !greasyForkSource)],
     resolve: {
         alias: userscriptAliases,
     },

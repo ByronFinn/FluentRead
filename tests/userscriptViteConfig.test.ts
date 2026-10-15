@@ -11,6 +11,7 @@ import {ungzip} from 'pako';
 import {zhCNMessages, UI_LANGUAGE_BUNDLES, userscriptMessages} from '@/userscript/languageBundles';
 import {zhCNMessages as extensionChinese} from '@/src/core/i18n/messages/zh-CN';
 import {UI_LANGUAGE_BUNDLES as extensionBundles} from '@/src/core/i18n/bundles';
+import {aiRequestTimeoutMessages} from '@/src/core/i18n/messages/aiRequestTimeout';
 import {installInformationHighlight} from '@/userscript/informationHighlight';
 import {inflateWithPako} from '@/userscript/pakoRuntime';
 import * as chineseCharacterData from '@/src/core/language/chineseVariants';
@@ -242,12 +243,25 @@ describe('authoritative site catalogs with an external pinned data asset', () =>
 });
 
 describe('userscript browser shim injection', () => {
+    const registeredSupplementKeys = ['learning.panelLoadError', 'learning.reloadPage', ...Object.keys(aiRequestTimeoutMessages['en-US']),
+        'sectionTranslation.picker.dragging', 'sectionTranslation.scope.selected', 'settings.services.deeplx.defaultRoute'];
+    const publishedOverrideKeys = ['sectionTranslation.picker.preview', 'sectionTranslation.picker.instruction',
+        'popup.sectionTranslationTitle', 'settings.services.deeplx.endpointHelp'];
+    const pinnedLanguageFiles = {
+        'ja-JP': 'ja-JP.5e7788c3a4de522b.json',
+        'ko-KR': 'ko-KR.a9bf921698fa06ce.json',
+        'fr-FR': 'fr-FR.78dbe119b553ddcd.json',
+        'ru-RU': 'ru-RU.a104fe752394ddcb.json',
+        'es-ES': 'es-ES.4407378e0f66c153.json',
+    };
+    const publishedMessages: Record<string, Record<string, string>> = Object.fromEntries(Object.entries(pinnedLanguageFiles)
+        .map(([language, file]) => [language, JSON.parse(readFileSync(resolve(process.cwd(), 'userscript/languages', file), 'utf8')).messages]));
     it('preserves pinned remote dictionaries for inlined panes and keeps embedded recovery copy', () => {
         const build = (userscriptConfig as {build: {cssCodeSplit: boolean; rollupOptions: {output: {inlineDynamicImports: boolean}}}}).build;
         expect(build.cssCodeSplit).toBe(false);
         expect(build.rollupOptions.output.inlineDynamicImports).toBe(true);
-        for (const key of ['learning.panelLoadError', 'learning.reloadPage'] as const) {
-            expect(zhCNMessages[key]).toBe(extensionChinese[key]);
+        for (const key of registeredSupplementKeys) {
+            expect((zhCNMessages as Record<string, string>)[key]).toBe((extensionChinese as Record<string, string>)[key]);
             expect(UI_LANGUAGE_BUNDLES['en-US'].messages[key]).toBe(extensionBundles['en-US'].messages[key]);
         }
         for (const [language, bundle] of Object.entries(UI_LANGUAGE_BUNDLES)) {
@@ -255,7 +269,10 @@ describe('userscript browser shim injection', () => {
             expect(bundle.legacyText).toBe(original.legacyText);
             expect(bundle.legacyPatterns).toBe(original.legacyPatterns);
             const kept = Object.fromEntries(Object.entries(original.messages).filter(([key]) =>
-                !key.startsWith('informationHighlight.') && !key.startsWith('contextMenu.notice.') && !key.startsWith('video.learning.') && !key.startsWith('popup.compact.') && (language === 'en-US' || !['learning.panelLoadError', 'learning.reloadPage'].includes(key))));
+                !key.startsWith('informationHighlight.') && !key.startsWith('contextMenu.notice.') && !key.startsWith('video.learning.') && !key.startsWith('popup.compact.')
+                && !key.startsWith('document.config.') && !key.startsWith('document.translationRecovery.') && !key.startsWith('document.retainedRevisions.')
+                && !key.startsWith('document.translationProgress.') && (language === 'en-US' || !registeredSupplementKeys.includes(key))));
+            if (language !== 'en-US') for (const key of publishedOverrideKeys) kept[key] = publishedMessages[language]![key]!;
             expect(bundle.messages).toEqual(kept);
             expect(original.messages['learning.reloadPage']).toBeTruthy();
         }
@@ -278,7 +295,10 @@ describe('userscript browser shim injection', () => {
             else {
                 const pinned = metadataIcon.match(/^https:\/\/cdn\.jsdelivr\.net\/gh\/FluentRead\/FluentRead@([a-f0-9]{40})\/public\/icon\/64\.png$/u);
                 expect(pinned).not.toBeNull();
-                expect(execFileSync('git', ['show', `${pinned![1]}:public/icon/64.png`], {cwd: process.cwd()})).toEqual(iconBytes);
+                // 固定公开资源不属于 main 的祖先，干净 CI 不必包含其旧 Git 对象；
+                // 对照已发布 PNG 的精确 pin 和 SHA256，继续拒绝图标漂移或非固定地址。
+                expect(pinned![1]).toBe('1cd92296ef25e89a411193894a1225db582e4a17');
+                expect(createHash('sha256').update(iconBytes).digest('hex')).toBe('4226fc057f80b2308a6153b3316bc02b31b74f1a7f92504e9f45f30d245b5535');
                 expect(metadataIcon).not.toBe(runtimeIcon);
             }
         } finally {vi.unstubAllEnvs();vi.resetModules();}
@@ -303,12 +323,21 @@ describe('userscript browser shim injection', () => {
             expect(extension[key]).toBeTruthy();
             expect(Object.hasOwn(projected, key)).toBe(false);
         }
+        expect(extension['document.config.loadFailed']).toBeTruthy();
+        const readerRecoveryKeys = Object.keys(extension).filter(key => key.startsWith('document.config.') || key.startsWith('document.translationRecovery.')
+            || key.startsWith('document.retainedRevisions.') || key.startsWith('document.translationProgress.'));
+        expect(readerRecoveryKeys.length).toBeGreaterThan(0);
+        for (const key of readerRecoveryKeys) {
+            expect(extension[key]).toBeTruthy();
+            expect(Object.hasOwn(projected, key)).toBe(false);
+        }
         const retainedKeys = Object.keys(extension).filter(key => !key.startsWith('informationHighlight.')
-            && !noticeKeys.includes(key) && !learningKeys.includes(key)
+            && !noticeKeys.includes(key) && !learningKeys.includes(key) && !readerRecoveryKeys.includes(key)
             && key !== 'popup.compact.translate' && key !== 'popup.compact.restore'
-            && (_language === 'zh-CN' || _language === 'en-US' || !['learning.panelLoadError', 'learning.reloadPage'].includes(key)));
+            && (_language === 'zh-CN' || _language === 'en-US' || !registeredSupplementKeys.includes(key)));
         expect(Object.keys(projected)).toHaveLength(retainedKeys.length);
-        for (const key of retainedKeys) expect(projected[key]).toBe(extension[key]);
+        for (const key of retainedKeys) expect(projected[key]).toBe(publishedMessages[_language] && publishedOverrideKeys.includes(key)
+            ? publishedMessages[_language]![key] : extension[key]);
         expect(projected['contextMenu.translateSelection']).toBeTruthy();
         expect(projected['contextMenu.translatePage']).toBeTruthy();
         expect(projected['contextMenu.restorePage']).toBeTruthy();
@@ -327,8 +356,8 @@ describe('userscript browser shim injection', () => {
         const defines = (userscriptConfig as {define: Record<string, string>}).define;
         const commit = JSON.parse(defines.__FLUENTREAD_USERSCRIPT_RESOURCE_COMMIT__);
         const bundles = JSON.parse(defines.__FLUENTREAD_USERSCRIPT_REMOTE_LANGUAGES__) as Record<string, string>;
-        expect(commit).toMatch(/^[a-f0-9]{40}$/u);
-        expect(Object.keys(bundles)).toHaveLength(5);
+        expect(commit).toBe('6112632a8ced3de4f104cab445eefdbc9f23bdb7');
+        expect(bundles).toEqual(pinnedLanguageFiles);
         for (const file of Object.values(bundles)) {
             const path = `userscript/languages/${file}`;
             const committed = execFileSync('git', ['show', `${commit}:${path}`], {cwd: process.cwd(), encoding: 'utf8'});
@@ -359,6 +388,33 @@ describe('userscript browser shim injection', () => {
             vi.unstubAllGlobals();
         }
         expect(moduleSource).toContain(createHash('sha256').update(gunzipSync(Buffer.from(base64!, 'base64'))).digest('hex'));
+    });
+
+    it('updates only the two DeepLX Chinese messages when Greasy Fork uses its pinned old data', async () => {
+        vi.stubEnv('FLUENTREAD_USERSCRIPT_GREASYFORK_SOURCE', '1');
+        vi.stubEnv('FLUENTREAD_USERSCRIPT_VENDOR_URL', 'https://fixture.invalid/vendor.js');
+        vi.stubEnv('FLUENTREAD_USERSCRIPT_DATA_URL', 'https://fixture.invalid/data.js');
+        try {
+            vi.resetModules();
+            const {createUserscriptCatalogCompressionPlugin: createPlugin} = await import('@/userscript/vite.config');
+            const {transformWithEsbuild} = await import('vite');
+            const plugin = createPlugin();
+            const resolveId = typeof plugin.resolveId === 'function' ? plugin.resolveId : plugin.resolveId!.handler;
+            const load = typeof plugin.load === 'function' ? plugin.load : plugin.load!.handler;
+            const id = await Reflect.apply(resolveId, {}, ['./messages/zh-CN', resolve(process.cwd(), 'src/core/i18n/index.ts')]);
+            const source = await Reflect.apply(load, {}, [id]);
+            const compiled = await transformWithEsbuild(source, 'pinned-chinese.js', {format: 'cjs', target: 'es2018'});
+            const data = runInNewContext(readFileSync(resolve(process.cwd(), 'userscript/resources/fluentread-data.v1.js'), 'utf8'), {}, {timeout: 5000});
+            const before = JSON.stringify(data);
+            const realm = {module: {exports: {} as {zhCNMessages: Record<string, string>}}, __FLUENTREAD_USERSCRIPT_DATA__: data};
+            runInNewContext(compiled.code, realm, {timeout: 5000});
+            const result = realm.module.exports.zhCNMessages;
+            const keys = ['settings.services.deeplx.defaultRoute', 'settings.services.deeplx.endpointHelp'];
+            for (const key of keys) expect(result[key]).toBe((zhCNMessages as Record<string, string>)[key]);
+            const changes = Object.keys(result).filter(key => result[key] !== data.zhCNMessages[key]);
+            expect(changes.sort()).toEqual(keys.sort());
+            expect(JSON.stringify(data)).toBe(before);
+        } finally {vi.unstubAllEnvs();vi.resetModules();}
     });
 
     it('embeds the English bundle without the reader-only keys and preserves every other field', () => {
@@ -629,7 +685,7 @@ describe('userscript lossless Unicode character data', () => {
 });
 
 
-describe('standalone locked franc pure-data encoding', () => {
+describe('userscript locked franc pure-data encoding', () => {
     const require = createRequire(resolve(process.cwd(), 'package.json'));
     const dataPath = realpathSync(require.resolve('franc-min/data.js'));
     const original = readFileSync(dataPath, 'utf8');
@@ -746,7 +802,7 @@ describe('standalone locked franc pure-data encoding', () => {
     });
 
     it.each([
-        ['ordinary', '0', '0', false],
+        ['ordinary', '0', '0', true],
         ['standalone', '1', '0', true],
         ['greasy-fork', '0', '1', false],
         ['standalone-and-greasy', '1', '1', false],

@@ -1,9 +1,5 @@
 import {describe, expect, it, vi} from 'vitest';
 import {
-    TRANSLATION_MODEL_USAGE_OBSERVER,
-    TRANSLATION_PROVIDER_CONFIG,
-    TRANSLATION_REQUEST_CONTROL,
-    TRANSLATION_REQUEST_SCHEDULER,
     attachTranslationModelUsageObserver,
     attachTranslationProviderConfig,
     attachTranslationRequestControl,
@@ -11,17 +7,22 @@ import {
     getTranslationRequestScheduler,
     createTranslationProviderConfigSnapshot,
     createTranslationRequestSnapshot,
+    markTranslationRemainingBudget,
     getTranslationProviderConfig,
+    requireTranslationProviderConfig,
+    getTranslationProviderLanguages,
     getTranslationRequestControl,
     attachTranslationRouteObserver,
     reportTranslationModelUsage,
     reportTranslationModelUsageFailure,
     reportTranslationRoute,
-    TRANSLATION_ROUTE_OBSERVER,
     getTranslationGlossaryTerms,
     getTranslationGlossarySourceText,
     getTranslationGlossarySourceSlots,
+    allowUnchangedTranslationResult,
+    isUnchangedTranslationResultAllowed,
 } from '@/src/services/translation/requestSnapshot';
+import {TRANSLATION_MODEL_USAGE_OBSERVER, TRANSLATION_PROVIDER_CONFIG, TRANSLATION_REQUEST_CONTROL, TRANSLATION_REQUEST_SCHEDULER, TRANSLATION_ROUTE_OBSERVER, TRANSLATION_REMAINING_BUDGET} from '@/src/services/translation/types';
 import {createTranslationRequestScheduler} from '@/src/services/translation/requestScheduler';
 import {parseTranslationSlots, serializeTranslationSlots} from '@/src/core/translation/public';
 import type {TranslationConfigSource} from '@/src/services/translation/types';
@@ -63,6 +64,15 @@ function configSource(overrides: Partial<TranslationConfigSource> = {}): Transla
 }
 
 describe('translation provider request config snapshot', () => {
+    it('图片原样响应策略随内部快照和展开保留，公开字段与 JSON 无法附加策略', () => {
+        const request = allowUnchangedTranslationResult({origin: 'Original English sentence.'});
+        for (const internal of [request, {...request}, createTranslationRequestSnapshot(request)]) {
+            expect(isUnchangedTranslationResultAllowed(internal)).toBe(true);
+        }
+        for (const publicRequest of [null, undefined, false, '', {acceptUnchangedResult: true}, JSON.parse(JSON.stringify(request))]) {
+            expect(isUnchangedTranslationResultAllowed(publicRequest)).toBe(false);
+        }
+    });
     it.each(['chrome', 'userscript'])('保留 %s 的用户术语和严格槽原文，自动文档字面值仅用于扩展构建', browser => {
         vi.stubEnv('BROWSER', browser);
         try {
@@ -569,4 +579,59 @@ describe('translation provider request config snapshot', () => {
         expect(observer.mock.calls[2][0]).not.toHaveProperty('statusCode');
         expect(observer.mock.calls[3][0]).not.toHaveProperty('actualModel');
     });
+});
+
+
+describe('provider 显式配置边界', () => {
+    it.each([undefined, null, 'invalid', {}, {origin: 'Hello'}])('缺少快照时明确拒绝 %j', message => {
+        expect(() => requireTranslationProviderConfig(message)).toThrow('缺少配置快照');
+        try {
+            requireTranslationProviderConfig(message);
+        } catch (error) {
+            expect(error).toMatchObject({code: 'TRANSLATION_PROVIDER_CONFIG_REQUIRED'});
+        }
+    });
+
+    it('保留调用边界的原快照并从同一快照解析语言缺省及请求覆盖', () => {
+        const source = configSource({from: 'en', to: 'zh-Hant'});
+        const snapshot = createTranslationProviderConfigSnapshot(source);
+        const request = attachTranslationProviderConfig({origin: 'Hello'}, snapshot);
+        source.from = 'ja';
+        source.to = 'en';
+        expect(requireTranslationProviderConfig(request)).toBe(snapshot);
+        expect(getTranslationProviderLanguages(request)).toEqual({sourceLanguage: 'en', targetLanguage: 'zh-Hant'});
+        expect(getTranslationProviderLanguages(attachTranslationProviderConfig({sourceLanguage: 'fr', targetLanguage: 'zh-CN'}, snapshot)))
+            .toEqual({sourceLanguage: 'fr', targetLanguage: 'zh-Hans'});
+    });
+});
+
+
+it('请求快照保留进程内剩余预算标记，runtime/JSON 投影不会伪造该权限', () => {
+    const marked = markTranslationRemainingBudget({origin: 'Source', requestTimeoutMs: 125});
+    const copied = createTranslationRequestSnapshot(marked);
+    expect(copied.requestTimeoutMs).toBe(125);
+    expect(copied[TRANSLATION_REMAINING_BUDGET]).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(copied, TRANSLATION_REMAINING_BUDGET))
+        .toEqual(Object.getOwnPropertyDescriptor(marked, TRANSLATION_REMAINING_BUDGET));
+    expect(JSON.parse(JSON.stringify(marked))).toEqual({origin: 'Source', requestTimeoutMs: 125});
+    expect(Object.getOwnPropertySymbols(JSON.parse(JSON.stringify(marked)))).toEqual([]);
+});
+
+it('组合请求的成员与策略在捕获后不受设置页原地编辑影响', () => {
+    const source = configSource({compositeTranslationProviders: [{
+        id: 'composite:study', name: '学习组合', strategy: 'sequential',
+        services: ['google', 'aiSdk'], timeoutMs: 30_000,
+    }]});
+    const snapshot = createTranslationProviderConfigSnapshot(source);
+    const profile = source.compositeTranslationProviders![0];
+    profile.services.reverse();
+    profile.services.push('microsoft');
+    profile.name = '改名';
+    profile.timeoutMs = 60_000;
+    expect(snapshot.compositeTranslationProviders![0]).toEqual({
+        id: 'composite:study', name: '学习组合', strategy: 'sequential',
+        services: ['google', 'aiSdk'], timeoutMs: 30_000,
+    });
+    expect(Object.isFrozen(snapshot.compositeTranslationProviders![0])).toBe(true);
+    expect(Object.isFrozen(snapshot.compositeTranslationProviders![0].services)).toBe(true);
 });

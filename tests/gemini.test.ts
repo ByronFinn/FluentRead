@@ -1,8 +1,10 @@
+import {withProviderSnapshot} from './helpers/providerSnapshot';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 const {mockConfig} = vi.hoisted(() => ({
     mockConfig: {
         service: 'gemini',
+        aiRequestTimeoutMs: undefined as number | undefined,
         to: 'zh-Hans',
         token: {gemini: 'google-secret-key'} as Record<string, string>,
         model: {gemini: 'gemini-2.5-flash'} as Record<string, string>,
@@ -39,6 +41,7 @@ function mockResponse(body: unknown, overrides: Partial<Response> = {}): Respons
 
 beforeEach(() => {
     fetchMock.mockReset();
+        mockConfig.aiRequestTimeoutMs = undefined;
     mockConfig.token.gemini = 'google-secret-key';
     mockConfig.model.gemini = 'gemini-2.5-flash';
     mockConfig.customModel = {};
@@ -47,7 +50,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-    vi.unstubAllGlobals();
+    vi.useRealTimers();
+        vi.unstubAllGlobals();
 });
 
 describe('Gemini adapter credential transport', () => {
@@ -56,7 +60,7 @@ describe('Gemini adapter credential transport', () => {
             candidates: [{content: {parts: [{text: '译文'}]}}],
         }));
 
-        await expect(gemini({origin: 'source', serviceOverride: 'gemini'})).resolves.toBe('译文');
+        await expect(gemini(withProviderSnapshot({origin: 'source', serviceOverride: 'gemini'}, mockConfig))).resolves.toBe('译文');
 
         const [requestUrl, init] = fetchMock.mock.calls[0]!;
         expect(requestUrl).toBe(
@@ -74,7 +78,7 @@ describe('Gemini adapter credential transport', () => {
             candidates: [{content: {parts: [{text: '代理译文'}]}}],
         }));
 
-        await expect(gemini({origin: 'source', serviceOverride: 'gemini'})).resolves.toBe('代理译文');
+        await expect(gemini(withProviderSnapshot({origin: 'source', serviceOverride: 'gemini'}, mockConfig))).resolves.toBe('代理译文');
 
         const [requestUrl, init] = fetchMock.mock.calls[0]!;
         expect(requestUrl).toBe('https://proxy.example/v1/generate');
@@ -89,7 +93,7 @@ describe('Gemini adapter credential transport', () => {
         mockConfig.proxy.gemini = '  https://proxy.example/v1beta/models/{model}:generateContent?key={key}&tenant=reader  ';
         fetchMock.mockResolvedValue(mockResponse({candidates: [{content: {parts: [{text: '代理译文'}]}}]}));
 
-        await expect(gemini({origin: 'source', serviceOverride: 'gemini'})).resolves.toBe('代理译文');
+        await expect(gemini(withProviderSnapshot({origin: 'source', serviceOverride: 'gemini'}, mockConfig))).resolves.toBe('代理译文');
 
         expect(fetchMock).toHaveBeenCalledOnce();
         const [requestUrl, init] = fetchMock.mock.calls[0]!;
@@ -113,7 +117,7 @@ describe('Gemini adapter credential transport', () => {
         mockConfig.proxy.gemini = 'https://proxy.example/models/{model}:generateContent';
         fetchMock.mockResolvedValue(mockResponse({candidates: [{content: {parts: [{text: '译文'}]}}]}));
 
-        await gemini({origin: 'source', serviceOverride: 'gemini', modelOverride: override});
+        await gemini(withProviderSnapshot({origin: 'source', serviceOverride: 'gemini', modelOverride: override}, mockConfig));
 
         expect(fetchMock.mock.calls[0]![0]).toBe(`https://proxy.example/models/${encodeURIComponent(expected)}:generateContent`);
         expect(String(fetchMock.mock.calls[0]![0])).not.toContain('google-secret-key');
@@ -125,7 +129,7 @@ describe('Gemini adapter credential transport', () => {
         mockConfig.proxy.gemini = 'https://proxy.example/generate?key={key}';
         fetchMock.mockResolvedValue(mockResponse({candidates: [{content: {parts: [{text: '译文'}]}}]}));
 
-        await gemini({origin: 'source', serviceOverride: 'gemini'});
+        await gemini(withProviderSnapshot({origin: 'source', serviceOverride: 'gemini'}, mockConfig));
 
         const [requestUrl, init] = fetchMock.mock.calls[0]!;
         expect(requestUrl).toBe('https://proxy.example/generate?key=');
@@ -136,7 +140,7 @@ describe('Gemini adapter credential transport', () => {
         mockConfig.proxy.gemini = 'https://proxy.example/models/fixed:generateContent?key=inline%2Bkey';
         fetchMock.mockResolvedValue(mockResponse({candidates: [{content: {parts: [{text: '译文'}]}}]}));
 
-        await gemini({origin: 'source', serviceOverride: 'gemini', modelOverride: 'another-model'});
+        await gemini(withProviderSnapshot({origin: 'source', serviceOverride: 'gemini', modelOverride: 'another-model'}, mockConfig));
 
         expect(fetchMock.mock.calls[0]![0]).toBe(mockConfig.proxy.gemini);
     });
@@ -145,7 +149,7 @@ describe('Gemini adapter credential transport', () => {
         mockConfig.proxy.gemini = ' \n\t ';
         fetchMock.mockResolvedValue(mockResponse({candidates: [{content: {parts: [{text: '译文'}]}}]}));
 
-        await gemini({origin: 'source', serviceOverride: 'gemini'});
+        await gemini(withProviderSnapshot({origin: 'source', serviceOverride: 'gemini'}, mockConfig));
 
         const [requestUrl, init] = fetchMock.mock.calls[0]!;
         expect(requestUrl).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent');
@@ -163,7 +167,7 @@ describe('Gemini adapter credential transport', () => {
         mockConfig.proxy.gemini = 'https://changed.example/generate';
         fetchMock.mockResolvedValue(mockResponse({candidates: [{content: {parts: [{text: '译文'}]}}]}));
 
-        await gemini(request);
+        await gemini(withProviderSnapshot(request, mockConfig));
 
         expect(fetchMock.mock.calls[0]![0]).toBe('https://snapshot.example/models/snapshot-model?key=snapshot-key');
     });
@@ -177,7 +181,7 @@ describe('Gemini adapter credential transport', () => {
             createTranslationProviderConfigSnapshot(imported));
         fetchMock.mockResolvedValue(mockResponse({candidates: [{content: {parts: [{text: '译文'}]}}]}));
 
-        await gemini(request);
+        await gemini(withProviderSnapshot(request, mockConfig));
 
         expect(imported.token.gemini).toBe('saved-test-key');
         const url = new URL(String(fetchMock.mock.calls[0]![0]));
@@ -194,7 +198,7 @@ describe('Gemini adapter credential transport', () => {
             text: responseBody,
         }));
 
-        const error = await gemini({origin: 'source', serviceOverride: 'gemini'}).catch(cause => cause);
+        const error = await gemini(withProviderSnapshot({origin: 'source', serviceOverride: 'gemini'}, mockConfig)).catch(cause => cause);
 
         expect(error).toBeInstanceOf(Error);
         expect((error as Error).message).toBe('翻译失败: 403');
@@ -209,10 +213,68 @@ describe('Gemini adapter credential transport', () => {
             ),
         }));
 
-        const error = await gemini({origin: 'source', serviceOverride: 'gemini'}).catch(cause => cause);
+        const error = await gemini(withProviderSnapshot({origin: 'source', serviceOverride: 'gemini'}, mockConfig)).catch(cause => cause);
 
         expect(error).toBeInstanceOf(Error);
         expect((error as Error).message).toBe('Gemini 返回的不是有效 JSON');
         expect((error as Error).message).not.toContain('SENSITIVE_SUCCESS_RESPONSE_SENTINEL');
+    });
+});
+
+
+describe('gemini AI 请求超时预算', () => {
+    it('直接调用默认允许 60 秒响应，完成后清理超时计时器', async () => {
+        vi.useFakeTimers();
+        let resolve!: (value: Response) => void;
+        let signal!: AbortSignal;
+        fetchMock.mockImplementation((_input, init) => {
+            signal = init!.signal!;
+            return new Promise<Response>(done => {resolve = done;});
+        });
+        const result = gemini(withProviderSnapshot({origin: 'Slow native AI source'}, mockConfig));
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(signal.aborted).toBe(false);
+        resolve(mockResponse({candidates: [{content: {parts: [{text: '缓慢模型译文'}]}}]}));
+        await expect(result).resolves.toBe('缓慢模型译文');
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it.each([
+        {configured: 10_000, explicit: undefined, deadline: 10_000},
+        {configured: 600_000, explicit: 500, deadline: 500},
+        {configured: 10_000, explicit: 180_000, deadline: 180_000},
+    ])('配置与显式剩余预算在精确截止 abort：$deadline 毫秒', async ({configured, explicit, deadline}) => {
+        vi.useFakeTimers();
+        mockConfig.aiRequestTimeoutMs = configured;
+        let signal!: AbortSignal;
+        fetchMock.mockImplementation((_input, init) => {
+            signal = init!.signal!;
+            return new Promise((_, reject) => signal.addEventListener('abort',
+                () => reject(new DOMException('aborted', 'AbortError')), {once: true}));
+        });
+        const outcome = gemini(withProviderSnapshot({origin: 'Native AI deadline source', requestTimeoutMs: explicit}, mockConfig)).catch(error => error);
+        await vi.advanceTimersByTimeAsync(deadline - 1);
+        expect(signal.aborted).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(outcome).resolves.toMatchObject({kind: 'timeout', retryable: true});
+        expect(signal.aborted).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('用户取消立即传播，与延长后的等待时间无关', async () => {
+        vi.useFakeTimers();
+        mockConfig.aiRequestTimeoutMs = 600_000;
+        const controller = new AbortController();
+        let signal!: AbortSignal;
+        fetchMock.mockImplementation((_input, init) => {
+            signal = init!.signal!;
+            return new Promise((_, reject) => signal.addEventListener('abort',
+                () => reject(new DOMException('aborted', 'AbortError')), {once: true}));
+        });
+        const outcome = gemini(withProviderSnapshot({origin: 'Cancelled native AI source', abortSignal: controller.signal}, mockConfig)).catch(error => error);
+        controller.abort();
+        await expect(outcome).resolves.toMatchObject({name: 'AbortError'});
+        expect(signal.aborted).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
     });
 });

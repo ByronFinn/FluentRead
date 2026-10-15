@@ -2,7 +2,7 @@
  * @file src/services/harness/modelGateway.ts
  * 文件职责：把已配置的 FluentRead AI 服务适配为 Harness 可消费的 LanguageModel。
  * 主要内容：解析 OpenAI 兼容端点、注入凭据与供应商头、保留 tools/messages/system
- * 语义，单独适配固定端点与模型的 B站匿名讲解，并对 DeepSeek Responses 配置和其他机器翻译服务给出明确错误；normalizeHarnessModelError
+ * 语义，单独适配固定端点与模型的 B站匿名讲解，并对未开放的 ChatGPT 套餐、DeepSeek Responses 配置和其他机器翻译服务给出明确错误；normalizeHarnessModelError
  * 额外把契约类内部 TypeError（is not a function 结尾）映射为可执行的中文提示，避免英文栈信息直出面板；
  * createHarnessLanguageModelDirect 是在当前进程内直接构建并执行 provider 的直连工厂（含多 Key 轮换 Proxy），既是
  * harnessCallHost='background' 的回滚入口，也是 Offscreen 执行宿主（src/app/offscreen/modelExecutorHost.ts）
@@ -45,6 +45,8 @@ import {browserCapabilities} from '@/src/platform/browser/capabilities';
 // 这里仅在 getClient 回调内解引用，不在网关模块顶层求值，node 测试加载本文件安全。
 import {extensionDomClient} from '@/src/platform/offscreen/extensionClient';
 import {createOffscreenHarnessLanguageModel} from './offscreenModelClient';
+import {createChatGPTPlanHarnessModel} from './chatgptPlanModel';
+import {getTranslationServiceUnavailableMessage} from '@/src/services/translation/capabilities';
 
 function zhipuBearer(apiKey: string): string {
   const [key, secret] = apiKey.split('.', 2);
@@ -132,6 +134,7 @@ export function normalizeHarnessModelError(error: unknown, service: string, apiK
 type ConcreteLanguageModel = Extract<LanguageModel, {specificationVersion: 'v3'}>;
 
 function createSingleHarnessLanguageModel(config: Config, service: string, model: string): ConcreteLanguageModel {
+  if (service === services.chatgptPlan) return createChatGPTPlanHarnessModel(model);
   if (service === services.bilibili) {
     // 免费入口只使用已验证的官方模型；残留凭据、代理、多 Key 和自定义模型均不参与请求。
     const provider = createOpenAICompatible({
@@ -198,6 +201,7 @@ function snapshotHarnessConfig(config: Config): Config {
 
 /** 后台取消只比较 gateway 的生效输入；摘要不包含可展示或发送的凭据。 */
 export function getHarnessModelInputKey(config: Config, service: string, model: string): string {
+  if (service === services.chatgptPlan) return sha256Hex(JSON.stringify([service, model.trim(), 'chatgpt-plan-local-oauth']));
   if (service === services.bilibili) return sha256Hex(JSON.stringify([service, BILIBILI_FREE_TRANSLATION_MODEL, BILIBILI_FREE_TRANSLATION_DOMAIN]));
   const requestedModel = model.trim();
   const keys = getServiceApiKeys(config, service);
@@ -225,6 +229,11 @@ export function getHarnessModelInputKey(config: Config, service: string, model: 
  * 切换的入口，否则在 Offscreen 内会再次代理回后台、形成递归。
  */
 export function createHarnessLanguageModelDirect(config: Config, service: string, model: string): LanguageModel {
+  if (service === services.chatgptPlan) {
+    const unavailable = getTranslationServiceUnavailableMessage(service);
+    if (unavailable) throw Object.assign(new Error(unavailable), {kind: 'bad-request', retryable: false});
+    return createChatGPTPlanHarnessModel(model);
+  }
   if (service === services.bilibili) return createSingleHarnessLanguageModel(config, service, model);
   const keys = getServiceApiKeys(config, service);
   if (keys.length < 2) return createSingleHarnessLanguageModel(withServiceApiKey(config, service, keys[0] ?? ''), service, model);

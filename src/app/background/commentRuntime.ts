@@ -14,7 +14,7 @@ import {attachCommentStreamPort} from '@/src/features/comment-assistant/streamPo
 import {createCommentRuntime} from '@/src/services/comment/runtime';
 import {createHarnessLanguageModel} from '@/src/services/harness/modelGateway';
 import {isExtensionDisabledOnSite} from '@/src/core/site-rules/domain';
-import type {BackgroundMessageHandler} from './messageRouter';
+import type {BackgroundMessageHandler} from '@/src/services/messaging/backgroundRouter';
 import type {CommentUsageSink} from '@/src/services/comment/runtime';
 import type {CommentSender} from '@/src/features/comment-assistant/background';
 
@@ -54,5 +54,5 @@ export function installCommentBackgroundRuntime(): BackgroundMessageHandler<{sen
     browser.tabs.onUpdated.addListener((tabId, change) => {
         if (change.status === 'loading' || change.url) handler.cancelTab(tabId);
     });
-    return {type: 'fluentReadComment', handle: (message, context) => handler.handle(message, context.sender ?? {})};
+    return {type: 'fluentReadComment', handle: (message: {type: string}, context: {sender?: CommentSender}) => handler.handle(message, context.sender ?? {})};
 }

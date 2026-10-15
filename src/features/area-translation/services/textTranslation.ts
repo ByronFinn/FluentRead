@@ -6,6 +6,7 @@
  */
 import {options as catalogOptions, resolveConfiguredModel, servicesType} from '@/src/core/config/catalog';
 import {withCustomOpenAIServiceOptions} from '@/src/core/config/customOpenAI';
+import {withCompositeTranslationServiceOptions} from '@/src/core/config/compositeTranslation';
 import {buildGlossaryRevision, resolveGlossaryEntries} from '@/src/core/glossary';
 import {
     attachTranslationGlossaryContext,
@@ -14,8 +15,8 @@ import {
     createTranslationProviderConfigSnapshot,
     markTranslationRemainingBudget,
     attachTranslationImageInput,
-    type TrustedTranslationGlossaryContext,
 } from '@/src/services/translation/requestSnapshot';
+import type {TrustedTranslationGlossaryContext} from '@/src/services/translation/types';
 import type {TranslationConfigSource, TranslationRequestMessage} from '@/src/services/translation/types';
 import type {ImageOperationOptions} from '@/src/features/image-translation/protocol';
 import type {AreaRecognitionResult, AreaTranslationMode, AreaTranslationResult, AreaTranslationSelection} from '../protocol';
@@ -44,8 +45,10 @@ export function prepareAreaVisionRecognition(
     cropArea: (image: string, selection: AreaTranslationSelection, options: ImageOperationOptions) => Promise<AreaRecognitionResult>,
     translate: (request: TranslationRequestMessage) => Promise<string | string[]>,
     now: () => number = Date.now,
+    glossaryContext: TrustedTranslationGlossaryContext = {},
 ): (image: string, selection: AreaTranslationSelection, options: ImageOperationOptions) => Promise<AreaRecognitionResult> {
     const startedAt = now();
+    const trustedContext = Object.freeze({...glossaryContext});
     const frozen = createTranslationProviderConfigSnapshot(source);
     const service = source.areaTranslationService || source.service;
     const model = resolveConfiguredModel(frozen.model[service], frozen.customModel[service]);
@@ -61,10 +64,10 @@ export function prepareAreaVisionRecognition(
         checkAbort(options.signal);
         const requestTimeoutMs = Math.floor(options.timeoutMs - (now() - startedAt));
         if (requestTimeoutMs <= 0) throw new Error('圈选翻译总时间已耗尽，请重试');
-        const visionRequest = attachTranslationImageInput(attachTranslationProviderConfig(attachTranslationRequestControl(
+        const visionRequest = attachTranslationGlossaryContext(attachTranslationImageInput(attachTranslationProviderConfig(attachTranslationRequestControl(
             markTranslationRemainingBudget({origin: 'Transcribe the cropped image.', glossaryIds: [], sourceLanguage, targetLanguage: visionSnapshot.to,
                 serviceOverride: service, modelOverride: model, context: title, pageContext: '', enableAIContext: false,
-                useCache: false, requestTimeoutMs}), {signal: options.signal, ownershipKey: `area:${options.requestId}:vision`}), visionSnapshot), cropped.image);
+                useCache: false, requestTimeoutMs}), {signal: options.signal, ownershipKey: `area:${options.requestId}:vision`}), visionSnapshot), cropped.image), trustedContext);
         const value = await translate(visionRequest);
         checkAbort(options.signal);
         if (typeof value !== 'string') throw new Error('视觉圈选识别未返回有效文字');
@@ -117,7 +120,7 @@ export function prepareAreaTextTranslation(
     const service = source.areaTranslationService || source.service;
     const frozen = createTranslationProviderConfigSnapshot(source);
     const model = resolveConfiguredModel(frozen.model[service], frozen.customModel[service]);
-    const serviceName = withCustomOpenAIServiceOptions(catalogOptions.services, frozen.customOpenAIProviders)
+    const serviceName = withCompositeTranslationServiceOptions(withCustomOpenAIServiceOptions(catalogOptions.services, frozen.customOpenAIProviders), frozen.compositeTranslationProviders)
         .find(option => option.value === service)?.label ?? service;
     const displayModel = servicesType.isUseModel(service) ? model : '';
     if (mode === 'ai' && !supportsAreaTranslationAI(service, model)) {
@@ -146,7 +149,7 @@ export function prepareAreaTextTranslation(
         const selectedGlossaryIds = trustedContext.context === 'document' ? snapshot.documentGlossaryIds
             : trustedContext.context === 'video' ? snapshot.videoGlossaryIds : null;
         // 用户明确要求的固定译名与 broker 共用本次冻结语言、词库和可信网站范围，优先于同目标跳过。
-        const hasExplicitGlossary = mode === 'standard' && snapshot.glossaryEnabled && resolveGlossaryEntries(snapshot.glossaryLibraries ?? [], {
+        const hasExplicitGlossary = mode === 'standard' && snapshot.glossaryEnabled && resolveGlossaryEntries(snapshot.glossaryLibraries!, {
             text: sourceText, sourceLanguage: sourceLanguage.trim() || snapshot.from, targetLanguage: snapshot.to,
             pageUrl: trustedContext.pageUrl, glossaryIds: selectedGlossaryIds ? [...selectedGlossaryIds] : null,
         }).terms.length > 0;

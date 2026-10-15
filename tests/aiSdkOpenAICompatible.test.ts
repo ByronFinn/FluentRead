@@ -1,3 +1,4 @@
+import {withProviderSnapshot} from './helpers/providerSnapshot';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
 const {mockConfig} = vi.hoisted(() => ({
@@ -26,6 +27,7 @@ const {mockConfig} = vi.hoisted(() => ({
     deepseekApiType: 'auto',
     deepseekThinkingMode: 'disabled',
     translationMaxRetries: 2,
+    aiRequestTimeoutMs: undefined as number | undefined,
     youdaoAppKey: '',
     youdaoAppSecret: '',
     tencentSecretId: '',
@@ -102,7 +104,7 @@ function ollamaBroker() {
   return createTranslationBroker({
     ready: Promise.resolve(),
     getConfig: () => current,
-    providers: {[services.ollama]: message => translateWithOpenAICompatibleAiSdk(message as unknown as AiSdkTranslationRequest)},
+    providers: {[services.ollama]: message => translateWithOpenAICompatibleAiSdk(withProviderSnapshot(message as unknown as AiSdkTranslationRequest, mockConfig))},
     cache: {
       get: async () => null,
       set: async () => true,
@@ -136,6 +138,7 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     mockConfig.proxy = {};
     mockConfig.requireApiKey = {};
     mockConfig.translationMaxRetries = 2;
+    mockConfig.aiRequestTimeoutMs = undefined;
     mockConfig.custom = 'http://127.0.0.1:11434/v1/chat/completions';
     mockConfig.newApiUrl = '';
     mockConfig.azureOpenaiEndpoint = '';
@@ -147,6 +150,93 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     vi.unstubAllGlobals();
   });
 
+  it('直接 SDK 调用默认允许 60 秒待响应，覆盖旧 40 秒 provider 超时', async () => {
+    vi.useFakeTimers();
+    const transport = deferredResponse();
+    let signal!: AbortSignal;
+    setRuntimeFetch(vi.fn((_input, init) => {
+      signal = init!.signal!;
+      signal.addEventListener('abort', () => transport.reject(new DOMException('aborted', 'AbortError')), {once: true});
+      return transport.promise;
+    }));
+    const result = translateWithOpenAICompatibleAiSdk(withProviderSnapshot({origin: 'Slow direct model source'}, mockConfig));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(signal.aborted).toBe(false);
+    transport.resolve(successResponse('缓慢模型译文'));
+    await expect(result).resolves.toBe('缓慢模型译文');
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    {configured: 10_000, explicit: undefined, deadline: 10_000},
+    {configured: 600_000, explicit: 500, deadline: 500},
+    {configured: 10_000, explicit: 180_000, deadline: 180_000},
+  ])('SDK 采用配置或显式预算并在精确截止 abort：$deadline 毫秒', async ({configured, explicit, deadline}) => {
+    vi.useFakeTimers();
+    mockConfig.aiRequestTimeoutMs = configured;
+    let signal!: AbortSignal;
+    setRuntimeFetch(vi.fn((_input, init) => {
+      signal = init!.signal!;
+      return new Promise<Response>((_, reject) => signal.addEventListener('abort',
+        () => reject(new DOMException('aborted', 'AbortError')), {once: true}));
+    }));
+    const outcome = translateWithOpenAICompatibleAiSdk(withProviderSnapshot({origin: 'SDK deadline source', requestTimeoutMs: explicit}, mockConfig)).catch(error => error);
+    await vi.advanceTimersByTimeAsync(deadline - 1);
+    expect(signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(outcome).resolves.toMatchObject({kind: 'timeout', retryable: true});
+    expect(signal.aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('SDK 数组的总预算继承 180 秒设置，并向后项只传剩余预算', async () => {
+    vi.useFakeTimers();
+    mockConfig.aiRequestTimeoutMs = 180_000;
+    const responses = [deferredResponse(), deferredResponse()];
+    const signals: AbortSignal[] = [];
+    setRuntimeFetch(vi.fn((_input, init) => {
+      const response = responses[signals.length];
+      signals.push(init!.signal!);
+      init!.signal!.addEventListener('abort', () => response.reject(new DOMException('aborted', 'AbortError')), {once: true});
+      return response.promise;
+    }));
+    const result = translateWithOpenAICompatibleAiSdk(withProviderSnapshot({origin: ['First slow source', 'Second slow source']}, mockConfig));
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(signals[0].aborted).toBe(false);
+    responses[0].resolve(successResponse('第一段译文'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signals).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(signals[1].aborted).toBe(false);
+    responses[1].resolve(successResponse('第二段译文'));
+    await expect(result).resolves.toEqual(['第一段译文', '第二段译文']);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('SDK 数组第二项在总预算耗尽时 abort，而不重新得到完整用户预算', async () => {
+    vi.useFakeTimers();
+    mockConfig.aiRequestTimeoutMs = 10_000;
+    const first = deferredResponse();
+    const signals: AbortSignal[] = [];
+    setRuntimeFetch(vi.fn((_input, init) => {
+      signals.push(init!.signal!);
+      if (signals.length === 1) return first.promise;
+      return new Promise<Response>((_, reject) => init!.signal!.addEventListener('abort',
+        () => reject(new DOMException('aborted', 'AbortError')), {once: true}));
+    }));
+    const outcome = translateWithOpenAICompatibleAiSdk(withProviderSnapshot({origin: ['First source', 'Pending second source']}, mockConfig)).catch(error => error);
+    await vi.advanceTimersByTimeAsync(7_000);
+    first.resolve(successResponse('第一段译文'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signals).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(signals[1].aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(outcome).resolves.toMatchObject({kind: 'timeout'});
+    expect(signals[1].aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('issue #626：Base URL 经真实 SDK 发往完整接口并保留模型和鉴权', async () => {
     mockConfig.custom = 'https://opencode.ai/zen/v1';
     mockConfig.model[services.custom] = 'big-pickle';
@@ -154,7 +244,7 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
       ? successResponse('你好')
       : new Response('<!DOCTYPE html><html><body>Not Found</body></html>', {status: 404, headers: {'content-type': 'text/html'}}));
     setRuntimeFetch(fetchMock);
-    await expect(translateWithOpenAICompatibleAiSdk({origin: 'hello'})).resolves.toBe('你好');
+    await expect(translateWithOpenAICompatibleAiSdk(withProviderSnapshot({origin: 'hello'}, mockConfig))).resolves.toBe('你好');
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('https://opencode.ai/zen/v1/chat/completions');
@@ -174,11 +264,11 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     const fetchMock = vi.fn().mockResolvedValue(successResponse());
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(translateWithOpenAICompatibleAiSdk({
+    await expect(translateWithOpenAICompatibleAiSdk(withProviderSnapshot({
       origin: 'hello',
       serviceOverride: services.custom,
       requestTimeoutMs: 5_000,
-    })).resolves.toBe('译文');
+    }, mockConfig))).resolves.toBe('译文');
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('http://127.0.0.1:11434/non-standard-generate');
@@ -201,7 +291,7 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     const fetchMock = vi.fn().mockResolvedValue(successResponse('你好'));
     setRuntimeFetch(fetchMock);
 
-    await expect(translateWithOpenAICompatibleAiSdk({origin: 'hello'})).resolves.toBe('你好');
+    await expect(translateWithOpenAICompatibleAiSdk(withProviderSnapshot({origin: 'hello'}, mockConfig))).resolves.toBe('你好');
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -218,10 +308,10 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     const runtimeTransport = vi.fn().mockResolvedValue(successResponse('GM 译文'));
     setRuntimeFetch(runtimeTransport);
 
-    await expect(translateWithOpenAICompatibleAiSdk({
+    await expect(translateWithOpenAICompatibleAiSdk(withProviderSnapshot({
       origin: 'hello',
       serviceOverride: services.custom,
-    })).resolves.toBe('GM 译文');
+    }, mockConfig))).resolves.toBe('GM 译文');
 
     expect(runtimeTransport).toHaveBeenCalledOnce();
     expect(nativeFetch).not.toHaveBeenCalled();
@@ -238,7 +328,7 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     const fetchMock = vi.fn().mockResolvedValue(successResponse('Azure 译文'));
     setRuntimeFetch(fetchMock);
 
-    await expect(azureOpenai({origin: 'hello', serviceOverride: services.azureOpenai})).resolves.toBe('Azure 译文');
+    await expect(azureOpenai(withProviderSnapshot({origin: 'hello', serviceOverride: services.azureOpenai}, mockConfig))).resolves.toBe('Azure 译文');
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe(expected);
@@ -259,7 +349,7 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     const fetchMock = vi.fn().mockResolvedValue(successResponse());
     setRuntimeFetch(fetchMock);
 
-    await azureOpenai(attachTranslationProviderConfig({origin: 'hello', serviceOverride: services.azureOpenai}, snapshot));
+    await azureOpenai(withProviderSnapshot(attachTranslationProviderConfig({origin: 'hello', serviceOverride: services.azureOpenai}, snapshot), mockConfig));
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://snapshot.services.ai.azure.com/openai/v1/chat/completions');
@@ -274,14 +364,14 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     const fetchMock = vi.fn();
     setRuntimeFetch(fetchMock);
 
-    await expect(azureOpenai({origin: 'hello'})).rejects.toThrow('Azure API Key 未配置');
+    await expect(azureOpenai(withProviderSnapshot({origin: 'hello'}, mockConfig))).rejects.toThrow('Azure API Key 未配置');
     mockConfig.token[services.azureOpenai] = '   ';
-    await expect(azureOpenai({origin: 'hello'})).rejects.toThrow('Azure API Key 未配置');
+    await expect(azureOpenai(withProviderSnapshot({origin: 'hello'}, mockConfig))).rejects.toThrow('Azure API Key 未配置');
     mockConfig.token[services.azureOpenai] = 'azure-test-key';
     mockConfig.azureOpenaiEndpoint = 'https://reader.services.ai.azure.com/unexpected';
-    await expect(azureOpenai({origin: 'hello'})).rejects.toThrow('Azure 端点地址格式不正确');
+    await expect(azureOpenai(withProviderSnapshot({origin: 'hello'}, mockConfig))).rejects.toThrow('Azure 端点地址格式不正确');
     mockConfig.azureOpenaiEndpoint = 'https://reader.services.ai.azure.com';
-    await expect(azureOpenai({origin: 'hello'})).rejects.toThrow('模型尚未配置');
+    await expect(azureOpenai(withProviderSnapshot({origin: 'hello'}, mockConfig))).rejects.toThrow('模型尚未配置');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -296,9 +386,9 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
       return successResponse();
     }));
 
-    await azureOpenai({origin: 'hello', modelOverride: 'custom-deployment'});
+    await azureOpenai(withProviderSnapshot({origin: 'hello', modelOverride: 'custom-deployment'}, mockConfig));
     mockConfig.customBody[services.azureOpenai] = '{"model":"body-deployment"}';
-    await azureOpenai({origin: 'hello'});
+    await azureOpenai(withProviderSnapshot({origin: 'hello'}, mockConfig));
     expect(models).toEqual(['custom-deployment', 'body-deployment']);
   });
 
@@ -316,10 +406,10 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     }), {status: 200, headers: {'content-type': 'application/json'}}));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(translateWithOpenAICompatibleAiSdk(attachTranslationModelUsageObserver({
+    await expect(translateWithOpenAICompatibleAiSdk(withProviderSnapshot(attachTranslationModelUsageObserver({
       origin: 'hello',
       serviceOverride: services.custom,
-    }, (observation) => observations.push(observation)))).resolves.toBe('Kimi 译文');
+    }, (observation) => observations.push(observation)), mockConfig))).resolves.toBe('Kimi 译文');
 
     expect(observations).toEqual([
       expect.objectContaining({
@@ -344,10 +434,10 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     )));
     vi.stubGlobal('fetch', fetchMock);
 
-    const error = await translateWithOpenAICompatibleAiSdk(attachTranslationModelUsageObserver({
+    const error = await translateWithOpenAICompatibleAiSdk(withProviderSnapshot(attachTranslationModelUsageObserver({
       origin: 'hello',
       serviceOverride: services.custom,
-    }, (observation) => observations.push(observation))).catch((reason) => reason);
+    }, (observation) => observations.push(observation)), mockConfig)).catch((reason) => reason);
 
     expect(error).toMatchObject({kind: 'timeout', statusCode: 408});
     expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -372,7 +462,7 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
       origin: 'hello',
       serviceOverride: services.custom,
     }, scheduler, {service: services.custom, model: 'base-model'});
-    await expect(translateWithOpenAICompatibleAiSdk(request)).rejects.toMatchObject({statusCode: 408});
+    await expect(translateWithOpenAICompatibleAiSdk(withProviderSnapshot(request, mockConfig))).rejects.toMatchObject({statusCode: 408});
     expect(fetchMock).toHaveBeenCalledTimes(3);
   }, 15_000);
 
@@ -394,11 +484,11 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
 
     const fetchMock = vi.fn().mockResolvedValue(successResponse());
     vi.stubGlobal('fetch', fetchMock);
-    await expect(translateWithOpenAICompatibleAiSdk(attachTranslationProviderConfig({
+    await expect(translateWithOpenAICompatibleAiSdk(withProviderSnapshot(attachTranslationProviderConfig({
       origin: 'hello',
       serviceOverride: services.custom,
       targetLanguage: 'fr',
-    }, snapshot))).resolves.toBe('译文');
+    }, snapshot), mockConfig))).resolves.toBe('译文');
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://snapshot-a.example/v1/chat/completions');
@@ -419,10 +509,10 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
-    const error = await translateWithOpenAICompatibleAiSdk({
+    const error = await translateWithOpenAICompatibleAiSdk(withProviderSnapshot({
       origin: 'hello',
       serviceOverride: services.custom,
-    }).catch((reason) => reason);
+    }, mockConfig)).catch((reason) => reason);
 
     expect(error).toMatchObject({kind: 'bad-request', retryable: false});
     expect(error.message).toContain('未配置');
@@ -438,10 +528,10 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     const fetchMock = vi.fn().mockResolvedValue(successResponse());
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(translateWithOpenAICompatibleAiSdk({
+    await expect(translateWithOpenAICompatibleAiSdk(withProviderSnapshot({
       origin: 'hello',
       serviceOverride: services.custom,
-    })).resolves.toBe('译文');
+    }, mockConfig))).resolves.toBe('译文');
 
     expect(JSON.parse(String(fetchMock.mock.calls[0][1].body)).messages).toEqual(customMessages);
   });
@@ -458,10 +548,10 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(translateWithOpenAICompatibleAiSdk({
+    await expect(translateWithOpenAICompatibleAiSdk(withProviderSnapshot({
       origin: 'hello',
       serviceOverride: services.custom,
-    })).resolves.toBe('兼容旧 Custom 的译文');
+    }, mockConfig))).resolves.toBe('兼容旧 Custom 的译文');
   });
 
   it('does not retry permanent authentication errors and redacts secrets', async () => {
@@ -472,10 +562,10 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     ));
     vi.stubGlobal('fetch', fetchMock);
 
-    const error = await translateWithOpenAICompatibleAiSdk({
+    const error = await translateWithOpenAICompatibleAiSdk(withProviderSnapshot({
       origin: 'hello',
       serviceOverride: services.custom,
-    }).catch((reason) => reason);
+    }, mockConfig)).catch((reason) => reason);
 
     expect(error).toMatchObject({
       name: 'LlmTransportError',
@@ -500,10 +590,10 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     const fetchMock = vi.fn().mockResolvedValue(errorResponse(401, providerMessage));
     vi.stubGlobal('fetch', fetchMock);
 
-    const error = await translateWithOpenAICompatibleAiSdk({
+    const error = await translateWithOpenAICompatibleAiSdk(withProviderSnapshot({
       origin: 'hello',
       serviceOverride: service,
-    }).catch((reason) => reason);
+    }, mockConfig)).catch((reason) => reason);
 
     expect(error).toMatchObject({kind: 'authentication', retryable: false, statusCode: 401});
     expect(error.message).toContain(expectedDetail);
@@ -519,11 +609,11 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     )));
     vi.stubGlobal('fetch', fetchMock);
 
-    const request = translateWithOpenAICompatibleAiSdk({
+    const request = translateWithOpenAICompatibleAiSdk(withProviderSnapshot({
       origin: 'hello',
       serviceOverride: services.custom,
       requestTimeoutMs: 30_000,
-    });
+    }, mockConfig));
     const outcome = request.catch((reason) => reason);
     await vi.runAllTimersAsync();
     const error = await outcome;
@@ -705,11 +795,11 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(errorResponse(429, 'rate limited')));
     vi.stubGlobal('fetch', fetchMock);
 
-    const request = translateWithOpenAICompatibleAiSdk({
+    const request = translateWithOpenAICompatibleAiSdk(withProviderSnapshot({
       origin: 'hello',
       serviceOverride: services.custom,
       requestTimeoutMs: 30_000,
-    });
+    }, mockConfig));
     const outcome = request.catch((reason) => reason);
     await vi.runAllTimersAsync();
     await expect(outcome).resolves.toMatchObject({kind: 'rate-limit', statusCode: 429});
@@ -720,10 +810,10 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
     vi.stubGlobal('fetch', fetchMock);
 
-    const error = await translateWithOpenAICompatibleAiSdk({
+    const error = await translateWithOpenAICompatibleAiSdk(withProviderSnapshot({
       origin: 'hello',
       serviceOverride: services.custom,
-    }).catch((reason) => reason);
+    }, mockConfig)).catch((reason) => reason);
 
     expect(error).toMatchObject({
       name: 'LlmTransportError',
@@ -756,11 +846,11 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     ));
     vi.stubGlobal('fetch', fetchMock);
 
-    const outcome = translateWithOpenAICompatibleAiSdk({
+    const outcome = translateWithOpenAICompatibleAiSdk(withProviderSnapshot({
       origin: 'hello',
       serviceOverride: services.custom,
       requestTimeoutMs: 1_000,
-    }).catch((reason) => reason);
+    }, mockConfig)).catch((reason) => reason);
     await vi.advanceTimersByTimeAsync(1_000);
     const error = await outcome;
 
@@ -785,11 +875,11 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
 
-    const outcome = translateWithOpenAICompatibleAiSdk({
+    const outcome = translateWithOpenAICompatibleAiSdk(withProviderSnapshot({
       origin: ['first', 'second'],
       serviceOverride: services.custom,
       requestTimeoutMs: 1_000,
-    }).catch((reason) => reason);
+    }, mockConfig)).catch((reason) => reason);
     await vi.advanceTimersByTimeAsync(1_000);
     const error = await outcome;
 

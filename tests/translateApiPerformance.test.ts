@@ -1,5 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {buildGlossaryRevision, type GlossaryLibrary} from '@/src/core/glossary';
+import type {CompositeTranslationProvider} from '@/src/core/config/compositeTranslation';
 
 const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
@@ -32,6 +33,8 @@ const mocks = vi.hoisted(() => ({
     enableAIContext: false,
     nativeBatchTranslationEnabled: {} as Record<string, boolean>,
     videoService: 'mock',
+    compositeTranslationProviders: [] as CompositeTranslationProvider[],
+    aiRequestTimeoutMs: undefined as number | undefined,
   },
 }));
 
@@ -53,6 +56,7 @@ vi.mock('@/src/core/config/catalog', async (importOriginal) => {
     resolveConfiguredModel: (model: string) => model,
     servicesType: {
       ...actual.servicesType,
+    isAI: (service: string) => service === 'mock-ai' || actual.servicesType.isAI(service),
     isUseAIContext: (service: string) => service === 'mock-ai',
     isAiSdk: (service: string) => service === 'mock-ai',
     },
@@ -61,7 +65,7 @@ vi.mock('@/src/core/config/catalog', async (importOriginal) => {
 vi.mock('@/src/services/translation/context', () => ({getPageTranslationContext: mocks.getPageTranslationContext}));
 vi.mock('@/src/core/config/validation', () => ({getMissingCredentialMessage: mocks.getMissingCredentialMessage}));
 
-import {cancelAllTranslations, translateText, translateTextBatch, translateVideoText} from '@/src/app/translation/client';
+import {cancelAllTranslations, translateText, translateTextBatch, translateVideoText} from '@/src/services/translation/client';
 import {
   createTranslationCancelHandler,
   createTranslationRequestFallback,
@@ -125,6 +129,8 @@ describe('translation API request lifecycle performance', () => {
     mocks.config.nativeBatchTranslationEnabled = {};
     mocks.config.service = 'mock';
     mocks.config.videoService = 'mock';
+    mocks.config.compositeTranslationProviders = [];
+    mocks.config.aiRequestTimeoutMs = undefined;
     mocks.config.from = 'en';
     mocks.config.to = 'zh-CN';
     mocks.config.useCache = true;
@@ -147,6 +153,68 @@ describe('translation API request lifecycle performance', () => {
     vi.useRealTimers();
     Object.defineProperty(globalThis, 'document', {value: originalDocument, configurable: true});
     Object.defineProperty(globalThis, 'location', {value: originalLocation, configurable: true});
+  });
+
+  it.each(['single', 'batch', 'video'] as const)('%s AI 默认允许超过 45 秒响应，并完整提供 120 秒后台预算', async kind => {
+    mocks.config.service = 'mock-ai';
+    mocks.config.videoService = 'mock-ai';
+    const transport = deferred<string | string[]>();
+    mocks.sendMessage.mockReturnValue(transport.promise);
+    const request = contextGateRequest(kind);
+    await flushMicrotasks();
+    expect(mocks.sendMessage.mock.calls[0][0]).toMatchObject({requestTimeoutMs: 120_000});
+    await vi.advanceTimersByTimeAsync(60_000);
+    transport.resolve(kind === 'batch' ? ['缓慢模型译文'] : '缓慢模型译文');
+    await expect(request).resolves.toEqual(kind === 'batch' ? ['缓慢模型译文'] : '缓慢模型译文');
+  });
+
+  it.each(['single', 'batch', 'video'] as const)('%s AI 在等待前冻结用户预算，外层只增加一秒收取后台结果', async kind => {
+    mocks.config.service = 'mock-ai';
+    mocks.config.videoService = 'mock-ai';
+    mocks.config.translationMaxRetries = 0;
+    mocks.config.aiRequestTimeoutMs = 180_000;
+    mocks.config.enableAIContext = true;
+    const context = deferred<string>();
+    const transport = deferred<string | string[]>();
+    mocks.getPageTranslationContext.mockReturnValue(context.promise);
+    mocks.sendMessage.mockReturnValue(transport.promise);
+    const request = contextGateRequest(kind);
+    const outcome = request.catch(error => error);
+    mocks.config.aiRequestTimeoutMs = 10_000;
+    context.resolve('Frozen page context');
+    await flushMicrotasks();
+    expect(mocks.sendMessage.mock.calls[0][0]).toMatchObject({requestTimeoutMs: 180_000});
+    await vi.advanceTimersByTimeAsync(180_000);
+    let finished = false;
+    void outcome.then(() => {finished = true;});
+    await flushMicrotasks();
+    expect(finished).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(outcome).resolves.toMatchObject({message: '翻译请求超时'});
+    transport.resolve(kind === 'batch' ? ['迟到译文'] : '迟到译文');
+  });
+
+  it.each(['single', 'batch'] as const)('%s AI 显式 timeout 优先于用户默认配置', async kind => {
+    mocks.config.service = 'mock-ai';
+    mocks.config.aiRequestTimeoutMs = 600_000;
+    const transport = deferred<string | string[]>();
+    mocks.sendMessage.mockReturnValue(transport.promise);
+    const request = kind === 'batch'
+      ? translateTextBatch(['Override source'], 'Page', {timeout: 2_000, maxRetries: 0})
+      : translateText('Override source', 'Page', {timeout: 2_000, maxRetries: 0});
+    const outcome = request.catch(error => error);
+    await flushMicrotasks();
+    expect(mocks.sendMessage.mock.calls[0][0]).toMatchObject({requestTimeoutMs: 1_000});
+    await vi.advanceTimersByTimeAsync(2_000);
+    await expect(outcome).resolves.toMatchObject({message: '翻译请求超时'});
+    transport.resolve(kind === 'batch' ? ['迟到译文'] : '迟到译文');
+  });
+
+  it.each(['single', 'batch', 'video'] as const)('%s 机器翻译保持原默认预算', async kind => {
+    mocks.config.aiRequestTimeoutMs = 600_000;
+    mocks.sendMessage.mockResolvedValue(kind === 'batch' ? ['机器译文'] : '机器译文');
+    await contextGateRequest(kind);
+    expect(mocks.sendMessage.mock.calls[0][0]).toMatchObject({requestTimeoutMs: kind === 'video' ? 19_000 : 44_000});
   });
 
   it.each(['single', 'batch', 'video'] as const)('术语版本和选择在 %s 的上下文提取前冻结', async kind => {
@@ -301,7 +369,7 @@ describe('translation API request lifecycle performance', () => {
       sourceLanguage: 'en',
       targetLanguage: 'ja',
       useCache: false,
-      requestTimeoutMs: 44_000,
+      requestTimeoutMs: 120_000,
     }));
     expect(mocks.config.model['mock-ai']).toBe('mock-ai-model');
   });
@@ -1033,6 +1101,22 @@ describe('translation API request lifecycle performance', () => {
     expect(mocks.config.enableAIContext).toBe(true);
   });
 
+  it.each(['single', 'batch', 'video'] as const)('%s 组合中的通用 AI 成员保留页面上下文，纯机器组合不提取', async kind => {
+    mocks.config.enableAIContext = true;
+    mocks.config.service = 'composite:context';
+    mocks.config.videoService = 'composite:context';
+    mocks.config.compositeTranslationProviders = [{id: 'composite:context', name: '上下文组合', strategy: 'sequential', services: ['mock', 'mock-ai'], timeoutMs: 12_000}];
+    mocks.getPageTranslationContext.mockResolvedValue('Combined page context');
+    mocks.sendMessage.mockImplementation(({origin}: {origin: string | string[]}) => Promise.resolve(Array.isArray(origin) ? ['译文'] : '译文'));
+    await contextGateRequest(kind);
+    expect(mocks.getPageTranslationContext).toHaveBeenCalledOnce();
+    expect(mocks.sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({serviceOverride: 'composite:context', pageContext: 'Combined page context'}));
+    mocks.config.compositeTranslationProviders[0].services = ['mock'];
+    await contextGateRequest(kind);
+    expect(mocks.getPageTranslationContext).toHaveBeenCalledOnce();
+    expect(mocks.sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({serviceOverride: 'composite:context', pageContext: undefined}));
+  });
+
   it('显式 AI 上下文策略覆盖实时配置并原样发送给 background', async () => {
     mocks.config.service = 'mock-ai';
     mocks.config.enableAIContext = false;
@@ -1105,8 +1189,159 @@ describe('translation API request lifecycle performance', () => {
       thinkingOverride: false,
       sourceLanguage: 'en',
       targetLanguage: 'zh-Hans',
-      requestTimeoutMs: 19_000,
+      requestTimeoutMs: 120_000,
     }));
     expect(mocks.sendMessage.mock.calls[0]?.[0].clientRequestId).toEqual(expect.any(String));
   });
+
+  it('空来源及空批次保持本地结果，不启动消息或完成计数', async () => {
+    await expect(translateText(undefined as never)).resolves.toBe('');
+    await expect(translateTextBatch([])).resolves.toEqual([]);
+    await expect(translateVideoText(undefined as never)).resolves.toBe('');
+    await expect(translateVideoText(' 	')).resolves.toBe(' 	');
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+    expect(mocks.persistCountIncrement).not.toHaveBeenCalled();
+  });
+
+  it('原生Chrome批次使用45秒预算，显式超时和篇章证据逐次独立', async () => {
+    mocks.sendMessage.mockResolvedValue(['译文']);
+    mocks.config.service = 'chromeTranslator';
+    const evidence = 'e'.repeat(2500);
+    await expect(translateTextBatch(['Source'], undefined, {maxRetries: 0, discourseContext: evidence})).resolves.toEqual(['译文']);
+    expect(mocks.sendMessage.mock.calls[0][0]).toMatchObject({requestTimeoutMs: 44_000, discourseContext: evidence.slice(0, 2400)});
+    await expect(translateTextBatch(['Source'], 'Page', {maxRetries: 0, timeout: 3_000})).resolves.toEqual(['译文']);
+    expect(mocks.sendMessage.mock.calls[1][0]).toMatchObject({requestTimeoutMs: 2_000});
+    expect(mocks.sendMessage.mock.calls[1][0].discourseContext).toBeUndefined();
+    mocks.sendMessage.mockResolvedValue('译文');
+    await translateText('Source', 'Page', {maxRetries: 0, discourseContext: evidence});
+    expect(mocks.sendMessage.mock.calls[2][0].discourseContext).toBe(evidence.slice(0, 2400));
+  });
+
+  it('没有模型的机器服务在扩展页面验证原配置，不创建虚构模型覆盖', async () => {
+    Object.defineProperty(globalThis, 'location', {value: {protocol: 'chrome-extension:'}, configurable: true});
+    mocks.config.service = 'microsoft';
+    delete mocks.config.model.microsoft;
+    delete mocks.config.customModel.microsoft;
+    mocks.sendMessage.mockResolvedValue('机器译文');
+    await expect(translateText('Source', 'Page', {maxRetries: 0})).resolves.toBe('机器译文');
+    expect(mocks.getMissingCredentialMessage).toHaveBeenCalledWith('microsoft', mocks.config);
+    expect(mocks.sendMessage.mock.calls[0][0].modelOverride).toBeUndefined();
+  });
+
+  it('非法显式重试间隔回退到有效预算，存活signal的重试完成后清理监听', async () => {
+    const controller = new AbortController();
+    const remove = vi.spyOn(controller.signal, 'removeEventListener');
+    mocks.sendMessage.mockRejectedValueOnce(new Error('temporary network failure')).mockResolvedValueOnce('恢复译文');
+    const request = translateText('Retry source', 'Page', {signal: controller.signal, maxRetries: 1, retryDelay: -1, retryMaxDelay: Number.NaN});
+    await flushMicrotasks();
+    expect(mocks.sendMessage).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(mocks.sendMessage).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(request).resolves.toBe('恢复译文');
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+    controller.abort();
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
+    remove.mockRestore();
+  });
+
+  it('运行时同步取消即使取消通知抛错也只结束本调用，迟到结果结算后下一请求才启动', async () => {
+    mocks.config.maxConcurrentTranslations = 1;
+    const controller = new AbortController();
+    const transport = deferred<string>();
+    mocks.sendMessage.mockImplementation(message => {
+      if (message.type) throw new Error('Extension context invalidated');
+      if (message.origin === 'Synchronous source') {
+        controller.abort();
+        return transport.promise;
+      }
+      return Promise.resolve('下一个译文');
+    });
+    const first = translateText('Synchronous source', 'Page', {signal: controller.signal, maxRetries: 0});
+    await expect(first).rejects.toMatchObject({name: 'AbortError'});
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
+    const [request] = mocks.sendMessage.mock.calls[0];
+    expect(mocks.sendMessage.mock.calls[1][0]).toEqual({type: 'fluentReadTranslationCancel', clientRequestId: request.clientRequestId});
+    const next = translateText('Next source', 'Page', {maxRetries: 0});
+    await flushMicrotasks();
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
+    transport.resolve('迟到译文');
+    await expect(next).resolves.toBe('下一个译文');
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(mocks.persistCountIncrement).toHaveBeenCalledWith(1, expect.any(Function), expect.any(String));
+  });
+
+  it.each([undefined, new AbortController().signal])('空自动上下文在有无signal时均不伪造pageContext %j', async signal => {
+    enableContextGate();
+    mocks.getPageTranslationContext.mockResolvedValue('');
+    mocks.sendMessage.mockResolvedValue('译文');
+    await expect(translateText('Source', 'Page', {signal, maxRetries: 0})).resolves.toBe('译文');
+    expect(mocks.sendMessage.mock.calls[0][0].pageContext).toBeUndefined();
+  });
+
+  it('视频请求在无document环境仍保留字幕与语言，短暂故障按统一策略重试', async () => {
+    Object.defineProperty(globalThis, 'document', {value: undefined, configurable: true});
+    mocks.sendMessage.mockRejectedValueOnce(new Error('temporary network failure')).mockResolvedValueOnce('字幕译文');
+    const request = translateVideoText('Subtitle source');
+    await flushMicrotasks();
+    expect(mocks.sendMessage).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1000);
+    await expect(request).resolves.toBe('字幕译文');
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
+    expect(mocks.sendMessage.mock.calls[1][0]).toMatchObject({context: '视频字幕：', origin: 'Subtitle source', sourceLanguage: 'en'});
+  });
+
+  it('视频完成计数写入失败后复用操作身份恢复，不使已完成翻译失败', async () => {
+    const error = new Error('storage temporarily unavailable');
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      mocks.sendMessage.mockResolvedValue('字幕译文');
+      mocks.persistCountIncrement.mockRejectedValueOnce(error).mockResolvedValue(1);
+      await expect(translateVideoText('Subtitle source')).resolves.toBe('字幕译文');
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(log).toHaveBeenCalledWith('[FluentRead] 保存视频翻译计数失败:', error);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mocks.persistCountIncrement).toHaveBeenCalledTimes(2);
+      expect(mocks.persistCountIncrement.mock.calls[0][2]).toBe(mocks.persistCountIncrement.mock.calls[1][2]);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it.each(['random-throws', 'crypto-missing', 'uuid-missing'] as const)('随机API %s 时请求身份仍唯一，取消沿用各自身份', async mode => {
+    const originalCrypto = globalThis.crypto;
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.stubEnv('NODE_ENV', 'development');
+    try {
+      Object.defineProperty(globalThis, 'crypto', {configurable: true, value: mode === 'crypto-missing' ? undefined : {
+        getRandomValues: (bytes: Uint32Array) => {
+          if (mode === 'random-throws') throw new Error('random unavailable');
+          bytes.set([1, 2, 3, 4]);
+          return bytes;
+        },
+      }});
+      vi.resetModules();
+      const client = await import('@/src/services/translation/client');
+      mocks.sendMessage.mockRejectedValueOnce(new Error('temporary network failure')).mockResolvedValue('译文');
+      const first = client.translateText('First fallback source', 'Page', {signal: new AbortController().signal, maxRetries: 1, retryDelay: 0, retryMaxDelay: 0});
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(first).resolves.toBe('译文');
+      await client.translateVideoText('Second fallback source');
+      const requestIds = mocks.sendMessage.mock.calls.map(([message]) => message.clientRequestId);
+      expect(requestIds).toHaveLength(3);
+      expect(new Set(requestIds).size).toBe(3);
+      requestIds.forEach(id => expect(id).toMatch(/^translation-[a-z0-9-]+-\d+$/u));
+      client.cancelAllTranslations();
+      expect(log).toHaveBeenCalledWith('[翻译API] 取消所有等待中的翻译任务');
+    } finally {
+      Object.defineProperty(globalThis, 'crypto', {configurable: true, value: originalCrypto});
+      vi.unstubAllEnvs();
+      log.mockRestore();
+      vi.resetModules();
+    }
+  });
+
 });

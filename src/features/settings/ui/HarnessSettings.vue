@@ -1,7 +1,7 @@
 <!--
  * @file src/features/settings/ui/HarnessSettings.vue
  * 文件职责：作为划词翻译的学习子设置，用示例说明 AI 讲解，明确原文范围、学习笔记和自定义指令的用途，并配置评论动作与模型调用执行位置。
- * 主要内容：左侧用真实回答组件预览学习动作，右侧配置服务、模型、动作、回答偏好与模型调用执行位置（离屏常驻运行时（推荐）/ 后台直连（回滚），绑定 config.harnessCallHost）；B站仅预览基础读懂和用法、禁用暂不可用动作，默认动作临时回退而保留用户偏好，明确免费免密钥并展示固定模型，其他服务恢复完整动作与模型选择；多行偏好使用完整单列控件保持左侧对齐，窄屏下默认动作也纵向排列；独立展示上下文和记忆分区，提供学习中心入口；随后提供评论设置（启用开关、评论服务、模型、条数和风格提示词编辑器）；风格指令编辑器声明提示词契约（只影响语气、视角与风格，语言与条数由代码决定），并内置以未识别选区语言场景实时拼装的系统提示词预览；关闭讲解保留偏好，示例不发送请求。
+ * 主要内容：服务候选遵循共享平台可用性；ChatGPT 套餐选择器保留已保存的全局与讲解实际模型 slug，不另行发现账户模型。左侧用真实回答组件预览学习动作，右侧配置服务、模型、动作、回答偏好与模型调用执行位置（离屏常驻运行时（推荐）/ 后台直连（回滚），绑定 config.harnessCallHost）；B站仅预览基础读懂和用法、禁用暂不可用动作，默认动作临时回退而保留用户偏好，明确免费免密钥并展示固定模型，其他服务恢复完整动作与模型选择；多行偏好使用完整单列控件保持左侧对齐，窄屏下默认动作也纵向排列；独立展示上下文和记忆分区，提供学习中心入口；随后提供评论设置（启用开关、评论服务、模型、条数和风格提示词编辑器）；风格指令编辑器声明提示词契约（只影响语气、视角与风格，语言与条数由代码决定），并内置以未识别选区语言场景实时拼装的系统提示词预览；关闭讲解保留偏好，示例不发送请求。
  * 模块边界：只编辑传入 Config 的 harness、comment 与 harnessCallHost 字段；评论仅在卡内展示、不写入学习记录；阅读记录由学习中心管理，不发起模型请求、不拥有网页选区。
  -->
 <template>
@@ -135,11 +135,12 @@ import {ReadingAnswer} from '@/src/features/reading-assistant/ui/answer/public';
 import {sentenceSource, sentenceTranslation, sentenceAnalysis, learningPreviewAnswers} from '@/src/core/config/selectionPreview';
 import FeatureEnableCard from '@/src/ui/components/FeatureEnableCard.vue';
 import {computed, nextTick, ref, toRef, watch} from 'vue'
-import {models, options, services} from '@/src/core/config/catalog'
+import {models, options, resolveConfiguredModel, services} from '@/src/core/config/catalog'
 import {getCustomOpenAIProviderLabel, getCustomOpenAIProviderModels, isCustomOpenAIProviderId} from '@/src/core/config/customOpenAI'
 import {HARNESS_ACTIONS, isReadingActionSupported, isReadingService, resolveHarnessModel, type HarnessActionId} from '@/src/core/config/harness'
 import {isCommentServiceUsable} from '@/src/core/config/comment'
 import {buildCommentSystemPrompt, COMMENT_PROMPT_MAX_LENGTH, COMMENT_PROMPT_VARIABLES, DEFAULT_COMMENT_PROMPT} from '@/src/core/comment/prompts'
+import {filterAvailableTranslationServices} from '@/src/services/translation/capabilities'
 import type {Config} from '@/src/core/config/model'
 import SettingsGroup from './components/SettingsGroup.vue'
 import SettingsItem from './components/SettingsItem.vue'
@@ -153,20 +154,24 @@ const emit = defineEmits<{navigate: [section: string]}>()
 const previewAction = ref<HarnessActionId>(props.config.harness.defaultAction)
 const previewAnswer = computed(() => previewAction.value === 'grammar' ? sentenceAnalysis : learningPreviewAnswers[previewAction.value][config.value.harness.explanationDepth])
 const {t} = useUiI18n()
-const serviceOptions = computed(() => [
+const serviceOptions = computed(() => filterAvailableTranslationServices([
   ...options.services.filter((item) => !item.disabled && isReadingService(item.value)).map(item => item.value === services.bilibili ? {...item, label: 'B站翻译 · 免费'} : item),
   ...config.value.customOpenAIProviders.filter((provider) => !options.services.some((item) => item.value === provider.id)).map((provider) => ({value: provider.id, label: getCustomOpenAIProviderLabel(config.value.customOpenAIProviders, provider.id)})),
-])
+]))
 const modelOptions = computed(() => {
   const service = config.value.harness.service || config.value.service
+  if (service === services.chatgptPlan) return [...new Set([
+    resolveConfiguredModel(config.value.model[service], config.value.customModel[service]),
+    config.value.harness.model,
+  ].filter(Boolean))]
   return (isCustomOpenAIProviderId(service) ? getCustomOpenAIProviderModels(config.value.customOpenAIProviders, service) : models.get(service) || []).filter((model) => model !== '自定义模型')
 })
 // 评论服务候选按评论运行时自己的可用判定（isCommentServiceUsable，即 Harness AI 白名单，含自定义 OpenAI 兼容供应商）过滤，
 // 不再包含阅读层专用的 B站（运行时 isHarnessService 检查本就会拒绝它），与 effectiveCommentServiceUsable 保持同一规则。
-const commentServiceOptions = computed(() => [
+const commentServiceOptions = computed(() => filterAvailableTranslationServices([
   ...options.services.filter((item) => !item.disabled && isCommentServiceUsable(item.value, config.value.customOpenAIProviders)),
   ...config.value.customOpenAIProviders.filter((provider) => !options.services.some((item) => item.value === provider.id)).map((provider) => ({value: provider.id, label: getCustomOpenAIProviderLabel(config.value.customOpenAIProviders, provider.id)})),
-])
+]))
 // 空服务跟随当前默认服务；空模型跟随服务的已配置模型。
 const commentModelOptions = computed(() => {
   const service = config.value.comment.service || config.value.service

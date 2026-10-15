@@ -153,29 +153,38 @@ function verificationOwners(path: string, strictCoverage: Set<string>): Verifica
     return [...owners].sort();
 }
 
-function isTypeOnlyModule(path: string): boolean {
-    if (path.endsWith('.d.ts')) return true;
-    if (!path.endsWith('.ts')) return false;
-    // 以实际输出判断纯声明；任意文件中的常量、枚举和副作用仍须拥有行为验证。
+const classificationCompilerOptions = Object.freeze({module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext});
+const classificationOptions = JSON.stringify([classificationCompilerOptions, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS, ts.ScriptKind.TS]);
+type ModuleClassification = Readonly<{typeOnly: boolean; pureBarrel: boolean}>;
+const moduleClassifications = new Map<string, {source: string; options: string; result: ModuleClassification}>();
+function classifyModule(path: string): ModuleClassification {
     const source = readFileSync(projectPath(path), 'utf8');
-    const emitted = ts.transpileModule(source, {
-        compilerOptions: {module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ESNext},
-    }).outputText;
+    const cached = moduleClassifications.get(path);
+    if (cached?.source === source && cached.options === classificationOptions) return cached.result;
+    // 仍按实际输出判断纯声明；只缓存两个布尔结果，不共享可变 AST 或模块执行状态。
+    const emitted = ts.transpileModule(source, {compilerOptions: classificationCompilerOptions}).outputText;
     const runtime = ts.createSourceFile(path + '.js', emitted, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
-    return runtime.statements.every((statement) => ts.isEmptyStatement(statement)
+    const typeOnly = runtime.statements.every((statement) => ts.isEmptyStatement(statement)
         || (ts.isExportDeclaration(statement)
             && !statement.moduleSpecifier
             && !!statement.exportClause
             && ts.isNamedExports(statement.exportClause)
             && statement.exportClause.elements.length === 0));
+    const original = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const pureBarrel = original.statements.length > 0
+        && original.statements.every((statement) => ts.isExportDeclaration(statement));
+    const result = Object.freeze({typeOnly, pureBarrel});
+    moduleClassifications.set(path, {source, options: classificationOptions, result});
+    return result;
+}
+
+function isTypeOnlyModule(path: string): boolean {
+    if (path.endsWith('.d.ts')) return true;
+    return path.endsWith('.ts') && classifyModule(path).typeOnly;
 }
 
 function isPureBarrel(path: string): boolean {
-    if (!path.endsWith('.ts')) return false;
-    const source = readFileSync(projectPath(path), 'utf8');
-    const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    return sourceFile.statements.length > 0
-        && sourceFile.statements.every((statement) => ts.isExportDeclaration(statement));
+    return path.endsWith('.ts') && classifyModule(path).pureBarrel;
 }
 
 function isCoverageExemptSrcModule(path: string): boolean {
@@ -251,8 +260,6 @@ const BUILD_ONLY_SRC_ALLOWLIST = new Set([
     'src/app/content/messageRuntime.ts',
     // 这是 WXT/provider/config 的静态组装根；行为由被注入模块的单测和双浏览器构建验证。
     'src/app/translation/runtime.ts',
-    // 内容侧客户端绑定 browser.runtime、页面上下文、AbortSignal 与持久化定时器；由 translateApi 功能测试和三种构建验证。
-    'src/app/translation/client.ts',
     // 页面上下文运行时绑定 live DOM、脱离文档快照和 Defuddle 动态导入；纯预算与格式化策略已严格覆盖。
     'src/services/translation/context/browser.ts',
     // 文档组合根只把 config/store 与 app translation client 注入严格覆盖的编排服务；由文档功能回归和双浏览器构建验证。
@@ -297,11 +304,11 @@ const BUILD_ONLY_SRC_ALLOWLIST = new Set([
     'src/providers/translation/local-translation.ts',
     'src/providers/translation/ai-sdk/openai-compatible.ts',
     // 以下文件逐一绑定真实网络协议或浏览器 offscreen API；纯端点、错误和鉴权逻辑已拆出并纳入 strict coverage。
+    // DeepLX 自身包含模式选择、有序故障转移、共享时限及响应校验，现通过外部传输端口测试进入严格覆盖，不再按仅组装模块豁免。
     'src/providers/translation/azure-openai.ts',
     'src/providers/translation/chrome-translator.ts',
     'src/providers/translation/claude.ts',
     'src/providers/translation/deepl.ts',
-    'src/providers/translation/deeplx.ts',
     'src/providers/translation/deepseek.ts',
     // 豆包按生效模型分流并直连方舟 Responses API；模型识别、语言映射与协议工具已拆出并纳入 strict coverage。
     'src/providers/translation/doubao.ts',

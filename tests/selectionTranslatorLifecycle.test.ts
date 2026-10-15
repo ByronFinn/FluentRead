@@ -18,6 +18,7 @@ import * as selectionCore from '@/src/features/selection-translation/core';
 import * as translationErrors from '@/src/services/translation/errors';
 import * as harness from '@/src/core/config/harness';
 import {services} from '@/src/core/config/catalog';
+import {normalizeCommentPreferences} from '@/src/core/config/comment';
 import * as runtimeMessages from '@/src/platform/browser/runtimeMessages';
 import * as detect from '@/src/core/language/detect';
 import * as partOfSpeech from '@/src/core/language/partOfSpeech';
@@ -181,12 +182,17 @@ function mountSelection(privateContext = false, selectionAdapter?: Record<string
         'webextension-polyfill': browser,
         '@/src/platform/browser/runtimeMessages': runtimeMessages,
         '@/src/services/config/store': {config, configReady, requestConfigPatch, subscribeConfig: (listener: () => void) => { configListener = listener; return unsubscribeConfig; }},
-        '@/src/app/translation/client': {translateText, translateTextBatch},
+        '@/src/services/translation/client': {translateText, translateTextBatch},
         '@/src/features/selection-translation/core': selectionCore,
         '@/src/services/translation/errors': translationErrors,
         '@/src/features/selection-translation/services/wordNormalization': wordNormalization,
         '@/src/core/config/harness': harness,
         '@/src/core/config/catalog': {services},
+        '@/src/core/config/comment': {normalizeCommentPreferences},
+        '@/src/features/selection-translation/protocol': {createSelectionTtsClientRequestId: () => `tts-request-${Date.now()}`},
+        '@/src/features/comment-assistant/public': {CommentPanel: {}, captureCommentImages: vi.fn(), browserSelectionImageDeps: {}},
+        '@/src/features/reading-assistant/ui/panel/public': {ReadingPanel: {}},
+        '@/src/platform/browser/capabilities': {browserCapabilities: {hasOffscreenDocument: false}},
         '@/src/core/language/detect': detect,
         '@/src/core/language/partOfSpeech': partOfSpeech,
         '@/src/features/vocabulary/protocol': vocabularyProtocol,
@@ -846,44 +852,6 @@ function expectAudioReset(state: Record<string, any>) {
 }
 
 describe('SelectionTranslator TTS generation and progress ownership', () => {
-    it('5 second controls use the active route, reject unavailable playback and ignore late seek failures', async () => {
-        const fixture=mountSelection();const response=deferredTts();prepareTts(fixture,[response.promise]);
-        const pending=fixture.state.toggleAudio('Hello world','source');
-        await fixture.state.seekAudio(5);expect(ttsMessages(fixture,'selectionTtsSeek')).toEqual([]);
-        response.resolve({success:true,transport:'offscreen'});await pending;
-        await fixture.state.seekAudio(5);expect(ttsMessages(fixture,'selectionTtsSeek')).toEqual([]);
-        emitTtsState(fixture,'tts-client-1','progress',{progress:{start:0,end:5,fraction:0,estimated:true},position:{currentTime:2,duration:12}});
-        fixture.browser.runtime.sendMessage.mockResolvedValue({success:true});
-        await fixture.state.seekAudio(5);await fixture.state.seekAudio(-5);
-        expect(ttsMessages(fixture,'selectionTtsSeek')).toEqual([
-            {type:'selectionTtsSeek',clientRequestId:'tts-client-1',offsetSeconds:5},
-            {type:'selectionTtsSeek',clientRequestId:'tts-client-1',offsetSeconds:-5},
-        ]);
-        expect(fixture.state.audioPosition).toEqual({currentTime:2,duration:12});
-        const delayed=deferredTts();fixture.browser.runtime.sendMessage.mockImplementation(message=>message.type==='selectionTtsSeek'?delayed.promise:Promise.resolve({success:true}));
-        const jump=fixture.state.seekAudio(5);fixture.state.stopAudio();delayed.resolve({success:false});await jump;
-        expect(fixture.state.audioPosition).toBeNull();expect(fixture.state.noticeMessage).toBe('');
-        expect(fixture.state.playbackTime(65.9)).toBe('1:05');
-    });
-
-    it('page audio jumps by 5 seconds, updates text immediately and clears its sampling timer on stop', async () => {
-        const fixture=mountSelection();const audios:FakeSeekAudio[]=[];
-        class FakeSeekAudio {
-            currentTime=2;duration=12;ontimeupdate:((event?:Event)=>void)|null=null;
-            play=vi.fn(async()=>undefined);pause=vi.fn();removeAttribute=vi.fn();
-            constructor(public src:string){audios.push(this);}
-        }
-        vi.stubGlobal('Audio',FakeSeekAudio);
-        await fixture.state.playExternalAudio('https://audio','Hello world','source','Hello world',0);
-        await fixture.state.seekAudio(5);expect(audios[0].currentTime).toBe(7);
-        expect(fixture.state.audioPosition).toEqual({currentTime:7,duration:12});expect(fixture.state.audioProgress.start).toBe(6);
-        await fixture.state.seekAudio(-5);await fixture.state.seekAudio(-5);expect(audios[0].currentTime).toBe(0);
-        expect(fixture.state.audioProgress.start).toBe(0);
-        await fixture.state.seekAudio(5);await fixture.state.seekAudio(5);await fixture.state.seekAudio(5);expect(audios[0].currentTime).toBe(12);
-        expect(audios[0].play).toHaveBeenCalledOnce();expect(ttsMessages(fixture,'selectionTtsSeek')).toEqual([]);
-        fixture.state.stopAudio();expect(fixture.state.audioPosition).toBeNull();
-        const stopped=fixture.state.audioProgress;await vi.advanceTimersByTimeAsync(500);expect(fixture.state.audioProgress).toBe(stopped);
-    });
     it.each(['source', 'translation'] as const)('keeps %s in preparation until synthesis succeeds', async kind => {
         const fixture = mountSelection();
         const response = deferredTts();

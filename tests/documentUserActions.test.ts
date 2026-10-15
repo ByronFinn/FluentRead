@@ -34,7 +34,7 @@ vi.mock('@/src/services/config/store', async () => {
         requestConfigPatch: (patch: unknown, send: (message: unknown) => Promise<unknown>) => send({patch}),
     };
 });
-vi.mock('@/src/app/translation/client', () => ({translateText: ports.single, translateTextBatch: ports.batch}));
+vi.mock('@/src/services/translation/client', () => ({translateText: ports.single, translateTextBatch: ports.batch}));
 vi.mock('@/src/features/document-translation/services/binary', async () => {
     const actual = await vi.importActual<typeof import('@/src/features/document-translation/services/binary')>('@/src/features/document-translation/services/binary');
     ports.download.mockImplementation(actual.createDocumentDownload);
@@ -102,7 +102,7 @@ const renderer = createRenderer<Host, Host>({
     remove: node => {if (node.parent) node.parent.children.splice(node.parent.children.indexOf(node), 1); node.parent = undefined;},
     patchProp: (node, key, _old, value) => {
         node.props[key] = value;
-        if (key === 'value' || key === 'checked' || key === 'type') (node as any)[key] = value;
+        if (key === 'value' || key === 'checked' || key === 'type' || key === 'open') (node as any)[key] = value;
     },
 });
 const walk = (node: Host): Host[] => [node, ...node.children.flatMap(walk)];
@@ -298,7 +298,7 @@ describe('document user actions: configuration consumers', () => {
         expect(ports.send).not.toHaveBeenCalled();
     });
 
-    it('shows local save failure, consumes authoritative rollback, and dismisses the error after a later successful edit', async () => {
+    it('retains a failed language draft across authority updates and retries it with the next user edit', async () => {
         await importFiles(file('save.txt'));
         ports.send.mockRejectedValueOnce(new Error('storage unavailable'));
         await fire(labelled('文档目标语言'), 'change', {value: 'fr'});
@@ -307,11 +307,22 @@ describe('document user actions: configuration consumers', () => {
         await fire(button('调整设置', taskbar()), 'click');
         expect(dialog('document-settings-heading').open).toBe(true);
         broadcast({to: 'zh-CN'}); await flush();
-        expect(labelled('文档目标语言').value).toBe('zh-CN');
-        expect(ports.send).toHaveBeenCalledOnce();
-        await fire(labelled('文档目标语言'), 'change', {value: 'ja'});
-        expect(textOf(root)).not.toContain('设置未能保存');
+        expect(labelled('文档目标语言').value).toBe('fr');
         expect(ports.config.to).toBe('zh-CN');
+        expect(textOf(root)).toContain('设置未能保存');
+        expect(ports.send).toHaveBeenCalledOnce();
+        const retry = deferred<unknown>(undefined); ports.send.mockReturnValueOnce(retry.promise);
+        await fire(labelled('文档源语言'), 'change', {value: 'en'});
+        expect(ports.send).toHaveBeenLastCalledWith({patch: {from: 'en', to: 'fr'}});
+        expect(textOf(root)).toContain('设置未能保存');
+        expect(ports.config.to).toBe('zh-CN');
+        broadcast({from: 'en', to: 'fr'}); await flush();
+        expect(textOf(root)).toContain('设置未能保存');
+        expect(ports.send).toHaveBeenCalledTimes(2);
+        retry.resolve(undefined); await flush();
+        expect(textOf(root)).not.toContain('设置未能保存');
+        expect(labelled('文档目标语言').value).toBe('fr');
+        expect(ports.config.to).toBe('fr');
     });
 
     it('keeps a newer failure visible when an older save succeeds late', async () => {
@@ -324,8 +335,20 @@ describe('document user actions: configuration consumers', () => {
         older.resolve(undefined); await flush();
         expect(textOf(root)).toContain('设置未能保存');
         broadcast({from: 'en', to: 'de'}); await flush();
-        expect(labelled('文档目标语言').value).toBe('de');
+        expect(labelled('文档目标语言').value).toBe('fr');
+        expect(ports.config.to).toBe('de');
+        expect(textOf(root)).toContain('设置未能保存');
         expect(ports.send).toHaveBeenCalledTimes(2);
+        const latest = deferred<unknown>(undefined); ports.send.mockReturnValueOnce(latest.promise);
+        await fire(labelled('文档源语言'), 'change', {value: 'ja'});
+        expect(ports.send).toHaveBeenLastCalledWith({patch: {from: 'ja', to: 'fr'}});
+        expect(textOf(root)).toContain('设置未能保存');
+        broadcast({from: 'ja', to: 'fr'}); await flush();
+        latest.resolve(undefined); await flush();
+        expect(textOf(root)).not.toContain('设置未能保存');
+        expect(labelled('文档目标语言').value).toBe('fr');
+        expect(ports.config.to).toBe('fr');
+        expect(ports.send).toHaveBeenCalledTimes(3);
     });
 
     it('saves custom model sentinel and value together while preserving another service mapping', async () => {
@@ -543,6 +566,48 @@ describe('document user actions: download consumers', () => {
 });
 
 describe('document user actions: real editor events and parent consumers', () => {
+    it('keeps retained revisions collapsed and read-only, renders forty at a time and resets disclosure on document changes', async () => {
+        apps.pop()!.unmount();
+        const current = ref<ParsedDocument>(parseDocument('retained-first.txt', 'Current source wording.'));
+        const translations = ['当前正文校订'];
+        const retained = ref(Array.from({length: 85}, (_, index) => ({source: `Former source ${index}`, translation: `旧校订 ${index}`, contextLabel: `第 ${index + 1} 页`})));
+        const updates = vi.fn();
+        mount({setup: () => () => h(DocumentSegmentEditor, {document: current.value, translations, retainedRevisions: retained.value, disabled: false, onUpdate: updates})});
+        await flush();
+        const details = () => find(node => node.tag === 'details' && node.props.class === 'editor-retained', editor());
+        const rows = () => walk(details()).filter(node => node.tag === 'article');
+        expect(details().open).toBe(false);
+        expect(textOf(details())).toContain('document.retainedRevisions.title · 85');
+        expect(rows()).toHaveLength(0);
+        expect(textOf(details())).not.toContain('Former source 0');
+        await fire(details(), 'toggle', {open: true});
+        expect(rows()).toHaveLength(40);
+        expect(textOf(rows()[0])).toContain('Former source 0');
+        expect(textOf(rows()[39])).toContain('旧校订 39');
+        expect(walk(details()).some(node => node.tag === 'textarea' || node.tag === 'input' || node.props.contenteditable)).toBe(false);
+        await fire(button('显示更多', details()), 'click');
+        expect(rows()).toHaveLength(80);
+        await fire(button('显示更多', details()), 'click');
+        expect(rows()).toHaveLength(85);
+        expect(walk(details()).some(node => node.tag === 'button')).toBe(false);
+        expect(updates).not.toHaveBeenCalled();
+        expect(translations).toEqual(['当前正文校订']);
+        await fire(details(), 'toggle', {open: false});
+        expect(rows()).toHaveLength(0);
+        await fire(details(), 'toggle', {open: true});
+        expect(rows()).toHaveLength(85);
+
+        current.value = parseDocument('retained-second.txt', 'Replacement current wording.');
+        retained.value = retained.value.map((revision, index) => ({...revision, source: `Replacement former source ${index}`}));
+        await flush();
+        expect(details().open).toBe(false);
+        expect(rows()).toHaveLength(0);
+        await fire(details(), 'toggle', {open: true});
+        expect(rows()).toHaveLength(40);
+        expect(textOf(rows()[0])).toContain('Replacement former source 0');
+        expect(updates).not.toHaveBeenCalled();
+    });
+
     it('clamps a pending-only last page after its focused final row is translated and blurred', async () => {
         await importFiles(file('clamp.json', JSON.stringify(Array.from({length: 41}, (_, i) => `Source ${i}`))));
         await fire(button('校订译文'), 'click');
@@ -820,7 +885,7 @@ describe('document user actions: confirmation and task consumers', () => {
         await fire(translateButton(), 'click');
         expect(ports.batch).toHaveBeenCalledTimes(2);
         expect(ports.batch.mock.calls.map(call => call[0].length)).toEqual([16, 2]);
-        expect(labelled('文档翻译进度').props['aria-valuenow']).toBe(88);
+        expect(labelled('document.translationProgress.label').props['aria-valuenow']).toBe(88);
         await fire(button('暂停翻译'), 'click');
         const signal = ports.batch.mock.calls[1][2].signal;
         expect(signal.aborted).toBe(true);
@@ -831,7 +896,7 @@ describe('document user actions: confirmation and task consumers', () => {
         await fire(translateButton(), 'click');
         expect(ports.batch.mock.calls.at(-1)![0]).toEqual(['Paragraph 16', 'Paragraph 17']);
         expect(textarea(0).value).toBe('manual kept');
-        expect(labelled('文档翻译进度').props['aria-valuenow']).toBe(100);
+        expect(labelled('document.translationProgress.label').props['aria-valuenow']).toBe(100);
     });
 
     it('renders a retryable service failure and retries the actual missing document segment', async () => {
@@ -839,7 +904,7 @@ describe('document user actions: confirmation and task consumers', () => {
         ports.batch.mockRejectedValueOnce(new Error('provider offline'));
         await fire(translateButton(), 'click');
         expect(textOf(taskbar())).toContain('第 1 段文档翻译失败：provider offline');
-        expect(textOf(translateButton())).toBe('重试翻译');
+        expect(textOf(translateButton())).toBe('document.translationRecovery.retry');
         await fire(translateButton(), 'click');
         expect(textOf(taskbar())).toContain('翻译完成');
         expect(textOf(taskbar())).not.toContain('provider offline');
@@ -854,7 +919,7 @@ describe('document user actions: confirmation and task consumers', () => {
         await fire(translateButton(), 'click');
         // 没有点击任何按钮：页面仍在翻译，并说明正在等待重试及原因。
         await vi.waitFor(() => expect(textOf(taskbar())).toContain('429 rate limited'));
-        expect(textOf(taskbar())).toContain('翻译服务暂时没有响应，将自动重试'); expect(textOf(taskbar())).toContain('2s'); expect(textOf(taskbar())).toContain('正在翻译');
+        expect(textOf(taskbar())).toContain('翻译服务暂时没有响应，将自动重试'); expect(textOf(taskbar())).toContain('2s'); expect(textOf(taskbar())).toContain('document.translationProgress.waitingRetry');
         expect(waits).toEqual([2000]); expect(ports.batch).toHaveBeenCalledTimes(1);
         release!(); await vi.waitFor(() => expect(textOf(taskbar())).toContain('翻译完成'));
         expect(ports.batch).toHaveBeenCalledTimes(2); expect(textOf(taskbar())).not.toContain('429 rate limited');

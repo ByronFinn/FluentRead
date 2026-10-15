@@ -8,7 +8,6 @@
 
 import {createOpenAICompatible} from '@ai-sdk/openai-compatible';
 import {generateText} from 'ai';
-import {config} from '@/src/services/config/store';
 import {stripTranslationReasoning as contentPostHandler} from '@/src/core/translation/prompts';
 import {commonMsgTemplate} from '@/src/services/translation/templates';
 import {services} from '@/src/core/config/catalog';
@@ -22,17 +21,18 @@ import {LlmTransportError, normalizeAiSdkError} from './errors';
 import {createImageInputHttpError} from '@/src/platform/http/errors';
 import {runtimeFetch} from '@/src/platform/http/runtime';
 import {
-  getTranslationProviderConfig,
-  getTranslationRequestScheduler,
-  reportTranslationModelUsage,
-  getTranslationImageInput,
-  type TranslationProviderRequestContext,
+    requireTranslationProviderConfig,
+    getTranslationRequestScheduler,
+    reportTranslationModelUsage,
+    getTranslationImageInput,
 } from '@/src/services/translation/requestSnapshot';
+import type {TranslationProviderRequestContext} from '@/src/services/translation/types';
 import type {TranslationProviderConfigSnapshot} from '@/src/services/translation/types';
 import {normalizeOpenAICompatibleUsage} from '../usage';
 import {normalizeTranslationMaxRetries} from '@/src/core/config/scheduling';
+import {DEFAULT_AI_REQUEST_TIMEOUT_MS, normalizeAiRequestTimeoutMs} from '@/src/core/config/aiRequestTimeout';
 
-export const AI_SDK_REQUEST_TIMEOUT_MS = 40_000;
+export const AI_SDK_REQUEST_TIMEOUT_MS = DEFAULT_AI_REQUEST_TIMEOUT_MS;
 export const AI_SDK_MAX_RETRIES = 2;
 
 export interface AiSdkTranslationRequest extends TranslationProviderRequestContext {
@@ -197,12 +197,15 @@ function compatibilityFetch(
     let result: {response: Response; normalized: Awaited<ReturnType<typeof normalizeSuccessfulTextResponse>>};
     try {
       const schedulerContext = getTranslationRequestScheduler(request);
+      const identity = {...schedulerContext?.identity,
+        service: request.serviceOverride || schedulerContext?.identity?.service, model: requestedModel};
       const fetchAttempt = () => {
         const settlement = (async () => {
           const response = await runtimeFetch(endpoint.exactEndpoint || input, init);
+          schedulerContext?.scheduler.observeResponse(identity, response);
           const normalized = await normalizeSuccessfulTextResponse(response);
           // SDK 还会读取失败响应体；先读完克隆，确保取消时该网络读取也受并发槽约束。
-          if (schedulerContext?.lease && !response.ok) {
+          if (schedulerContext && !response.ok) {
             try {
               await response.clone().arrayBuffer();
             } catch {
@@ -218,7 +221,8 @@ function compatibilityFetch(
       result = schedulerContext
         ? await schedulerContext.scheduler.scheduleAttempt(fetchAttempt, {
             signal: init?.signal ?? undefined,
-            identity: {service: request.serviceOverride || schedulerContext.identity?.service, model: requestedModel},
+            identity,
+            countConcurrency: Boolean(schedulerContext.identity?.quotaScope),
           })
         : await fetchAttempt();
     } catch (error) {
@@ -249,9 +253,10 @@ function compatibilityFetch(
   };
 }
 
-function normalizedTimeout(value?: number): number {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return AI_SDK_REQUEST_TIMEOUT_MS;
-  return Math.min(120_000, Math.max(1, Math.floor(value)));
+function normalizedTimeout(value: number | undefined, configuredTimeout: number | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return normalizeAiRequestTimeoutMs(configuredTimeout);
+  // 显式数值可能是事务剩余预算，不能使用设置的最小值抬高，也不能按旧 120 秒上限截断。
+  return Math.max(1, Math.floor(value));
 }
 
 function createRequestAbortContext(timeoutMs: number, callerSignal?: AbortSignal) {
@@ -297,17 +302,18 @@ async function translateSingle(
     kind: 'bad-request', retryable: false,
   });
   const apiKey = current.token[service]?.trim() || '';
-  const payload = parsePayload(commonMsgTemplate(
-    origin,
-    request.pageContext,
-    request.summaryPrompt,
-    request.summarySystemPrompt,
-    service,
-    request.targetLanguage,
-    request.modelOverride,
-    current,
-    request.thinkingOverride,
-    getTranslationImageInput(request),
+  const payload = parsePayload(commonMsgTemplate({
+      origin,
+      context: request.pageContext,
+      prompt: request.summaryPrompt,
+      systemPrompt: request.summarySystemPrompt,
+      serviceOverride: service,
+      targetLanguage: request.targetLanguage,
+      modelOverride: request.modelOverride,
+      current,
+      thinkingOverride: request.thinkingOverride,
+      imageInput: getTranslationImageInput(request),
+  }
   ));
 
   // 协议的 stream 标记由 SDK 管理。自定义请求体仍可替换 model/messages，并添加任意
@@ -325,7 +331,7 @@ async function translateSingle(
     transformRequestBody: () => requestBody,
   });
   const abortContext = createRequestAbortContext(
-    normalizedTimeout(request.requestTimeoutMs),
+    normalizedTimeout(request.requestTimeoutMs, current.aiRequestTimeoutMs),
     request.abortSignal,
   );
 
@@ -360,9 +366,9 @@ async function translateSingle(
 export async function translateWithOpenAICompatibleAiSdk(
   request: AiSdkTranslationRequest,
 ): Promise<string | string[]> {
-  const current = getTranslationProviderConfig(request, config);
+  const current = requireTranslationProviderConfig(request);
   const service = request.serviceOverride || current.service;
-  const requestBudget = normalizedTimeout(request.requestTimeoutMs);
+  const requestBudget = normalizedTimeout(request.requestTimeoutMs, current.aiRequestTimeoutMs);
   if (!Array.isArray(request.origin)) {
     return translateSingle({...request, requestTimeoutMs: requestBudget}, service, request.origin, current);
   }

@@ -106,9 +106,10 @@ describe('划词翻译挂载生命周期', () => {
     });
 
     it('划词总开关关闭时 Harness 不单独挂载，重新启用后关闭会丢弃待挂载 UI', async () => {
-        mocks.config.harness = {enabled: true};
+        mocks.config.harness = {enabled: false};
         mocks.config.disableSelectionTranslator = true;
         mocks.config.selectionTranslatorMode = 'disabled';
+        mocks.config.comment = {enabled: false};
         const runtime = await import('@/src/features/selection-translation/content/runtime');
         const mounted = ui();
         mocks.createVueShadowUi.mockResolvedValueOnce(mounted);

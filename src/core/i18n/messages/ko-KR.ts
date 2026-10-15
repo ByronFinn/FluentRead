@@ -6,6 +6,8 @@
  * 模块边界：资源只描述扩展自己的界面文本；不会翻译网页正文、用户输入或翻译结果。
  */
 import videoLearningText from './video-learning/ko-KR.json';
+import {compositeTranslationMessages, compositeTranslationLegacyText} from './compositeTranslation';
+import {aiRequestTimeoutMessages} from './aiRequestTimeout';
 import {pdfReadingMessages} from './pdfReading';
 import {informationHighlightMessages} from './informationHighlight';
 import reencounterText from './reencounter/ko-KR.json';
@@ -23,9 +25,11 @@ import {translationStatsKoreanMessages} from './translationStats';
 import {localTranslationKoreanMessages} from './localTranslation';
 
 export const koKRMessages = {
+    "document.config.loadFailed": "설정을 불러오지 못했습니다. 새로고침 후 다시 시도하세요.",
     "popup.compact.translate": "번역",
     "popup.compact.restore": "복원",
     ...videoLearningText,
+    ...compositeTranslationMessages['ko-KR'],
     ...pdfReadingMessages['ko-KR'],
     ...informationHighlightMessages['ko-KR'],
     ...reencounterText,
@@ -531,6 +535,7 @@ export const koKRMessages = {
     "settings.requestLimits.modelTitle": "모델 요청 제한",
     "settings.requestLimits.globalTitle": "요청 제한",
     "settings.requestLimits.globalHelp": "개별 설정이 없는 서비스와 모델은 이 제한을 공유합니다.",
+    ...aiRequestTimeoutMessages["ko-KR"],
     "settings.requestLimits.retryIntervals": "재시도 간격",
     "settings.requestLimits.apiKeyRecovery": "실패한 Key 쿨다운",
     "settings.requestLimits.apiKeyRecoveryHelp": "인증, 할당량 또는 속도 제한 오류가 난 Key는 잠시 건너뜁니다. 서비스가 Retry-After를 보내면 해당 대기 시간을 우선합니다.",
@@ -1412,7 +1417,8 @@ export const koKRMessages = {
     'settings.services.deepl.proxyOverride': '사용자 지정 API 주소를 사용 중입니다. 요금제를 변경해도 이 주소는 덮어쓰지 않습니다.',
     'settings.services.azure.endpoint': 'Azure 엔드포인트',
     "settings.services.deeplx.endpoint": "서비스 URL",
-    "settings.services.deeplx.endpointHelp": "전체 번역 API 주소를 입력하세요(보통 /translate로 끝남). 경로는 자동으로 추가되지 않습니다. 비워 두면 기본 공개 API를 사용합니다.",
+    "settings.services.deeplx.defaultRoute": "기본: DeepL 직접 연결",
+    "settings.services.deeplx.endpointHelp": "API Key가 없으면 기본적으로 DeepL에 직접 연결하고, 실패하면 공개 API를 사용합니다. 사용자 지정 주소에는 전체 경로(보통 /translate로 끝남)가 필요하며 경로는 자동으로 추가되지 않습니다.",
     "settings.services.deeplx.tokenHelp": "API Key에는 Bearer 접두사 없이 Token 값만 입력하세요. 기본적으로 요청 헤더로 전송됩니다. 사이트에서 URL에 Token을 요구하면 아래에서 사이트가 지정한 형식을 사용하세요.",
     "settings.services.deeplx.queryToken": "쿼리 매개변수:",
     "settings.services.deeplx.pathToken": "URL 경로:",
@@ -1507,7 +1513,7 @@ export const koKRMessages = {
     "paragraphCopy.notice.noPointer": "먼저 문단 위로 마우스를 옮긴 뒤 복사 단축키를 누르세요",
     "paragraphCopy.notice.failed": "복사하지 못했습니다. 텍스트를 선택해 직접 복사하세요.",
     "sectionTranslation.picker.title": "부분 번역",
-    "sectionTranslation.picker.instruction": "클릭하여 번역할 영역을 선택하세요",
+    "sectionTranslation.picker.instruction": "클릭하거나 드래그하여 번역할 영역 선택",
     "sectionTranslation.picker.keys": "↑/↓ 범위 조정 · Enter 확인 · Esc 종료",
     "sectionTranslation.picker.locked": "선택이 고정되었습니다. 필요하면 범위를 조정한 뒤 확인하세요",
     "sectionTranslation.picker.expand": "범위 넓히기",
@@ -1515,12 +1521,14 @@ export const koKRMessages = {
     "sectionTranslation.picker.reselect": "다시 선택",
     "sectionTranslation.picker.confirm": "선택한 영역 번역",
     "sectionTranslation.picker.restore": "원문 복원",
-    "sectionTranslation.picker.preview": "마우스를 움직여 미리 보고 클릭하여 선택하세요",
+    "sectionTranslation.picker.preview": "마우스로 미리 보고 클릭하거나 드래그하여 선택",
     "sectionTranslation.scope.paragraph": "문단",
     "sectionTranslation.scope.list": "목록",
     "sectionTranslation.scope.table": "표",
     "sectionTranslation.scope.article": "글",
     "sectionTranslation.scope.region": "영역",
+    "sectionTranslation.picker.dragging": "드래그하여 선택하고 놓은 뒤 확인",
+    "sectionTranslation.scope.selected": "선택한 영역 {count}개",
     "sectionTranslation.picker.close": "부분 번역 종료",
     "sectionTranslation.label.inspecting": "확인 중…",
     "sectionTranslation.label.translate": "이 영역 번역 · 문단 {count}개",
@@ -1550,7 +1558,7 @@ export const koKRMessages = {
     "sectionTranslation.settings.hotkeySet": "부분 번역 단축키를 {shortcut}(으)로 설정했습니다",
     "sectionTranslation.settings.hotkeyConflict": "이 단축키는 이미 {feature}에서 사용 중입니다. 다른 조합을 선택하세요.",
     "popup.sectionTranslation": "부분",
-    "popup.sectionTranslationTitle": "부분 번역: 마우스로 미리 보고 클릭하여 선택한 뒤 확인하면 번역합니다",
+    "popup.sectionTranslationTitle": "부분 번역: 클릭하거나 드래그하여 선택한 뒤 확인",
     "popup.sectionTranslationShortcut": "단축키 {shortcut}",
     "popup.sectionTranslationUnavailable": "이 페이지에서는 부분 번역을 사용할 수 없습니다. 새로고침한 뒤 다시 시도하세요.",
     "area.settings.service": "영역 번역 서비스",
@@ -2429,6 +2437,7 @@ const koKRLegacyTextBase: Readonly<Record<string, string>> = {
 
 export const koKRLegacyText: Readonly<Record<string, string>> = {
     ...googleDriveText.legacy,
+    ...compositeTranslationLegacyText['ko-KR'],
     ...cloudBackupText.legacy,
     "腾讯交互翻译": "Tencent TranSmart",
     "火山翻译": "Volcengine 번역",
@@ -2693,6 +2702,10 @@ export const koKRLegacyText: Readonly<Record<string, string>> = {
     "翻译卡片模型": "번역 카드 모델",
     "跟随服务模型": "서비스 모델 사용",
     "默认沿用服务的模型，也可以选择或输入模型名称": "기본적으로 서비스 모델을 사용하며 다른 모델 이름을 선택하거나 입력할 수 있습니다.",
+    "默认沿用服务的模型，也可以选择或输入模型名称。": "기본적으로 서비스 모델을 사용하며 다른 모델 이름을 선택하거나 입력할 수 있습니다.",
+    "按当前配置生成可粘贴的评论": "현재 설정으로 바로 붙여넣을 수 있는 댓글을 생성합니다.",
+    "翻译卡片、按需学习与评论": "번역 카드, 필요할 때 학습과 댓글",
+    "划词翻译、普通翻译、卡片模式、词性、句法、冠词、名词、触发、朗读、翻译卡片、阅读卡、Harness、DeepSeek、读懂、拆句、用法、练习、选区、段落、学习辅助、解释深度、学习程度、学习记忆、记忆开关、评论、嘴替、社交评论、评论风格": "선택·일반 번역, 카드 모드, 품사, 구문, 관사, 명사, 실행, 읽어주기, 번역 카드, 읽기 카드, Harness, DeepSeek, 이해, 문장 분석, 용법, 연습, 선택 영역, 문단, 학습 지원, 설명 깊이, 학습 수준, 학습 메모리, 메모리 전환, 댓글, 대필, 소셜 댓글, 댓글 스타일",
     "选中网页文字，直接点“读懂”或“拆句”。回答留在原文旁边，读完就继续浏览。": "웹 텍스트를 선택해 이해하기나 문장 분석을 누르세요. 원문 옆에서 답변을 읽고 계속 탐색하세요.",
     "选中后显示的动作": "선택 후 표시할 동작",
     "保留“读懂”，其他动作可按需隐藏；网页浮条和上方示例同步变化。": "이해하기는 유지하고 다른 동작은 숨길 수 있습니다. 웹 도구 모음과 위 예시가 함께 바뀝니다.",

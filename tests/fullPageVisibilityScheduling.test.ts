@@ -75,7 +75,7 @@ const runtime = vi.hoisted(() => ({
     clearlyTargetLanguage: vi.fn<(value: string, targetLanguage: string, excluded?: readonly string[]) => boolean>(() => false),
 }));
 
-vi.mock("@/src/app/translation/check", () => ({checkConfig: () => true}));
+vi.mock("@/src/features/full-page-translation/content/configCheck", () => ({checkConfig: () => true}));
 vi.mock('@/src/features/full-page-translation/ui/modalProgressHint', () => ({syncModalTranslationHint: vi.fn()}));
 vi.mock("@/src/core/config/catalog", async (importOriginal) => ({
     ...await importOriginal<typeof import('@/src/core/config/catalog')>(),
@@ -108,7 +108,7 @@ vi.mock("@/src/core/language/detect", () => ({
         runtime.clearlyTargetLanguage(origin, target, excluded)
         || (excluded.includes('zh-Hant') && origin.includes('這個')) || (excluded.includes('ja') && origin.includes('これは')),
 }));
-vi.mock("@/src/app/translation/client", () => ({
+vi.mock("@/src/services/translation/client", () => ({
     translateText: async (origin: string, _context: string, options: Record<string, unknown>) => {
         runtime.requestOptions.push(options);
         runtime.requestContexts.push(_context);
@@ -3243,6 +3243,23 @@ describe("全文翻译可见性锚点", () => {
             .resolves.toEqual(['译:Label A', '译:Label B']);
         expect(runtime.requests.mock.calls.map(([texts]) => texts)).toEqual([['Label A'], ['Label B']]);
         expect(runtime.requestOptions.every(options => !options.validateTranslationSlots)).toBe(true);
+    });
+
+    it.each([
+        {enableAIContext: true, compositeAIContext: true, requests: 2},
+        {enableAIContext: false, compositeAIContext: true, requests: 1},
+        {enableAIContext: true, compositeAIContext: false, requests: 1},
+    ])('组合上下文能力 %j 只在真实消费页面上下文时失效已完成槽缓存', async ({enableAIContext, compositeAIContext, requests}) => {
+        const snapshot = translationSnapshot({service: 'composite:context', enableAIContext, compositeAIContext});
+        const session = {active: true, translationSlotCache: new Map(), translationConfig: snapshot,
+            ...createFullPageRequestSessionState()};
+        await expect(translateTextSlots(['Context-sensitive paragraph'], snapshot, undefined, undefined, session)).resolves.toEqual(['译:Context-sensitive paragraph']);
+        await expect(translateTextSlots(['Context-sensitive paragraph'], snapshot, undefined, undefined, session)).resolves.toEqual(['译:Context-sensitive paragraph']);
+        expect(runtime.requests).toHaveBeenCalledOnce();
+        invalidateContextSensitiveRequestCache(session);
+        expect(session.pageContextGeneration).toBe(requests - 1);
+        await expect(translateTextSlots(['Context-sensitive paragraph'], snapshot, undefined, undefined, session)).resolves.toEqual(['译:Context-sensitive paragraph']);
+        expect(runtime.requests).toHaveBeenCalledTimes(requests);
     });
 
     it('不接受通用提示词的翻译专用 AI 模型逐槽发送原文', async () => {
