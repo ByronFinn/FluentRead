@@ -280,6 +280,8 @@ node scripts/testing/run-webdav-backup-ui-test.cjs \
 
 划词卡片定向回归使用 `tests/selectionTranslatorLifecycle.test.ts`、`tests/readingPanelLifecycle.test.ts` 与 `tests/readingPanelStreamingResize.test.ts`，检查单帧合并拖动、结束时刷新最后位置、取消与迟到帧、视口变化、UTF-16 朗读偏移和流式正文的尺寸通知。生产构建后执行 `node scripts/testing/run-selection-key-information-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --artifacts-dir <证据目录> --phase optimized`，在第二屏临时后台 Edge 中检查译文首屏、完整原文、单行工具栏的滚轮与键盘操作、手动拖动/缩放、流式阅读期间的卡片尺寸和网页内容保留。`--phase baseline` 允许记录优化前的关键内容失败，但仍要求基础交互、原文和清理契约通过。性能探针在核对扩展 ID 的隔离世界统计实际送达的受信指针事件与卡片几何读取；请求的输入数量不等于实际事件数量，也不代表 FPS。
 
+顶部单行动作条不显示可见的横向滚动条：勾选多个学习动作时，动作条保留横向滚动能力（滚轮横移与键盘聚焦露出由 `handleUiWheel` 和 `handleStudyToolbarFocus` 负责），右侧分享、收藏与关闭操作固定可见，卡片高度只由正文决定。评论页签与读懂页签同构：卡片高度仍有上限，长评论的向下滚动落在面板内部滚动区。
+
 `--blank-space` 在同一划词专项中追加短原句与短回答的中英文、亮暗主题、自动/390px 窄屏/280×180/360×200 卡片。它量化闲置音频占位、回答之后的实际空白、长回答内部滚动和追问可达性；使用本机延迟音频夹具逐帧检查生成、播放与停止的外框稳定、正文与播放控件不重叠。静音 WAV 只验证布局，不证明可听性。原文对照另有展开与返回的实际界面检查。
 
 菜单使用 `tests/popupKeyInformation.test.ts` 及既有 Popup 生命周期、服务与页面操作测试。生产专项运行 `node scripts/testing/run-popup-key-information-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --artifacts-dir <证据目录> --phase optimized`，覆盖中英文、亮暗主题与三种皮肤，长名称、配置模型、本地/非模型服务、多服务分配、静态凭据提醒、模块排序及服务抽屉。仅使用合成配置，不执行翻译、连接检查或模型下载；普通扩展标签页尺寸不代表浏览器原生工具栏 Popup。

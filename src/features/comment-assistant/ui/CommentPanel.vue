@@ -1,7 +1,7 @@
 <!--
  * @file src/features/comment-assistant/ui/CommentPanel.vue
  * 文件职责：在划词卡片内呈现「评论」页签面板，负责自动发起生成、结果流展示、逐条与整体复制、停止与重试，并把「设置」入口跳转到设置页的翻译卡片分区。
- * 主要内容：顶部译文区（选区译文优先展示，后台未给出译文或选区即目标语言时回落原文）与图片数量提示、重新生成动作行、评论条目（正文、译文、复制这条）、复制全部页脚、加载与错误状态；底部状态条说明评论不保存到记录，并提供与读懂卡一致的「设置」按钮，经后台打开设置页翻译卡片分区，失败时走提示行降级，暗色沿用读懂卡的粉调变量。
+ * 主要内容：面板根节点作为划词卡片内容面板的伸缩项取得确定高度，使长评论的向下滚动落在内部滚动区而不是撑爆卡片；顶部译文区（选区译文优先展示，后台未给出译文或选区即目标语言时回落原文）与图片数量提示、重新生成动作行、评论条目（正文、译文、复制这条）、复制全部页脚、加载与错误状态；底部状态条说明评论不保存到记录，并提供与读懂卡一致的「设置」按钮，经后台打开设置页翻译卡片分区，失败时走提示行降级，暗色沿用读懂卡的粉调变量。
  * 模块边界：只经公共客户端触达后台；评论偏好统一在设置页翻译卡片分区编辑，本面板不读写共享配置、不组装提示词、不访问模型；选区与图片由划词卡片捕获后以纯数据传入。
 -->
 <template>
@@ -174,7 +174,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.fr-comment { --fr-comment-line: #eee8ec; --fr-comment-muted: #756a74; --fr-comment-soft: #faf7f9; display: flex; flex-direction: column; height: 100%; min-height: 0; box-sizing: border-box; padding: 10px 14px; overflow: hidden; color: #35333c; font: 13px/1.7 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+.fr-comment { --fr-comment-line: #eee8ec; --fr-comment-muted: #756a74; --fr-comment-soft: #faf7f9; display: flex; flex-direction: column; flex: 1; min-height: 0; box-sizing: border-box; padding: 10px 14px; overflow: hidden; color: #35333c; font: 13px/1.7 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 .fr-comment-source { flex-shrink: 0; margin-bottom: 8px; }
 .fr-comment-source-text { margin: 0; color: #666570; font-size: 12px; line-height: 1.6; max-height: 4.8em; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; overflow-wrap: anywhere; user-select: text; }
 .fr-comment-source-images { margin: 4px 0 0; color: #9e5d71; font-size: 10.5px; font-weight: 700; }
