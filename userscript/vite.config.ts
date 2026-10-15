@@ -54,7 +54,7 @@ function installedVersion(name: string): string {
 // 1cd92296 是上游首个同时携带当前 64.png 与 vueElementPlusBridge.v1.js 的提交（184a3d74 早于两者，属过期钉扎）。
 const userscriptResourceCommit = '1cd92296ef25e89a411193894a1225db582e4a17';
 // 语言文件的内容哈希来自合并后的消息目录，固定到首次包含这些文件的提交。
-const userscriptLanguageResourceCommit = '6112632a8ced3de4f104cab445eefdbc9f23bdb7';
+const userscriptLanguageResourceCommit = '46a33852b81ff7a9edbdcc64385387f7698b9767';
 const pinnedIconUrl = `https://cdn.jsdelivr.net/gh/FluentRead/FluentRead@${userscriptResourceCommit}/public/icon/64.png`;
 const iconMetaUrl = greasyForkSource ? pinnedIconUrl : iconDataUrl;
 const uiRequires = [
