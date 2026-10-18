@@ -1,7 +1,7 @@
 <!--
  * @file src/features/selection-translation/ui/SelectionTranslator.vue
  * 文件职责：实现划词翻译的主要页面组件，覆盖选区捕获、图标/小点/悬停/快捷键/仅右键菜单/直接弹出、原生菜单可信选区恢复与重复请求复用、翻译与词卡展示、免费 AI 讲解的显式启用、朗读、收藏选中的单词/表达/句子、双语分享卡片、鉴权服务配置入口、重试和关闭。
- * 主要内容：相同译文保留原文且不重复展示；组件管理可信手势、已关闭选区与选择丢失宽限、继续阅读或复制原文时自动收起、请求 token、按既有错误种类显示有限提示并仅为当前鉴权失败提供通用设置入口、行内代码保护与纯文本安全渲染、按标签页页面缩放补偿的弹窗定位、空白拖动、边角缩放、主题及可换行的多语言标题；普通译文先于完整原文，单行动作条去掉可见横向滚动条、保留滚轮与键盘横移能力，与右侧固定分享、收藏、关闭及更多操作共同把高度留给正文，次级菜单按可见窗口覆盖显示；指针移动按帧合并并在结束时提交最后位置，已定位卡片不重复读取选区几何；富文本 UTF-16 跟读偏移一次计算并复用；默认过滤同语言选区，按配置开放中英反向入口，翻译方向始终按现有语言配置判断；评论入口与读懂并列放行——仅评论开启也展示指示条，中文/目标语言选区在评论可用时不被统一过滤吞掉；评论入口与读懂并列放行——仅评论开启也展示指示条，中文/目标语言选区在评论可用时不被统一过滤吞掉；统一卡片默认显示翻译并以同一导航进入学习；首次定位后保持弹窗锚点，手动尺寸下内容与播放状态变化只影响内部布局；闲置语音栏不占空间，自动卡生成与播放期间用独立临时高度保持外框，停止恢复自然尺寸；学习短回答自然收拢、长回答受高度上限约束，完整原文和译文按需对照并允许翻译继续完成；单词先展示原文与可用词卡，再补充辅助释义，以紧凑状态提示等待、未命中与网络失败；关闭或更换选区取消等待并阻止旧响应覆盖新结果；区分语音生成和播放，按实际音频时钟或浏览器词边界显示完整词高亮，并提供真实音频时间与前后 5 秒跳转。
+ * 主要内容：相同译文保留原文且不重复展示；组件管理可信手势、已关闭选区与选择丢失宽限、继续阅读或复制原文时自动收起、指针远离入口 100px 后再驻留 2 秒才收起（长选区拖选终点常远于入口，保证来得及移回点击）、请求 token、按既有错误种类显示有限提示并仅为当前鉴权失败提供通用设置入口、行内代码保护与纯文本安全渲染、按标签页页面缩放补偿的弹窗定位、空白拖动、边角缩放、主题及可换行的多语言标题；普通译文先于完整原文，卡宽按头部页签在 388–448px 自适应使页签完整可见（上限须同步写进缩放与手动几何的内联 maxWidth）、超限或窄视口回落单行动作条去掉可见横向滚动条、保留滚轮与键盘横移能力，与右侧固定分享、收藏、关闭及更多操作共同把高度留给正文，次级菜单按可见窗口覆盖显示；指针移动按帧合并并在结束时提交最后位置，已定位卡片不重复读取选区几何；富文本 UTF-16 跟读偏移一次计算并复用；默认过滤同语言选区，按配置开放中英反向入口，翻译方向始终按现有语言配置判断；评论入口与读懂并列放行——仅评论开启也展示指示条，中文/目标语言选区在评论可用时不被统一过滤吞掉；评论入口与读懂并列放行——仅评论开启也展示指示条，中文/目标语言选区在评论可用时不被统一过滤吞掉；统一卡片默认显示翻译并以同一导航进入学习；首次定位后保持弹窗锚点，手动尺寸下内容与播放状态变化只影响内部布局；闲置语音栏不占空间，自动卡生成与播放期间用独立临时高度保持外框，停止恢复自然尺寸；学习短回答自然收拢、长回答受高度上限约束，完整原文和译文按需对照并允许翻译继续完成；单词先展示原文与可用词卡，再补充辅助释义，以紧凑状态提示等待、未命中与网络失败；关闭或更换选区取消等待并阻止旧响应覆盖新结果；区分语音生成和播放，按实际音频时钟或浏览器词边界显示完整词高亮，并提供真实音频时间与前后 5 秒跳转。
  * 模块边界：组件只通过公共客户端和 runtime 消息触达后台及现有设置入口，不直接持有 provider、IndexedDB 或 Offscreen 资源；纯选区算法在 core，活动 Range 通过回调交给 content/runtime 管理 modal 挂载所有权；扩展 PDF 文档页通过可选来源适配器复用同一卡片、标题和阅读上下文，来源失效时取消当前请求，词书协议独立维护；阅读依据的 DOM 锚点只属于当前选区，关闭、换区或卸载释放临时绘制和监听。
  -->
 <template>
@@ -288,7 +288,7 @@ const popupScale = computed(() => 1 / pageZoom.value);
 const tooltipScaleStyle = computed(() => ({
   transform: `scale(${popupScale.value})`,
   transformOrigin: 'top left',
-  maxWidth: `${Math.max(1, viewportSize.value.width - 24) / popupScale.value}px`,
+  maxWidth: `${Math.min(Math.max(1, viewportSize.value.width - 24), SELECTION_CARD_MAX_WIDTH_PX) / popupScale.value}px`,
   maxHeight: `${Math.min(520, Math.max(1, viewportSize.value.height - 20) / popupScale.value)}px`,
 }));
 const snapshot = ref<SelectionSnapshot | null>(null);
@@ -475,6 +475,10 @@ const triggerMode = computed<SelectionTrigger>(() => {
 const UI_SELECTION_SUPPRESSION_MS = 350;
 const SELECTION_LOSS_GRACE_MS = 160;
 const PENDING_SELECTION_SHORTCUT_MS = 250;
+// 指针离开入口 100px 后再驻留的时长：长选区的拖选终点常远于入口出现处，600ms 来不及感知并移回点击，延长到 2 秒保证可达性。
+const SELECTION_ENTRY_DISMISS_MS = 2_000;
+// 自动卡片的设计宽度上限：头部页签按内容自适应（下限 388px），超过上限的更长文案回落到隐藏滚动条横移。
+const SELECTION_CARD_MAX_WIDTH_PX = 448;
 
 const selectedWord = computed(() => normalizeEnglishWord(selectedText.value));
 const hasDistinctTranslationResult = computed(() => hasDistinctTranslation(selectedText.value, translationResult.value));
@@ -820,7 +824,9 @@ function applyManualPopupGeometry(measured?: Pick<DOMRect, 'width'>): void {
   if (manualPopupSize) manualPopupSize = {width, height: height!};
   tooltipStyle.value = {
     left: `${left}px`, top: `${top}px`, visibility: 'visible',
-    maxWidth: `${widthLimit / scale}px`, maxHeight: `${Math.min(manualPopupSize ? availableHeight : 520 * scale, availableHeight) / scale}px`,
+    // 手动缩放卡保留视口上限（允许超过 448px 的用户尺寸）；自动卡以 448 设计上限封顶，与 CSS 自适应宽度一致。
+    maxWidth: `${(manualPopupSize ? widthLimit : Math.min(widthLimit, SELECTION_CARD_MAX_WIDTH_PX * scale)) / scale}px`,
+    maxHeight: `${Math.min(manualPopupSize ? availableHeight : 520 * scale, availableHeight) / scale}px`,
     ...(manualPopupSize ? {width: `${width / scale}px`} : {}),
     ...(height !== undefined ? {height: `${height / scale}px`} : {}),
   };
@@ -2018,7 +2024,7 @@ function handlePointerMove(event: PointerEvent): void {
     if (selectionSettings.value.autoDismiss && !showTooltip.value && !isSelecting
       && (import.meta.env.BROWSER === 'userscript' || !contextMenuSelection && !contextMenuSourceRejected)
       && !isInsideUi(document.activeElement)) hideAll();
-  }, 600);
+  }, SELECTION_ENTRY_DISMISS_MS);
 }
 function handlePageCopy(event: ClipboardEvent): void {
   // 不拦截复制、不清除原生选区；卡片里的复制不参与页面的自动收起。
@@ -2323,7 +2329,10 @@ onBeforeUnmount(() => {
 .fr-selection-indicator:hover, .fr-selection-indicator:focus-visible { transform: translate(-50%, -50%) scale(1.1); color:#b8416b; border-color:#d889a5; box-shadow:0 2px 7px rgba(40, 35, 43, .18); outline:2px solid #f0cede; outline-offset:2px; }
 .fr-selection-indicator-glyph { font-size: 12px; font-weight: 700; line-height: 1; }
 .fr-translation-tooltip, .fr-translation-tooltip * { box-sizing: border-box; }
-.fr-translation-tooltip { position: fixed; display: flex; flex-direction: column; width: min(388px, calc(100vw - 24px)); max-height: min(520px, calc(100vh - 20px)); overflow: hidden; border: 1px solid rgba(35, 35, 43, .12); border-radius: 11px; background: #fff; box-shadow: 0 5px 20px rgba(35, 33, 43, .12); -webkit-user-select: none; user-select: none; }
+.fr-translation-tooltip { position: fixed; display: flex; flex-direction: column; width: auto; min-width: min(388px, calc(100vw - 24px)); max-width: min(448px, calc(100vw - 24px)); max-height: min(520px, calc(100vh - 20px)); overflow: hidden; border: 1px solid rgba(35, 35, 43, .12); border-radius: 11px; background: #fff; box-shadow: 0 5px 20px rgba(35, 33, 43, .12); -webkit-user-select: none; user-select: none; }
+/* 卡宽按头部页签自适应：fixed 元素 width:auto 为 shrink-to-fit，nowrap 页签条把卡片推宽到全部可见（页签少时由 388px 下限兜底）；
+   448px 上限封顶后，更长文案回落到隐藏滚动条 + 滚轮/键盘横移。上限还须同步写进 tooltipScaleStyle 与 applyManualPopupGeometry 的内联 maxWidth，
+   否则内联的视口宽上限会覆盖此处的 448px。 */
 .fr-translation-tooltip > .fr-study-navigation { cursor: move; }
 .fr-popup-manipulating, .fr-popup-manipulating * { cursor: grabbing !important; user-select: none !important; }
 .fr-popup-resize-handle { position: absolute; z-index: 2; touch-action: none; }

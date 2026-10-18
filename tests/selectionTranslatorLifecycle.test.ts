@@ -1,7 +1,7 @@
 /**
  * @file tests/selectionTranslatorLifecycle.test.ts
  * 文件职责：执行划词组件的实际挂载与卸载回调，验证扩展消息端口撤销不会留下宿主页面资源。
- * 主要内容：覆盖注销清理、原生右键菜单选区恢复与重复翻译复用、免费讲解明确启用及保存确认、用户 AI 偏好保护、关闭/换区/卸载后的迟到保存隔离、朗读生成与降级、取消、迟到响应、进度隔离和富文本 trim 后的 UTF-16 跟读偏移、顶栏菜单外点/焦点关闭边界、导航空白拖动、按配置与显式反向请求确定翻译语言和窗口尺寸变化清理、鉴权配置动作归属；可选真实 SFC 模板模式验证两处错误入口。
+ * 主要内容：覆盖注销清理、原生右键菜单选区恢复与重复翻译复用、入口在指针离开半径后的完整驻留与移回取消、自动卡与手动卡的宽度上限分流、免费讲解明确启用及保存确认、用户 AI 偏好保护、关闭/换区/卸载后的迟到保存隔离、朗读生成与降级、取消、迟到响应、进度隔离和富文本 trim 后的 UTF-16 跟读偏移、顶栏菜单外点/焦点关闭边界、导航空白拖动、按配置与显式反向请求确定翻译语言和窗口尺寸变化清理、鉴权配置动作归属；可选真实 SFC 模板模式验证两处错误入口。
  * 模块边界：默认编译真实 Vue setup 并使用原有空渲染；新增入口可选官方模板和独立 Linkedom 节点树，浏览器、子组件与语言是受控 ports，不声称 CSS、原生焦点或真实浏览器验证。
  */
 import {hasDistinctTranslation} from '@/src/core/translation/result';
@@ -1372,6 +1372,23 @@ describe('selection card geometry across content changes', () => {
         state.applyManualPopupGeometry();
         expect(state.tooltipStyle).toMatchObject({left: '12px', top: '248px', width: '366px', height: '140px'});
     });
+    it('caps the automatic card width at the design maximum while manual sizes keep the viewport limit', () => {
+        const {state, window} = mountSelection();
+        state.tooltipRef = {getBoundingClientRect: () => ({width: 388, height: 180})};
+        state.manualPopupPosition = {left: 200, top: 100};
+        state.applyManualPopupGeometry();
+        // 自动卡与缩放补偿层都以 448 设计上限封顶，防止内联视口宽上限把自适应卡宽放大到整屏。
+        expect(state.tooltipStyle.maxWidth).toBe('448px');
+        expect(state.tooltipScaleStyle.maxWidth).toBe('448px');
+        state.manualPopupSize = {width: 450, height: 240};
+        state.applyManualPopupGeometry();
+        expect(state.tooltipStyle).toMatchObject({width: '450px'});
+        expect(state.tooltipStyle.maxWidth).toBe('976px');
+        state.manualPopupSize = null;
+        window.innerWidth = 390;
+        state.applyManualPopupGeometry();
+        expect(state.tooltipStyle.maxWidth).toBe('366px');
+    });
 });
 
 describe('automatic card audio height ownership', () => {
@@ -1620,9 +1637,44 @@ describe('context menu selection ownership', () => {
         fixture.state.handlePointerMove(pointer);
         expect(fixture.state.entryDismissTimer).toBeNull();
         fixture.getSelection.mockReturnValue(null);
-        await vi.advanceTimersByTimeAsync(601);
+        await vi.advanceTimersByTimeAsync(2_001);
         expect(fixture.state.translateSelectionFromContextMenu('Good ideas deserve attention.')).toBe(true);
         expect(fixture.translateText).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the selection entry through the extended dwell after the pointer leaves the entry radius', async () => {
+        const fixture = await prepareMenu();
+        fixture.config.selectionTranslatorTrigger = 'dot';
+        fixture.config.selectionTranslatorDelay = 0;
+        fixture.config.selectionTranslatorAutoDismiss = true;
+        fixture.state.selectionConfigVersion += 1;
+        await Vue.nextTick();
+        fixture.state.applySelection(fixture.state.readSelectionSnapshot());
+        expect(fixture.state.showIndicator).toBe(true);
+        fixture.state.handlePointerMove({isTrusted: true, pointerType: 'mouse', clientX: 900, clientY: 750, target: null});
+        expect(fixture.state.entryDismissTimer).not.toBeNull();
+        // 指针已离开 100px 半径但驻留未到期：入口必须保留到 2 秒驻留结束（600ms 旧值下此处已被收起）。
+        await vi.advanceTimersByTimeAsync(1_999);
+        expect(fixture.state.showIndicator).toBe(true);
+        await vi.advanceTimersByTimeAsync(2);
+        expect(fixture.state.showIndicator).toBe(false);
+    });
+
+    it('cancels the entry dismissal when the pointer returns inside the entry radius', async () => {
+        const fixture = await prepareMenu();
+        fixture.config.selectionTranslatorTrigger = 'dot';
+        fixture.config.selectionTranslatorDelay = 0;
+        fixture.config.selectionTranslatorAutoDismiss = true;
+        fixture.state.selectionConfigVersion += 1;
+        await Vue.nextTick();
+        fixture.state.applySelection(fixture.state.readSelectionSnapshot());
+        fixture.state.handlePointerMove({isTrusted: true, pointerType: 'mouse', clientX: 900, clientY: 750, target: null});
+        expect(fixture.state.entryDismissTimer).not.toBeNull();
+        const style = fixture.state.indicatorStyle;
+        fixture.state.handlePointerMove({isTrusted: true, pointerType: 'mouse', clientX: Number.parseFloat(style.left), clientY: Number.parseFloat(style.top), target: null});
+        expect(fixture.state.entryDismissTimer).toBeNull();
+        await vi.advanceTimersByTimeAsync(2_001);
+        expect(fixture.state.showIndicator).toBe(true);
     });
 
     it('keeps an in-flight request intact through repeated right clicks and duplicate menu commands', async () => {

@@ -847,8 +847,14 @@ async function main(argv = process.argv.slice(2)) {
             const wheel = await toolbarWheel(page);
             report.cases.push({...scenario, metrics, focus, wheel});
             checkTranslationText(`${scenario.name}: ordinary translation exactly matches the fixture`, metrics.translationText, {locale:scenario.locale,theme:scenario.theme});
-            check(`${scenario.name}: actual card size`, Math.abs(metrics.card.width - scenario.width) < 1 &&
-                (scenario.normal || Math.abs(metrics.card.height - scenario.height) < 1), metrics.card);
+            // 卡宽按页签内容自适应（388 下限、448 设计上限）：手动尺寸仍精确匹配用户拖出的宽高，
+            // 自动 normal 卡在区间内浮动；中文页签必须全部直接可见，英文更长文案允许超过上限后回落滚轮横移。
+            check(`${scenario.name}: actual card size`, (scenario.normal
+                ? metrics.card.width >= 387 && metrics.card.width <= 448.5
+                : Math.abs(metrics.card.width - scenario.width) < 1 && Math.abs(metrics.card.height - scenario.height) < 1), metrics.card);
+            check(`${scenario.name}: zh tabs fit the adaptive card without overflow`,
+                !scenario.normal || scenario.locale !== 'zh-CN' || metrics.toolbarScrollWidth <= metrics.toolbarClientWidth + 1,
+                {toolbarScrollWidth:metrics.toolbarScrollWidth, toolbarClientWidth:metrics.toolbarClientWidth});
             check(`${scenario.name}: locale theme applied`, metrics.dark === (scenario.theme === 'dark'), {dark:metrics.dark});
             check(`${scenario.name}: full source retained`, metrics.originalText === SOURCE && metrics.originalCopies === 1);
             check(`${scenario.name}: complete first translated line visible without scrolling`, metrics.keyVisibleHeight >= metrics.firstLine?.height - 1 && metrics.keyVisibleWidth >= metrics.firstLine?.width - 1 && metrics.contentScrollTop === 0, metrics, true);
