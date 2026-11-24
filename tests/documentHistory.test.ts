@@ -454,6 +454,41 @@ describe('document history storage', () => {
         await history.save(record('mixed', 2, {parsed, total: 1, completed: 1}));
         expect((await history.list())[0]).not.toHaveProperty('pendingOcrPages');
     });
+
+    it('rejects invalid or missing article progress and keeps unrelated metadata when clearing history', async () => {
+        const factory = new IDBFactory(), history = createDocumentHistory(factory);
+        expect(await history.saveArticleProgress('missing', Number.NaN)).toBe(false);
+        expect(await history.saveArticleProgress('missing', .5)).toBe(false);
+        expect(await history.save(record('article', 1))).toBe(true);
+        expect(await history.saveArticleProgress('article', .5)).toBe(true);
+
+        const database = await new Promise<IDBDatabase>((resolve, reject) => {
+            const opened = factory.open('FluentReadDocumentHistory');
+            opened.onsuccess = () => resolve(opened.result);
+            opened.onerror = () => reject(opened.error);
+        });
+        await new Promise<void>((resolve, reject) => {
+            const transaction = database.transaction('metadata', 'readwrite');
+            transaction.objectStore('metadata').put({key: 'unrelated', value: 'keep'});
+            transaction.oncomplete = () => resolve();
+            transaction.onabort = () => reject(transaction.error);
+        });
+        database.close();
+
+        expect(await history.clear()).toBe(true);
+        const metadata = await new Promise<Array<{key: string}>>((resolve, reject) => {
+            const opened = factory.open('FluentReadDocumentHistory');
+            opened.onsuccess = () => {
+                const request = opened.result.transaction('metadata', 'readonly').objectStore('metadata').getAll();
+                request.onsuccess = () => {opened.result.close();resolve(request.result);};
+                request.onerror = () => reject(request.error);
+            };
+            opened.onerror = () => reject(opened.error);
+        });
+        expect(metadata.map(entry => entry.key)).toContain('unrelated');
+        expect(metadata.map(entry => entry.key)).not.toContain('article-position:article');
+    });
+
     it('does not overwrite another tab after both successfully read the same record', async () => {
         const factory = new IDBFactory(), first = createDocumentHistory(factory), second = createDocumentHistory(factory);
         expect(await first.save(record('shared', 1, {translations: ['Original']}))).toBe(true);

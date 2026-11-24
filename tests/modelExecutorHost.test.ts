@@ -220,3 +220,25 @@ describe('model executor host 默认事件推送', () => {
         await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce());
     });
 });
+
+describe('model executor host 防御性拒绝', () => {
+    it('执行器违反不 reject 契约时吞掉拒绝，不向 Offscreen 页面泄漏未处理异常', async () => {
+        // 真实执行器保证不 reject；这里替换执行器模块模拟未来改动或第三方注入破坏契约，
+        // 验证宿主的双保险仍能吞掉拒绝。动态导入避免影响文件内其余使用真实执行器的用例。
+        const runGenerate = vi.fn(() => Promise.reject(new Error('unexpected executor rejection')));
+        vi.resetModules();
+        vi.doMock('@/src/services/harness/modelExecutor', () => ({
+            createModelExecutor: () => ({runGenerate, runStream: vi.fn(), cancel: vi.fn()}),
+        }));
+        try {
+            const {createModelExecutorHost: createHost} = await import('@/src/app/offscreen/modelExecutorHost');
+            const host = createHost({createModel: vi.fn(() => asModel({doGenerate: vi.fn(), doStream: vi.fn()}))});
+            expect(() => host.start(startRequest())).not.toThrow();
+            await vi.waitFor(() => expect(runGenerate).toHaveBeenCalledOnce());
+            await new Promise(resolve => setTimeout(resolve, 0));
+        } finally {
+            vi.doUnmock('@/src/services/harness/modelExecutor');
+            vi.resetModules();
+        }
+    });
+});

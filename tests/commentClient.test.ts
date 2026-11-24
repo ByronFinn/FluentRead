@@ -54,14 +54,20 @@ describe('comment client', () => {
         expect(state.message).toHaveBeenCalledWith({type: 'fluentReadComment', action: 'cancel', requestId: 'c1'});
     });
 
-    it('treats a post failure as disconnect and swallows cancel send failures', async () => {
+    it('treats a post failure as disconnect', () => {
         port().postMessage = vi.fn(() => { throw new Error('gone'); });
         const error = vi.fn();
-        const handle = requestComments(request, {error});
+        requestComments(request, {error});
         expect(error).toHaveBeenCalledOnce();
+    });
+
+    it('swallows cancel send failures', async () => {
         state.message.mockRejectedValue(new Error('no channel'));
+        const handle = requestComments(request, {});
         handle.cancel();
-        await Promise.resolve();
+        await vi.waitFor(() => expect(state.message).toHaveBeenCalledOnce());
+        await new Promise(resolve => setTimeout(resolve, 0));
+        expect(port().disconnect).toHaveBeenCalledOnce();
     });
 
     it('swallows a port that refuses to disconnect', () => {

@@ -100,6 +100,23 @@ describe('comment background handler', () => {
         expect(failure(await handler.handle(runRequest({requestId: 'r11'}) as never, sender())).error).toContain('无效');
     });
 
+    it('cancelTab leaves other tabs running and dispose aborts the remaining owner', async () => {
+        const handler = createCommentHandler(deps());
+        run.mockImplementation((_request: CommentRequest, signal: AbortSignal) =>
+            new Promise<CommentResponse>((resolve) => {
+                signal.addEventListener('abort', () => resolve({success: false, error: '已取消', cancelled: true}), {once: true});
+            }));
+        const first = handler.handle(runRequest({requestId: 'tab-1'}) as never, sender({tab: {id: 1}}));
+        await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+        const second = handler.handle(runRequest({requestId: 'tab-2'}) as never, sender({tab: {id: 2}}));
+        await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+
+        handler.cancelTab(2);
+        expect(failure(await second).cancelled).toBe(true);
+        handler.dispose();
+        expect(failure(await first).cancelled).toBe(true);
+    });
+
     it('waits for config readiness and drops late results after timeout', async () => {
         vi.useFakeTimers();
         try {

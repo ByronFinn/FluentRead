@@ -108,4 +108,28 @@ describe('comment stream port', () => {
         await vi.waitFor(() => expect(port.postMessage).toHaveBeenCalledOnce());
         expect(handler.handle).toHaveBeenCalledWith({requestId: 'r10'}, {});
     });
+
+    it('accepts non-string request ids without recording a cancellation target', async () => {
+        handler.handle.mockResolvedValue({success: true, comments: []});
+        const port = makePort();
+        attachCommentStreamPort(port, handler);
+        port.fire({requestId: 42});
+        await vi.waitFor(() => expect(handler.handle).toHaveBeenCalledOnce());
+        expect(handler.handle).toHaveBeenCalledWith({requestId: 42}, port.sender);
+        port.drop();
+        expect(handler.handle).toHaveBeenCalledOnce();
+    });
+
+    it('swallows a rejected cancellation request when the port drops', async () => {
+        handler.handle.mockImplementation((message: {action: string}) => (message.action === 'cancel'
+            ? Promise.reject(new Error('cancel unavailable'))
+            : new Promise(() => { /* 永不完成，等待端口断开触发取消。 */ })));
+        const port = makePort();
+        attachCommentStreamPort(port, handler);
+        port.fire({requestId: 'r-cancel'});
+        await vi.waitFor(() => expect(handler.handle).toHaveBeenCalledOnce());
+        port.drop();
+        await vi.waitFor(() => expect(handler.handle).toHaveBeenCalledTimes(2));
+        await new Promise(resolve => setTimeout(resolve, 0));
+    });
 });

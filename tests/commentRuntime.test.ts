@@ -183,6 +183,37 @@ describe('comment model runtime', () => {
         expect(hint).not.toContain('{"comments":[]}');
     });
 
+    it('classifies non-Error and nullish transport failures without retrying', async () => {
+        mocks.normalizeError.mockReturnValue({message: '供应商失败'});
+        for (const [index, error] of [Object.assign({statusCode: 400}, {message: 'tool_choice unsupported'}), null].entries()) {
+            mocks.generateText.mockReset();
+            mocks.generateText.mockRejectedValue(error);
+            expect(failure(await runtime.run(request({requestId: `shape-${index}`}), freshSignal())).error).toBe('供应商失败');
+            expect(mocks.generateText).toHaveBeenCalledOnce();
+        }
+    });
+
+    it('formats string, object, function and empty-detail invalid call errors defensively', async () => {
+        const cases: Array<{error: unknown; detail?: string}> = [
+            {error: 'plain failure', detail: 'plain failure'},
+            {error: {code: 'bad'}, detail: '{"code":"bad"}'},
+            {error: () => undefined},
+            {error: 'Error message: '},
+        ];
+        for (const [index, {error, detail}] of cases.entries()) {
+            mocks.generateText.mockReset();
+            mocks.generateText
+                .mockResolvedValueOnce({toolCalls: [{toolName: 'submit_comments', invalid: true, error,
+                    input: {comments: []}}], text: Promise.resolve('')})
+                .mockResolvedValueOnce(okResult([{content: 'a', translation: null}]));
+            await expect(runtime.run(request({requestId: `detail-${index}`}), freshSignal())).resolves.toMatchObject({success: true});
+            expect(mocks.generateText).toHaveBeenCalledTimes(2);
+            const hint = mocks.generateText.mock.calls[1][0].system;
+            if (detail === undefined) expect(hint).toContain('参数结构');
+            else expect(hint).toContain(detail);
+        }
+    });
+
     it('shrinks the budget and retries when the endpoint rejects it as above the model cap', async () => {
         // 输出预算超过模型硬上限的 400（各端点上限无法预知）：收缩到 4096 重试一次成功；被拒尝试记 error 事件。
         const sink = vi.fn();

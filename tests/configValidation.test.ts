@@ -4,6 +4,7 @@ import {
     createApiKeyRequirementKey,
     getApiKeyRequirementKey,
     getMissingCredentialMessage,
+    isApiKeyRequired,
     parseApiKeyRequirementKey,
 } from '@/src/core/config/validation';
 import {customModelString, services} from '@/src/core/config/catalog';
@@ -38,6 +39,15 @@ describe('翻译服务凭据校验', () => {
             createApiKeyRequirementKey(services.deepseek, 'deepseek-v4-flash'),
         );
         expect(getMissingCredentialMessage(services.deepseek, config)).toBeNull();
+    });
+
+    it('ChatGPT 套餐始终免除 API Key，自定义接口未配置时仍要求密钥', () => {
+        expect(isApiKeyRequired(services.chatgptPlan, {})).toBe(false);
+        expect(isApiKeyRequired('custom:team', {})).toBe(true);
+        expect(isApiKeyRequired('custom', {
+            requireApiKey: {'custom:team-model': false},
+            model: {custom: 'team-model'},
+        })).toBe(false);
     });
 
     it('切换模型后不会复用另一个模型的免 Key设置', () => {
