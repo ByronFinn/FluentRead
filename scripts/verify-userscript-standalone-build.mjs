@@ -52,6 +52,8 @@ const bytes = Buffer.byteLength(source);
 // #1356's media controls and feedback exceed the existing cap by less than 3 kB on abdbbcc88.
 // Register only that rounded text/UI increment; dependencies, metadata checks and compact/Greasy Fork limits stay unchanged.
 // JSON 合批与共享退避增加代码，按 1 kB 步长利用原余量后追加 4 kB。
-const maxBytes = 3_707_000;
+// Fork 的评论助手、评论入口与相关文案进入 standalone 后，CI 构建为 3,737,865 字节，
+// 超出原上限 30,865 字节；按 1 kB 步长追加 34 kB，保留 3,135 字节余量。
+const maxBytes = 3_741_000;
 if (bytes > maxBytes) throw new Error(`Standalone userscript grew past ${maxBytes.toLocaleString('en-US')} bytes: ${bytes}`);
 console.log(`Verified ${artifact} (${bytes.toLocaleString()} bytes; no @require)`);
