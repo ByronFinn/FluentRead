@@ -1,79 +1,50 @@
 # Translation statistics
 
-Open **Settings → Translation statistics** to see how large your translation requests are, how long they take, and how fast and reliable each translation service is.
+Open **Settings → Translation statistics** to see request volume, speed, and failures. Use these records to choose services and adjust request frequency.
 
 <GuideVisual kind="stats" en />
 
-## Overview
+## Start with the overview
 
-- **Translation requests**: request count and success rate. Errors and timeouts are counted separately; requests cancelled because you left the page are not failures.
-- **Text translated**: source characters, segments, and data size sent for translation.
-- **Average duration**: time from starting a translation to receiving it, with P95, the longest duration, and how much of it was spent waiting for the service.
-- **Cache reuse**: the share of segments served from existing translations without calling a service again.
+Choose today, 7 days, or 30 days, then filter by service or model.
 
-Filter by service, model, and time range (today, 7 days, 30 days). The trend chart can show requests, average duration, or text volume.
+| Metric | Meaning |
+| --- | --- |
+| Translation requests | Count and success rate; errors and timeouts are separate, and cancellation after leaving a page is not a failure |
+| Text translated | Source characters, segments, and data size in requests |
+| Average duration | Time from requesting to receiving a result, with P95, longest duration, and service waiting time |
+| Cache reuse | Share of segments returned from existing translations without another service call |
 
-<details class="guide-details">
-<summary>Compare services</summary>
+The trend chart switches between request count, average duration, and text volume.
 
 ## Compare services
 
-**Service performance** lists requests, success rate, average duration, P95, longest duration, and average size for each service and model. Select a column header to sort, or a row to focus on that service. Select the same row again to clear the selection.
+In **Service performance**, select a column header to sort or a service row to filter its records. Select the row again to clear the filter. Durations cover successful calls to services and exclude results returned directly from cache.
 
-Durations include only successful requests that reached a service. Results returned directly from cache take almost no time and would pull the average down, so they are excluded. P95 means about 95% of requests finish within that time; it is estimated from the duration distribution.
+**P95** estimates the time within which about 95% of requests finish. Larger batches usually take longer; use each row’s characters-per-second figure to help compare services.
 
-Batch requests contain several segments and naturally take longer. The “≈ X characters/s” figure on each row helps compare services fairly.
+For free translation, select the free service and inspect **Free translation routes**. A request may try another route after a failure, so attempts can outnumber requests. Route durations count successful attempts only. Adjust enabled routes and their order under **Translation services → Free translation**.
 
-</details>
+## Find slow requests and failures
 
-<details class="guide-details">
-<summary>Free translation routes</summary>
+Duration and size distributions show whether a few long requests or a wider slowdown caused the delay. Failure groups distinguish key or permission issues, rate or quota limits, timeouts, and network problems. For frequent rate limits, lower concurrency or requests per second in **Advanced**.
 
-## Free translation routes
-
-With free translation, one request may try several routes in turn (Microsoft, Google, Youdao, and so on), switching automatically after a failure. After selecting the free translation service, the **Free translation routes** table appears below the three distribution cards. It lists attempts, success rate, average duration, P95, longest duration, and average size per route, so you can tell which routes are fast and which fail often, then adjust the enabled routes or their order under **Translation services → Free translation**.
-
-Because failures are retried on other routes, route attempts usually outnumber requests, and route durations count successful attempts only. The request history also shows which routes served each request.
-
-</details>
-
-<details class="guide-details">
-<summary>Distributions and failures</summary>
-
-## Distributions and failures
-
-The duration and request size distributions show whether slow requests are rare or common. Failures are grouped into invalid key or permission, rate or quota limit, timeout, network issue, and more. If rate limits are frequent, lower concurrency or requests per second in **Advanced**.
-
-</details>
-
-<details class="guide-details">
-<summary>Request history</summary>
-
-## Request history
-
-Request history lists recent translation requests with time, service and model, size, source, status, and duration. Filter by source or status, or sort by **Slowest** to find the longest requests. Use previous/next pages or enter a page number to jump directly. Changing filters or page size returns to page one.
+**Request history** shows time, service and model, size, status, and duration. Filter by status or sort by **Slowest** to find unusual requests.
 
 | Source | Meaning |
 | --- | --- |
-| Service | Text was sent to the translation service |
-| Cache hit | Every segment came from the translation cache |
-| Partly cached | Some segments of a batch came from cache; the rest were requested |
-| Merged | Shared the result of an identical request already in progress |
-
-</details>
-
-<details class="guide-details">
-<summary>Storage and clearing</summary>
+| Service | Text was sent to a translation service |
+| Cache hit | All segments used existing translations |
+| Partly cached | Some segments used cache; the rest called a service |
+| Merged | Shared an identical request already in progress |
 
 ## Storage and clearing
 
-Statistics stay in this browser. The latest 5,000 requests are kept in request history, and hourly summaries are kept for 90 days, so longer ranges are not limited by the history size. **Clear statistics** deletes all statistics without affecting the translation cache, model usage, or settings.
+Statistics stay in this browser: the latest 5,000 requests and 90 days of hourly summaries are retained. **Clear statistics** leaves the translation cache, model usage, and settings intact.
 
 For AI token usage, see [AI usage](/en/guide/model-usage).
 
-</details>
-
 ## Related guides
 
-- [All guides](/en/docs/)
+- [Translation services](/en/config/translation-engines)
 - [Troubleshooting](/en/guide/faq)

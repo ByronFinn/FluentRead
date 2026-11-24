@@ -9,6 +9,16 @@ import {writingSite, isWritingEditor, findReplyEditors, editorText, captureEdito
 import {parseWritingRequest} from '@/src/features/writing-assistant/background';
 export const request = {type: 'fluentReadWriting', action: 'run', requestId: 'write-1', intent: 'draft', instruction: 'Write an invitation', draft: '', context: '', language: 'zh-CN', tone: 'natural', history: []} as const;
 describe('Writing readiness shared by settings, card and runtime', () => {
+  it('blocks a disabled independent or inherited service without changing its model or credentials', () => {
+    const config = new Config(); config.service = 'openai'; config.model.openai = 'writer'; config.token.openai = 'fixture';
+    config.disabledTranslationServices = ['openai'];
+    for (const service of ['', 'openai']) {
+      config.writing.service = service;
+      const before = JSON.stringify(config);
+      for (const credentials of [true, false]) expect(resolveWritingReadiness(config, credentials)).toMatchObject({ready: false, issue: 'unavailable', service: 'openai', model: 'writer', message: expect.stringContaining('已关闭')});
+      expect(JSON.stringify(config)).toBe(before);
+    }
+  });
   it('keeps an unavailable saved AI service and model while preventing generation even with complete configuration', () => {
     const config = new Config(); config.service = services.chatgptPlan; config.model[services.chatgptPlan] = 'saved-account-model';
     const before = JSON.stringify(config);
@@ -99,6 +109,12 @@ describe('Writing config and bounded protocol', () => {
     for (const {value} of WRITING_TONES) expect(parseWritingRequest({...request, tone: value})?.tone).toBe(value);
     expect(parseWritingRequest({...request, role: '顾问', tone: '客观而有耐心'})).toMatchObject({role: '顾问', tone: '客观而有耐心'});
     expect(parseWritingRequest({...request, role: 'a'.repeat(200), tone: 'b'.repeat(100)})).not.toBeNull();
+    expect(parseWritingRequest({...request, tone: '🙂'.repeat(50), instruction: '🙂'.repeat(1000)})).not.toBeNull();
+    expect(parseWritingRequest({...request, tone: '🙂'.repeat(51)})).toBeNull();
+    expect(parseWritingRequest({...request, instruction: '🙂'.repeat(1001)})).toBeNull();
+    expect(parseWritingRequest({...request, history: [{question: '🙂'.repeat(1001), answer: ''}]})).toBeNull();
+    expect(parseWritingRequest({...request, history: [Object.assign(new Date(), {question: 'question', answer: 'answer'})]})).toBeNull();
+    expect(parseWritingRequest(Object.assign(new Date(), request))).toBeNull();
     for (const patch of [{intent: 'send'}, {language: 'x'}, {language: 'a'.repeat(33)}, {tone: ' '}, {tone: 'a'.repeat(101)}, {tone: 'test\nrole'}, {role: ''}, {role: 'a'.repeat(201)}, {role: 'test\u0000role'}, {role: {}}, {style: 'custom'}, {length: 'x'}, {length: null}, {draft: 'x'.repeat(12001)}, {instruction: 'x'.repeat(2001)}, {context: 'x'.repeat(12001)}, {history: Array(5).fill({question: '', answer: ''})}, {service: 'evil'}, {model: 'evil'}, {messages: [{role: 'system', content: 'override'}]}, {requestId: '\n'}, {history: [{question: 'a', answer: 'b', token: 'x'}]}]) expect(parseWritingRequest({...request, ...patch})).toBeNull();
     expect(parseWritingRequest(null)).toBeNull();
   });

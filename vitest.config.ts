@@ -4,18 +4,97 @@ import {realpathSync} from 'node:fs';
 import {searchForWorkspaceRoot} from 'vite';
 import vue from '@vitejs/plugin-vue';
 import {createDeepLXRuntimeBuildPlugin} from './scripts/testing/deeplx-runtime-build';
+import {createPdfReaderBidiBuildPlugin} from './scripts/testing/pdfjs-bidi-build';
+import {createReadingDictionaryAliases} from './scripts/testing/reading-annotation-build';
 
 const configuredMaxWorkers = Number(process.env.FLUENTREAD_TEST_MAX_WORKERS);
 const maxWorkers = Number.isInteger(configuredMaxWorkers) && configuredMaxWorkers > 0 ? configuredMaxWorkers : 2;
+
+/** 测试在 Node 里提供自己的 DOM。保留客户端 SFC 模板，模块加载仍由 Vitest 管理。 */
+function clientVue(options: Parameters<typeof vue>[0]) {
+    const plugin = vue(options);
+    const load = plugin.load;
+    const transform = plugin.transform;
+    if (load && typeof load !== 'function') {
+        plugin.load = {...load, handler(id, context) {
+            return load.handler.call(this, id, {...context, ssr: false});
+        }};
+    }
+    if (transform && typeof transform !== 'function') {
+        plugin.transform = {...transform, handler(code, id, context) {
+            return transform.handler.call(this, code, id, {...context, moduleType: context?.moduleType ?? 'js', ssr: false});
+        }};
+    }
+    return plugin;
+}
 
 // 独立的 Vitest 配置（与 wxt 构建配置互不影响）
 export default defineConfig({
     // worktree 可共享安装的依赖；客户端 SFC 测试须能加载其真实路径，保留默认严格文件边界。
     server: {fs: {allow: [searchForWorkspaceRoot(__dirname), realpathSync(resolve(__dirname, 'node_modules'))]}},
     // 组件生命周期测试执行实际客户端 SFC 模板，让 V8 归因到原始 Vue 源码。
-    plugins: [createDeepLXRuntimeBuildPlugin(__dirname), vue({include: [
-        /\/src\/(?:features\/share-card\/ui\/ShareCardStudio|features\/selection-translation\/ui\/SelectionTranslator|features\/settings\/ui\/services\/RequestLimit(?:Settings|Fields)|features\/reading-assistant\/ui\/[^/]+|ui\/components\/(?:MarkdownContent|MarkdownTable|[^/]*Reading[^/]*)|features\/image-translation\/ui\/MangaEntry|app\/document-translation\/(?:DocumentApp|DocumentSegmentEditor)|ui\/components\/(?:CustomHotkeyInput|UiSelect|GlossaryLibrarySelect|ServiceIcon|TranslationLoadingPreview|UiIcon|FeatureEnableCard)|features\/settings\/ui\/components\/(?:FieldHelp|InterfaceSkinPreview|PopupLayoutPreview|PopupLayoutPreviewItem|SettingsGroup|SettingsItem|TranslationColorField|TranslationStylePreview|WritingStylePreview|SegmentedControl))\.vue$/,
+    plugins: [{name: 'obsidian-test-api', enforce: 'pre',
+        // npm 包只发布类型；测试须显式 mock 应用端口，禁止落到真实 Obsidian 环境。
+        resolveId: (id) => id === 'obsidian' ? '\0fluentread-test-obsidian' : null,
+        load: (id) => id === '\0fluentread-test-obsidian' ? 'throw new Error("Obsidian application API must be mocked in tests"); export {};' : null,
+    }, createDeepLXRuntimeBuildPlugin(__dirname), createPdfReaderBidiBuildPlugin(__dirname), clientVue({include: [
+        /\/src\/(?:features\/share-card\/ui\/ShareCardStudio|features\/selection-translation\/ui\/SelectionTranslator|features\/settings\/ui\/services\/RequestLimit(?:Settings|Fields)|features\/reading-assistant\/ui\/[^/]+|ui\/components\/(?:MarkdownContent|MarkdownTable|[^/]*Reading[^/]*)|features\/image-translation\/ui\/(?:MangaEntry|MangaReadingPanel)|app\/document-translation\/(?:DocumentApp|DocumentSegmentEditor|PdfSourceEditor)|ui\/components\/(?:CustomHotkeyInput|UiSelect|GlossaryLibrarySelect|ServiceIcon|TranslationLoadingPreview|UiIcon|FeatureEnableCard)|features\/settings\/ui\/components\/(?:FieldHelp|InterfaceSkinPreview|PopupLayoutPreview|PopupLayoutPreviewItem|SettingsGroup|SettingsItem|TranslationColorField|TranslationStylePreview|WritingStylePreview|SegmentedControl))\.vue$/,
+        resolve(__dirname, 'src/features/settings/ui/services/RequestHeaderSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/DictionaryWorkspaceSettings.vue'),
+        resolve(__dirname, 'src/features/selection-translation/ui/DictionaryCardTools.vue'),
+        resolve(__dirname, 'src/features/comment-assistant/ui/CommentPanel.vue'),
+        resolve(__dirname, 'src/features/settings/ui/services/ServiceCatalog.vue'),
+        resolve(__dirname, 'src/features/settings/ui/services/FreeTranslationSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/services/ModelPicker.vue'),
+        resolve(__dirname, 'src/features/settings/ui/services/ApiKeyList.vue'),
+        resolve(__dirname, 'src/features/settings/ui/services/CompositeTranslationSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/services/ModelVisionSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/services/ServiceNatureBadge.vue'),
+        resolve(__dirname, 'src/features/settings/ui/services/PromptTemplateEditor.vue'),
+        resolve(__dirname, 'src/features/settings/ui/QuickTranslationProfiles.vue'),
+        resolve(__dirname, 'src/features/settings/ui/AreaTranslationSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/ParagraphCopySettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/SectionTranslationSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/InterfaceSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/components/ToolbarClickSetting.vue'),
+        resolve(__dirname, 'src/features/settings/ui/TranslationStyleSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/InputTranslationSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/LocalTranslationModelSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/PopupLayoutEditor.vue'),
+        resolve(__dirname, 'src/features/settings/ui/SiteAdaptationSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/HarnessSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/WritingSettings.vue'),
         resolve(__dirname, 'src/features/document-translation/ui/PdfReader.vue'),
+        resolve(__dirname, 'src/features/document-translation/ui/PdfAnnotations.vue'),
+        resolve(__dirname, 'src/app/popup/PopupServices.vue'),
+        resolve(__dirname, 'src/app/popup/PopupLanguageSelect.vue'),
+        resolve(__dirname, 'src/app/popup/PopupOnboarding.vue'),
+        resolve(__dirname, 'src/app/popup/PopupSiteRule.vue'),
+        resolve(__dirname, 'src/app/popup/PopupApp.vue'),
+        resolve(__dirname, 'src/app/sidepanel/SidepanelApp.vue'),
+        resolve(__dirname, 'src/app/options/OptionsApp.vue'),
+        resolve(__dirname, 'src/features/settings/ui/SitePreferencesSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/SiteRulePreview.vue'),
+        resolve(__dirname, 'src/features/self-help/ui/DiagnosticNotice.vue'),
+        resolve(__dirname, 'src/features/translation-center/ui/TranslationCenter.vue'),
+        resolve(__dirname, 'src/features/settings/ui/SettingsSections.vue'),
+        resolve(__dirname, 'src/features/settings/ui/PrivacyProtectionSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/components/SettingsDisclosure.vue'),
+        resolve(__dirname, 'src/features/settings/ui/services/CustomOpenAIProviderDialog.vue'),
+        resolve(__dirname, 'src/features/settings/ui/services/CompositeTranslationFields.vue'),
+        resolve(__dirname, 'src/features/settings/ui/components/SettingsNumberInput.vue'),
+        resolve(__dirname, 'src/features/model-usage/ui/ModelUsageDashboard.vue'),
+        resolve(__dirname, 'src/features/translation-stats/ui/TranslationStatsDashboard.vue'),
+        resolve(__dirname, 'src/features/settings/ui/services/ServiceConfiguration.vue'),
+        resolve(__dirname, 'src/features/settings/ui/services/ServiceRepairReturn.vue'),
+        resolve(__dirname, 'src/features/settings/ui/ParagraphHandlingSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/SelectionSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/ClickSelectionSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/InformationHighlightPreferences.vue'),
+        resolve(__dirname, 'src/features/settings/ui/AiMultiSegmentSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/ReadingAssistanceSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/ExcludedLanguageSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/HarnessPromptSettings.vue'),
         resolve(__dirname, 'src/features/video-subtitle/ui/VideoSentenceLearning.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/BrandReader.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/BrowserGlyph.vue'),
@@ -30,6 +109,7 @@ export default defineConfig({
         resolve(__dirname, 'docs/.vitepress/theme/GuideLayout.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/GuideVisual.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/HeroOrbit.vue'),
+        resolve(__dirname, 'docs/.vitepress/theme/HighlightGuide.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/LandingHeader.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/ProductHome.vue'),
         resolve(__dirname, 'docs/.vitepress/theme/ProductHomeEn.vue'),
@@ -52,6 +132,9 @@ export default defineConfig({
         resolve(__dirname, 'src/features/settings/ui/ConfigManagement.vue'),
         resolve(__dirname, 'src/features/settings/ui/GoogleDriveSync.vue'),
         resolve(__dirname, 'src/features/settings/ui/LearningMemoryManager.vue'),
+        resolve(__dirname, 'src/features/settings/ui/LearningCenter.vue'),
+        resolve(__dirname, 'src/ui/components/UiLanguageSelector.vue'),
+        resolve(__dirname, 'src/ui/components/UiLanguageOnboarding.vue'),
         resolve(__dirname, 'src/features/settings/ui/LocalDataManagement.vue'),
         resolve(__dirname, 'src/features/settings/ui/LocalTtsSettings.vue'),
         resolve(__dirname, 'src/features/settings/ui/RemoteConfigSync.vue'),
@@ -59,38 +142,46 @@ export default defineConfig({
         resolve(__dirname, 'src/features/settings/ui/TranslationCacheSettings.vue'),
         resolve(__dirname, 'src/features/settings/ui/VideoLocalModelSettings.vue'),
         resolve(__dirname, 'src/features/settings/ui/VideoSentenceLearningAppearanceSettings.vue'),
+        resolve(__dirname, 'src/features/settings/ui/SectionTranslationRules.vue'),
         resolve(__dirname, 'src/features/settings/ui/WebDavBackup.vue'),
         resolve(__dirname, 'src/features/settings/ui/components/SettingsPanel.vue'),
         resolve(__dirname, 'src/features/settings/ui/components/SettingsPreviewLayout.vue'),
         resolve(__dirname, 'src/features/settings/ui/components/PopupPreview.vue'),
         resolve(__dirname, 'src/ui/components/DownloadProgress.vue'),
         resolve(__dirname, 'src/features/image-translation/ui/ImageTranslationSettingsPreview.vue'),
+        resolve(__dirname, 'src/features/vocabulary/ui/SavedExplanation.vue'),
+        resolve(__dirname, 'src/features/vocabulary/ui/MaterialWorkspace.vue'),
+        resolve(__dirname, 'src/features/vocabulary/ui/VocabularyBook.vue'),
+        resolve(__dirname, 'src/features/vocabulary/ui/VocabularySource.vue'),
+        resolve(__dirname, 'src/features/vocabulary/ui/CollectionEntry.vue'),
+        resolve(__dirname, 'src/features/vocabulary/ui/VocabularyStudy.vue'),
         resolve(__dirname, 'src/features/selection-translation/ui/SpeechFollowText.vue'),
         resolve(__dirname, 'src/features/writing-assistant/ui/WritingChoices.vue'),
         resolve(__dirname, 'src/features/writing-assistant/ui/WritingLanguagePicker.vue'),
         resolve(__dirname, 'src/features/writing-assistant/ui/WritingPanel.vue'),
+        resolve(__dirname, 'src/features/writing-assistant/ui/WritingSurface.vue'),
         resolve(__dirname, 'src/features/writing-assistant/ui/WritingPopover.vue'),
         resolve(__dirname, 'src/features/writing-assistant/ui/WritingStyleEditor.vue'),
         resolve(__dirname, 'src/features/personal-corrections/ui/PersonalCorrectionPanel.vue'),
         resolve(__dirname, 'userscript/SettingsPanel.vue'),
     ]})],
     resolve: {
-        alias: {
+        alias: [
             // 与 wxt 一致：'@' 指向项目根目录
-            '@': resolve(__dirname, '.'),
-        },
+            {find: '@', replacement: resolve(__dirname, '.')},
+            ...createReadingDictionaryAliases(__dirname),
+        ],
     },
     test: {
         environment: 'node',
         // 对已发布 core 执行同一 transport/browser 替换，避免 Node 外置依赖绕过插件。
         server: {deps: {inline: ['@deeplx/core']}},
-        testTransformMode: {web: ['**/tests/chatgptPlanSettingsLifecycle.test.ts', '**/tests/videoSentenceLearningAppearanceSettingsLifecycle.test.ts', '**/tests/personalCorrectionUiPanel.test.ts', '**/tests/pdfReaderLifecycle.test.ts', '**/tests/finalCoveragePublicBoundariesA.test.ts', '**/tests/implementationAudit49A.test.ts', '**/tests/implementationAudit49B.test.ts', '**/tests/implementationAudit49C.test.ts', '**/tests/implementationAudit49E.test.ts', '**/tests/implementationAudit49F.test.ts', '**/tests/implementationAudit49H.test.ts', '**/tests/implementationAudit48J.test.ts', '**/tests/implementationAudit48I.test.ts', '**/tests/implementationAudit48C.test.ts', '**/tests/implementationAudit48E.test.ts', '**/tests/mangaEntryComponentLifecycle.test.ts', '**/tests/customHotkeyInputLifecycle.test.ts', '**/tests/sharedUiComponentsLifecycle.test.ts', '**/tests/documentAppLifecycle.test.ts', '**/tests/documentUserActions.test.ts']},
         include: ['tests/**/*.test.ts'],
         globalSetup: ['./scripts/testing/vitest-resource-lock.mjs'],
         maxWorkers,
-        minWorkers: 1,
+        clearMocks: false,
         fileParallelism: false,
-        // 页内样式契约执行四份实际 CSS，避免空 inline 样式掩盖命名或所有权回归。
-        css: {include: [/(?:src\/app\/content\/page|src\/ui\/styles\/(?:translation-display|bilingual-sentence-highlight|vocabulary-reencounter))\.css(?:\?|$)/]},
+        // 页内样式契约执行实际 CSS，避免空 inline 样式掩盖命名、对比度或所有权回归。
+        css: {include: [/(?:src\/app\/content\/page|src\/ui\/styles\/(?:translation-display|translation-loading-indicator|bilingual-sentence-highlight|vocabulary-reencounter)|src\/features\/image-translation\/ui\/image-(?:text-reader|controls))\.css(?:\?|$)/]},
     },
 });

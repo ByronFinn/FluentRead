@@ -1,0 +1,174 @@
+# 视频字幕与本地推理
+
+## YouTube 内嵌播放器入口
+
+`youtubeEmbedFrameRuntime` 验证 `/embed/{11位视频ID}` 子 frame 的配置水合、语言包等待、总开关、站点禁用、BFCache 暂停恢复及失效清理；延迟完成的语言回调不能重新挂载已关闭页面。专用内容入口与 MAIN 桥保持 `document_start`，匹配范围相同；顶层桥继续覆盖 YouTube 全路径以支持 SPA 导航。组合根只导入视频公共入口，避免把其他顶层功能的聚合模块带入独立播放器包。`youtubeSubtitleData` 和 `videoSubtitle` 同时核对原 watch/shorts ID 契约、内嵌路径 ID、错误主机、额外路径及伪造查询参数。这些端口与路由测试不代表真实 X 卡片、在线字幕或跨设备验收。
+
+[返回测试入口](../testing.md)。按本次改动选择下面的专项；这些条目不要求每次全部运行。
+
+## B 站、Udemy 与 edX 课程字幕
+
+`videoCourseCaptions` 覆盖分 P 和小节身份、来源资源主机、原语言人工轨优先、JSON/VTT 时间轴、请求预算、关闭及切换后的迟到结果、只读播放器桥和独立站点配置。`videoCourseFrame` 验证 edX 子 frame 的权威配置水合、暂停恢复、禁用与上下文失效；`videoCaptionPlatformRuntime` 从真实挂载入口验证菜单、原文模式、翻译复用、原文 SRT、校时空档、动态播放器和 edX 多视频归属。
+
+B 站字幕先匹配设置中的原语言；原语言自动或无匹配时，优先选择与目标语言不同的轨道，再在候选中优先人工字幕。简繁中文按同一目标语言处理，避免中文人工译轨排在英文前时双语只显示中文。非目标语言是原文候选，不代表已确认视频音频语言；仅有目标语言字幕时保留一行，不反向翻译来伪造原文。原语言或目标语言变更会取消旧加载并重新选轨；仅切换双语、译文、原文模式则复用当前轨道。两组测试覆盖中英轨排序、机器原文候选、语言切换和关闭后重启。
+
+生产浏览器定向回归：`node scripts/testing/run-bilibili-bilingual-test.cjs --background --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --artifacts-dir <证据目录>`。使用临时 Edge profile、第二屏后台正常窗口和受控中英轨顺序，检查双语/单语、上下顺序、关闭恢复、原语言及目标语言切换、仅中文轨和刷新；保存截图、内容脚本隔离世界、设置页及后台诊断。此夹具不代表真实登录态 B 站或在线翻译服务验收。
+
+先对上述三个文件及 `videoCaptionPlatforms` 运行相应分组的 `--dry-run`，再执行限定文件的行为测试；新增源码纳入四维 100% 覆盖率。生产浏览器专项必须包含 B 站延迟切 P、Udemy Business 换小节和播放器重建、edX 所选语言、`learning.edx.org` 嵌套 `courses.edx.org` 的跨源 iframe，以及三个独立开关的保存和刷新。应在 frame 视频导航前另行附加 CDP 诊断，不能只采集顶层。受控元数据、账号接口和翻译响应只证明接入及交互，不代表真实付费课程、登录态、在线翻译服务或 Firefox 实机验证。
+
+## 读音状态与菜单稳定性
+
+`videoReadingPlayer` 覆盖准备、无适用读音、失败重试及显示模式切换。生产 Chrome 构建后，运行 `node scripts/testing/run-video-menu-ui-test.cjs --suite reading-stability --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper scripts/testing/focus-safe-browser.cjs --runtime-diagnostics <浏览器测试技能>/scripts/runtime-diagnostics.cjs --artifacts-dir <证据目录>`；将 suite 改为 `x-reading-stability` 可测试 X 缓存 AI 字幕菜单。专项在第二屏临时 Edge 后台窗口使用受控页面、媒体与字幕，连续切换韩语、无需标注的文字和空字幕，采样菜单及控件几何并保存截图；不代表真实网站、真实 AI 转写、Firefox 或辅助技术实机验收。
+
+## 视频双语上下顺序（issue #1073）
+
+播放器菜单和字幕外观设置共用 `videoSubtitleAppearance.bilingualOrder`，默认原文在上；切换只重排原文、读音和译文，读音始终紧跟原文，单语显示与字幕下载顺序保持各自语义。`videoSubtitleAppearance`、`videoSubtitleAppearanceSettingsLifecycle`、`videoUiI18n`、`videoSubtitleTrackPriorityRuntime`、`videoCaptionPlatformRuntime` 和 `videoNativeFullscreen` 覆盖归一化、持久化、即时更新、缓存/节点保留、单语和原生轨道选择。
+
+生产 Chrome 构建后，运行 `node scripts/testing/run-video-menu-ui-test.cjs --suite subtitle-order --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper scripts/testing/focus-safe-browser.cjs --runtime-diagnostics <浏览器测试技能>/scripts/runtime-diagnostics.cjs --artifacts-dir <证据目录>`。专项在第二屏临时 Edge 后台正常窗口中验证真实点击和键盘切换、字幕上下几何、无重复翻译请求、刷新后偏好、单语显示、390/320px 菜单与外部配置同步，并保存截图及运行时诊断。网页、媒体、原字幕和翻译响应使用确定性夹具，不代表原站、在线服务、Firefox 或 Safari 系统全屏实机验收。
+
+## 自定义字幕轮廓与背景（issue #1183）
+
+`videoSubtitleAppearance` 验证旧配置继续跟随皮肤、轮廓样式与颜色/粗细归一化，以及关闭背景时透明背景、边框、阴影和模糊一并清除。`videoSubtitleAppearanceSettingsLifecycle` 执行真实设置组件的控件事件，验证实时预览、透明度保留、禁用状态和七种界面语言；`videoCaptionPlatformRuntime` 验证 Meet 等平台字幕面板消费同一组外观变量。YouTube/X 与平台字幕 DOM 均使用受控夹具，不代表真实网站或跨浏览器实机验收。
+
+先运行 `pnpm test:unit -- tests/videoSubtitleAppearance.test.ts --dry-run` 与 `pnpm test:functional -- tests/videoSubtitleAppearanceSettingsLifecycle.test.ts tests/videoCaptionPlatformRuntime.test.ts --dry-run` 核对范围，再运行相同命令并移除 `--dry-run` 执行定向回归。
+
+## 视频完整句学习
+
+学习卡浮出播放器后仍复用原组件和草稿，并随同一播放器的全屏状态迁移；底部把手向下拖动增高、向上拖动缩小，拖动和调高都须提交抬手时的最终坐标。`videoSentenceLearningPlacement` 覆盖浮出/停靠、视口偏移与缩小、键盘调高、ARIA实际高度、关闭重开及监听器清理；实际窗口与媒体交互仍需生产浏览器验收。
+
+设置中心关闭视频字幕总开关时，YouTube/X 播放器按钮和菜单必须移除；播放器菜单的「关闭」只停止翻译并隐藏字幕，保留入口、关闭选中态及原显示方式，可从同一菜单恢复双语、译文或原文，刷新后入口仍在。`videoSubtitleTrackPriorityRuntime` 覆盖两平台的字幕关闭、重复关闭、重新挂载与菜单恢复，以及功能总开关关闭后移除节点、重复开启无副本。生产 Chrome 构建后使用 `node scripts/run-video-menu-state-test.cjs --button-visibility-only --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper scripts/testing/focus-safe-browser.cjs --artifacts-dir <证据目录>` 定向验证：初始关闭、外部配置关闭、控制栏重建、刷新、菜单关闭保留入口、菜单重新开启，以及字幕功能关闭时网页段落翻译—恢复—再次翻译的 `[1, 0, 1]`。脚本使用临时 Edge 后台正常窗口与受控 YouTube/X DOM、媒体和翻译响应；不代表原站、在线服务或 Firefox 运行验收。
+
+AI 字幕运行时的缓存恢复与完整生成提交由 `video-ai/subtitleSession.ts` 统一拥有：媒体、模型、来源语言变化或卸载后，旧缓存不能写入新会话；原生轨道就绪时拒绝缓存恢复；同媒体元数据补全保持生成开始时的模型与语言快照。`videoAiSubtitleSession` 使用受控未决 Promise 验证这些边界、请求去重、新旧请求终结顺序、失败恢复、重入与销毁，完整时间轴提交会复制身份和 cue，缓存失败保留已识别字幕。
+
+`video-ai/requestSession.ts` 将完整和实时采集器的本地 session 映射为同一后台流的单调请求 generation，避免相同本地计数碰撞。模型预热、转写和取消共用冻结身份，缓存恢复不虚构识别请求；销毁后禁止新请求，原采集器仍用精确旧身份终止资源。`videoAiRequestSession` 联合真实后台 handler 验证旧预热、旧取消与新代际的隔离；`videoSubtitleTrackPriorityRuntime` 继续验证实际挂载、原生字幕优先、模型切换、元数据补全、预览和离开清理。两模块四维覆盖率单列；这组端口/DOM 证据不代表真实 PCM 采集、本地模型准确率或原站播放验收。
+
+`pnpm test:video:learning --coverage` 限定执行原始字幕聚合、播放控制、面板所有权与来源恢复、收藏来源及 UI 五份测试；四个新增 TypeScript 模块的 statements/branches/functions/lines 均要求 100%。字幕菜单和运行时回归使用 `videoSubtitle`、`videoSubtitleTrackPriorityRuntime`、`videoSubtitleLogic`、`videoUiI18n`，以及架构、文件头和 i18n 检查。
+
+本地规则断句专项检查同一条字幕中多句的原文和来源映射、共享时间范围时换句保留播放位置、切换来源时沿用原字幕起点，以及重播、循环和暂停仍服从原字幕时间。断句在现有时间轴上运行，专项使用受控字幕和播放器时钟。
+
+生产 Chrome 构建后运行：
+
+```sh
+node scripts/run-video-sentence-learning-test.cjs \
+  --extension-dir .output/chrome-mv3 \
+  --playwright-root "$PLAYWRIGHT_ROOT" \
+  --focus-safe-helper scripts/testing/focus-safe-browser.cjs \
+  --artifacts-dir /private/tmp/fluentread-video-sentence-learning
+```
+
+脚本使用自有临时 Edge profile、第二屏后台正常窗口、前台 PID 保护和真实解码的本地 MP4。平台 DOM、原字幕与翻译/解释传输受控；断言整句原时间、用户播放优先、循环与句末暂停、失败恢复、主动收藏、来源去重、学习中心链接、X 多视频/引用帖归属、全屏与窄屏边界。它不代表原站字幕可取得或线上服务译文质量。
+
+追加 `--live-only --live-youtube-urls <视频地址列表> --live-x-url <帖子地址>` 单独访问真实网站，不注入字幕或替换网站 DOM/媒体；仍使用受控翻译传输。原站无法供给可读取字幕时记录状态和失败，不能据此宣称字幕学习闭环通过。Firefox 与 userscript 构建不等于实际浏览器运行验收；原生画中画未通过此前台隔离脚本测试。本次结果与边界见[视频完整句学习记录](../reports/video-sentence-learning-20261011/README.md)。
+
+
+## 扩展体积与共享推理引擎
+
+`pnpm analyze:bundle [构建目录] [基线目录]` 统计真实字节、文件类型、目录、最大文件和相同内容，详见 [2026-10-06 体积记录](../maintainers/extension-size-20261006.md)。普通开发构建不内联源码映射；需要时使用 `FLUENTREAD_DEV_SOURCEMAPS=1 pnpm dev`。手动加载可设置 `FLUENTREAD_DISABLE_BROWSER_RUNNER=1`。
+
+以下专项使用自有临时 Edge profile、第二屏后台正常窗口与 focus-safe helper。Node 包目录包含 Playwright。`run-bundle-model-smoke.cjs` 通过源码实际端口和固定摘要校验运行 Paddle/LaMa，OPUS 使用实际构建 Worker；音频专项使用实际生产 Worker。受控图片/合成语音不代表真实网站音轨或模型整体质量。
+
+```sh
+node scripts/testing/run-ort-runtime-smoke.cjs \
+  --extension-dir .output/chrome-mv3 \
+  --playwright-root "$PLAYWRIGHT_ROOT" \
+  --focus-safe-helper "$FOCUS_SAFE_HELPER" \
+  --artifacts-dir /private/tmp/fluentread-ort-smoke
+
+node scripts/testing/run-bundle-model-smoke.cjs \
+  --kinds paddle,opus --extension-dir .output/chrome-mv3 \
+  --manga-models-dir "$MANGA_MODELS_DIR" \
+  --playwright-root "$PLAYWRIGHT_ROOT" \
+  --focus-safe-helper "$FOCUS_SAFE_HELPER" \
+  --artifacts-dir /private/tmp/fluentread-model-smoke
+
+node scripts/testing/run-local-audio-gpu-test.cjs \
+  --kinds tts,whisper --modes gpu,cpu,init-failure,device-loss \
+  --skip-settings --no-screenshots --extension-dir .output/chrome-mv3 \
+  --playwright-root "$PLAYWRIGHT_ROOT" \
+  --focus-safe-helper "$FOCUS_SAFE_HELPER" \
+  --artifacts-dir /private/tmp/fluentread-audio-smoke
+
+node scripts/testing/run-local-audio-gpu-test.cjs \
+  --kinds whisper --modes q4-failure --skip-settings --no-screenshots \
+  --extension-dir .output/chrome-mv3 \
+  --playwright-root "$PLAYWRIGHT_ROOT" \
+  --focus-safe-helper "$FOCUS_SAFE_HELPER" \
+  --artifacts-dir /private/tmp/fluentread-whisper-q8-smoke
+```
+
+`MANGA_MODELS_DIR` 必须包含与源码版本、字节数及 SHA-256 匹配的 `PP-OCRv6_small_det.onnx`、`PP-OCRv6_small_rec.onnx`、`ppocrv6_dict.txt`、`lama-manga-dynamic.onnx`；文件只导入本次临时扩展。`--kinds opus` 无需这些文件。OPUS 和音频专项会联网下载公开模型。q4 故障仅注入自有扩展副本的 CPU q4 初始化调用，必须实际返回 `dtype=q8` 才通过；不修改生产产物或用户扩展。
+
+## 本地推理响应、转圈与跟读
+
+本轮诊断、资源策略、CPU/GPU 对照与验收边界见[本地推理可靠性报告](../maintainers/local-inference-reliability-20261006.md)。漫画性能模式用同一原图、提前导入已校验模型和固定文字传输；`--worker-diagnostics` 只修改临时扩展副本，记录真实 GPU 提交与 pthread 创建。`--pipeline-cpu` 强制禁用 GPU，不将能力探测当作实际后端证明。
+
+```sh
+pnpm test tests/localInferenceResources.test.ts tests/mangaInferenceClient.test.ts tests/mangaInferenceWorker.test.ts tests/selectionTranslatorLifecycle.test.ts tests/offscreenTtsPlayback.test.ts tests/speechProgress.test.ts tests/localTranslationRuntime.test.ts tests/videoAiOffscreen.test.ts
+node scripts/testing/run-local-audio-gpu-test.cjs \
+  --kinds tts --modes gpu,cpu --skip-settings --no-screenshots \
+  --artifacts-dir /tmp/fluentread-audio-playback
+```
+
+音频专项验证实际 WAV 解码、媒体时钟推进、进度和结束清理；默认静音测试播放。需要双线程能力对照时仅在临时副本增加 `--cross-origin-isolated --modes unavailable,thread-failure`，不更改生产 manifest。线程创建故障注入和实际 GPU 不可用情况分别记录；真实设置页、扬声器和 Firefox 实机音频不在这个限定命令的验收范围内。
+
+划词朗读的整词高亮与前后 5 秒跳转使用独立专项：
+
+```sh
+pnpm test tests/speechProgress.test.ts tests/offscreenTtsPlayback.test.ts tests/selectionTtsBackgroundHandler.test.ts tests/offscreenMessageRouter.test.ts tests/offscreenAdapters.test.ts tests/selectionTranslatorLifecycle.test.ts tests/selectionTtsProtocol.test.ts tests/selectionTtsContentController.test.ts
+node scripts/run-selection-speech-test.cjs \
+  --extension-dir .output/chrome-mv3 \
+  --playwright-root <Node包目录> \
+  --focus-safe-helper scripts/testing/focus-safe-browser.cjs \
+  --runtime-diagnostics <扩展界面测试技能>/scripts/runtime-diagnostics.cjs \
+  --artifacts-dir /private/tmp/fluentread-selection-speech
+```
+
+浏览器专项加载生产扩展，在第二屏临时 Edge 后台窗口运行；翻译与语音响应使用确定性夹具，但音频解码、媒体时钟、跳转及跨后台路由真实执行。验证完整词高亮、文字节点与换行稳定、跳转不重新合成、浅色/深色/390px 布局、减少动画和停止清理；保存 `report.json` 与卡片截图。它不证明在线发音对齐、扬声器输出或 Firefox 实机行为。
+
+## X 字幕来源与恢复体验
+
+`node scripts/run-video-menu-state-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper <focus-safe-browser.cjs路径> --artifacts-dir /private/tmp/fluentread-x-experience-proof` 验证生产扩展在临时 Edge profile 中的播放器操作、全屏、320–960px 控件位置、横屏紧凑菜单、缓存恢复、模型确认与三类 SRT 下载。
+
+同一专项覆盖 200 条缓存字幕按播放位置预取、空翻译响应与独立重试、双语和原文切换复用译文、重新识别绕过缓存且确认前保留原文、迟到原生轨道优先、原生静音空档、原文模式加载 sidecar、初始隐藏后恢复字幕和键盘焦点。页面、识别结果与翻译响应为受控夹具，不代表真实 X 登录会话、Whisper 识别质量或外部翻译服务可用性。产品取舍见 [体验复核](../reports/x-video-experience-20260930/README.md)。
+
+`node scripts/run-x-native-subtitle-flicker-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper <focus-safe-browser.cjs路径> --artifacts-dir /private/tmp/fluentread-x-native-flicker` 在临时 Chrome profile 的第二屏后台窗口中验证视频 5 秒处的原生字幕：陆续注入五个字幕分片，每 20ms 采样原文与译文，断言已显示的双语不会被清空、翻译请求数不增加；同时检查正常字幕空档与跳转换句。使用真实视频和浏览器 TextTrack，分片与固定 250ms 翻译响应为受控夹具；不代表外部供应商、登录账号或 Firefox 实机验证。
+
+`node scripts/run-x-home-audio-recovery-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper <focus-safe-browser.cjs路径> --artifacts-dir /private/tmp/fluentread-x-home-recovery` 在临时 Chrome profile 的第二屏后台窗口中验证 Home：使用真实 MSE 视频和 HLS 音轨解码，复现 arraybuffer 清单未被页面桥捕获，检查当前视频匹配、A 失败后切换 B、无法读音频时的刷新提示、播放状态保持，以及从字幕选项重新识别后 Base 空结果的可见提示。脚本需要 ffmpeg；可用 `--ffmpeg` 指定路径。Base 识别结果与翻译响应使用受控回复，不代表真实模型或 X 登录账号验证。
+
+## YouTube 全屏与字幕同步
+
+YouTube 的“仅原文”模式（issue #1344）始终使用 FluentRead 自有字幕层，并隐藏原生字幕容器，避免桌面宽屏退回 YouTube 的逐词字幕样式。运行时在可读时仍接入原始 timedtext 时间轴；当前滚动窗口与播放时间匹配时显示完整 cue，不请求译文。`videoSubtitleTrackPriorityRuntime` 覆盖前缀 cue、原文/双语切换、零翻译请求及三种模式下的原生字幕所有权。
+
+`node scripts/run-youtube-subtitle-handover-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --artifacts-dir <证据目录>` 验证 #1341 的早到响应交接。生产扩展使用真实 MAIN-world Fetch 桥与 content runtime；阻塞解析的受控资源让 timedtext 在 `document.readyState=loading` 时先到，之后的补抓明确返回空响应。相同 JSON3、原生滚动窗口结构和媒体时钟分别测试挂载前、挂载后到达，两条同文原生行应按当前 cue 显示及翻译一次；后续重复时段、`No no` 和单 cue 内完整整句重复仍保留。专项保存响应/挂载时刻、请求输入、截图、后台与页面诊断，使用临时 profile、第二屏后台可见窗口。JSON3 窗口结构取自真实 YouTube 播放器观察，文字与网络响应受控；这不等于原视频回放或在线翻译验收。
+
+`tests/mainWorldBridgeLifecycle.test.ts` 验证默认 YouTube 适配器回放早到响应、不消费宿主正文、不因回放重发请求，并在换地址时拒绝旧响应、停用后清空；`tests/videoSubtitleTrackPriorityRuntime.test.ts` 验证实际公共 mount 在初始化监听及页面状态后取回时间轴，既处理滚动同文行，也保留合法重复，seek 不重复请求回放。
+
+`tests/videoTranslationScheduler.test.ts` 验证三路满载的重复当前句请求不枚举等待队列，仍合并同一 Promise、提升优先级并在完成后保留同级顺序；清理后不响应 abort 的旧传输仍占原名额，其迟到 finally 可启动同 key 的新请求。两路预取保留第三路的原行为继续回归，操作计数不代表播放器或供应商耗时。
+
+`tests/videoSubtitleTrackPriorityRuntime.test.ts` 从实际公共 mount 验证 YouTube 同轮选择、两次时钟跨界、NaN、seek、字幕偏移、换轨、迟到结果及人工目标轨命中后回退。只在同步媒体事件窗口对真实 selector 作 call-through 计数，先检查原译文及翻译请求不变；不模拟业务算法。YouTube 夹具按订阅过滤 Linkedom 错发的 attributes，保留真实 childList 与业务回调，并断言观察器预算、订阅和计时器清理；既有 X 夹具继续使用原观察器。这是受控 DOM/媒体/fetch 端口验证，不代表原生浏览器布局、在线字幕服务或设备耗时。
+
+`pnpm test -- tests/youtubeSubtitleData.test.ts tests/videoSubtitleLogic.test.ts tests/videoSubtitleDownloads.test.ts tests/videoSubtitle.test.ts tests/videoSubtitleTrackPriorityRuntime.test.ts` 离线验证原生 timedtext 的事件边界与时间轴。不同事件的 Unicode 字母、引号和括号边界保留必要空格；直/弯 apostrophe 在前一事件末尾、后一事件开头或独立事件时，有限英语缩写与常见法语省音前缀继续组成完整词，单引号及其内部缩写保留引用空格。引用判断只查看本次可合并词流，只有有限引述动词借可见闭号判断引用，普通缩写与名词所有格不会借后面的复数所有格误判；这些局部规则不声称能消除纯文本中的全部语言歧义。称谓仅在可靠人名式后继时延续，歧义缩写、域名样式和小数样式保留句界。JSON3/XML 拒绝空白、非数值类型、负时间和非有限结束时间，缺失或零时长仍按有效后继推断；前缀折叠与词流合并收敛后，重复规范化和 SRT 导出保持幂等。这些 fixture 只证明数据处理，不代表真实 YouTube 捕获、在线翻译质量或 ASR/GPU 验收。
+
+`node scripts/run-video-caption-prefetch-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper <focus-safe-browser.cjs路径> --artifacts-dir /private/tmp/fluentread-caption-prefetch` 在临时 Edge profile 的第二屏后台窗口中，以固定 500ms 翻译响应检查 YouTube/X 的预取和首次显示：重复原生条目不能占满后续句子的名额，轨道加入后立即启动预取，缓存命中的原文与译文在同一次 DOM 更新中显示。报告记录请求启动时间、两行首次显示的间隔和焦点隔离信息；页面与供应商均为受控夹具，不代表真实账号或在线翻译服务的端到端延迟。
+
+同一专项还覆盖滚动字幕的上一句残留、窗口裁切的旧行、连续每 40ms 增词、无时间轴的请求启动延迟与缓存重播。报告中的 `dispatchMs` 只度量原文变化到请求发出的等待，不包含真实供应商耗时；译文仍使用确定性响应，不能据此声称真实视频端到端零延迟。
+
+X 另覆盖未预取句子等待原译文成对显示、seek 后迟到结果丢弃、仅原文模式零翻译请求与同目标语言单行显示。使用新版 Chrome 时添加 `--extension-install cdp --browser-path <Chrome可执行文件>`；其余焦点隔离和夹具边界相同。
+
+播放页菜单校时使用真实按钮点击，验证正负半秒的字幕内容、视频进度不变、仅原文模式、时间轴空档、重新打开页面后持久化、跨页同步、连续点击、重置和播放期间按帧更新。没有时间轴时禁用无效的提前/延后操作，仍允许重置已保存的偏移。
+
+`node scripts/run-youtube-subtitle-sync-test.cjs --extension-dir .output/chrome-mv3 --playwright-root <Node包目录> --focus-safe-helper <focus-safe-browser.cjs路径> --artifacts-dir /private/tmp/fluentread-youtube-sync` 在临时 Edge profile 的后台可见窗口中验证文档全屏、菜单操作、整句/逐词字幕定位、时间边界、重复句、延迟译文、真实视频 seek、空字幕、原文模式和关闭清理。夹具使用真实视频进度、受控 YouTube DOM 与模拟翻译响应，不代表真实 YouTube 字幕供应或翻译服务质量。
+
+Issue #1341 的重复字幕回归区分内容与滚动残留：`No no`、`Very very`、`Bye bye` 和重复整句即使分成多个可见片段，也必须完整显示并送翻；只有窗口裁切或匹配当前 cue 的时间轴依据才能排除旧行。无时间轴时不猜测同文就是残留。浏览器专项检查每个原生场景的全部新增请求（另列时间轴预取），以及同文滚动场景的全部相关请求；还验证紧凑原文模式零新请求、重新开启后的缓存复用与 cue 本身合法重复。公共 mount 测试补充动态重分段、重叠旧 cue 的选择和人工目标轨。报告者后来补充了原视频链接；受控回归仍不能替代对该视频原始字幕和实际播放器的复现。
+
+该专项还逐动画帧采样原生字幕的可见性，覆盖前句过期、下一句延迟、seek 和整块字幕容器替换；容器替换会在观察器重新绑定前立即检查样式。原文/双语/译文模式和暂时隐藏字幕时持续接管原生显示，关闭视频翻译或扩展后恢复，未选中的播放器保持原样。`videoSubtitleTrackPriorityRuntime` 补充播放器重绑、离开视频页和卸载清理。脚本通过 `--runtime-diagnostics-helper <浏览器翻译测试技能>/scripts/runtime-diagnostics.cjs` 指定诊断采集器，默认使用本机该技能；在导航前附加网页和 popup，并采集扩展后台，保存错误/告警、上下文归属与采集空窗。Edge 夹具与 Firefox 构建不能代替 Firefox 真实 YouTube 验收。
+
+### YouTube 仅原文与听力流程（issue #1344）
+
+为同一专项添加 `--suite original-only`，只执行本次听力流程验收：首次以原文模式打开、**关闭 → 原文 → 双语 → 关闭**、缓存复用、原文模式重新开启及刷新恢复。桌面与紧凑播放器检查完整 cue、自有原文节点、字体与播放器内布局；逐帧检查切换、播放进度跳转、空档和原生容器替换时没有原生字幕闪现。原文阶段核对全部翻译请求数不增加，双语重播核对当前句没有重复请求，后续字幕的正常预取单独保留；关闭视频字幕总开关才恢复原生字幕，最后导航离开页面并保留运行时诊断。使用生产 Chrome 产物、临时 Edge profile、第二屏可见后台窗口和 focus-safe helper；字幕、媒体及翻译响应受控，不代表 Windows Chrome、Firefox 或真实 YouTube 服务验收。
+
+## 通用 HTML 音视频（issue #1356）
+
+`tests/htmlMedia.test.ts` 验证无媒体空闲、动态发现、字幕浮层归属、滚动/视口/全屏定位及资源回收。`tests/videoSubtitleTrackPriorityRuntime.test.ts` 的 standard HTML media 用例从公共入口验证音频和视频的原生轨、双语、原文模式和动态卸载；既有 YouTube/X 用例约束兼容性。`tests/videoAiFullCapture.test.ts` 的 playback capture 用例验证实时音轨采集的原始时间戳、结束、跳转/倍速失效及原媒体状态保持，也覆盖 AudioWorklet 批处理、端口清理、加载取消和原始流音轨的克隆归属。`tests/subtitleExport.test.ts` 检查 SRT、WebVTT、Markdown 的时间与文本转义。
+
+浏览器专项 `scripts/testing/run-html-media-subtitle-test.cjs` 使用生产扩展、隔离临时 profile 与 focus-safe helper，验证普通音频、视频、子 frame、切换、学习面板、导出及关闭；缓存与翻译夹具和真实模型识别分别记录，不能把缓存回放当成真实转写验收。完整日志、截图及内容脚本/扩展页面/后台诊断放在工作区证据目录。

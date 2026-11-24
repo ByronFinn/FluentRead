@@ -9,13 +9,20 @@ import * as ort from 'onnxruntime-web/webgpu';
 import {mkdirSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {createVirtualModelResponsePort, virtualModelBuffer} from './helpers/virtualModelResponse';
+// 本组显式虚拟容量不含真实 ONNX wire；仅控制纯模型变换端口，保留实际资源校验/入库/取消/删除生命周期。
+vi.mock('@/src/features/image-translation/services/mangaRecognitionShapes',async original=>({...await original<any>(),optimizeVerifiedMangaRecognition:(buffer:ArrayBuffer)=>buffer}));
 
-const sdk = vi.hoisted(() => ({sessions: [] as any[], detectionSession: undefined as any, create: vi.fn(), initialize: vi.fn(), recognize: vi.fn(), destroy: vi.fn()}));
+const sdk = vi.hoisted(() => ({sessions: [] as any[], detectors: [] as Array<{session: unknown; options: unknown}>, detectionSession: undefined as any, create: vi.fn(), initialize: vi.fn(), recognize: vi.fn(), destroy: vi.fn()}));
 vi.mock('onnxruntime-web/webgpu', () => ({env: {wasm: {}}, InferenceSession: {create: sdk.create}, Tensor: class {
     constructor(public type: string, public data: Float32Array, public dims: number[]) {}
     dispose() {}
 }}));
-vi.mock('ppu-paddle-ocr/web', () => ({PaddleOcrService: class {
+vi.mock('ppu-paddle-ocr/web', () => ({RecognitionService: class {}, DetectionService: class {
+    platform = {canvas: {createProcessor: () => ({findRegions: () => []})}};
+    constructor(public session: unknown, public options: unknown) {sdk.detectors.push(this);}
+}, PaddleOcrService: class {
+    constructor(public options: unknown) {}
+    detector: unknown;
     detectionSession = sdk.detectionSession; recognitionSession = undefined;
     async initialize() {await sdk.initialize();}
     async recognize() {return sdk.recognize();}
@@ -111,7 +118,7 @@ beforeEach(async () => {
     vi.stubGlobal('Response', createVirtualModelResponsePort(NativeResponse));
     vi.useFakeTimers({toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout']}); stores.clear(); onDelete = undefined; onPut = undefined; workers.length = 0;
     ocrCanvasWrites.mockClear(); ocrCanvases.length = 0;
-    sdk.sessions.length = 0; sdk.detectionSession = undefined; sdk.create.mockReset(); sdk.initialize.mockReset().mockResolvedValue(undefined);
+    sdk.sessions.length = 0; sdk.detectors.length = 0; sdk.detectionSession = undefined; sdk.create.mockReset(); sdk.initialize.mockReset().mockResolvedValue(undefined);
     sdk.destroy.mockReset().mockResolvedValue(undefined); sdk.recognize.mockReset().mockResolvedValue({results: [{text: 'Hello world', confidence: 1, box: {x: 8, y: 8, width: 16, height: 16}}]});
     sdk.create.mockImplementation(async () => {const port = {run: vi.fn(async ({image}) => ({inpainted: {data: new Float32Array(image.data), dispose() {}}})), release: vi.fn(async () => {})}; sdk.sessions.push(port); return port;});
     vi.stubGlobal('caches', {open: async (name: string) => cachePort(name), delete: vi.fn(async (name: string) => {const result = await (onDelete?.() ?? Promise.resolve(true)); if (result) stores.delete(name); return result;})});
@@ -322,6 +329,8 @@ describe('E2 real runtime removal admission', () => {
         sdk.create.mockImplementationOnce(async () => {abort.abort(); return {release};});
         sdk.recognize.mockImplementationOnce(async () => {await gpu.run(); return {results: []};});
         const port = await createBrowserMangaOcr();
+        expect(sdk.detectors).toHaveLength(1); expect(sdk.detectors[0].session).toBe(gpu);
+        expect(sdk.detectors[0].options).toEqual({maxSideLength: 1536, paddingVertical: .1, paddingHorizontal: .2});
         const decodedImage = {naturalWidth: 32, naturalHeight: 32, src: 'borrowed-source'} as HTMLImageElement;
         try {await expect(port.recognize('fixture', {flatten: true, noCache: true, strategy: 'per-box', signal: abort.signal, decodedImage})).rejects.toMatchObject({name: 'AbortError'});}
         finally {await port.destroy();}

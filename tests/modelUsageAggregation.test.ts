@@ -43,6 +43,26 @@ function event(overrides: Partial<ModelUsageEvent> = {}): ModelUsageEvent {
 }
 
 describe('模型用量纯聚合', () => {
+    it.each([undefined,null,'100',NaN,Infinity,-1])('does not coerce an invalid duration %j into latency or output speed', durationMs => {
+        const totals=aggregateModelUsageTotals([{...event({outputTokens:10}),durationMs} as ModelUsageEvent]);
+        expect(totals).toMatchObject({requestCount:1,averageDurationMs:0,outputTokensPerSecond:null,speedReportedRequests:0});
+    });
+    it.each([null, 0, 123])('已有记录起点 %s 时不扫描被筛除调用的起点', recordingStartedAt => {
+        const now = new Date(2026, 7, 29, 12).getTime(); let timestampReads = 0;
+        const events = Array.from({length: 200}, (_, index) => ({...event({serviceId: 'excluded'}),
+            get startedAt() {timestampReads++; return now - index;}}));
+        const snapshot = buildModelUsageDashboard(events, {serviceId: 'selected'}, {now, recordingStartedAt, dimensions: []});
+        expect(snapshot.recordingStartedAt).toBe(recordingStartedAt);
+        expect(snapshot.selected.totals.requestCount).toBe(0);
+        expect(timestampReads).toBe(0);
+    });
+    it('纯聚合大量调用时逐项计算记录起点，不依赖引擎的函数实参数量上限', () => {
+        const now = new Date(2026, 7, 29, 12).getTime(), row = event({serviceId: 'excluded', startedAt: now - 1_000});
+        const events = Array<ModelUsageEvent>(180_000).fill(row); events[100] = {...row, startedAt: now - 3_000};
+        const snapshot = buildModelUsageDashboard(events, {serviceId: 'selected'}, {now, dimensions: []});
+        expect(snapshot.recordingStartedAt).toBe(now - 3_000);
+        expect(snapshot.selected.totals.requestCount).toBe(0);
+    });
     it('只把 provider 明确报告的调用计入平均 Token，并把所有非成功结果计为失败', () => {
         const totals = aggregateModelUsageTotals([
             event({

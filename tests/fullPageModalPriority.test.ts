@@ -74,6 +74,22 @@ describe('full page modal priority', () => {
         plain.removeAttribute('aria-modal'); expect(findActiveTranslationModal([window.document])).toBe(plain);
     });
 
+    it('respects the live Bambu consent dialog until its explicit rejection action closes it', () => {
+        const window = dom('<html><body><main><p>When switching between different filaments for printing.</p></main><div id="truste-consent-track" role="dialog" aria-modal="true" data-trustarc-focus-trapped="true"><a href="https://bambulab.com/policies/cookie-policy">Cookie Notice</a><button id="truste-consent-required">Reject All</button></div></body></html>');
+        const dialog = window.document.querySelector('#truste-consent-track') as HTMLElement;
+        const paragraph = window.document.querySelector('p')!;
+        rect(dialog, 24, 614.65625, 420, 177.34375);
+        rect(paragraph, 528, 264, 732, 136);
+        const active = findActiveTranslationModal([window.document]);
+        expect(active).toBe(dialog);
+        expect(isWithinTranslationModal(active!, paragraph)).toBe(false);
+        const reject = dialog.querySelector('button')!;
+        reject.addEventListener('click', () => { dialog.style.display = 'none'; });
+        reject.click();
+        expect(findActiveTranslationModal([window.document])).toBeNull();
+        expect(paragraph.textContent).toBe('When switching between different filaments for printing.');
+    });
+
     it('supports common component modal classes only with mask and center obstruction', () => {
         const window = dom('<html><body><div id="modal" class="el-dialog">x</div><div id="other" class="modal">y</div></body></html>');
         const modal = window.document.querySelector('#modal') as HTMLElement;
@@ -139,24 +155,31 @@ describe('full page modal priority', () => {
         expect(findActiveTranslationModal([b, a])).toBe(a);
     });
 
-    it('uses the first page hit for sibling native modals even when DOM order differs', () => {
+    it.each([false,true])('uses the first page hit for sibling native modals with first-hit=%s', firstHit => {
         const window = dom('<html><body><dialog id="first"><p>a</p></dialog><dialog id="second"><p>b</p></dialog></body></html>');
         const first = window.document.querySelector('#first') as HTMLDialogElement;
         const second = window.document.querySelector('#second') as HTMLDialogElement;
         first.open = true; second.open = true; rect(first); rect(second);
         const nativeMatches = (selector: string) => selector.includes(':modal') || selector.includes('dialog');
         Object.defineProperty(first, 'matches', {value: nativeMatches}); Object.defineProperty(second, 'matches', {value: nativeMatches});
-        Object.defineProperty(window.document, 'elementsFromPoint', {configurable: true, value: () => [second, first]});
-        expect(findActiveTranslationModal([window.document])).toBe(second);
+        Object.defineProperty(window.document, 'elementsFromPoint', {configurable: true, value: () => firstHit?[first,second]:[second, first]});
+        expect(findActiveTranslationModal([window.document])).toBe(firstHit?first:second);
     });
 
-    it('promotes a native modal over an aria modal regardless of DOM order', () => {
+    it.each([false,true])('promotes a native modal over an aria modal with native-first=%s', nativeFirst => {
         const window = dom('<html><body><div id="aria" role="dialog" aria-modal="true">a</div><dialog id="native"><p>b</p></dialog></body></html>');
         const aria = window.document.querySelector('#aria') as HTMLElement;
         const native = window.document.querySelector('#native') as HTMLDialogElement;
         rect(aria); rect(native); native.open = true;
         Object.defineProperty(native, 'matches', {value: (selector: string) => selector.includes(':modal') || selector.includes('dialog')});
+        if(nativeFirst)window.document.body.prepend(native);
         expect(findActiveTranslationModal([window.document])).toBe(native);
+    });
+    it.each([[500,800],[1000,300]])('does not treat a positioned %i by %i sibling as a viewport-blocking mask', (width,height) => {
+        const window=dom('<html><body><div class="el-dialog" id="dialog">Body</div><div class="el-overlay" id="mask"></div></body></html>');
+        const dialog=window.document.getElementById('dialog') as HTMLElement,mask=window.document.getElementById('mask') as HTMLElement;
+        dialog.style.position='fixed';mask.style.position='fixed';rect(dialog);rect(mask,0,0,width,height);
+        expect(findActiveTranslationModal([window.document])).toBeNull();
     });
 
     it('recognizes alertdialog and keeps hidden ancestors out of the result', () => {
@@ -165,6 +188,51 @@ describe('full page modal priority', () => {
         const alert = window.document.querySelector('#alert') as HTMLElement;
         hidden.style.display = 'none'; rect(hidden.querySelector('div') as HTMLElement);
         rect(alert); expect(findActiveTranslationModal([window.document])).toBe(alert);
+    });
+
+    it.each(['hidden', 'inert', 'aria-hidden'])('skips style reads inside an explicitly %s subtree until it is exposed', (attribute) => {
+        const window = dom('<html><body><section id="ancestor"><div id="modal" role="dialog" aria-modal="true">x</div></section></body></html>');
+        const ancestor = window.document.querySelector('#ancestor') as HTMLElement;
+        const modal = window.document.querySelector('#modal') as HTMLElement;
+        rect(modal);
+        ancestor.setAttribute(attribute, attribute === 'aria-hidden' ? 'true' : '');
+        const original = window.getComputedStyle;
+        const reads: Element[] = [];
+        window.getComputedStyle = ((element: Element) => {
+            reads.push(element);
+            return original(element);
+        }) as typeof window.getComputedStyle;
+        expect(findActiveTranslationModal([window.document])).toBeNull();
+        expect(reads).toEqual([]);
+        ancestor.removeAttribute(attribute);
+        expect(findActiveTranslationModal([window.document])).toBe(modal);
+        expect(reads).toContain(modal);
+    });
+
+    it('rejects explicit hidden state on the dialog before reading its styles', () => {
+        const window = dom('<html><body><div id="modal" role="dialog" aria-modal="true" hidden>x</div></body></html>');
+        const modal = window.document.querySelector('#modal') as HTMLElement;
+        rect(modal);
+        const reads: Element[] = [];
+        window.getComputedStyle = ((element: Element) => { reads.push(element); return {}; }) as typeof window.getComputedStyle;
+        expect(findActiveTranslationModal([window.document])).toBeNull();
+        expect(reads).toEqual([]);
+    });
+
+    it('checks an explicitly hidden shadow host before reading its modal descendant styles', () => {
+        const window = dom('<html><body><div id="host" aria-hidden="true"></div></body></html>');
+        const host = window.document.querySelector('#host') as HTMLElement;
+        const shadow = host.attachShadow({mode: 'open'});
+        const modal = window.document.createElement('div');
+        modal.setAttribute('role', 'dialog'); modal.setAttribute('aria-modal', 'true'); shadow.append(modal); rect(modal);
+        const original = window.getComputedStyle;
+        const reads: Element[] = [];
+        window.getComputedStyle = ((element: Element) => { reads.push(element); return original(element); }) as typeof window.getComputedStyle;
+        expect(findActiveTranslationModal([shadow])).toBeNull();
+        expect(reads).toEqual([]);
+        host.removeAttribute('aria-hidden');
+        expect(findActiveTranslationModal([shadow])).toBe(modal);
+        expect(reads).toContain(modal);
     });
 
     it('reports only mutations that may change modal discovery', () => {

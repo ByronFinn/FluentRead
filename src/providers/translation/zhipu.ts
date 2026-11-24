@@ -1,5 +1,6 @@
 /**
  * @file src/providers/translation/zhipu.ts
+ * 字幕参考：将后台规范化的相邻 cue 标记交给共用提示模板，供应商协议与返回结构保持原契约。
  *
  * 文件职责：适配智谱 BigModel 聊天接口，支持 apiKey.secret 生成 JWT、凭据校验和模型翻译请求。
  * 主要内容：维护短期 JWT 缓存，使用 commonMsgTemplate 生成消息，从配置快照选择模型和端点，通过 runtimeFetch 归一用量并校验 choices 后返回译文。 可核对的公开符号包括 default:zhipu。
@@ -13,9 +14,10 @@ import hmacSha256 from 'crypto-js/hmac-sha256';
 import base64 from 'crypto-js/enc-base64';
 import {isApiKeyRequired} from "@/src/core/config/validation";
 import {createHttpStatusError, createImageInputHttpError, readJsonResponse} from '@/src/platform/http/errors';
-import {abortErrorFromSignal, runtimeFetch} from '@/src/platform/http/runtime';
+import {abortErrorFromSignal, cancelUnreadResponseBody, runtimeFetch} from '@/src/platform/http/runtime';
 import {
     requireTranslationProviderConfig,
+    observeTranslationHttpResponse,
     reportTranslationModelUsage,
     reportTranslationModelUsageFailure,
     getTranslationImageInput,
@@ -60,6 +62,7 @@ async function zhipu(message: TranslationProviderRequest<string>) {
     const body = commonMsgTemplate({
         origin: message.origin,
         context: message.pageContext,
+        subtitleContext: message.subtitleContext,
         prompt: message.summaryPrompt,
         systemPrompt: message.summarySystemPrompt,
         serviceOverride: service,
@@ -79,12 +82,15 @@ async function zhipu(message: TranslationProviderRequest<string>) {
             body,
             signal: message.abortSignal,
         });
+        observeTranslationHttpResponse(message, resp);
         if (!resp.ok) {
             reportTranslationModelUsageFailure(message, undefined, startedAt, configuredModel, resp.status);
             attemptReported = true;
-            throw getTranslationImageInput(message) ? await createImageInputHttpError(resp, '翻译失败') : createHttpStatusError(resp, '翻译失败');
+            const error = getTranslationImageInput(message) ? await createImageInputHttpError(resp, '翻译失败') : createHttpStatusError(resp, '翻译失败');
+            cancelUnreadResponseBody(resp);
+            throw error;
         }
-        const result = await readJsonResponse<any>(resp, '智谱返回的不是有效 JSON');
+        const result = await readJsonResponse<any>(resp, '智谱返回的不是有效 JSON', message.abortSignal);
         if (message.abortSignal?.aborted) throw abortErrorFromSignal(message.abortSignal);
         const actualModel = typeof result?.model === 'string' && result.model.trim()
             ? result.model

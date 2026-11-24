@@ -1,11 +1,13 @@
 /**
  * @file tests/translationSlotEchoRegression.test.ts
  * 文件职责：通过真实 broker 入口验证全文单条槽协议的局部恢复、术语豁免和缓存安全。
- * 主要内容：注入 provider、内存 cache 与时钟，观察顺序、请求次数、旧缓存/pending 隔离、协议形状、取消和共享 deadline；零宽空槽验证首次恢复、恢复后拒绝和旧缓存失效；Chrome 接入真实请求构造与 offscreen 检测逻辑，覆盖逐槽长样本、调用快照与乱序结算，上下文泄漏验证只恢复坏槽；frontend 验证标记透传、中文过滤及失败会话复用。
+ * 主要内容：注入 provider、内存 cache 与时钟，观察顺序、请求次数、旧缓存/pending 隔离、协议形状、取消和共享 deadline；普通 single 仍校验整段质量，合法字面标记/引文不冒充外语正文，长正文残留经整段重试且不缓存坏结果；零宽空槽验证首次恢复、恢复后拒绝和旧缓存失效；Chrome 接入真实请求构造与 offscreen 检测逻辑，覆盖逐槽长样本、调用快照与乱序结算，上下文泄漏验证只恢复坏槽；frontend 验证标记透传、中文过滤及失败会话复用。
  * 模块边界：不 mock broker 或校验算法，不使用网络、浏览器与真实存储；client 替身把 frontend 请求交给真实 broker，公共翻译出口仅替换为纯槽协议模块。
  */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {resolveTranslationLanguages} from '@/src/core/translation/languages';
+import {identifyTextLanguage} from '@/src/core/language/identify';
+import {isClearlyWrongLanguageResponse} from '@/src/core/translation/resultValidation';
 import {parseTranslationSlots, serializeTranslationSlots,
     type SerializedTranslationSlots} from '@/src/core/translation/slotProtocol';
 import {NativeBatchResponseError} from '@/src/core/translation/nativeBatch';
@@ -17,9 +19,12 @@ import type {TranslationConfigSource, TranslationProvider} from '@/src/services/
 import type {TranslateOptions} from '@/src/services/translation/client';
 import {translateTextSlots, type FullPageTranslationConfigSnapshot,
     type FullPageTranslationSessionCache} from '@/src/features/full-page-translation/content/translationRequest';
+import {createFullPageRequestSessionState, disposeFullPageRequestSession} from '@/src/features/full-page-translation/content/requestSession';
 
 const ports = vi.hoisted(() => ({single: vi.fn(), batch: vi.fn()}));
 const ownedChromeEnvironments = new Set<ChromeTranslationEnvironment>();
+// 可选浏览器证据由预检边界套件验证；这里保留原有纯识别与请求/DOM契约。
+vi.mock('@/src/services/translation/languagePreflight', () => ({shouldSkipTranslationWithEvidence: async () => false}));
 vi.mock('@/src/services/translation/client', () => ({translateText: ports.single, translateTextBatch: ports.batch}));
 vi.mock('@/src/services/config/store', () => ({config: {maxConcurrentTranslations: 2}}));
 vi.mock('@/src/core/translation/public', () => import('@/src/core/translation/slotProtocol'));
@@ -98,6 +103,24 @@ afterEach(() => {
 });
 
 describe('真实 broker 的全文单条槽协议', () => {
+    it.each(['literal-code', 'quoted-example'] as const)('合法中文说明保留完整字面代码标记，不把标记统计为外语正文：%s', async variant => {
+        const h = createHarness({service: 'deepL'});
+        const packet = serializeTranslationSlots([first, second, third, first], 'literal');
+        const markers = [...packet.starts, ...packet.ends].join('\n');
+        const source = variant === 'literal-code'
+            ? `${first} Keep the following protocol markers unchanged.\n${markers}`
+            : `The following quoted sentence is an example, and the protocol markers below are literal code: “${first}”\n${markers}`;
+        const result = variant === 'literal-code'
+            ? `软件读取文档并翻译页面，保留以下标记。\n${markers}`
+            : `示例原句：“${first}”\n${markers}`;
+        expect(identifyTextLanguage(source)).toMatchObject({status: 'identified', languages: ['en']});
+        expect(isClearlyWrongLanguageResponse(source, result, 'zh-Hans')).toBe(false);
+        h.provider.mockResolvedValue(result);
+        await expect(h.broker.translateWithCache({origin: source})).resolves.toBe(result);
+        await expect(h.broker.translateWithCache({origin: source})).resolves.toBe(result);
+        expect(h.provider).toHaveBeenCalledOnce();
+        expect([...h.store.values()]).toEqual([result]);
+    });
     it('首槽以异命名空间字面标记开头时仍修复其回显并复用完整缓存', async () => {
         const h = createHarness({service: 'deepL'});
         connectFrontend(h);
@@ -226,31 +249,34 @@ describe('真实 broker 的全文单条槽协议', () => {
         expect(h.provider).toHaveBeenCalledOnce();
     });
 
-    it('旧 single 模式的部分回显缓存不污染新协议请求，两种结果分别可复用', async () => {
+    it('single 合法字面结果与内部逐槽修复缓存隔离，两种结果分别复用', async () => {
         const h = createHarness();
         const packet = serializeTranslationSlots([first, second]);
         const partial = renderPacket(packet, [first, translated[1]!]);
         const complete = renderPacket(packet, translated.slice(0, 2));
-        h.provider.mockResolvedValueOnce(partial).mockResolvedValueOnce(partial).mockResolvedValueOnce(translated[0]);
-        await expect(h.broker.translateWithCache({origin: packet.payload})).resolves.toBe(partial);
+        const literalResult = `协议示例的中文说明：\n${complete}`;
+        h.provider.mockResolvedValueOnce(literalResult).mockResolvedValueOnce(partial).mockResolvedValueOnce(translated[0]);
+        await expect(h.broker.translateWithCache({origin: packet.payload})).resolves.toBe(literalResult);
         await expect(h.broker.translateWithCache(slotRequest([first, second]))).resolves.toBe(complete);
         expect(h.provider.mock.calls.map(([message]) => message.origin)).toEqual([packet.payload, packet.payload, first]);
-        await expect(h.broker.translateWithCache({origin: packet.payload})).resolves.toBe(partial);
+        await expect(h.broker.translateWithCache({origin: packet.payload})).resolves.toBe(literalResult);
         await expect(h.broker.translateWithCache(slotRequest([first, second]))).resolves.toBe(complete);
         expect(h.provider).toHaveBeenCalledTimes(3);
-        expect([...h.store.values()]).toEqual([partial, complete]);
+        expect([...h.store.values()]).toEqual([literalResult, complete]);
         expect([...h.store.keys()].map(key => JSON.parse(key).requestMode)).toEqual(['single', 'slot-protocol']);
     });
 
-    it.each([undefined, false])('字面协议文本 flag=%s 按普通原文处理，不恢复内部回显槽', async flag => {
+    it.each([undefined, false])('字面协议 flag=%s 的合法引用按普通整段接受和缓存，不赋逐槽语义', async flag => {
         const h = createHarness();
         const packet = serializeTranslationSlots([first, second]);
-        const partial = renderPacket(packet, [first, translated[1]!]);
-        h.provider.mockResolvedValueOnce(partial);
+        const literalResult = renderPacket(packet, [`原文引用：“${first}”`, translated[1]!]);
+        h.provider.mockResolvedValueOnce(literalResult);
         const message = {origin: packet.payload, ...(flag === undefined ? {} : {validateTranslationSlots: flag})};
-        await expect(h.broker.translateWithCache(message)).resolves.toBe(partial);
-        await expect(h.broker.translateWithCache(message)).resolves.toBe(partial);
+        await expect(h.broker.translateWithCache(message)).resolves.toBe(literalResult);
+        await expect(h.broker.translateWithCache(message)).resolves.toBe(literalResult);
         expect(h.provider).toHaveBeenCalledOnce();
+        expect(h.provider.mock.calls[0]![0].origin).toBe(packet.payload);
+        expect([...h.store.keys()].map(key => JSON.parse(key).requestMode)).toEqual(['single']);
     });
 
     it.each(['custom-nonce', 'leading-prose'] as const)('flag=true 的 %s 原文不会误认成内部 canonical 包', async variant => {
@@ -258,7 +284,7 @@ describe('真实 broker 的全文单条槽协议', () => {
         const packet = serializeTranslationSlots([first, second], variant === 'custom-nonce' ? 'literal' : undefined);
         const prefix = variant === 'leading-prose' ? 'Quoted protocol example:\n' : '';
         const origin = prefix + packet.payload;
-        const result = prefix + renderPacket(packet, [first, translated[1]!]);
+        const result = (variant === 'leading-prose' ? '协议引用示例：\n' : '') + renderPacket(packet, translated.slice(0, 2));
         h.provider.mockResolvedValueOnce(result);
         await expect(h.broker.translateWithCache({origin, validateTranslationSlots: true})).resolves.toBe(result);
         expect(h.provider).toHaveBeenCalledOnce();
@@ -269,8 +295,8 @@ describe('真实 broker 的全文单条槽协议', () => {
     it('相同原文的 single 与 slot-protocol 在途工作隔离，协议调用不 JOIN 字面调用', async () => {
         const h = createHarness();
         const packet = serializeTranslationSlots([first, second]);
-        const partial = renderPacket(packet, [first, translated[1]!]);
         const complete = renderPacket(packet, translated.slice(0, 2));
+        const literalResult = `协议示例的中文说明：\n${complete}`;
         let releaseLiteral!: (value: string) => void;
         let markLiteralStarted!: () => void;
         const literalStarted = new Promise<void>(resolve => {markLiteralStarted = resolve;});
@@ -284,12 +310,64 @@ describe('真实 broker 的全文单条槽协议', () => {
         try {
             await vi.waitFor(() => expect(h.provider).toHaveBeenCalledTimes(2), {timeout: 500, interval: 5});
         } finally {
-            releaseLiteral(partial);
+            releaseLiteral(literalResult);
             await joined;
         }
-        await expect(literal).resolves.toBe(partial);
+        await expect(literal).resolves.toBe(literalResult);
         await expect(protocol).resolves.toBe(complete);
         expect(h.provider.mock.calls.map(([message]) => message.validateTranslationSlots)).toEqual([undefined, true]);
+    });
+
+    it.each(['complete', 'malformed', 'ordinary-words'] as const)('普通 single 中 %s 标记不豁免其间大量未译正文，只整段重试', async shape => {
+        const h = createHarness();
+        const longSource = [first, second, third].join(' ');
+        const packet = serializeTranslationSlots([longSource, second], 'literal');
+        const wrap = (values: readonly string[]) => {
+            const result = renderPacket(packet, values);
+            return shape === 'complete' ? result : shape === 'malformed'
+                ? result.replaceAll('_BEGIN___', '_BEGI___').replaceAll('_END___', '_EN___')
+                : result.replaceAll('___', ' marker ');
+        };
+        const origin = wrap([longSource, second]);
+        const bad = wrap([longSource, translated[1]!]);
+        const good = wrap([translated.join(' '), translated[1]!]);
+        expect(identifyTextLanguage(origin)).toMatchObject({status: 'identified', languages: ['en']});
+        expect(isClearlyWrongLanguageResponse(origin, bad, 'zh-Hans')).toBe(true);
+        h.provider.mockResolvedValueOnce(bad).mockResolvedValueOnce(good);
+        await expect(h.broker.translateWithCache({origin})).resolves.toBe(good);
+        expect(h.provider.mock.calls.map(([message]) => message.origin)).toEqual([origin, origin]);
+        expect(h.provider.mock.calls.every(([message]) => message.validateTranslationSlots !== true)).toBe(true);
+        expect([...h.store.values()]).toEqual([good]);
+        await expect(h.broker.translateWithCache({origin})).resolves.toBe(good);
+        expect(h.provider).toHaveBeenCalledTimes(2);
+    });
+
+    it('旧 single 坏缓存不能命中，整段重试恢复后才覆盖缓存而不逐槽请求', async () => {
+        const h = createHarness();
+        const longSource = [first, second, third].join(' ');
+        const packet = serializeTranslationSlots([longSource, second]);
+        const bad = renderPacket(packet, [longSource, translated[1]!]);
+        const good = renderPacket(packet, [translated.join(' '), translated[1]!]);
+        h.cacheGet.mockResolvedValueOnce(bad);
+        h.provider.mockResolvedValueOnce(bad).mockResolvedValueOnce(good);
+        await expect(h.broker.translateWithCache({origin: packet.payload})).resolves.toBe(good);
+        expect(h.provider.mock.calls.map(([message]) => message.origin)).toEqual([packet.payload, packet.payload]);
+        expect(h.cacheSet).toHaveBeenCalledOnce();
+        expect([...h.store.values()]).toEqual([good]);
+        await expect(h.broker.translateWithCache({origin: packet.payload})).resolves.toBe(good);
+        expect(h.provider).toHaveBeenCalledTimes(2);
+    });
+
+    it('标记包裹长坏正文连续返回仍整段失败，不缓存且不第三次请求', async () => {
+        const h = createHarness();
+        const longSource = [first, second, third].join(' ');
+        const packet = serializeTranslationSlots([longSource, second]);
+        h.provider.mockResolvedValue(renderPacket(packet, [longSource, translated[1]!]));
+        await expect(h.broker.translateWithCache({origin: packet.payload})).rejects.toMatchObject({
+            kind: 'response', code: 'WRONG_LANGUAGE_RESPONSE', retryable: false,
+        });
+        expect(h.provider.mock.calls.map(([message]) => message.origin)).toEqual([packet.payload, packet.payload]);
+        expect(h.cacheSet).not.toHaveBeenCalled();
     });
 
     it.each(['missing-end', 'reordered'] as const)('返回协议 %s 时交回 raw 供前端 fallback，重复调用也不缓存', async shape => {
@@ -530,7 +608,7 @@ describe('真实 broker 的全文单条槽协议', () => {
         h.config.enableAIContext = true;
         const sources = [first, second, third];
         const packet = serializeTranslationSlots(sources);
-        const pageContext = 'This page explains document translation, computer network settings, and application storage.';
+        const pageContext = 'This page explains document translation, computer network settings, and application storage.'.repeat(20);
         const summary = '页面介绍文档翻译、网络设置和应用存储。';
         const leaked = '<webpage_context>仅用于参考的页面上下文被泄漏。</webpage_context>';
         const partial = renderPacket(packet, [translated[0]!, leaked, translated[2]!]);
@@ -570,8 +648,11 @@ describe('真实 broker 的全文单条槽协议', () => {
         const name = '人工智能驱动的网页阅读辅助工具';
         const pageContext = `页面摘要：${name}，可帮助用户理解网页并阅读更多相关内容。`;
         h.provider.mockImplementation(async message => {
-            if ('summaryPrompt' in message) return '网页阅读工具摘要。';
-            if (message.origin === packet.payload) return renderPacket(packet, [name, translated[1]!]);
+            if ('summaryPrompt' in message) return `网页阅读工具摘要：${name}。`;
+            if (message.origin === packet.payload) {
+                expect(message.pageContext).toContain(name);
+                return renderPacket(packet, [name, translated[1]!]);
+            }
             if (message.origin === sources[0]) {
                 expect(message.pageContext).toBe('');
                 return name;
@@ -720,6 +801,59 @@ describe('frontend 区分原生数组、机器逐槽与 AI 槽协议的会话边
         expect(h.provider.mock.calls[0]![0].validateTranslationSlots).not.toBe(true);
     });
 
+    it.each([true, false])('全文单个原生批次去重重复句子，并沿用缓存设置 %s', async useCache => {
+        const h = createHarness({service: 'deepL'});
+        connectFrontend(h);
+        h.provider.mockResolvedValueOnce(translated.slice(0, 2));
+        const sources = [first, second, first, second];
+        await expect(translateTextSlots(sources, {...snapshot, service: 'deepL', useCache}))
+            .resolves.toEqual([translated[0], translated[1], translated[0], translated[1]]);
+        expect(h.provider).toHaveBeenCalledOnce();
+        expect(h.provider.mock.calls[0]![0].origin).toEqual([first, second]);
+        expect(ports.batch.mock.calls[0]![2].useCache).toBe(useCache);
+        expect(h.cacheSet).toHaveBeenCalledTimes(useCache ? 2 : 0);
+    });
+
+    it.each([true, false])('全文不同位置的 40 个相同句子共享首次请求，缓存=%s', async useCache => {
+        const h = createHarness({service: 'deepL'});
+        connectFrontend(h);
+        const session = {active: true, translationSlotCache: new Map(), ...createFullPageRequestSessionState()};
+        h.provider.mockResolvedValue([translated[0]]);
+        try {
+            const results = await Promise.all(Array.from({length: 40}, () => translateTextSlots(
+                [first], {...snapshot, service: 'deepL', useCache}, undefined, undefined, session,
+            )));
+            expect(results).toEqual(Array.from({length: 40}, () => [translated[0]]));
+            expect(h.provider).toHaveBeenCalledOnce();
+            expect(h.provider.mock.calls[0]![0].origin).toEqual([first]);
+        } finally {
+            disposeFullPageRequestSession(session, new Error('test complete'));
+        }
+    });
+
+    it('全文分批出现的重复句子与恢复后新会话复用已完成译文', async () => {
+        const h = createHarness({service: 'deepL'});
+        connectFrontend(h);
+        const invocation = {...snapshot, service: 'deepL'};
+        const session = {active: true, translationSlotCache: new Map(), ...createFullPageRequestSessionState()};
+        const restarted = {active: true, translationSlotCache: new Map(), ...createFullPageRequestSessionState()};
+        h.provider.mockResolvedValueOnce(translated.slice(0, 2)).mockResolvedValueOnce([translated[2]]);
+        try {
+            await expect(translateTextSlots([first, second], invocation, undefined, undefined, session))
+                .resolves.toEqual(translated.slice(0, 2));
+            await expect(translateTextSlots([second, third], invocation, undefined, undefined, session))
+                .resolves.toEqual(translated.slice(1));
+            expect(h.provider.mock.calls.map(([message]) => message.origin)).toEqual([[first, second], [third]]);
+            disposeFullPageRequestSession(session, new Error('restore original'));
+            await expect(translateTextSlots([third, first, second], invocation, undefined, undefined, restarted))
+                .resolves.toEqual([translated[2], translated[0], translated[1]]);
+            expect(h.provider).toHaveBeenCalledTimes(2);
+        } finally {
+            disposeFullPageRequestSession(session, new Error('test complete'));
+            disposeFullPageRequestSession(restarted, new Error('test complete'));
+        }
+    });
+
     it('serialized single 向 client 透传 validateTranslationSlots=true', async () => {
         const h = createHarness();
         connectFrontend(h);
@@ -761,5 +895,47 @@ describe('frontend 区分原生数组、机器逐槽与 AI 槽协议的会话边
         expect(h.provider).toHaveBeenCalledTimes(2);
         expect(h.cacheSet).not.toHaveBeenCalled();
         expect(session.translationSlotCache.size).toBe(0);
+    });
+
+    it('跨段批次的空槽补译失败不会触发前端整批降级或重新发送良槽', async () => {
+        const h = createHarness();
+        connectFrontend(h);
+        const session = {active: true, translationSlotCache: new Map(), ...createFullPageRequestSessionState()};
+        const invocation = {...snapshot, enableAIMultiSegment: true};
+        const packet = serializeTranslationSlots([first, second]);
+        h.provider.mockResolvedValueOnce(renderPacket(packet, ['', translated[1]!])).mockResolvedValueOnce('');
+        try {
+            const outcomes = await Promise.allSettled([
+                translateTextSlots([first], invocation, undefined, undefined, session),
+                translateTextSlots([second], invocation, undefined, undefined, session),
+            ]);
+            expect(outcomes).toEqual([
+                {status: 'rejected', reason: expect.objectContaining({code: 'AI_MULTI_SEGMENT_REPAIR_FAILED'})},
+                {status: 'rejected', reason: expect.objectContaining({code: 'AI_MULTI_SEGMENT_REPAIR_FAILED'})},
+            ]);
+            expect(ports.batch).toHaveBeenCalledOnce();
+            expect(ports.single).not.toHaveBeenCalled();
+            expect(h.provider.mock.calls.map(([message]) => message.origin)).toEqual([packet.payload, first]);
+            expect(h.cacheSet).not.toHaveBeenCalled();
+        } finally {
+            disposeFullPageRequestSession(session, new Error('test complete'));
+        }
+    });
+
+    it.each(['abort', 'deadline'] as const)('多段局部恢复沿用外层 %s，不发送迟到补译或写缓存', async stop => {
+        let now = 0;
+        const h = createHarness({now: () => now});
+        const controller = new AbortController();
+        const packet = serializeTranslationSlots([first, second]);
+        h.provider.mockImplementationOnce(async () => {
+            if (stop === 'abort') controller.abort();
+            else now = 10_001;
+            return renderPacket(packet, ['', translated[1]!]);
+        });
+        await expect(h.broker.translateWithCache(attachTranslationRequestControl({origin: [first, second], aiMultiSegment: true,
+            requestTimeoutMs: 10_000}, {signal: controller.signal, ownershipKey: 'partial-repair'})))
+            .rejects.toMatchObject(stop === 'abort' ? {name: 'AbortError'} : {name: 'TranslationProviderDeadlineError'});
+        expect(h.provider).toHaveBeenCalledOnce();
+        expect(h.cacheSet).not.toHaveBeenCalled();
     });
 });

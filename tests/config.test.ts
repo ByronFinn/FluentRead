@@ -3,8 +3,148 @@ import { reactive } from 'vue';
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import * as ts from 'typescript';
-import { Config, normalizeConfig } from '@/src/core/config/model';
+import {Config, normalizeConfig} from '@/src/core/config/model';
+import {configPatchValuesEqual, createConfigPatch} from '@/src/core/config/mutations';
+import {defaultOption, defaultModelIds, LEGACY_DEFAULT_USER_ROLES, options} from '@/src/core/config/catalog';
 import {GLOSSARY_LIMITS} from '@/src/core/glossary';
+describe('工具栏点击行为配置', () => {
+    it('旧配置保持打开面板，显式翻译偏好可导入导出且不影响悬浮球', () => {
+        expect(new Config().toolbarClickAction).toBe('popup');
+        for (const value of [undefined, null, '', 'unknown', true, 1, {}, []]) {
+            expect(normalizeConfig({toolbarClickAction: value}).toolbarClickAction).toBe('popup');
+        }
+        for (const toolbarClickAction of ['popup', 'translate'] as const) {
+            const original = {toolbarClickAction, floatingBallClickAction: 'settings'};
+            const normalized = normalizeConfig(original);
+            expect(normalized.toolbarClickAction).toBe(toolbarClickAction);
+            expect(normalizeConfig(JSON.parse(JSON.stringify(normalized))).toolbarClickAction).toBe(toolbarClickAction);
+            expect(normalized.floatingBallClickAction).toBe('settings');
+            expect(original).toEqual({toolbarClickAction, floatingBallClickAction: 'settings'});
+        }
+    });
+});
+describe('翻译服务启用状态配置', () => {
+    it('全部内置关闭时依次使用已启用自定义或组合，全部关闭的备份仍保留一个默认服务', () => {
+        const disabledTranslationServices = options.services.filter(item => !item.disabled).map(item => item.value);
+        const custom = {id: 'custom:available', name: 'Available', endpoint: 'https://fixture.invalid/v1', models: ['fixture']};
+        const composite = {id: 'composite:available', name: 'Group', strategy: 'sequential', services: ['google', 'microsoft'], timeoutMs: 12000};
+        expect(normalizeConfig({service: 'openai', disabledTranslationServices, customOpenAIProviders: [custom]}).service).toBe(custom.id);
+        expect(normalizeConfig({service: 'openai', disabledTranslationServices, compositeTranslationProviders: [composite]}).service).toBe(composite.id);
+        const allClosed = normalizeConfig({service: 'openai', disabledTranslationServices});
+        expect(allClosed.service).toBe('openai'); expect(allClosed.disabledTranslationServices).not.toContain('openai');
+    });
+    it('新配置默认移除指定 AI 平台，旧配置只迁移一次并保留已经配置的服务', () => {
+        const removedPlatforms = ['runcrate', 'cloudgpu', 'cheaperinference', 'cheapaimodel', 'standardcompute'];
+        expect(new Config().disabledTranslationServices).toEqual(removedPlatforms);
+        expect(normalizeConfig({disabledTranslationServices: []}).disabledTranslationServices).toEqual(removedPlatforms);
+        const oldConfig = normalizeConfig({service: 'runcrate', token: {cloudgpu: 'fixture-key'}});
+        expect(oldConfig.disabledTranslationServices).toEqual(['cheaperinference', 'cheapaimodel', 'standardcompute']);
+        expect(oldConfig.service).toBe('runcrate');
+        expect(oldConfig.aiPlatformDefaultRemovalMigrated).toBe(true);
+        const restored = normalizeConfig({...oldConfig, disabledTranslationServices: []});
+        expect(restored.disabledTranslationServices).toEqual([]);
+        const legacyPrompt = normalizeConfig({disabledTranslationServices: [], user_role: {runcrate: LEGACY_DEFAULT_USER_ROLES[0]}});
+        expect(legacyPrompt.disabledTranslationServices).toEqual(removedPlatforms);
+        const customPrompt = normalizeConfig({disabledTranslationServices: [], user_role: {runcrate: 'fixture custom prompt'}});
+        expect(customPrompt.disabledTranslationServices).not.toContain('runcrate');
+    });
+    it('尊重迁移后的显式可用状态；导入时去重并约束标识，关闭默认服务时选择一个启用项', () => {
+        expect(normalizeConfig({...new Config(), disabledTranslationServices: []}).disabledTranslationServices).toEqual([]);
+        const normalized = normalizeConfig({service: 'openai', aiPlatformDefaultRemovalMigrated: true, disabledTranslationServices: ['openai', ' openai ', 'deeplx', '', null, 12, 'x'.repeat(129)]} as never);
+        expect(normalized.disabledTranslationServices).toEqual(['openai', 'deeplx']);
+        expect(normalized.service).not.toBe('openai');
+        expect(normalized.disabledTranslationServices).not.toContain(normalized.service);
+        expect(normalizeConfig(JSON.parse(JSON.stringify(normalized))).disabledTranslationServices).toEqual(normalized.disabledTranslationServices);
+    });
+    it('旧配置中的服务引用与平台设置保留对应服务', () => {
+        const service = 'runcrate';
+        const selectedFields = [
+            'service', 'hoverTranslationService', 'selectionTranslationService', 'imageTranslationService',
+            'documentService', 'videoService', 'areaTranslationService', 'inputBoxTranslationService',
+        ];
+        const references: Record<string, unknown>[] = [
+            ...selectedFields.map(field => ({[field]: service})),
+            {harness: {service}},
+            {writing: {service}},
+            {favoriteServices: [service]},
+            {translationCenterServices: [service]},
+            {quickTranslationProfiles: [{service}]},
+            {compositeTranslationProviders: [{id: 'composite:fixture', name: 'fixture', services: [service, 'google'], strategy: 'sequential', timeoutMs: 12000}]},
+        ];
+        const platformSettings: Record<string, unknown>[] = [
+            {secret: {[service]: 'fixture-secret'}},
+            {proxy: {[service]: 'https://proxy.example/v1'}},
+            {customModel: {[service]: 'fixture-model'}},
+            {customBody: {[service]: '{"fixture":true}'}},
+            {customHeaders: {[service]: '{"X-Fixture":"yes"}'}},
+            {serviceRegion: {[service]: 'fixture-region'}},
+            {apiKeys: {[service]: ['fixture-key']}},
+            {customModels: {[service]: ['fixture-model']}},
+            {model: {[service]: 'fixture-model'}},
+            {modelThinking: {[service]: {fixture: true}}},
+            {serviceRequestLimits: {[service]: {fixture: 1}}},
+            {modelRequestLimits: {[service]: {fixture: 1}}},
+            {modelVision: {[service]: {fixture: true}}},
+            {apiKeyRotationEnabled: {[service]: true}},
+            {system_role: {[service]: 'fixture system prompt'}},
+            {user_role: {[service]: 'fixture user prompt'}},
+        ];
+        for (const settings of [...references, ...platformSettings]) {
+            expect(normalizeConfig({disabledTranslationServices: [], ...settings}).disabledTranslationServices).not.toContain(service);
+        }
+    });
+    it('旧默认值、空值和其他服务的设置不会误判为目标服务配置', () => {
+        const service = 'runcrate';
+        const unconfigured: Record<string, unknown>[] = [
+            {harness: 'invalid'}, {writing: []}, {writing: {service: 'google'}},
+            {favoriteServices: ['google']}, {translationCenterServices: ['google']},
+            {quickTranslationProfiles: [null, [], {service: 'google'}]},
+            {compositeTranslationProviders: [null, {}, {services: ['google']}]},
+            {token: {[service]: '  '}}, {secret: {[service]: ''}}, {proxy: {[service]: ''}},
+            {customModel: {[service]: ''}}, {customBody: {[service]: ''}}, {customHeaders: {[service]: ''}},
+            {serviceRegion: {[service]: ''}}, {apiKeys: {[service]: ['', '  ']}},
+            {customModels: {[service]: []}}, {model: {[service]: defaultModelIds[service as keyof typeof defaultModelIds]}},
+            {modelThinking: {[service]: {}}}, {serviceRequestLimits: {[service]: {}}},
+            {modelRequestLimits: {[service]: {}}}, {modelVision: {[service]: {}}},
+            {apiKeyRotationEnabled: {[service]: false}}, {system_role: {[service]: defaultOption.system_role}},
+            {user_role: {[service]: defaultOption.user_role}},
+        ];
+        for (const settings of unconfigured) {
+            expect(normalizeConfig({disabledTranslationServices: [], ...settings}).disabledTranslationServices).toContain(service);
+        }
+    });
+});
+
+describe('配置补丁中的迁移标记保护', () => {
+    it('忽略对后台迁移标记的补丁，并比较重复引用的对象图', () => {
+        const current = new Config();
+        const patch = createConfigPatch({service: 'google', aiPlatformDefaultRemovalMigrated: false}, current, false, new Set(Object.keys(current)));
+        expect(patch).toEqual({service: 'google'});
+        const shared = {};
+        expect(configPatchValuesEqual({first: shared, second: shared}, {first: {}, second: {}})).toBe(true);
+    });
+});
+
+describe('浏览器默认译文字体配置', () => {
+    it('浏览器默认译文字体默认关闭，仅严格布尔 true 开启，导入导出保留选择且不改原有外观', () => {
+        expect(new Config().browserDefaultTranslationFont).toBe(false);
+        expect(normalizeConfig(undefined).browserDefaultTranslationFont).toBe(false);
+        expect(normalizeConfig({}).browserDefaultTranslationFont).toBe(false);
+        for (const browserDefaultTranslationFont of [undefined, null, '', 'true', 'false', 0, 1, {}, []]) {
+            expect(normalizeConfig({browserDefaultTranslationFont}).browserDefaultTranslationFont).toBe(false);
+        }
+        for (const browserDefaultTranslationFont of [true, false]) {
+            const source = {browserDefaultTranslationFont, translationAppearance: {fontFamily: 'mono', fontScale: 112}};
+            const normalized = normalizeConfig(source);
+            expect(normalized.browserDefaultTranslationFont).toBe(browserDefaultTranslationFont);
+            expect(normalized.translationAppearance).toMatchObject(source.translationAppearance);
+            const imported = normalizeConfig(JSON.parse(JSON.stringify(normalized)));
+            expect(imported.browserDefaultTranslationFont).toBe(browserDefaultTranslationFont);
+            expect(imported.translationAppearance).toEqual(normalized.translationAppearance);
+            expect(source).toEqual({browserDefaultTranslationFont, translationAppearance: {fontFamily: 'mono', fontScale: 112}});
+        }
+    });
+});
 describe('单图本地识别方式配置', () => {
     it('新配置、缺失和非法值默认 PaddleOCR，显式引擎选择可往返且不改变漫画开关', () => {
         expect(new Config().imageTranslationOcrEngine).toBe('paddle');
@@ -15,6 +155,19 @@ describe('单图本地识别方式配置', () => {
             const value=normalizeConfig(original);expect(value.imageTranslationOcrEngine).toBe(engine);
             expect(normalizeConfig(JSON.parse(JSON.stringify(value))).imageTranslationOcrEngine).toBe(engine);
             expect(value.imageTranslationMangaEnabled).toBe(false);expect(original).toEqual({imageTranslationOcrEngine:engine,imageTranslationMangaEnabled:false});
+        }
+    });
+});
+describe('图片本地处理后端配置兼容', () => {
+    it('旧配置与非法值使用自动，CPU 选择在序列化和归一后保留', () => {
+        expect(new Config().imageTranslationInferenceBackend).toBe('auto');
+        for (const value of [undefined, null, 'webgpu', true, {}, 1]) {
+            expect(normalizeConfig({imageTranslationInferenceBackend: value}).imageTranslationInferenceBackend).toBe('auto');
+        }
+        for (const backend of ['cpu', 'auto'] as const) {
+            const config = normalizeConfig({imageTranslationInferenceBackend: backend});
+            expect(config.imageTranslationInferenceBackend).toBe(backend);
+            expect(normalizeConfig(JSON.parse(JSON.stringify(config))).imageTranslationInferenceBackend).toBe(backend);
         }
     });
 });
@@ -3830,6 +3983,22 @@ describe('配置 store 默认字段快照复用', () => {
             expect(() => fixture.store.prepareConfigPatchRequest({theme: 'light'}, {theme: 'auto'}, shared, true)).toThrow('theme');
         } finally {
             await fixture.close();
+        }
+    });
+});
+
+describe('native video ASR configuration boundaries', () => {
+    it('defaults only missing endpoints and preserves explicit invalid endpoints as disabled', () => {
+        expect(new Config().videoTranscriptionProvider).toBe('browser');
+        expect(new Config().videoNativeAsrBaseUrl).toBe('http://127.0.0.1:8000');
+        expect(normalizeConfig({}).videoNativeAsrBaseUrl).toBe('http://127.0.0.1:8000');
+        expect(normalizeConfig({videoTranscriptionProvider: 'native-qwen', videoNativeAsrBaseUrl: 'http://127.0.0.1:8000/v1/'}))
+            .toMatchObject({videoTranscriptionProvider: 'native-qwen', videoNativeAsrBaseUrl: 'http://127.0.0.1:8000'});
+        for (const value of [null, '', 'https://example.com']) {
+            expect(normalizeConfig({videoNativeAsrBaseUrl: value}).videoNativeAsrBaseUrl).toBe('');
+        }
+        for (const value of [undefined, null, '', 'unknown', {}, 1]) {
+            expect(normalizeConfig({videoTranscriptionProvider: value}).videoTranscriptionProvider).toBe('browser');
         }
     });
 });

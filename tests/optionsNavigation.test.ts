@@ -176,15 +176,18 @@ describe('options navigation view-model', () => {
     }
     expect(filterNavigationItems('')).toEqual([])
     expect(filterNavigationItems('不存在的设置项')).toEqual([])
-    expect(filterNavigationItems('Harness')).toEqual([
-      expect.objectContaining({ id: 'settings-selection' }),
-    ])
     expect(filterNavigationItems('嘴替')).toEqual([
       expect.objectContaining({ id: 'settings-selection' }),
     ])
     expect(filterNavigationItems('社交评论')).toEqual([
       expect.objectContaining({ id: 'settings-selection' }),
     ])
+    for (const keyword of ['翻译卡片', '学习辅助', '解释深度', '学习记忆']) {
+      expect(filterNavigationItems(keyword)).toEqual([
+        expect.objectContaining({ id: 'settings-selection' }),
+      ])
+    }
+    expect(filterNavigationItems('Harness')).toEqual([])
   })
 })
 
@@ -268,7 +271,6 @@ describe('settings page categories', () => {
     expect(resolveSettingsPanel('settings-translation', 'excluded-language-settings')).toBe('excluded-languages')
     expect(resolveSettingsPanel('settings-translation', 'context-menu-settings')).toBe('context-menu')
     expect(resolveSettingsPanel('settings-interface', 'translation-appearance-panel')).toBe('translation')
-    expect(resolveSettingsPanel('settings-translation', 'translation-sentence-highlight')).toBe('reading')
     expect(resolveSettingsPanel('settings-interface', 'translation-sentence-highlight-style')).toBe('translation')
     expect(settingsPagePanels['settings-translation'][0].id).toBe('reading')
     expect(resolveSettingsPanel('settings-interface', 'font')).toBe('font')
@@ -279,6 +281,9 @@ describe('settings page categories', () => {
     expect(resolveSettingsPanel('settings-interface')).toBe('translation')
     expect(resolveSettingsPanel('settings-general')).toBe('')
     expect(resolveSettingsPanel('unknown', 'cache')).toBe('')
+    for (const section of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      expect(resolveSettingsPanel(section, 'cache')).toBe('')
+    }
   })
   it('keeps every category attached to a real settings page without ambiguous targets', () => {
     for (const [section, panels] of Object.entries(settingsPagePanels)) {

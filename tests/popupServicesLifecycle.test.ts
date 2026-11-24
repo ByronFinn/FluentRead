@@ -1,63 +1,37 @@
 /**
  * @file tests/popupServicesLifecycle.test.ts
  * 文件职责：验证实际 Popup 服务选择模板的事件归属、面板焦点、独立模型与凭据读取范围。
- * 主要内容：执行真实缓存客户端模板，覆盖隐藏、缓存、配置替换、选择会话切换、查询、目录权限、九种功能模型和默认继承；验证B站免费阅读选项、固定模型与写作拒绝边界。
+ * 主要内容：执行真实缓存客户端模板，覆盖隐藏、缓存、配置替换、选择会话切换、查询、目录权限、九种功能模型和默认继承；验证B站免费阅读选项、固定模型与写作拒绝边界；通过实际抽屉祖先与受控 DOM 几何验证进入/返回的局部滚动及同步、迟到、焦点保护。
  * 模块边界：Linkedom 保留实际节点树，展示控件与焦点为受控端口；不调用翻译或验证系统输入法。
  */
-import {createRequire} from 'node:module'
-import {readFileSync} from 'node:fs'
-import {resolve} from 'node:path'
+import * as runtime from 'vue'
 import {parseHTML} from 'linkedom'
-import vue from '@vitejs/plugin-vue'
-import {createServer, type ViteDevServer} from 'vite'
-import {compileScript, compileTemplate, parse} from 'vue/compiler-sfc'
-import ts from 'typescript'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {Config} from '@/src/core/config/model'
 import {createApiKeyRequirementKey} from '@/src/core/config/validation'
 import {BILIBILI_FREE_TRANSLATION_MODEL} from '@/src/core/config/freeTranslation'
 
-const runtime = createRequire(import.meta.url)('vue') as typeof import('vue')
-let server: ViteDevServer, app: import('vue').App, document: Document, win: any, focused: Element | null
+let app: import('vue').App, document: Document, win: any, focused: Element | null
 let state: Record<string, any>, props: Record<string, any>, shown: import('vue').Ref<boolean>
 let events: Map<Element, Record<string, any>>
+let scrollPort: HTMLElement | undefined
+const scrollWrites: number[] = []
 const updates = vi.fn(), focus = vi.fn(), selectionRange = vi.fn()
-const popupPath = 'src/app/popup/PopupServices.vue'
 let capabilities: Record<string, unknown>
 async function settle() {await runtime.nextTick();await Promise.resolve();await runtime.nextTick()}
 beforeEach(async () => {
-  vi.clearAllMocks();capabilities = runtime.reactive({browser: 'chrome', areaTranslation: true, imageTranslation: true});(globalThis as any).__featureMenuCapabilities = capabilities;events = new Map();const parsed = parseHTML('<html><body><div id="app"></div></body></html>');win = parsed.window;document = win.document;focused = document.body
+  vi.clearAllMocks();scrollPort=undefined;scrollWrites.length=0;capabilities = runtime.reactive({browser: 'chrome', areaTranslation: true, imageTranslation: true});events = new Map();const parsed = parseHTML('<html><body><div id="app"></div></body></html>');win = parsed.window;document = win.document;focused = document.body
   Object.defineProperty(document, 'activeElement', {configurable: true, get: () => focused})
   for (const [key, value] of Object.entries({document, window: win, HTMLTextAreaElement: win.HTMLTextAreaElement, HTMLElement: win.HTMLElement, Event: win.Event, Node: win.Node})) vi.stubGlobal(key, value)
-  server = await createServer({root: process.cwd(), configFile: false, appType: 'custom', logLevel: 'silent', resolve: {alias: {'@': process.cwd()}}, server: {hmr: false, middlewareMode: true},
-    ssr: {noExternal: ['element-plus', '@element-plus/icons-vue']}, plugins: [{name: 'prompt-profile-controlled-ports', enforce: 'pre', resolveId(id) {
-      if (/\/src\/ui\/i18n(?:\.ts)?$/u.test(id)) return '\0prompt-i18n'
-      if (id === 'element-plus') return '\0prompt-element'
-      if (/\/src\/platform\/browser\/capabilities(?:\.ts)?$/u.test(id)) return '\0feature-menu-capabilities'
-      if (id === '@element-plus/icons-vue') return '\0prompt-icons'
-      if (id.endsWith('.vue') && !/\/(?:PopupServices)\.vue$/u.test(id)) return '\0prompt-display'
-      return null
-    }, load(id) {
-      if (id === '\0prompt-i18n') return "import {ref} from 'vue';export const useUiI18n = () => ({language: ref('zh-CN'), t: (key, params) => params?.model ? `${key} ${params.model}` : key, translateLegacy: text => text})"
-      if (id === '\0prompt-element') return "import {h, getCurrentInstance} from 'vue';export const ElPopover = {setup(_, {attrs, slots}) {const instance = getCurrentInstance();return () => h('div', {...attrs, 'data-timing-port-key': instance.vnode.key}, [slots.reference?.(), slots.default?.()])}}"
-      if (id === '\0feature-menu-capabilities') return 'export const browserCapabilities = globalThis.__featureMenuCapabilities;'
-      if (id === '\0prompt-icons') return 'export const ArrowDown = {}, WarningFilled = {}'
-      if (id === '\0prompt-display') return "import {h} from 'vue';export default {setup(_, {slots}) {return () => h('div', null, [slots.copy?.(), slots.default?.()])}}"
-      return null
-    }}, vue()]})
+  vi.resetModules()
+  vi.doMock('@/src/ui/i18n', () => ({useUiI18n: () => ({language: runtime.ref('zh-CN'), t: (key: string, params?: {model?: string}) => params?.model ? `${key} ${params.model}` : key, translateLegacy: (text: string) => text})}))
+  vi.doMock('@/src/platform/browser/capabilities', () => ({browserCapabilities: capabilities}))
+  vi.doMock('@/src/ui/components/ServiceIcon.vue', () => ({default: {setup(_: unknown, {slots}: any) {return () => runtime.h('div', null, [slots.copy?.(), slots.default?.()])}}}))
 })
-afterEach(async () => {app?.unmount();await settle();await server?.close();delete (globalThis as any).__featureMenuCapabilities;vi.unstubAllGlobals()})
-async function compile(path: string) {
-  const filename = resolve(path), {descriptor} = parse(readFileSync(filename, 'utf8'), {filename})
-  const bindings = compileScript(descriptor, {id: 'prompt-profile-test'}).bindings
-  const template = compileTemplate({source: descriptor.template!.content, filename, id: 'prompt-profile-test', compilerOptions: {mode: 'function', cacheHandlers: true, bindingMetadata: bindings, expressionPlugins: ['typescript']}})
-  expect(template.errors).toEqual([])
-  const component = (await server.ssrLoadModule(`/${path}`)).default;component.ssrRender = undefined
-  component.render = new Function('Vue', ts.transpileModule(template.code, {compilerOptions: {target: ts.ScriptTarget.ES2022}}).outputText)(runtime)
-  return component
-}
-async function mount(path: string, values: Record<string, unknown>, listeners: Record<string, unknown> = {}) {
-  const component = await compile(path), source = runtime.shallowReactive({active: true, context: {}, contextKey: 'service-a', ...values});shown = runtime.ref(true)
+afterEach(async () => {app?.unmount();await settle();vi.unstubAllGlobals()})
+async function mount(values: Record<string, unknown>, listeners: Record<string, unknown> = {}) {
+  const component = (await import('@/src/app/popup/PopupServices.vue')).default
+  const source = runtime.shallowReactive({active: true, context: {}, contextKey: 'service-a', ...values});shown = runtime.ref(true)
   const renderer = runtime.createRenderer({patchProp(el: any, key: string, previous: any, next: any) {
     const handlers = events.get(el) || {};events.set(el, handlers)
     if (/^on[A-Z]/u.test(key)) {handlers[key] = next;const event = key.slice(2).toLowerCase();if (previous) el.removeEventListener(event, previous);if (next) el.addEventListener(event, next);return}
@@ -65,18 +39,18 @@ async function mount(path: string, values: Record<string, unknown>, listeners: R
     if (key === 'class') {el.className = next ?? '';return}
     if (next === false || next === undefined || next === null) el.removeAttribute(key);else el.setAttribute(key, String(next))
   }, insert: (child: any, parent: any, anchor: any = null) => parent.insertBefore(child, anchor), remove: (child: any) => child.parentNode?.removeChild(child),
-    createElement: tag => {const el = document.createElement(tag) as any;el.focus = (options: unknown) => {focus(options);focused = el}
+    createElement: tag => {const el = document.createElement(tag) as any;el.focus = (options: unknown) => {focus(options);focused = el};el.getBoundingClientRect=()=>geometry(el)
       if (tag === 'textarea') {el.selectionStart = 0;el.selectionEnd = 0;el.setSelectionRange = (start: number, end: number) => {selectionRange(start, end);el.selectionStart = start;el.selectionEnd = end}}
       return el}, createText: text => document.createTextNode(text), createComment: text => document.createComment(text), setText: (n: any, text: string) => {n.nodeValue = text},
     setElementText: (el: any, text: string) => {el.textContent = text}, parentNode: (n: any) => n.parentNode, nextSibling: (n: any) => n.nextSibling,
     querySelector: selector => document.querySelector(selector), setScopeId: () => {}, cloneNode: (n: any) => n.cloneNode(true),
     insertStaticContent: (html: string, parent: any, anchor: any) => {const t = document.createElement('template');t.innerHTML = html;const first = t.content.firstChild!, last = t.content.lastChild!;parent.insertBefore(t.content, anchor);return [first, last]}})
   app = renderer.createApp({setup: () => () => runtime.h(runtime.KeepAlive, null, {default: () => shown.value
-    ? runtime.h(component, {...source, ...listeners, ref: (vm: any) => {if (vm) {state = vm.$.setupState;props = vm.$.props}}}) : runtime.h({render: () => null}, {key: 'other'})})})
+    ? runtime.h(component as runtime.Component, {...source, ...listeners, ref: (vm: any) => {if (vm) {state = vm.$.setupState;props = vm.$.props}}}) : runtime.h({render: () => null}, {key: 'other'})})})
   const control = {setup(_props: unknown, {attrs}: any) {return () => runtime.h('input', attrs)}}
   app.component('el-switch', control);app.component('el-select', control);app.component('el-option', {render: () => null})
   app.component('el-icon', {render: () => null})
-  app.provide(runtime.ssrContextKey, {modules: new Set<string>()});app.config.warnHandler = () => {};app.mount(document.getElementById('app')!);await settle()
+  app.config.warnHandler = () => {};app.mount(document.getElementById('app')!);await settle()
 }
 
 
@@ -87,12 +61,96 @@ function option(id: string) {return document.querySelector(`[data-service-choice
 function invalidate(reason: string) {if (reason === 'hidden') props.active = false;if (reason === 'cached') shown.value = false;if (reason === 'unmount') app.unmount();if (reason === 'config') props.config = runtime.reactive(new Config())}
 function snapshot(config: Config) {return {service: config.service, hover: config.hoverTranslationService, selection: config.selectionTranslationService, input: config.inputBoxTranslationService, inputModel: config.inputBoxTranslationModel, reading: {...config.harness}, writing: {...config.writing}}}
 // 待配置的服务收在折叠的更多区；夹具默认填好凭据，让 OpenAI 与 DeepSeek 留在常用区供事件归属用例直接点击。
-async function mountPopup(config = runtime.reactive(new Config()), values: Record<string, unknown> = {}, credentials = true) {config.service = 'openai';if (credentials) for (const id of ['openai', 'deepseek']) config.token[id] ||= 'test-only-key';await mount(popupPath, {config, serviceOptions: services, ...values}, {onClose: updates})}
+async function mountPopup(config = runtime.reactive(new Config()), values: Record<string, unknown> = {}, credentials = true) {config.service = 'openai';if (credentials) for (const id of ['openai', 'deepseek']) config.token[id] ||= 'test-only-key';await mount({config, serviceOptions: services, ...values}, {onClose: updates})}
 async function open(id: string) {const el = row(id) as HTMLElement;el.focus();eventOf(el)();await settle();expect(document.querySelector('[data-service-picker]')?.getAttribute('data-service-picker')).toBe(id)}
 async function search(keyword: string) {const input = document.querySelector('input[type="search"]') as HTMLInputElement;input.value = keyword;eventOf(input, 'onInput')({target: input});await settle()}
 function pickerBack() {return eventOf(document.querySelector('.service-picker-back')!)}
+function rect(top: number, height: number) {return {top,bottom:top+height,left:0,right:280,width:280,height,x:0,y:top,toJSON:()=>({top,height})} as DOMRect}
+function geometry(el: Element): DOMRect {
+  if(el===scrollPort)return rect(100,206)
+  if(el.matches('.popup-service-toolbar'))return rect(100,46)
+  const id=el.getAttribute('data-feature-service')
+  if(id){const index=[...document.querySelectorAll('[data-feature-service]')].indexOf(el);return rect(154+index*64-(scrollPort?.scrollTop||0),48)}
+  return rect(170-(scrollPort?.scrollTop||0),46)
+}
+function attachOwnedScroller() {
+  const drawer=document.createElement('div');drawer.className='popup-services-drawer'
+  const body=document.createElement('div');body.className='el-drawer__body';drawer.append(body);document.body.append(drawer);body.append(document.getElementById('app')!)
+  let top=0;Object.defineProperties(body,{clientTop:{value:0},clientHeight:{value:206},scrollTop:{get:()=>top,set:value=>{top=Math.max(0,value);scrollWrites.push(top)}}})
+  body.getBoundingClientRect=()=>rect(100,206);scrollPort=body;document.body.scrollTop=79
+  return body
+}
+function expectTargetVisible(el: Element) {const box=geometry(el);expect(box.top).toBeGreaterThanOrEqual(146);expect(box.bottom).toBeLessThanOrEqual(306);expect(document.body.scrollTop).toBe(79)}
+
 
 describe('Popup 服务选择实际缓存模板', () => {
+  it('关闭的服务不能在功能面板重新选用，原独立选择保留并可在启用后恢复', async () => {
+    const config = runtime.reactive(new Config()); config.disabledTranslationServices = ['deepseek']; config.hoverTranslationService = 'deepseek';
+    await mountPopup(config); const before = JSON.stringify(config); await open('default'); await search('deepseek');
+    expect(option('deepseek')).toBeNull(); expect(JSON.stringify(config)).toBe(before);
+    pickerBack()(); await settle();
+    expect(row('hover')?.querySelector('.assignment-warning')?.getAttribute('aria-label')).toBe('settings.services.library.serviceDisabledMessage');
+    await open('hover'); expect(option('deepseek').hasAttribute('disabled')).toBe(true);
+    const stale = eventOf(option('deepseek')); stale(); await settle(); expect(JSON.stringify(config)).toBe(before);
+    config.disabledTranslationServices = []; await settle();
+    expect(option('deepseek').hasAttribute('disabled')).toBe(false);
+  })
+  it('实际选择视图同步清掉抽屉旧滚动，返回后默认行可见且不滚动宿主',async()=>{
+    await mountPopup();const scroller=attachOwnedScroller();scroller.scrollTop=840;const source=row('default') as HTMLElement;source.focus();eventOf(source)()
+    expect(scroller.scrollTop).toBe(0);await settle();expectTargetVisible(document.querySelector('input')!);expect(focus).toHaveBeenLastCalledWith({preventScroll:true})
+    scroller.scrollTop=1222;pickerBack()();expect(scroller.scrollTop).toBe(0);await settle()
+    expectTargetVisible(row('default'));expect(focused).toBe(row('default'))
+  })
+  it('从底部功能返回时只在当前drawer内让源行避开sticky toolbar',async()=>{
+    await mountPopup();const scroller=attachOwnedScroller();await open('writing');scroller.scrollTop=1222;pickerBack()();await settle()
+    expect(scroller.scrollTop).toBeGreaterThan(0);expectTargetVisible(row('writing'));expect(focused).toBe(row('writing'))
+  })
+  it('用户在转场前已掌握外部焦点，同步和渲染后都不滚动或聚焦',async()=>{
+    await mountPopup();const scroller=attachOwnedScroller(),outside=document.createElement('button');document.body.append(outside);focused=outside;scroller.scrollTop=340;scrollWrites.length=0;focus.mockClear()
+    eventOf(row('writing'))();expect(scrollWrites).toEqual([]);await settle();expect(scroller.scrollTop).toBe(340);expect(scrollWrites).toEqual([]);expect(focus).not.toHaveBeenCalled()
+    pickerBack()();expect(scrollWrites).toEqual([]);await settle();expect(scroller.scrollTop).toBe(340);expect(focused).toBe(outside)
+  })
+  it('用户在转场后主动移走焦点，nextTick不再调整滚动或抢焦点',async()=>{
+    await mountPopup();const scroller=attachOwnedScroller();await open('writing');pickerBack()();scroller.scrollTop=77
+    const outside=document.createElement('button');document.body.append(outside);focused=outside;scrollWrites.length=0;focus.mockClear();await settle()
+    expect(scrollWrites).toEqual([]);expect(scroller.scrollTop).toBe(77);expect(focus).not.toHaveBeenCalled();expect(document.body.scrollTop).toBe(79)
+  })
+  it.each(['hidden','cached','unmount','config'])('同步转场后 %s，迟到渲染任务不再滚动旧容器',async reason=>{
+    await mountPopup();const scroller=attachOwnedScroller();const source=row('writing') as HTMLElement;source.focus();eventOf(source)();expect(scroller.scrollTop).toBe(0)
+    scroller.scrollTop=91;scrollWrites.length=0;invalidate(reason);await settle();expect(scrollWrites).toEqual([]);expect(scroller.scrollTop).toBe(91);expect(document.body.scrollTop).toBe(79)
+  })
+  it('返回后立即打开另一个会话，旧源行任务不能滚动新picker',async()=>{
+    await mountPopup();const scroller=attachOwnedScroller();await open('writing');pickerBack()();state.openPicker(state.fields.find((field:any)=>field.id==='reading'))
+    scrollWrites.length=0;await settle();expect(scroller.scrollTop).toBe(0);expect(scrollWrites).toEqual([]);expect(document.querySelector('[data-service-picker]')?.getAttribute('data-service-picker')).toBe('reading')
+  })
+  it('转场后当前面板被移到另一drawer，不对旧或新滚动容器误写',async()=>{
+    await mountPopup();const old=attachOwnedScroller();await open('writing');pickerBack()();old.scrollTop=73;const other=document.createElement('div');other.className='el-drawer__body';old.parentElement!.append(other);other.append(document.getElementById('app')!)
+    other.scrollTop=64;scrollWrites.length=0;await settle();expect(old.scrollTop).toBe(73);expect(other.scrollTop).toBe(64);expect(scrollWrites).toEqual([]);expect(document.body.scrollTop).toBe(79)
+  })
+
+  it.each([{label:'部分被标题遮住',top:40,expected:24},{label:'完整滚到标题上方',top:200,expected:24},{label:'已经完整可见',top:0,expected:0}])('视口恢复时搜索框$label，只调整当前抽屉并保留查询与焦点',async({top,expected})=>{
+    await mountPopup();const scroller=attachOwnedScroller();await open('default');await search('gpt')
+    const input=document.querySelector('input[type="search"]') as HTMLInputElement,heading=document.querySelector('.service-picker-heading') as HTMLElement
+    heading.getBoundingClientRect=()=>rect(100,46);scroller.scrollTop=top;scrollWrites.length=0;focus.mockClear()
+    state.revealFocusedSearch(()=>true);await settle()
+    expect(scroller.scrollTop).toBe(expected);expect(scrollWrites).toEqual(top===expected?[]:[expected])
+    expect(document.querySelector('input[type="search"]')).toBe(input);expect(input.value).toBe('gpt');expect(focused).toBe(input)
+    expectTargetVisible(input);expect(focus).not.toHaveBeenCalled()
+  })
+  it('视口恢复任务等待渲染时用户移走焦点，不滚动也不重新聚焦搜索框',async()=>{
+    await mountPopup();const scroller=attachOwnedScroller();await open('default');await search('gpt')
+    const heading=document.querySelector('.service-picker-heading') as HTMLElement;heading.getBoundingClientRect=()=>rect(100,46)
+    scroller.scrollTop=200;scrollWrites.length=0;focus.mockClear();state.revealFocusedSearch(()=>true)
+    const outside=document.createElement('button');document.body.append(outside);focused=outside;await settle()
+    expect(scrollWrites).toEqual([]);expect(scroller.scrollTop).toBe(200);expect(focused).toBe(outside);expect(focus).not.toHaveBeenCalled();expect(document.body.scrollTop).toBe(79)
+  })
+  it('仍在短视口时不为搜索框重置用户查看服务列表的位置',async()=>{
+    await mountPopup();const scroller=attachOwnedScroller();await open('default');await search('gpt')
+    const modal=document.createElement('div');modal.className='popup-drawer-modal';modal.setAttribute('data-fluent-read-popup-short','');scroller.parentElement!.before(modal);modal.append(scroller.parentElement!)
+    scroller.scrollTop=200;scrollWrites.length=0;focus.mockClear();state.revealFocusedSearch(()=>true);await settle()
+    expect(scrollWrites).toEqual([]);expect(scroller.scrollTop).toBe(200);expect(focused).toBe(document.querySelector('input[type="search"]'));expect(focus).not.toHaveBeenCalled();expect(document.body.scrollTop).toBe(79)
+  })
+
   it('阅读选择面板允许免密钥B站并显示固定模型，写作面板不提供该服务', async () => {
     const config = runtime.reactive(new Config()); config.harness.model = 'unused-reader'; config.model.bilibili = 'unused-default'
     await mountPopup(config, {serviceOptions: [...services, {value: 'bilibili', label: 'B站翻译'}]}, false)
@@ -158,11 +216,11 @@ describe('Popup 服务选择实际缓存模板', () => {
   it('搜索支持配置模型、自定义模型和服务名，AI 面板排除机器服务', async () => {
     const config=runtime.reactive(new Config());config.customModels.deepseek=['unique-needle'];await mountPopup(config);await open('input');await search('unique needle');expect(option('deepseek').textContent).toContain('unique-needle');await search('Microsoft');expect(option('microsoft')).not.toBeNull();pickerBack()();await settle();await open('reading');await search('Microsoft');expect(document.querySelector('[data-service-choice="microsoft"]')).toBeNull()
   })
-  it('当前查询输入、清空与更多服务收起正常，旧控制不能改新面板', async () => {
-    await mountPopup(undefined,{serviceOptions:[...services,{value:'ollama',label:'Ollama'}]});await open('input');const oldMore=eventOf(document.querySelector('.service-picker-more')!), oldType=eventOf(document.querySelector('input')!,'onInput');expect(option('ollama')).not.toBeNull();oldMore();await settle();expect(option('ollama')).toBeNull();await search('OpenAI');const clear=eventOf(document.querySelector('.service-picker-search button')!);clear();await settle();expect((document.querySelector('input') as HTMLInputElement).value).toBe('');pickerBack()();await settle();await open('reading');oldMore();oldType({target:document.querySelector('input')});await settle();expect(document.querySelector('[data-service-picker]')?.getAttribute('data-service-picker')).toBe('reading');expect((document.querySelector('input') as HTMLInputElement).value).toBe('');expect(option('ollama')).not.toBeNull()
+  it('更多服务默认收起，搜索跨目录且旧控制不能改新面板', async () => {
+    await mountPopup(undefined,{serviceOptions:[...services,{value:'ollama',label:'Ollama'}]});await open('input');const oldMore=eventOf(document.querySelector('.service-picker-more')!), oldType=eventOf(document.querySelector('input')!,'onInput');expect(option('ollama')).toBeNull();oldMore();await settle();expect(option('ollama')).not.toBeNull();eventOf(document.querySelector('.service-picker-more')!)();await settle();expect(option('ollama')).toBeNull();await search('Ollama');expect(option('ollama')).not.toBeNull();const clear=eventOf(document.querySelector('.service-picker-search button')!);clear();await settle();expect((document.querySelector('input') as HTMLInputElement).value).toBe('');expect(option('ollama')).toBeNull();pickerBack()();await settle();await open('reading');oldMore();oldType({target:document.querySelector('input')});await settle();expect(document.querySelector('[data-service-picker]')?.getAttribute('data-service-picker')).toBe('reading');expect((document.querySelector('input') as HTMLInputElement).value).toBe('');expect(option('ollama')).toBeNull()
   })
-  it('当前 ArrowDown 和列表方向键导航只访问可用条目，Escape 返回概览', async () => {
-    await mountPopup();await open('input');const prevent=vi.fn(), stop=vi.fn(), input=document.querySelector('input')!;eventOf(input,'onKeydown')({key:'ArrowDown',preventDefault:prevent});expect(focused).toBe(option(''));const list=document.querySelector('[role="listbox"]')!, nav=eventOf(list,'onKeydown');nav({key:'End',target:option(''),preventDefault:prevent});expect(focused).toBe(option('microsoft'));nav({key:'ArrowDown',target:option('microsoft'),preventDefault:prevent});expect(focused).toBe(option(''));nav({key:'Home',target:option('microsoft'),preventDefault:prevent});expect(focused).toBe(option(''));nav({key:'ArrowUp',target:option(''),preventDefault:prevent});expect(focused).toBe(option('microsoft'));nav({key:'x',target:option(''),preventDefault:prevent});expect(prevent).toHaveBeenCalledTimes(5);eventOf(document.querySelector('.popup-service-panel')!,'onKeydown')({key:'Escape',stopPropagation:stop});await settle();expect(stop).toHaveBeenCalledOnce();expect(document.querySelector('[data-service-picker]')).toBeNull()
+  it('当前 ArrowDown 和列表方向键导航只访问可用条目', async () => {
+    await mountPopup();await open('input');const prevent=vi.fn(), input=document.querySelector('input')!;eventOf(input,'onKeydown')({key:'ArrowDown',preventDefault:prevent});expect(focused).toBe(option(''));const list=document.querySelector('[role="listbox"]')!, nav=eventOf(list,'onKeydown');nav({key:'End',target:option(''),preventDefault:prevent});expect(focused).toBe(option('microsoft'));nav({key:'ArrowDown',target:option('microsoft'),preventDefault:prevent});expect(focused).toBe(option(''));nav({key:'Home',target:option('microsoft'),preventDefault:prevent});expect(focused).toBe(option(''));nav({key:'ArrowUp',target:option(''),preventDefault:prevent});expect(focused).toBe(option('microsoft'));nav({key:'x',target:option(''),preventDefault:prevent});expect(prevent).toHaveBeenCalledTimes(5)
   })
   it('返回后只恢复所属行，用户主动移走焦点或重开面板时旧任务不抢焦点', async () => {
     await mountPopup();await open('input');expect(focused).toBe(document.querySelector('input'));pickerBack()();await settle();expect(focused).toBe(row('input'));eventOf(row('input'))();const outside=document.createElement('button');document.body.append(outside);focused=outside;focus.mockClear();await settle();expect(focus).not.toHaveBeenCalled();expect(focused).toBe(outside);pickerBack()();await settle();expect(focused).toBe(outside)

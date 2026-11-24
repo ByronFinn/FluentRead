@@ -55,7 +55,7 @@ function startRequest(overrides: Partial<ModelCallStartMessage> = {}): ModelCall
 }
 
 /** 记录事件与 requestId 的注入式 emitEvent，同时充当分派断言的观察点。 */
-function recordingEmit(): {emitEvent: ReturnType<typeof vi.fn>; events: ModelCallEvent[]; requestIds: string[]} {
+function recordingEmit(): {emitEvent: (requestId: string, event: ModelCallEvent) => void; events: ModelCallEvent[]; requestIds: string[]} {
     const events: ModelCallEvent[] = [];
     const requestIds: string[] = [];
     const emitEvent = vi.fn((requestId: string, event: ModelCallEvent) => {

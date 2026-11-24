@@ -11,7 +11,7 @@ import {
     buildSiteRuleFromForm, createSiteRuleForm, listSiteRuleCatalog, mergeSiteRuleDraft, upsertSiteRuleDraft,
 } from '@/src/features/settings/model/siteAdaptationEditor';
 import {resolveSiteRule} from '@/src/core/site-adaptation/compiler';
-import {registerAllUiLanguageBundles} from '@/src/core/i18n/bundles';
+import {registerAllUiLanguageBundles} from './helpers/uiLanguageBundles';
 
 // 扩展运行时按需加载界面语言；本文件验证全部语言的文案契约，因此一次注册全部资源包。
 registerAllUiLanguageBundles();
@@ -40,7 +40,7 @@ describe('site adaptation settings persistence and editor behavior', () => {
     it('roundtrips advanced content, CSS commas and inherited template behavior through the visual form', () => {
         const source: SiteRulePack = {version: 1, profiles: {base: {
             mode: 'focus', content: [{css: [':is(article, main) p'], atomic: false, resolve: 'closest', splitOnBr: true, key: 'paragraph'}],
-            protect: ['pre'], omit: ['.private'], literalLabels: ['b'], literalTokens: ['code'],
+            protect: ['pre'], omit: ['.private'], literalLabels: ['b'], literalTokens: ['code'], forceTranslate: ['#comments'],
         }}, rules: [rule('advanced', {profile: 'base', allScopes: true, content: undefined,
             match: {hosts: ['example.com'], paths: ['/read/*'], excludePaths: ['/read/private/*']}, watchIgnore: ['.clock'], exclude: ['nav']})]};
         const expanded = resolveSiteRule(source, source.rules[0]!);
@@ -48,7 +48,7 @@ describe('site adaptation settings persistence and editor behavior', () => {
         form.name = 'User name'; form.protect += '\nbutton'; form.priority = 25;
         const rebuilt = buildSiteRuleFromForm(form, expanded);
         expect(rebuilt).toMatchObject({name: 'User name', allScopes: true, mode: 'focus', priority: 25,
-            omit: ['.private'], literalLabels: ['b'], literalTokens: ['code'], protect: ['pre', 'button']});
+            omit: ['.private'], literalLabels: ['b'], literalTokens: ['code'], forceTranslate: ['#comments'], protect: ['pre', 'button']});
         expect(rebuilt.content).toEqual(expanded.content);
         expect(rebuilt.match).toEqual(expanded.match);
         expect(rebuilt).not.toHaveProperty('profile');
@@ -130,7 +130,12 @@ describe('site adaptation settings persistence and editor behavior', () => {
             for (const label of ['网站适配', '保存并应用', 'JSON 编辑草稿', '网址匹配预览', '撤销草稿替换',
                 '按主域名生效，包含所有子域', '检查已保存规则，不访问网站', '检查规则',
                 '选择要翻译和保留原文的区域', '匹配网站', '翻译范围', '高级选项', 'JSON 与备份',
-                '只停用这条规则，其他匹配规则仍会生效', '放弃尚未保存的规则修改？', '每行填写一项，保存后应用到网页']) {
+                '只停用这条规则，其他匹配规则仍会生效', '放弃尚未保存的规则修改？', '每行填写一项，保存后应用到网页',
+                '结束编辑', '区域', '基于 CSS 选择器', '移除区域', '一行一个 CSS 选择器', '区域描述', '区域描述（可选）', '用于辅助辨认该区域位置或作用',
+                '将所有选择器选中的节点作为整体翻译', '每个匹配节点分别作为一个翻译单元，不合并多个节点；关闭后继续识别其内部正文。',
+                '只使用本身匹配选择器的节点；例如 article p 直接匹配段落。',
+                '从当前节点向上查找（含自身），使用第一个匹配本区域选择器的节点；例如 article p 内的 span 会归入所在段落。',
+                '仅在节点的直接子级 <br> 处分段；嵌套在其他标签内的 <br> 不分段。']) {
                 expect(translateLegacyText(label, language)).not.toBe(label);
             }
         }

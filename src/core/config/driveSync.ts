@@ -2,7 +2,7 @@
  * @file src/core/config/driveSync.ts
  * 文件职责：定义默认排除敏感信息的云同步范围、兼容完整快照和不泄露凭据的差异预览。
  * 主要内容：投影普通设置、读取 v1 完整与 v2 普通快照，兼容枚举列表去重与退役条目迁移，保留凭据明确删除语义、执行三方字段合并，并将请求体、
- * 地址、请求头、密钥和未知字段统一隐藏，普通设置包含不带统计或凭据的公开组合配置和按服务保存的原生翻译合批偏好并展示稳定名称和值；数组整体合并。
+ * 地址、请求头、密钥和未知字段统一隐藏，普通设置包含经严格结构校验的网站规则、不带统计或凭据的公开组合配置和按服务保存的原生翻译合批偏好；旧备份缺失的网站规则保留本机值，数组整体合并。
  * 模块边界：只处理纯数据；不拥有口令、加密、存储、浏览器消息或 Google API。
  */
 import {options, servicesType} from './catalog';
@@ -98,7 +98,7 @@ export function parseDriveSyncPayload(value: unknown): DriveSyncConfig {
 function parseCompleteDriveSyncPayload(value: unknown): DriveSyncConfig {
     if (!record(value) || value.format !== 'fluentread-complete-config' || value.version !== 1
         || !isConfigImportValid(value.config)
-        || !CONFIG_CREDENTIAL_FIELDS.every(field => Object.hasOwn(value.config as object, field))) {
+        || !CONFIG_CREDENTIAL_FIELDS.every(field => field === 'privacyProtectionSecretTerms' || Object.hasOwn(value.config as object, field))) {
         throw new DriveConfigError('云端文件不包含完整的配置和凭据快照');
     }
     const config = value.config;
@@ -119,7 +119,7 @@ function parseCompleteDriveSyncPayload(value: unknown): DriveSyncConfig {
     if (references.some(service => isCompositeTranslationProviderId(service) && !isConfiguredCompositeTranslationProvider(composites, service))) {
         throw new DriveConfigError('同步配置引用了不存在的组合翻译服务，请重新预览配置。');
     }
-    // 快照省略运行时迁移状态，但必须按已完成迁移的用户配置解析，保留用户选择。
+    // 视频默认服务迁移标记由本机接管；AI 平台可用状态及其迁移标记随快照同步。
     return toDriveSyncConfig({...value.config, videoServiceDefaultMigrated: true});
 }
 
@@ -151,6 +151,8 @@ const VISIBLE_FIELDS: Record<string, string> = {
     enableAIContext: 'AI 智能上下文',
     glossaryEnabled: '术语库',
     enableAIMultiSegment: 'AI 多段翻译',
+    aiMultiSegmentMaxSegments: 'AI 多段每批最多片段数',
+    aiMultiSegmentMaxCharacters: 'AI 多段每批最多字符数',
     nativeBatchTranslationEnabled: '原生翻译合批',
     bilingualSentenceHighlightEnabled: '双语逐句高亮',
     bilingualSentenceHighlightStyle: '逐句高亮样式',
@@ -168,10 +170,14 @@ const VISIBLE_FIELDS: Record<string, string> = {
     floatingBallCompact: '缩小悬浮球',
     floatingBallSettingsEntryVisible: '悬浮球设置入口',
     floatingBallCollapsedOpacity: '悬浮球收起不透明度',
+    floatingBallDefaultMargin: '悬浮球默认边距',
+    floatingBallPopoutMargin: '悬浮球弹出边距',
     paragraphCopyEnabled: '段落复制',
     sectionTranslationHotkeyEnabled: '局部翻译快捷键',
+    sectionTranslationRules: '记住的翻译区域',
     selectionAreaEnabled: '圈选翻译',
     imageTranslationMangaEnabled: '漫画连续翻译入口',
+    imageTranslationInferenceBackend: '本地处理后端',
     imageTranslationMangaPromptEnabled: '独立漫画按钮',
     imageTranslationMangaDownloadConfirmed: '已了解漫画资源下载',
     imageTranslationMangaSites: '自定义漫画网站',
@@ -183,6 +189,9 @@ const VISIBLE_FIELDS: Record<string, string> = {
     freeTranslationCooldownMs: '免费翻译失败后休息',
     selectionTranslatorAutoDismiss: '继续阅读时自动收起',
     selectionTranslatorBidirectional: '中英双向划词',
+    selectionDictionarySource: '词典来源',
+    selectionDictionaryRecipe: '自定义词典',
+    selectionDictionaryWorkspace: '词典与学习卡',
     vocabularyBookEnabled: '单词本',
     vocabularyReencounterEnabled: '再次遇见收藏表达',
     maxConcurrentTranslations: '翻译并发数',
@@ -196,18 +205,20 @@ const VISIBLE_FIELDS: Record<string, string> = {
     inputBoxTranslationInterval: '输入框翻译触发间隔',
     interfaceSkin: '界面皮肤', interfaceFont: '界面字体', interfaceVisibility: '界面栏目',
     popupModuleOrder: '菜单栏布局顺序', popupQuickFeatureVisibility: '快捷功能卡片', popupQuickFeatureOrder: '快捷功能顺序',
-    translationAppearance: '译文外观', translationStyleProfiles: '译文样式', activeTranslationStyleProfileId: '译文样式',
-    siteAdaptation: '网站规则', alwaysTranslateDomains: '网站规则', disabledExtensionDomains: '网站规则',
+    translationSidepanelScope: '侧边栏显示范围',
+    translationAppearance: '译文外观', browserDefaultTranslationFont: '浏览器默认译文字体', translationStyleProfiles: '译文样式', activeTranslationStyleProfileId: '译文样式',
+    siteAdaptation: '网站规则', alwaysTranslateDomains: '网站规则', disabledExtensionDomains: '网站规则', translationOnlyDomains: '网站规则',
     excludedLanguages: '跳过翻译的语言', videoSubtitleAppearance: '视频字幕外观',
     videoSentenceLearningAppearance: '完整句学习外观',
     system_role: 'System 提示词', user_role: 'User 提示词', glossaryLibraries: '术语库内容',
     contextMenuEntries: '右键菜单入口', shareCard: '双语卡片',
     contextMenuShowTargetLanguage: '右键菜单显示目标语言', contextMenuShowShortcut: '右键菜单显示快捷键',
     hoverShortcutBeforeDisable: '已保存的悬浮快捷键', selectionTranslatorModeBeforeDisable: '已保存的划词模式',
-    videoLocalModel: '本地语音识别模型', requestHeaderRules: '移除来源请求头',
+    videoLocalModel: '本地语音识别模型', videoTranscriptionProvider: '语音识别方式', videoNativeAsrBaseUrl: '本机语音识别地址', requestHeaderRules: '移除来源请求头',
 };
 // 端点、路由模型与凭据一起选择，防止自动合并把某端的密钥绑定到另一端的新地址。
 const CONNECTION_FIELDS = new Set<string>([
+    'videoTranscriptionProvider', 'videoNativeAsrBaseUrl',
     ...CONFIG_CREDENTIAL_FIELDS, ...SERVICE_FIELDS, 'translationCenterServices', 'favoriteServices',
     'quickTranslationProfiles', 'writing', 'harness', 'serviceRegion', 'customModels', 'modelThinking',
     'requireApiKey', 'apiKeyRotationEnabled', 'inputBoxTranslationModel', 'deepseekApiType', 'deepseekThinkingMode', 'proxy', 'custom', 'deeplx', 'customBody', 'customOpenAIProviders',
@@ -247,28 +258,32 @@ export function projectDriveSyncConfig(config: DriveSyncConfig, includeSensitive
     if (includeSensitive) return structuredClone(config);
     const normalized = toDriveSyncConfig(config);
     return Object.fromEntries(Object.entries(config).filter(([key, value]) => KNOWN_SETTINGS.has(key)
-        && !CONNECTION_FIELDS.has(key) && !PRIVATE_FIELDS.has(key) && !containsExcludedSettings(value)
+        && !CONNECTION_FIELDS.has(key) && !PRIVATE_FIELDS.has(key)
+        // 网站规则的 custom 是规则包，content.key 是诊断标签；必须完全符合归一化后的
+        // 严格规则结构才能备份，不能把这两个字段名的例外放宽到其他配置中的凭据。
+        && (key === 'siteAdaptation' ? driveValuesEqual(value, normalized[key]) : !containsExcludedSettings(value))
         && (!(value && typeof value === 'object') || SETTINGS_SCHEMA[key] !== null && typeof SETTINGS_SCHEMA[key] === 'object')
         && !hasUnknownStructure(value, normalized[key]))
         .map(([key, value]) => [key, structuredClone(value)]));
 }
 
-/** 普通范围仅替换可备份设置；本机完整连接、未知字段和私密偏好保持原子性。 */
+/** 普通范围替换可备份设置；旧备份缺失的网站/局部区域规则及本机完整连接、未知字段和私密偏好保留。 */
 export function restoreDriveSyncSettings(local: DriveSyncConfig, settings: DriveSyncConfig): DriveSyncConfig {
     const projected = projectDriveSyncConfig(local);
-    const preserved = Object.fromEntries(Object.entries(local).filter(([key]) => !Object.hasOwn(projected, key)));
+    const preserved = Object.fromEntries(Object.entries(local).filter(([key]) => !Object.hasOwn(projected, key)
+        || (key === 'siteAdaptation' || key === 'sectionTranslationRules') && !Object.hasOwn(settings, key)));
     return {...structuredClone(settings), ...structuredClone(preserved)};
 }
 
 const fieldLabel = (field: string) => Object.hasOwn(VISIBLE_FIELDS, field) ? VISIBLE_FIELDS[field] : configDiffFieldLabel(field);
 const CONNECTION_SUMMARIES: [string, readonly string[]][] = [
     ['settings.cloud.changed.credentials', CONFIG_CREDENTIAL_FIELDS],
-    ['settings.cloud.changed.requests', ['proxy', 'custom', 'deeplx', 'customBody', 'newApiUrl', 'azureOpenaiEndpoint']],
+    ['settings.cloud.changed.requests', ['proxy', 'custom', 'deeplx', 'customBody', 'newApiUrl', 'azureOpenaiEndpoint', 'videoNativeAsrBaseUrl']],
     ['settings.cloud.changed.models', ['model', 'customModel', 'customModels', 'modelThinking', 'documentModel', 'documentCustomModel', 'inputBoxTranslationModel']],
     ['settings.cloud.changed.services', [...SERVICE_FIELDS, 'translationCenterServices', 'favoriteServices', 'quickTranslationProfiles']],
     ['settings.cloud.changed.customServices', ['customOpenAIProviders']],
     ['settings.cloud.changed.assistants', ['writing', 'harness']],
-    ['settings.cloud.changed.options', ['serviceRegion', 'requireApiKey', 'apiKeyRotationEnabled', 'deepseekApiType', 'deepseekThinkingMode', 'deeplApiPlan', 'minimaxBillingPlan', 'minimaxRegion', 'mimoBillingPlan', 'mimoRegion']],
+    ['settings.cloud.changed.options', ['serviceRegion', 'requireApiKey', 'apiKeyRotationEnabled', 'deepseekApiType', 'deepseekThinkingMode', 'deeplApiPlan', 'minimaxBillingPlan', 'minimaxRegion', 'mimoBillingPlan', 'mimoRegion', 'videoTranscriptionProvider']],
 ];
 function connectionDetails(local: DriveSyncConfig, remote: DriveSyncConfig): string[] {
     return CONNECTION_SUMMARIES.filter(([, keys]) => keys.some(key => !driveValuesEqual(local[key], remote[key]))).map(([label]) => label);
@@ -297,6 +312,7 @@ function previewValue(value: unknown, sensitive: boolean, field: string): string
         if (field === 'translationCacheMaxBytes' && Number.isFinite(value)) return `${Number((value / 1024 / 1024).toFixed(2))} MiB`;
         if (field.endsWith('Ms') || field.endsWith('Delay') || field === 'selectionTranslatorDelay' || field === 'inputBoxTranslationInterval') return `${value} ms`;
         if (field === 'floatingBallCollapsedOpacity' || field === 'videoSubtitleFontSize') return `${value}%`;
+        if (field === 'floatingBallDefaultMargin' || field === 'floatingBallPopoutMargin') return `${value} px`;
     }
     const choices = field === 'theme' ? options.theme : field === 'from' ? options.from : field === 'to' ? options.to : field === 'style' ? options.styles : [];
     const option = choices.find(option => option.value === value);

@@ -46,9 +46,154 @@ function response(body: unknown): Response {
 }
 
 describe('harness model gateway', () => {
+  it.each([services.openai, services.bilibili, services.chatgptPlan, 'custom:closed'])('rejects disabled %s before constructing any AI transport', service => {
+    const config = new Config(); config.disabledTranslationServices = [service];
+    const before = JSON.stringify(config);
+    expect(() => createHarnessLanguageModel(config, service, 'saved-model')).toThrow('所选翻译服务已关闭');
+    expect(JSON.stringify(config)).toBe(before);
+  });
   afterEach(() => {
     setRuntimeFetch();
     planBuild.enabled = false;
+  });
+
+  it.each(['gpt-4o', 'o3', 'gpt-5', 'gpt-6-luna', 'gpt-6.1-terra', 'future-model-alias'])(
+    'serializes completion limits for %s in generation and streaming without mutating settings', async modelId => {
+      const config = new Config();
+      for (const [custom, expectedLimit] of [
+        ['', 1200], ['{"max_tokens":64}', 64],
+        ['{"max_tokens":null,"max_completion_tokens":32,"service_tier":"fast","reasoning_effort":"none"}', 32],
+        ['{"max_tokens":null}', 1200], ['{"max_completion_tokens":48}', 48],
+        ['{"max_tokens":64,"max_completion_tokens":32}', 32],
+        ['{"max_tokens":64,"max_completion_tokens":null}', 64],
+      ] as const) {
+        config.customBody[services.openai] = custom;
+        const before = JSON.stringify(config);
+        const calls: Record<string, unknown>[] = [];
+        setRuntimeFetch(async (_input, init) => {
+          const serialized = String(init?.body);
+          expect(serialized).not.toContain('"max_tokens"');
+          const body = JSON.parse(serialized); calls.push(body);
+          expect(body.max_completion_tokens).toBe(expectedLimit);
+          if (custom.includes('service_tier')) expect(body).toMatchObject({service_tier: 'fast', reasoning_effort: 'none'});
+          if (body.stream) return new Response('data: {"choices":[{"index":0,"delta":{"content":"done"},"finish_reason":null}]}\n\ndata: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {headers: {'content-type': 'text/event-stream'}});
+          return response({choices: [{message: {role: 'assistant', content: 'done'}, finish_reason: 'stop'}]});
+        });
+        const model = createHarnessLanguageModel(config, services.openai, modelId);
+        expect((await generateText({model, prompt: 'Explain', maxOutputTokens: 1200, maxRetries: 0})).text).toBe('done');
+        expect(await streamText({model, prompt: 'Explain', maxOutputTokens: 1200, maxRetries: 0}).text).toBe('done');
+        expect(calls).toHaveLength(2);
+        expect(JSON.stringify(config)).toBe(before);
+      }
+    },
+  );
+
+  it.each([[services.openrouter, 'gpt-6-luna'], ['custom:limit', 'gpt-6.1-terra']])(
+    'preserves legacy token parameters for %s / %s', async (service, modelId) => {
+      const config = new Config();
+      config.customOpenAIProviders = [{id: 'custom:limit', name: 'Local', endpoint: 'https://fixture.test/v1', models: [modelId]}];
+      setRuntimeFetch(async (_input, init) => {
+        const body = JSON.parse(String(init?.body));
+        expect(body.max_tokens).toBe(1200); expect(body).not.toHaveProperty('max_completion_tokens');
+        return response({choices: [{message: {role: 'assistant', content: 'done'}, finish_reason: 'stop'}]});
+      });
+      await generateText({model: createHarnessLanguageModel(config, service, modelId), prompt: 'Explain', maxOutputTokens: 1200, maxRetries: 0});
+    },
+  );
+
+  it('merges OpenAI generation parameters while retaining SDK session and protocol ownership', async () => {
+    const config = new Config();
+    const originalKey = getHarnessModelInputKey(config, services.openai, 'gpt-6-luna');
+    config.customBody[services.openai] = JSON.stringify({model: 'wrong', messages: [], tools: [], tool_choice: 'none', parallel_tool_calls: false, stream: true, stream_options: {bad: true}, response_format: {type: 'bad'}, temperature: 0.2, service_tier: 'fast', reasoning_effort: 'none'});
+    expect(getHarnessModelInputKey(config, services.openai, 'gpt-6-luna')).not.toBe(originalKey);
+    setRuntimeFetch(async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body).toMatchObject({model: 'gpt-6-luna', temperature: 0.2, service_tier: 'fast', reasoning_effort: 'none'});
+      expect(body.messages).toEqual([{role: 'system', content: 'System'}, {role: 'user', content: 'Explain'}]);
+      expect(body.tools[0].function.name).toBe('lookup');
+      expect(body.tool_choice).not.toBe('none'); expect(body.parallel_tool_calls).not.toBe(false);
+      expect(body.stream).not.toBe(true); expect(body).not.toHaveProperty('stream_options'); expect(body).not.toHaveProperty('response_format');
+      expect(body).not.toHaveProperty('max_tokens'); expect(body).not.toHaveProperty('max_completion_tokens');
+      return response({choices: [{message: {role: 'assistant', content: 'done'}, finish_reason: 'stop'}]});
+    });
+    await generateText({model: createHarnessLanguageModel(config, services.openai, 'gpt-6-luna'), instructions: 'System', prompt: 'Explain', tools: {lookup: tool({inputSchema: z.object({q: z.string()})})}, maxRetries: 0});
+  });
+
+  it.each([
+    ['custom:protocol', 'https://api.openai.com/v1/chat/completions', '', 'max_completion_tokens'],
+    [services.openai, 'https://gateway.test/v1/chat/completions', '', 'max_tokens'],
+    ['custom:protocol', 'https://gateway.test/v1/chat/completions', '{"max_completion_tokens":80,"reasoning_effort":"none","service_tier":"fast"}', 'max_completion_tokens'],
+    [services.deepseek, 'https://api.deepseek.com/chat/completions', '{"thinking":{"type":"enabled"}}', 'max_tokens'],
+  ])('uses actual endpoint and explicit custom parameters for %s at %s', async (service, endpoint, custom, field) => {
+    const config = new Config();
+    config.proxy[service] = endpoint;
+    config.customOpenAIProviders = [{id: 'custom:protocol', name: 'Protocol', endpoint, models: ['alias']}];
+    config.customBody[service] = custom;
+    const key = getHarnessModelInputKey(config, service, 'alias');
+    setRuntimeFetch(async (_input, init) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body[field]).toBe(custom.includes('80') ? 80 : 1200);
+      expect(body).not.toHaveProperty(field === 'max_tokens' ? 'max_completion_tokens' : 'max_tokens');
+      if (custom.includes('service_tier')) expect(body).toMatchObject({reasoning_effort: 'none', service_tier: 'fast'});
+      if (service === services.deepseek) expect(body.thinking).toEqual({type: 'enabled'});
+      return response({choices: [{message: {role: 'assistant', content: 'done'}, finish_reason: 'stop'}]});
+    });
+    await generateText({model: createHarnessLanguageModel(config, service, 'alias'), prompt: 'Explain', maxOutputTokens: 1200, maxRetries: 0});
+    config.customBody[service] = '{"temperature":0.4}';
+    expect(getHarnessModelInputKey(config, service, 'alias')).not.toBe(key);
+  });
+
+  it('rejects invalid OpenAI custom JSON before sending a request', async () => {
+    const config = new Config(); config.customBody[services.openai] = '{invalid';
+    const fetch = vi.fn(); setRuntimeFetch(fetch);
+    await expect(generateText({model: createHarnessLanguageModel(config, services.openai, 'gpt-6-luna'), prompt: 'Explain', maxRetries: 0})).rejects.toThrow('有效的 JSON 对象');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([services.claude, services.gemini])('tracks a native %s proxy change without exposing its credentials', service => {
+    const config = new Config();delete config.proxy[service];
+    const direct = getHarnessModelInputKey(config, service, 'reader');
+    config.proxy[service] = 'https://fixture.test/native?token=private-value';
+    const proxied = getHarnessModelInputKey(config, service, 'reader');
+    expect(proxied).not.toBe(direct);expect(proxied).toMatch(/^[a-f0-9]{64}$/u);expect(proxied).not.toContain('private-value');
+    config.proxy[service] += ' ';expect(getHarnessModelInputKey(config, service, 'reader')).toBe(proxied);
+  });
+
+  it('keeps invalid gateway inputs comparable for cancellation and distinguishes repaired endpoint/header inputs', () => {
+    const config = new Config();config.deepseekApiType = 'responses';
+    const invalid = getHarnessModelInputKey(config, services.deepseek, 'reader');
+    expect(invalid).toMatch(/^[a-f0-9]{64}$/u);config.deepseekApiType = 'chat';
+    expect(getHarnessModelInputKey(config, services.deepseek, 'reader')).not.toBe(invalid);
+    const service = 'custom:key-identity';config.customOpenAIProviders = [{id: service, name: 'Local', endpoint: 'http://localhost:11434/v1', models: ['reader']}];
+    config.customHeaders[service] = '{invalid';const badHeader = getHarnessModelInputKey(config, service, 'reader');
+    config.customHeaders[service] = '{"x-a":"private-value"}';
+    const repaired = getHarnessModelInputKey(config, service, 'reader');expect(repaired).not.toBe(badHeader);expect(repaired).not.toContain('private-value');
+  });
+
+  it.each([
+    ['mimo', 'https://api.xiaomimimo.com/v1/chat/completions', 'mimo-v2.5', 'mimo-v2.6-flash'],
+    ['mimo', 'https://token-plan-sgp.xiaomimimo.com/v1/chat/completions', 'mimo-v2.5-pro', 'mimo-v2.6-pro'],
+    ['custom:mimo', 'https://api.xiaomimimo.com/v1', 'mimo-v2.5-pro', 'mimo-v2.6-pro'],
+    ['mimo', 'https://gateway.example/v1/chat/completions', 'mimo-v2.5', 'mimo-v2.5'],
+  ])('reading/writing gateway maps %s at %s without editing saved settings', async (service, endpoint, legacy, expected) => {
+    const config = new Config();
+    config.harness.model = legacy;
+    config.writing.model = legacy;
+    if (service.startsWith('custom:')) {
+      config.customOpenAIProviders = [{id: service, name: 'MiMo', endpoint, models: [legacy]}];
+    } else config.proxy[service] = endpoint;
+    const before = JSON.stringify(config);
+    const bodies: Record<string, unknown>[] = [];
+    setRuntimeFetch(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)); bodies.push(body);
+      if (body.stream) return new Response('data: {"choices":[{"index":0,"delta":{"content":"done"},"finish_reason":null}]}\n\ndata: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {headers: {'content-type': 'text/event-stream'}});
+      return response({choices: [{message: {role: 'assistant', content: 'done'}, finish_reason: 'stop'}]});
+    });
+    const model = createHarnessLanguageModel(config, service, legacy);
+    expect((await generateText({model, prompt: 'Explain', maxRetries: 0})).text).toBe('done');
+    expect(await streamText({model, prompt: 'Explain', maxRetries: 0}).text).toBe('done');
+    expect(bodies.map(body => body.model)).toEqual([expected, expected]);
+    expect(JSON.stringify(config)).toBe(before);
   });
 
   it('refuses saved ChatGPT requests in the public build before any transport and preserves their configuration', () => {
@@ -64,6 +209,38 @@ describe('harness model gateway', () => {
     expect(createHarnessLanguageModel(config, services.chatgptPlan, 'saved-account-model'))
       .toMatchObject({provider: 'fluentread-chatgpt-plan', modelId: 'saved-account-model'});
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('keys the local plan input only by the trimmed model while preserving saved configuration', () => {
+    const config = new Config();
+    const key = getHarnessModelInputKey(config, services.chatgptPlan, ' account-model ');
+    config.token[services.chatgptPlan] = 'unused-fixture-key';
+    config.proxy[services.chatgptPlan] = 'https://unused.fixture/v1';
+    config.apiKeys[services.chatgptPlan] = ['unused-fixture-A', 'unused-fixture-B'];
+    const before = JSON.stringify(config);
+    expect(key).toMatch(/^[a-f0-9]{64}$/u);
+    expect(getHarnessModelInputKey(config, services.chatgptPlan, 'account-model')).toBe(key);
+    expect(getHarnessModelInputKey(config, services.chatgptPlan, 'other-model')).not.toBe(key);
+    expect(JSON.stringify(config)).toBe(before);
+  });
+
+  it('changes the provider input key when rotation, required credentials or thinking changes', () => {
+    const config = new Config();
+    const service = services.deepseek, model = 'deepseek-v4-flash';
+    delete config.token[service];
+    const withoutCredential = getHarnessModelInputKey(config, service, model);
+    config.token[service] = 'fixture-A';
+    expect(getHarnessModelInputKey(config, service, model)).not.toBe(withoutCredential);
+    config.apiKeys[service] = ['fixture-A', 'fixture-B'];
+    const rotating = getHarnessModelInputKey(config, service, model);
+    config.apiKeyRecoveryMs += 60_000;
+    const changedRecovery = getHarnessModelInputKey(config, service, model);
+    expect(changedRecovery).not.toBe(rotating);
+    config.apiKeyRotationEnabled[service] = false;
+    const fixedKey = getHarnessModelInputKey(config, service, model);
+    expect(fixedKey).not.toBe(changedRecovery);
+    config.modelThinking[service] = {[model]: true};
+    expect(getHarnessModelInputKey(config, service, model)).not.toBe(fixedKey);
   });
 
   it('uses the fixed anonymous Bilibili endpoint without residual keys, proxy, tools or model overrides', async () => {
@@ -120,7 +297,7 @@ describe('harness model gateway', () => {
       // 对照真实 SDK 默认行为，确保该错误确实会触发原始控制台日志。
       const baseline = streamText({model: createHarnessLanguageModel(config, services.bilibili, ''), prompt: source, maxRetries: 0});
       let rawError: unknown;
-      for await (const part of baseline.fullStream) if (part.type === 'error') rawError = part.error;
+      for await (const part of baseline.stream) if (part.type === 'error') rawError = part.error;
       expect(rawError).toMatchObject({statusCode: 400});
       expect(consoleError).toHaveBeenCalledWith(rawError);
       consoleError.mockClear();
@@ -177,7 +354,7 @@ describe('harness model gateway', () => {
     });
     setRuntimeFetch(fetchMock);
     const model = createHarnessLanguageModel(config, services.deepseek, 'deepseek-chat');
-    await generateText({model, system: 'Use Chinese', prompt: 'Explain'});
+    await generateText({model, instructions: 'Use Chinese', prompt: 'Explain'});
   });
 
   it('supports explicit compatible endpoint overrides and disabled thinking', async () => {
@@ -227,7 +404,7 @@ describe('harness model gateway', () => {
     const router = new Config();
     router.token[services.openrouter] = 'router-secret';
     const routerFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      expect(new Headers(init?.headers).get('HTTP-Referer')).toBe('https://fluent.thinkstu.com');
+      expect(new Headers(init?.headers).get('HTTP-Referer')).toBe('https://read.thinkstu.com');
       expect(new Headers(init?.headers).get('X-Title')).toBe('FluentRead Harness');
       return response({choices: [{message: {role: 'assistant', content: 'ok'}, finish_reason: 'stop'}]});
     });
@@ -270,7 +447,7 @@ describe('harness model gateway', () => {
     setRuntimeFetch(directFetch);
     const directConfig = new Config();
     directConfig.token[services.claude] = 'direct-secret';
-    expect((await generateText({model: createHarnessLanguageModel(directConfig, services.claude, 'claude-test'), prompt: 'Explain'})).text).toBe('direct');
+    expect((await generateText({model: createHarnessLanguageModel(directConfig, services.claude, 'claude-test'), prompt: 'Explain', maxOutputTokens: 1200})).text).toBe('direct');
     expect(createHarnessLanguageModel(new Config(), services.claude, 'claude-no-key')).toBeTruthy();
   });
 
@@ -422,7 +599,7 @@ describe('harness model gateway multi-key rotation', () => {
     const chunks = partial.textStream[Symbol.asyncIterator]();
     expect(await chunks.next()).toEqual({value: 'once', done: false});
     transport!.error(new Error('partial stream failure'));
-    await expect(chunks.next()).rejects.toThrow('partial stream failure');
+    await expect(chunks.next()).rejects.toMatchObject({message: 'Failed to process successful response', cause: {message: 'partial stream failure'}});
     expect(calls).toBe(1);
   });
 });

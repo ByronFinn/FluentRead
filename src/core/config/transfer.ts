@@ -146,9 +146,10 @@ function prepareImportedCredentials(
     const importedApiKeys = (Object.hasOwn(value, 'apiKeys') && isRecord(value.apiKeys))
       ? {...currentCredentials.apiKeys, ...importedCredentials.apiKeys}
       : {...currentCredentials.apiKeys};
-    if (!(Object.hasOwn(value, 'apiKeys') && isRecord(value.apiKeys)) && (Object.hasOwn(value, 'token') && isRecord(value.token))) {
+    if (Object.hasOwn(value, 'token') && isRecord(value.token)) {
       for (const [service, token] of Object.entries(importedCredentials.token)) {
-        importedApiKeys[service] = token ? [token] : [];
+        // 新列表只覆盖同一服务的旧字段；其他服务的 token（含显式清空）仍是导入意图。
+        if (!Object.hasOwn(importedCredentials.apiKeys, service)) importedApiKeys[service] = token ? [token] : [];
       }
     }
     merged = {
@@ -228,6 +229,7 @@ export function prepareConfigForImport(
     ...sanitizeConfigCredentials(importedConfig),
     count: currentConfig.count,
     videoServiceDefaultMigrated: currentConfig.videoServiceDefaultMigrated,
+    aiPlatformDefaultRemovalMigrated: currentConfig.aiPlatformDefaultRemovalMigrated,
   }, credentials))
   const ownServices = (field: 'token' | 'apiKeys' | 'secret') => {
     if (!Object.hasOwn(value, field) || !isRecord(value[field])) return []

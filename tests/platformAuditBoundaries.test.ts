@@ -2,9 +2,10 @@
  * @file tests/platformAuditBoundaries.test.ts
  * 文件职责：验证平台摘要、标识、编译能力及本地推理探测的完整输入与生命周期边界。
  * 主要内容：真实内存 WASM/gzip 响应、受控 GPU 驱动和初始化并发，覆盖失败后重试及资源释放。
- * 模块边界：不启动浏览器、模型或真实 GPU，不访问网络或账号；仅测试六个共享平台模块。
+ * 模块边界：不启动浏览器、模型或真实 GPU，不访问网络或账号；仅测试共享平台模块。
  */
 import {createHash} from 'node:crypto';
+import {asArrayBufferBytes} from '@/src/shared/function/arrayBufferBytes';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {sha256Hex} from '@/src/shared/function/sha256';
 import {configureOnnxWasmBackend, loadCompressedWasmBinary, withCompressedWasmBinary, type OnnxWasmBackend} from '@/src/shared/onnx/wasmBinary';
@@ -15,7 +16,7 @@ import {supportsHunyuanTranslation} from '@/src/platform/browser/localTranslatio
 
 const wasm = new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0]);
 const unavailable = {available: false, info: ''};
-const fetchBytes = (bytes: Uint8Array = wasm) => vi.fn(async () => new Response(bytes));
+const fetchBytes = (bytes: Uint8Array = wasm) => vi.fn(async () => new Response(asArrayBufferBytes(bytes)));
 function deferred<T>() {
     let resolve!: (value: T) => void;
     let reject!: (reason: unknown) => void;
@@ -23,9 +24,28 @@ function deferred<T>() {
     return {promise, resolve, reject};
 }
 async function compressed(bytes: Uint8Array) {
-    return new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+    return new Uint8Array(await new Response(new Blob([asArrayBufferBytes(bytes)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); });
+
+describe('浏览器二进制接口的字节输入', () => {
+    it('复用普通缓冲区及其视图范围', async () => {
+        const bytes = Uint8Array.of(8, 1, 2, 9).subarray(1, 3);
+        const input = asArrayBufferBytes(bytes);
+        expect(input.buffer).toBe(bytes.buffer);
+        expect(input.byteOffset).toBe(bytes.byteOffset);
+        expect(new Uint8Array(await new Blob([input]).arrayBuffer())).toEqual(Uint8Array.of(1, 2));
+    });
+
+    it('仅复制共享视图包含的字节', async () => {
+        const bytes = new Uint8Array(new SharedArrayBuffer(4));
+        bytes.set([8, 1, 2, 9]);
+        const input = asArrayBufferBytes(bytes.subarray(1, 3));
+        expect(input.buffer).toBeInstanceOf(ArrayBuffer);
+        bytes[1] = 3;
+        expect(new Uint8Array(await new Response(input).arrayBuffer())).toEqual(Uint8Array.of(1, 2));
+    });
+});
 
 describe('摘要与浏览器 ID 输入边界', () => {
     it.each(['', 'a'.repeat(55), 'a'.repeat(56), 'a'.repeat(63), 'a'.repeat(64), 'a'.repeat(65), '\uD800', '\uDC00', 'a\u0000中🙂e\u0301', '🙂中文'.repeat(100_000)])('UTF-8 摘要与原生结果一致 %#', value => {
@@ -58,21 +78,22 @@ describe('浏览器构建与运行能力契约', () => {
     });
     it('仅提供确定的构建支持范围，不从 UA 打开功能', () => {
         for (const [browser, manifestVersion, dom, translator] of [
-            ['chrome', 3, true, true], ['edge', 3, true, false], ['firefox', 2, true, false],
+            ['chrome', 3, true, true], ['edge', 3, true, true], ['firefox', 2, true, false],
             ['firefox', 3, false, false], ['chrome', 2, false, false], ['edge', 2, false, false],
             ['userscript', 2, false, false], ['unknown', 3, false, false], ['', 2, false, false],
         ] as const) {
             const result = resolveBrowserCapabilities({browser, manifestVersion});
-            expect(result).toMatchObject({extensionDom: dom, imageOcr: dom, imageTranslation: dom, areaTranslation: dom, selectionTtsExtensionPlayback: dom, chromeTranslation: translator, selectionTtsPageFallback: true});
+            expect(result).toMatchObject({extensionDom: dom, imageOcr: dom, imageTranslation: dom, areaTranslation: dom, selectionTtsExtensionPlayback: dom, browserTranslation: translator, selectionTtsPageFallback: true});
             expect(result.offscreenDocument).toBe(dom && browser !== 'firefox');
             expect(Object.isFrozen(result)).toBe(true);
         }
     });
-    it('Chrome 包在 Edge 上收紧翻译能力，Firefox 包在 Thunderbird 上收紧 DOM 能力', () => {
+    it('识别桌面 Edge，并区分移动端和 Thunderbird 的能力', () => {
         const chrome = resolveBrowserCapabilities({browser: 'chrome', manifestVersion: 3});
         const firefox = resolveBrowserCapabilities({browser: 'firefox', manifestVersion: 2});
-        for (const ua of ['Edg/130', 'EdgA/130', 'EdgiOS/130']) {
-            expect(applyRuntimeBrowserConstraints(chrome, ua)).toMatchObject({browser: 'edge', extensionDom: true, chromeTranslation: false});
+        expect(applyRuntimeBrowserConstraints(chrome, 'Edg/148')).toMatchObject({browser: 'edge', browserTranslation: true});
+        for (const ua of ['EdgA/148', 'EdgiOS/148']) {
+            expect(applyRuntimeBrowserConstraints(chrome, ua)).toMatchObject({browser: 'edge', extensionDom: true, browserTranslation: false});
         }
         expect(applyRuntimeBrowserConstraints(chrome, 'Thunderbird/130')).toBe(chrome);
         expect(applyRuntimeBrowserConstraints(firefox, 'Edg/130')).toBe(firefox);

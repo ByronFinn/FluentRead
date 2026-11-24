@@ -70,17 +70,67 @@
   {
     "id": "bbc-news",
     "url": "https://www.bbc.com/news/articles/example",
-    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><article><span itemprop=\"author\" id=\"author\">Example Author</span><time id=\"time\">2026-09-05</time><p id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p><p id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</p></article>",
+    "html": "<nav id=\"navigation\"><a href=\"/news\">News navigation remains unchanged</a></nav><article id=\"article\"><h1 id=\"title\">A reported story explains the latest developments clearly</h1><div id=\"byline\" data-testid=\"byline\"><time id=\"time\">2026-10-25</time><div><button id=\"share\">Share</button></div><div><span id=\"author\">Example Reporter With A Long Display Name</span></div></div><div data-component=\"image-block\"><figure><div data-testid=\"hero-image\"><img alt=\"An independently authored main illustration\"><span id=\"hero-credit\">Example Hero Illustration Studio</span><p id=\"hero-prose\">Readable prose inside the hero component remains eligible.</p></div><div><figcaption id=\"hero-caption\">This readable hero caption explains the illustration instead of identifying its creator.</figcaption></div></figure></div><p id=\"body1\">This readable paragraph describes <span id=\"dirty\">important context for the reported story</span> with an <a id=\"reading-link\" href=\"/news/articles/related\">ordinary article reference</a> and <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code>.</p><figure id=\"figure\"><div data-testid=\"image\"><img alt=\"An illustrative photo of a public event\" src=\"/example-photo.jpg\"><span id=\"credit\">Example Photo Agency Via Image Library</span></div><figcaption id=\"caption\">This photograph shows the public event described in the article.</figcaption></figure><p id=\"body2\">A second independent paragraph provides further reporting and remains readable after repeated translation.</p></article><section><p id=\"outside\">A separate explanation of the author and image remains readable outside metadata.</p></section>",
     "required": [
+      "#title",
+      "#hero-prose",
+      "#hero-caption",
       "#body1",
+      "#caption",
       "#body2"
     ],
     "forbidden": [
       "#navigation",
-      "#protected",
+      "#byline",
       "#author",
-      "#time"
-    ]
+      "#time",
+      "#share",
+      "#credit",
+      "#hero-credit",
+      "#protected"
+    ],
+    "sourceAssertions": {
+      "required": [
+        "A reported story",
+        "Readable prose inside the hero",
+        "This readable hero caption",
+        "This readable paragraph describes",
+        "This photograph shows",
+        "A second independent paragraph",
+        "A separate explanation"
+      ],
+      "forbidden": [
+        "Example Reporter With A Long Display Name",
+        "Example Photo Agency Via Image Library",
+        "Example Hero Illustration Studio",
+        "2026-10-25",
+        "KEEP_ORIGINAL_TOKEN"
+      ]
+    },
+    "dynamic": {
+      "inlineText": [
+        {
+          "selector": "#dirty",
+          "owner": "#body1",
+          "from": "important context for the reported story",
+          "to": "newly updated context for the reported story"
+        }
+      ],
+      "appendHtml": [
+        {
+          "selector": "#article",
+          "html": "<figure id=\"dynamic-figure\"><div data-testid=\"image\"><img alt=\"Another illustrative photo\" src=\"/second-photo.jpg\"><span id=\"new-credit\">New Photo Agency Display Name</span></div><figcaption id=\"new-caption\">A newly added photograph gives the reader useful context.</figcaption></figure><p id=\"new-body\">The article receives a further independent paragraph as the report is updated.</p>",
+          "required": [
+            "#new-caption",
+            "#new-body"
+          ],
+          "forbidden": [
+            "#new-credit"
+          ]
+        }
+      ],
+      "noiseSelector": "#author"
+    }
   },
   {
     "id": "arstechnica",
@@ -332,7 +382,7 @@
   {
     "id": "amazon-shopping",
     "url": "https://www.amazon.com/dp/EXAMPLE123",
-    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><div id=\"productDescription\"><p id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p></div><div data-hook=\"review-body\" id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</div><div class=\"a-price\" id=\"price\">99.00 USD</div>",
+    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><div id=\"productDescription\"><p id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p></div><div data-hook=\"review-body\" id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</div><span id=\"acrPopover\" title=\"4.7 out of 5 stars\"><span class=\"a-declarative\" data-action=\"a-popover\"><a id=\"rating-trigger\" href=\"javascript:void(0)\" role=\"button\"><span aria-hidden=\"true\">4.7</span><i class=\"a-icon a-icon-star-mini\"><span class=\"a-icon-alt\" id=\"rating-label\">4.7 out of 5 stars</span></i></a></span></span><div class=\"a-price\" id=\"price\">99.00 USD</div>",
     "required": [
       "#body1",
       "#body2"
@@ -340,13 +390,14 @@
     "forbidden": [
       "#navigation",
       "#protected",
-      "#price"
+      "#price",
+      "#acrPopover"
     ]
   },
   {
     "id": "steam-store",
     "url": "https://store.steampowered.com/app/12345/example/",
-    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><div id=\"game_area_description\"><p id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p><p id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</p></div><div class=\"game_purchase_price\" id=\"price\">99.00 USD</div>",
+    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><div id=\"game_area_description\"><p id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p><p id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</p></div><div class=\"game_purchase_price\" id=\"price\">99.00 USD</div><a id=\"freeGameBtn\" href=\"javascript:fixtureOnly()\" role=\"button\">Play Game</a><section id=\"app_reviews_hash\"><a data-miniprofile=\"12345\" id=\"review-author\" href=\"https://steamcommunity.com/profiles/fixture\">A Fixture Reviewer Name</a><div data-hook=\"review-body\" id=\"review-body\">This review explains why the game works well with a group of friends.</div></section>",
     "required": [
       "#body1",
       "#body2"
@@ -354,7 +405,9 @@
     "forbidden": [
       "#navigation",
       "#protected",
-      "#price"
+      "#price",
+      "#freeGameBtn",
+      "#review-author"
     ]
   },
   {
@@ -368,6 +421,56 @@
     "forbidden": [
       "#navigation",
       "#protected"
+    ],
+    "variants": [
+      {
+        "name": "comments-no-translate",
+        "url": "https://milkshakeplusplus.itch.io/mousetraptab/comments",
+        "html": "<main><div id=\"game_comments_react_fixture_Game-Comments_root\" translate=\"no\"><div class=\"post_body user_formatted\"><p id=\"body1\">The first public comment describes a helpful game feature with <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code> preserved.</p><p id=\"body2\">The second public comment remains independently translatable after repeated requests.</p><p id=\"local-protected\" translate=\"no\">This nested local marker stays original.</p><textarea id=\"editor\">Unsent private draft</textarea></div></div><p id=\"outside\" translate=\"no\">Unrelated protected text.</p><nav id=\"navigation\">Keep navigation original.</nav></main>",
+        "required": [
+          "#body1",
+          "#body2"
+        ],
+        "forbidden": [
+          "#protected",
+          "#local-protected",
+          "#editor",
+          "#outside",
+          "#navigation"
+        ],
+        "restoreSelectors": [
+          "#game_comments_react_fixture_Game-Comments_root"
+        ],
+        "sourceAssertions": {
+          "required": [
+            "The first public comment describes",
+            "The second public comment remains"
+          ],
+          "forbidden": [
+            "KEEP_ORIGINAL_TOKEN",
+            "Unsent private draft",
+            "This nested local marker",
+            "Unrelated protected text"
+          ]
+        },
+        "dynamic": {
+          "appendHtml": [
+            {
+              "selector": ".post_body",
+              "html": "<p id=\"dynamic-comment\">A newly loaded comment is translated through the same marked shell.</p>",
+              "required": [
+                "#dynamic-comment"
+              ],
+              "sourceIncludes": [
+                "A newly loaded comment"
+              ]
+            }
+          ],
+          "noiseSelector": "#local-protected",
+          "noiseText": "Nested marker remains protected after host updates",
+          "remountSelector": "#game_comments_react_fixture_Game-Comments_root"
+        }
+      }
     ]
   },
   {
@@ -540,17 +643,41 @@
   {
     "id": "google-search",
     "url": "https://www.google.com/search?q=example",
-    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><div id=\"search\"><h3 id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></h3><div class=\"VwiC3b\" id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</div><cite id=\"source-url\">https://example.test/path</cite></div><p id=\"unrelated\">Search tools and navigation remain original.</p>",
+    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><div id=\"m-x-content\"><p id=\"overview\">A generated overview explains the answer using ordinary prose.</p><ul><li id=\"overview-item\">An additional detail provides context for the answer.</li></ul><button id=\"show-more\">Show more of this summary</button><aside><p id=\"overview-source\">Source card metadata should remain original.</p></aside></div><div data-attrid=\"VisualDigestGeneratedDescription\"><p id=\"generated-answer\">Another layout includes a generated description in featured results.</p></div><div id=\"search\"><h3 id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></h3><div class=\"VwiC3b\" id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</div><cite id=\"source-url\">https://example.test/path</cite></div><p id=\"unrelated\">Search tools and navigation remain original.</p>",
     "required": [
       "#body1",
-      "#body2"
+      "#body2",
+      "#overview",
+      "#overview-item",
+      "#generated-answer"
     ],
     "forbidden": [
       "#navigation",
       "#protected",
       "#source-url",
+      "#show-more",
+      "#overview-source",
       "#unrelated"
-    ]
+    ],
+    "restoreSelectors": ["#m-x-content", "#search"],
+    "dynamic": {
+      "appendHtml": [
+        {
+          "selector": "#m-x-content",
+          "click": "#show-more",
+          "html": "<p id=\"expanded-overview\">More generated overview prose becomes readable after expanding the summary.</p>",
+          "required": ["#expanded-overview"],
+          "sourceIncludes": ["More generated overview prose becomes readable"]
+        },
+        {
+          "selector": "#m-x-content",
+          "route": "/search?q=next-example",
+          "html": "<p id=\"new-overview\">A second search route brings a new paragraph into the generated overview.</p>",
+          "required": ["#new-overview"],
+          "sourceIncludes": ["A second search route brings a new paragraph"]
+        }
+      ]
+    }
   },
   {
     "id": "google-scholar",
@@ -599,17 +726,56 @@
   },
   {
     "id": "linkedin-articles",
-    "url": "https://www.linkedin.com/pulse/example-article",
-    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><article><span itemprop=\"author\" id=\"author\">User metadata remains unchanged</span><p id=\"body1\">This readable paragraph describes the behavior and provides enough context for translation. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p><p id=\"body2\">A second independent paragraph explains the example and should remain stable during repeated translation.</p></article>",
+    "url": "https://www.linkedin.com/pulse/authored-independent-article-example",
+    "html": "<nav id=\"navigation\"><a href=\"/settings\">Navigation remains unchanged</a></nav><main><section class=\"core-rail\"><article class=\"article-main\"><header><section><h1 id=\"title\" class=\"pulse-title\">A practical guide to readable public articles</h1><div class=\"publisher-author-card\"><a class=\"base-card__full-link\" href=\"https://www.linkedin.com/in/authored-person\"><span class=\"sr-only\">Riley Example</span></a><img alt=\"Riley Example\"><div class=\"base-main-card__info\"><h3 id=\"publisher-name\" class=\"base-main-card__title\">Riley Example</h3><div id=\"publisher-date\" class=\"base-main-card__metadata\">Published October 25, 2026</div><p id=\"publisher-bio\" class=\"base-main-card__subtitle\">This author explains accessible reading tools and practical workflows.</p></div><div class=\"base-main-card__ctas\"><a class=\"base-main-card__cta\" href=\"/signup/cold-join\">+ Follow</a></div></div></section></header><div class=\"article-main__content\"><h2 id=\"section\">A useful section heading</h2><p id=\"body-one\">A paragraph about Riley Example keeps a <a id=\"body-reference\" href=\"https://example.test/reading\">readable reference</a> and an <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code> intact.</p><p id=\"body-two\">A second paragraph keeps all of its beginning, middle, and ending.<br>Another original line remains in the same complete source.</p><ul><li id=\"body-list\">An ordinary list item remains readable.</li></ul><h3 id=\"body-fake-author\" class=\"base-main-card__title\">A body heading with a nearby component class</h3><p id=\"body-fake-date\" class=\"base-main-card__metadata\">Published examples are discussed in this ordinary paragraph.</p><p id=\"body-fake-inline-meta\" class=\"inline-article-meta\">An inline metadata class alone is ordinary article prose.</p><p id=\"body-fake-aside-meta\" class=\"base-aside-card__metadata\">An aside metadata class alone is ordinary article prose.</p><p id=\"body-fake-action\"><a class=\"social-action-bar__button\" href=\"https://example.test/action-reference\">A reading reference with an action class</a></p><div class=\"publisher-author-card\"><div class=\"base-main-card__info\"><h3 id=\"body-fake-publisher\" class=\"base-main-card__title\">A quoted publisher name in body prose</h3></div></div></div><div><div class=\"inline-articles\"><h2 id=\"recommendations-heading\">Recommended reading</h2><div><div class=\"inline-article\"><a href=\"https://www.linkedin.com/pulse/authored-recommendation\"><div id=\"inline-title\" class=\"inline-article-title\">A recommendation title remains readable</div><div id=\"inline-metadata\" class=\"inline-article-meta\"><span class=\"inline-article-author\">Jordan Example</span><span class=\"inline-article-published-date\">2 years ago</span></div></a></div></div></div></div></article><div class=\"article-social-activity\"><a id=\"like-control\" class=\"social-action-bar__button\" href=\"/signup/cold-join?trk=like\"><div><span class=\"social-action-bar__button-text\">Like</span></div></a><a id=\"comment-control\" class=\"social-action-bar__button\" href=\"/signup/cold-join?trk=comment\"><span class=\"social-action-bar__button-text\">Comment</span></a><button id=\"share-control\"><span class=\"social-action-bar__button-text\">Share</span></button></div></section><section class=\"right-rail\"><a class=\"aside-article-card\" href=\"https://www.linkedin.com/pulse/authored-aside\"><div class=\"base-aside-card__info\"><h3 id=\"aside-title\" class=\"base-aside-card__title\">An aside recommendation remains readable</h3><div id=\"aside-metadata\" class=\"base-aside-card__metadata\"><span>Casey Example</span><span>3w</span></div></div></a><div><p id=\"aside-fake-metadata\" class=\"base-aside-card__metadata\">A nearby class outside an aside article card is readable.</p></div></section></main><div class=\"publisher-author-card\"><div class=\"base-main-card__info\"><h3 id=\"outside-publisher\" class=\"base-main-card__title\">An outside publisher reference</h3></div></div><div class=\"inline-articles\"><p id=\"outside-inline\" class=\"inline-article-meta\">An outside inline reference remains readable.</p></div><div class=\"article-social-activity\"><p id=\"outside-action\"><a class=\"social-action-bar__button\" href=\"https://example.test/outside\">An outside action reference remains readable</a></p></div>",
     "required": [
-      "#body1",
-      "#body2"
+      "#title",
+      "#section",
+      "#body-one",
+      "#body-two",
+      "#body-list",
+      "#publisher-bio",
+      "#body-fake-author",
+      "#body-fake-date",
+      "#body-fake-inline-meta",
+      "#body-fake-aside-meta",
+      "#body-fake-action",
+      "#body-fake-publisher",
+      "#recommendations-heading"
     ],
     "forbidden": [
       "#navigation",
-      "#protected",
-      "#author"
-    ]
+      "#publisher-name",
+      "#publisher-date",
+      "#inline-metadata",
+      "#aside-metadata",
+      "#like-control",
+      "#comment-control",
+      "#share-control",
+      "#protected"
+    ],
+    "sourceAssertions": {
+      "required": [
+        "Riley Example keeps a",
+        "readable reference",
+        "A second paragraph keeps all of its beginning, middle, and ending.",
+        "Another original line remains",
+        "This author explains accessible reading tools",
+        "A recommendation title remains readable",
+        "An aside recommendation remains readable"
+      ],
+      "forbidden": [
+        "Published October 25, 2026",
+        "Jordan Example",
+        "2 years ago",
+        "Casey Example",
+        "3w",
+        "Like",
+        "Comment",
+        "KEEP_ORIGINAL_TOKEN"
+      ]
+    },
+    "provenance": "Independently authored from the public LinkedIn Pulse publisher, recommendation and action component topology observed 2026-10-25; all text, names, paths and destinations are original. Not a copied page or live-site acceptance."
   },
   {
     "id": "seekingalpha",
@@ -941,10 +1107,11 @@
   {
     "id": "google-news-home-headlines",
     "url": "https://news.google.com/home?hl=en-US&gl=US&ceid=US:en",
-    "html": "<style>.mock-story{position:relative;margin:16px 0;padding:12px;border:1px solid #ccc}.mock-stretch,.mock-overlay{position:absolute;inset:0;z-index:1}</style><header><nav id=\"navigation\"><a href=\"./home\">Home</a><a href=\"./read/navigation\" id=\"nav-read\">Navigation read-link lookalike</a></nav><form role=\"search\"><input id=\"query\" value=\"Fixture news\"><button>Search</button></form></header><main><h2 id=\"section-title\">Section heading is outside headline scope</h2><section id=\"stories\"><div class=\"mock-story\"><div class=\"mock-stretch\"><a aria-hidden=\"true\" class=\"mock-overlay\" id=\"overlay1\" href=\"./read/mock-one\" style=\"position:absolute;inset:0\"></a></div><div id=\"source1\">Publisher Identity Alpha</div><a id=\"body1\" class=\"mock-new-title-class\" href=\"./read/mock-one\" aria-label=\"Headline with Publisher Identity Alpha and time metadata\">Researchers explain a reliable browser behavior</a><time id=\"date1\">2 hours ago</time><button id=\"menu1\">More actions</button></div><div class=\"mock-story\"><div class=\"mock-stretch\"><a aria-hidden=\"true\" class=\"mock-overlay\" id=\"overlay2\" href=\"./read/mock-two\" style=\"position:absolute;inset:0\"></a></div><div id=\"source2\">Publisher Identity Beta</div><a id=\"body2\" class=\"mock-other-title-class\" href=\"./read/mock-two\">A second independent headline provides useful context</a><time id=\"date2\">1 hour ago</time><button id=\"menu2\">More actions</button></div><div id=\"non-story\"><a href=\"./topics/mock\">Topic navigation stays unchanged</a></div></section><aside id=\"sidebar\"><a href=\"./read/aside\" id=\"sidebar-read\">Sidebar read-link lookalike remains unchanged</a></aside></main><footer id=\"footer\"><a href=\"./read/footer\" id=\"footer-read\">Footer read-link lookalike remains unchanged</a></footer><pre id=\"fixture-code\"><code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></pre>",
+    "html": "<style>.mock-story{position:relative;margin:16px 0;padding:12px;border:1px solid #ccc}.mock-stretch,.mock-overlay{position:absolute;inset:0;z-index:1}</style><header><nav id=\"navigation\"><a href=\"./home\">Home</a><a href=\"./read/navigation\" id=\"nav-read\">Navigation read-link lookalike</a></nav><form role=\"search\"><input id=\"query\" value=\"Fixture news\"><button>Search</button></form></header><main><h1 id=\"page-heading\">A useful daily news briefing</h1><h2 id=\"section-title\">Section heading is outside headline scope</h2><section id=\"stories\"><div class=\"mock-story\"><div class=\"mock-stretch\"><a aria-hidden=\"true\" class=\"mock-overlay\" id=\"overlay1\" href=\"./read/mock-one\" style=\"position:absolute;inset:0\"></a></div><div id=\"source1\">Publisher Identity Alpha</div><a id=\"body1\" class=\"mock-new-title-class\" href=\"./read/mock-one\" aria-label=\"Headline with Publisher Identity Alpha and time metadata\">Researchers explain a reliable browser behavior</a><time id=\"date1\">2 hours ago</time><button id=\"menu1\">More actions</button></div><div class=\"mock-story\"><div class=\"mock-stretch\"><a aria-hidden=\"true\" class=\"mock-overlay\" id=\"overlay2\" href=\"./read/mock-two\" style=\"position:absolute;inset:0\"></a></div><div id=\"source2\">Publisher Identity Beta</div><a id=\"body2\" class=\"mock-other-title-class\" href=\"./read/mock-two\">A second independent headline provides useful context</a><time id=\"date2\">1 hour ago</time><button id=\"menu2\">More actions</button></div><div id=\"non-story\"><a href=\"./topics/mock\">Topic navigation stays unchanged</a></div></section><aside id=\"sidebar\"><a href=\"./read/aside\" id=\"sidebar-read\">Sidebar read-link lookalike remains unchanged</a></aside></main><footer id=\"footer\"><a href=\"./read/footer\" id=\"footer-read\">Footer read-link lookalike remains unchanged</a></footer><pre id=\"fixture-code\"><code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></pre>",
     "required": [
       "#body1",
-      "#body2"
+      "#body2",
+      "#page-heading"
     ],
     "forbidden": [
       "#navigation",
@@ -971,12 +1138,14 @@
       "#section-title",
       "#sidebar",
       "#footer",
-      "#fixture-code"
+      "#fixture-code",
+      "#page-heading"
     ],
     "sourceAssertions": {
       "required": [
         "Researchers explain a reliable browser behavior",
-        "A second independent headline provides useful context"
+        "A second independent headline provides useful context",
+        "A useful daily news briefing"
       ],
       "forbidden": [
         "Publisher Identity Alpha",
@@ -1454,6 +1623,46 @@
         },
         "name": "reviews"
       }
+    ]
+  },
+  {
+    "id": "cnn-news",
+    "url": "https://www.cnn.com/2026/10/25/science/original-authored-fixture",
+    "kind": "independently authored structural fixture; never fetched as a real URL",
+    "html": "<header><h1 id=\"maincontent\">A new telescope maps a quiet stellar nursery.</h1>\n<div class=\"byline\"><span class=\"byline__name\" id=\"author\">Author Alpha</span></div>\n<span class=\"timestamp__time-since\" id=\"relative-date\">Oct 25, 2026</span><time id=\"full-date\" datetime=\"2026-10-25T05:00:00Z\">Oct 25, 2026, 1:00 AM ET</time></header>\n<article><p id=\"body-one\" class=\"paragraph-elevate\">Researchers compared the new images with <a href=\"/science/original-reference\">an earlier observation</a> to locate the cloud boundary. <code id=\"protected\">KEEP_ORIGINAL_TOKEN</code></p>\n<h2 class=\"subheader\" id=\"body-heading\">A clearer view of the nearby stars</h2>\n<div class=\"image_large-elevate__metadata\" id=\"main-caption-owner\"><div itemprop=\"caption\" class=\"image_large-elevate__caption\" id=\"main-caption\"><span>The blue cloud surrounds a small group of bright stars.</span></div><figcaption class=\"image_large-elevate__credit\" id=\"main-credit\">Nova Image Archive</figcaption></div>\n<div class=\"image-elevate__metadata\" id=\"related-caption-owner\"><div itemprop=\"caption\" class=\"image-elevate__caption\" id=\"related-caption\"><span>A related image shows a wider field around the same cloud.</span></div><figcaption class=\"image-elevate__credit\" id=\"related-credit\">Survey Team Collection</figcaption></div>\n<p id=\"body-two\" class=\"paragraph-elevate\">The team will compare more observations next year. <span id=\"ordinary-prose\">The observer notes explain the remaining uncertainty.</span></p></article>",
+    "required": [
+      "#body-one",
+      "#body-heading",
+      "#body-two"
+    ],
+    "forbidden": [
+      "#author",
+      "#relative-date",
+      "#full-date",
+      "#main-credit",
+      "#related-credit",
+      "#protected"
+    ],
+    "sourceAssertions": {
+      "required": [
+        "Researchers compared",
+        "The blue cloud surrounds",
+        "A related image shows",
+        "The observer notes explain"
+      ],
+      "forbidden": [
+        "Author Alpha",
+        "Oct 25, 2026",
+        "Nova Image Archive",
+        "Survey Team Collection"
+      ]
+    },
+    "literalSkeleton": [
+      "#author",
+      "#relative-date",
+      "#full-date",
+      "#main-credit",
+      "#related-credit"
     ]
   }
 ]

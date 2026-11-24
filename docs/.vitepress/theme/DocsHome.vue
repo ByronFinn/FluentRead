@@ -7,6 +7,17 @@ const t = (zh: string, english: string) => (en.value ? english : zh)
 const link = (path: string) => withBase((en.value ? '/en' : '') + path)
 const groups = computed(() => [
   {
+    title: t('安装与使用环境', 'Installation & platforms'),
+    id: 'installation',
+    items: [
+      [t('离线下载与安装', 'Offline installation'), '/guide/offline-install'],
+      [t('手机与 Safari', 'Mobile & Safari'), '/guide/mobile-safari'],
+      [t('油猴脚本', 'Userscripts'), '/guide/userscript'],
+      [t('Thunderbird 邮件翻译', 'Thunderbird email translation'), '/guide/thunderbird'],
+      [t('Zotero 文献翻译', 'Zotero literature translation'), '/guide/zotero'],
+    ],
+  },
+  {
     title: t('网页翻译', 'Webpage translation'),
     id: 'webpage',
     items: [
@@ -65,8 +76,8 @@ const groups = computed(() => [
       <p>
         {{
           t(
-            '这里介绍流畅阅读的安装方法、翻译功能和设置选项。',
-            'Find instructions for installation, translation and settings.'
+            '查找安装、翻译、学习和设置的操作步骤。',
+            'Find steps for installation, translation, learning, and settings.'
           )
         }}
       </p>
@@ -76,8 +87,8 @@ const groups = computed(() => [
       <p>
         {{
           t(
-            '了解如何安装插件、固定图标和翻译网页。',
-            'Install the extension, choose a target language and translate your first webpage.'
+            '安装插件、固定图标、选择目标语言，翻译第一篇网页。',
+            'Install and pin the extension, choose a target language, and translate your first webpage.'
           )
         }}
       </p>
@@ -85,7 +96,7 @@ const groups = computed(() => [
         >{{ t('查看快速开始', 'Open the quick start guide') }} →</a
       >
     </section>
-    <h2>{{ t('功能指南', 'Feature guides') }}</h2>
+    <h2>{{ t('指南目录', 'Browse guides') }}</h2>
     <div class="fr-docs-directory">
       <section v-for="group in groups" :key="group.id" class="fr-docs-group">
         <h3 :id="en ? group.title.toLowerCase().replace(/[^a-z]+/g, '-') : group.title">

@@ -1,8 +1,8 @@
 <!--
  * @file src/features/settings/ui/services/ServiceCatalog.vue
- * 文件职责：以服务目录和清晰分层的配置工作区呈现翻译服务，窄屏按需展开目录，保持配置与默认使用分离。
- * 主要内容：侧栏展示全部内置及自定义服务，分组可单独收起，选中服务或回到本页时展开正在配置的服务所在分组；顶部分组导航点击后展开并滚动到对应分组，并随目录滚动同步高亮；搜索过滤目录时展开全部匹配分组，此时点击分组导航会清空搜索并回到完整目录；自定义按钮直接打开创建表单，入口下方的状态插槽由父组件反馈首次窗口加载，反馈显示时停用按钮说明气泡，避免遮挡提示与关闭操作；右侧集中展示服务名称及接口性质徽章、模型、官网帮助和连接配置；目录搜索文本按需缓存，目录几何按帧合并并缓存分组位置，滚动只读取当前位置，活跃上下文限定操作并取消过期焦点、滚动与帧回调。
- * 模块边界：目录提供“配置服务”“自定义服务”和“添加组合”入口，组合与自建接口共同显示在自定义目录且不展示模型字段；标题栏在检查连接左侧提供显式设为默认操作，通过独立事件交给外层 SettingsSections 持久化，公开构建不展示 ChatGPT 登录模块或旧配置详情，模块只在显式开发开关下可见，不编辑凭据、不测试连接也不保存配置；分组收起状态只保存在本次页面会话，不写入配置，停用或切换上下文时取消目录帧并重建分组尺寸及字体观察，卸载时清理观察器与监听；详细表单归 ServiceConfiguration.vue，服务定义来自 core/config。
+ * 文件职责：以服务目录和分层配置工作区呈现翻译服务，并独立管理服务启用状态与默认服务。
+ * 主要内容：侧栏展示未移除的内置及自定义服务，提供移除按钮、自定义服务入口、搜索及分组折叠；目录搜索文本与几何按需缓存，活跃上下文限定操作并取消过期焦点、滚动与帧回调。
+ * 模块边界：移除、自定义服务与默认切换通过事件交给 SettingsSections 确认及持久化；公开构建隐藏 ChatGPT 登录模块，详细表单归 ServiceConfiguration.vue；折叠和搜索是页面状态，卸载时清理观察器与监听。
  -->
 <template>
   <section
@@ -12,7 +12,7 @@
     :data-default-service="defaultService"
     :data-editing-service="service"
   >
-    <nav v-if="directoryGroups.length > 1" class="service-group-navigation" :aria-label="t('options.categories')">
+    <nav v-if="directoryGroups.length > 1" ref="groupNavigation" class="service-group-navigation settings-subnavigation" :aria-label="t('options.categories')">
       <button
         v-for="group in directoryGroups"
         :key="group.id"
@@ -28,7 +28,7 @@
         <button ref="directoryToggle" type="button" class="mobile-directory-toggle" :disabled="!active" :aria-expanded="directoryOpen" :aria-controls="directoryId" :onClick="actions.toggleDirectory">
           <ServiceIcon :service="isCustomOpenAIProviderId(service) ? 'custom' : service" :label="selectedService?.label" size="small" />
           <span class="mobile-directory-name">{{ selectedService?.label }}</span><small>{{ t('settings.organization.chooseService') }}</small>
-          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg>
+          <UiIcon name="chevron-down" :size="16" />
         </button>
         <div :id="directoryId" class="service-directory-content">
         <div class="rail-heading">
@@ -38,29 +38,30 @@
           </div>
           <el-tooltip :content="t('settings.services.library.addHelp')" placement="bottom" :show-after="250" :trigger="['hover', 'focus']" :disabled="!active || addServiceFeedbackVisible">
           <button ref="addButton" type="button" class="service-add-button" data-testid="custom-service-add" :disabled="!active" :aria-label="t('settings.services.library.add')" :onClick="actions.addService">
-            <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14" /></svg>
+            <UiIcon name="plus" :size="15" />
             <span>{{ t('settings.services.library.add') }}</span>
           </button>
           </el-tooltip>
         </div>
         <slot name="add-service-status" />
         <label class="catalog-search">
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg>
-          <input :value="serviceQuery" :disabled="!active" :onInput="actions.updateQuery" type="search" :aria-label="t('settings.services.library.search')" :placeholder="t('settings.services.library.search')" />
+          <UiIcon name="search" :size="16" />
+          <input :value="serviceQuery" :disabled="!active" :onInput="actions.updateQuery" type="search" :aria-label="directorySearchLabel" :placeholder="directorySearchLabel" />
         </label>
         <div ref="groupsElement" class="service-groups" :onScrollPassive="actions.syncActiveGroup" :onWheelPassive="actions.releasePinnedGroup" :onTouchstartPassive="actions.releasePinnedGroup" :onPointerdown="actions.releasePinnedGroup" :onKeydown="actions.releasePinnedGroup" :onFocusin="actions.releasePinnedGroup">
           <section v-for="group in visibleDirectoryGroups" :key="group.id" :data-service-section="group.id" class="directory-section" :class="{ 'is-collapsed': !isGroupOpen(group.id) }">
             <h4>
               <button type="button" class="directory-section-toggle" :aria-expanded="isGroupOpen(group.id)" :aria-controls="`${directoryId}-${group.id}`" :disabled="!active || searching" :onClick="actions.toggleGroup.bind(null, group.id)">
                 <span>{{ group.label }}</span><small>{{ group.items.length }}</small>
-                <svg v-if="!searching" class="directory-section-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m6 4 4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                <UiIcon v-if="!searching" class="directory-section-chevron" name="chevron-down" :size="14" />
               </button>
             </h4>
             <div v-show="isGroupOpen(group.id)" :id="`${directoryId}-${group.id}`" class="directory-items">
-              <ServiceCatalogItem v-for="item in group.items" :key="item.value" :item="item" compact
+                <ServiceCatalogItem v-for="item in group.items" :key="item.value" :item="item"
                 :selected="service === item.value" :is-default="defaultService === item.value"
                 :is-configured="configuredSet.has(item.value)" :is-favorite="favoriteSet.has(item.value)"
-                :onSelect="actions.selectService" />
+                :remove-disabled="!active || item.disabled || enabledServiceCount <= 1"
+                :onSelect="actions.selectService" :onRemove="actions.removeService" />
             </div>
           </section>
           <p v-if="!visibleDirectoryGroups.length" class="catalog-empty" role="status">{{ t('settings.services.library.empty') }}</p>
@@ -73,10 +74,8 @@
           <ServiceIcon :service="isCustomOpenAIProviderId(service) ? 'custom' : service" :label="selectedService?.label" size="large" />
           <div class="detail-heading">
             <div class="detail-title-row">
-              <h4>{{ selectedService?.label || '尚未配置服务' }}</h4>
+              <h4 tabindex="-1">{{ selectedService?.label || '尚未配置服务' }}</h4>
               <ServiceNatureBadge :service="service" />
-              <span v-if="service === defaultService" class="active-badge">{{ t('settings.services.library.default') }}</span>
-              <span v-else class="editing-badge">{{ t('settings.services.library.viewing') }}</span>
               <a
                 v-if="website && !publicPlanBlocked"
                 class="service-website-link"
@@ -88,9 +87,7 @@
                 :aria-label="t('settings.services.openExternal', { service: selectedService?.label || service, action: t(`settings.services.${website.kind}`) })"
               >
                 {{ t(`settings.services.${website.kind}`) }}
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M14 3h7v7M21 3 10 14M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5" />
-                </svg>
+                <UiIcon name="external" :size="14" />
               </a>
             </div>
           </div>
@@ -103,7 +100,7 @@
               :disabled="!active || service === defaultService || !selectedService || selectedService.disabled"
               :onClick="actions.setDefaultService"
             >
-              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 4 4L19 6" /></svg>
+              <UiIcon name="check" :size="16" />
               {{ t(service === defaultService ? 'settings.services.library.default' : 'settings.services.library.setDefault') }}
             </button>
             <div ref="connectionActionTarget" class="hero-connection-action" />
@@ -124,7 +121,7 @@
               <span class="credential-guide-badge">{{ t('settings.organization.guide') }}</span>
               <strong>{{ credentialGuide.freeQuota }}</strong>
             </span>
-            <svg class="credential-guide-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m4 6 4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            <UiIcon class="credential-guide-chevron" name="chevron-down" :size="16" />
           </summary>
           <div class="credential-guide-body">
             <small>免费额度与超额处理以厂商控制台和当前套餐为准</small>
@@ -141,9 +138,7 @@
                 :title="credentialGuide.consoleUrl"
               >
                 {{ credentialGuide.consoleLabel }}
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M14 3h7v7M21 3 10 14M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5" />
-                </svg>
+                <UiIcon name="external" :size="13" />
               </a>
               <a
                 class="credential-guide-link"
@@ -184,8 +179,10 @@
 </template>
 
 <script setup lang="ts">
+import '../components/settings-navigation.css'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
 import ServiceIcon from '@/src/ui/components/ServiceIcon.vue'
+import UiIcon from '@/src/ui/components/UiIcon.vue'
 import ServiceNatureBadge from './ServiceNatureBadge.vue'
 import { useUiI18n } from '@/src/ui/i18n'
 import { isCustomOpenAIProviderId } from '@/src/core/config/customOpenAI'
@@ -194,6 +191,7 @@ import {options as catalogOptions, services} from '@/src/core/config/catalog'
 import {chatGPTPlanDevelopmentEnabled} from '@/src/platform/chatgpt-plan/buildMode'
 import {
   buildServiceSections,
+  serviceDirectorySearchText,
   type ServiceCredentialGuide,
   type ServiceOption,
   type ServiceWebsite,
@@ -219,6 +217,7 @@ const props = withDefaults(defineProps<{
   selectedModel?: string
   services: ServiceOption[]
   favoriteServices: string[]
+  disabledServices?: string[]
   configuredServices: string[]
   modelOptions: ModelPickerOption[]
   showModel: boolean
@@ -226,11 +225,12 @@ const props = withDefaults(defineProps<{
   maximumModelLength: number
   customModelCount: number
   allowCustomModels: boolean
-}>(), {active: true, addServiceFeedbackVisible: false})
+}>(), {active: true, addServiceFeedbackVisible: false, disabledServices: () => []})
 
 const emit = defineEmits<{
   'update:service': [value: string]
   'update:default-service': [value: string]
+  'toggle-availability': [service: string, enabled: boolean]
   'update:model': [value: string]
   'add:service': []
   'add:model': [value: string]
@@ -247,24 +247,29 @@ const addButton = ref<HTMLButtonElement | null>(null)
 const connectionActionTarget = ref<HTMLElement | null>(null)
 const configuredSet = computed(() => new Set(props.configuredServices))
 const favoriteSet = computed(() => new Set(props.favoriteServices))
+const disabledServiceSet = computed(() => new Set(props.disabledServices))
 const customServices = computed(() => props.services.filter((item) => isCustomOpenAIProviderId(item.value) || isCompositeTranslationProviderId(item.value)))
 const builtInServices = computed(() => props.services.filter((item) => !isCustomOpenAIProviderId(item.value) && !isCompositeTranslationProviderId(item.value)
   && (item.value !== services.chatgptPlan || chatGPTPlanDevelopmentEnabled)))
 const sections = computed(() => buildServiceSections(builtInServices.value))
-const directoryGroups = computed(() => [
+const catalogGroups = computed(() => [
   ...sections.value.flatMap(section => section.groups.map(group => ({ ...group, label: group.label || section.label }))),
   ...(customServices.value.length ? [{ id: 'custom', label: t('settings.services.library.custom'), items: customServices.value }] : []),
 ])
+const directoryGroups = computed(() => catalogGroups.value
+  .map(group => ({...group, items: group.items.filter(item => !disabledServiceSet.value.has(item.value))}))
+  .filter(group => group.items.length))
 const allServices = computed(() => directoryGroups.value.flatMap(group => group.items))
+const enabledServiceCount = computed(() => allServices.value.filter(item => !item.disabled).length)
+const directorySearchLabel = computed(() => t('settings.services.library.search'))
 // 延迟建立索引，空搜索不读取或规范化逐项文本；连续输入复用同一目录索引。
-const directorySearchText = computed(() => new Map(allServices.value.map(item => [item,
-  [item.label, item.value, item.description, ...(item.searchTerms || [])].join(' ').normalize('NFKC').toLocaleLowerCase(),
-])))
+const directorySearchText = computed(() => new Map(allServices.value.map(item => [item, serviceDirectorySearchText(item)])))
+const keyword = computed(() => serviceQuery.value.trim().normalize('NFKC').toLocaleLowerCase())
+const matchesSearch = (item: ServiceOption) => !keyword.value || directorySearchText.value.get(item)!.includes(keyword.value)
 const visibleDirectoryGroups = computed(() => {
-  const keyword = serviceQuery.value.trim().normalize('NFKC').toLocaleLowerCase()
-  if (!keyword) return directoryGroups.value
+  if (!keyword.value) return directoryGroups.value
   return directoryGroups.value
-    .map(group => ({ ...group, items: group.items.filter(item => directorySearchText.value.get(item)!.includes(keyword)) }))
+    .map(group => ({ ...group, items: group.items.filter(matchesSearch) }))
     .filter(group => group.items.length)
 })
 const selectedService = computed(() => allServices.value.find(item => item.value === props.service)
@@ -277,6 +282,20 @@ const searching = computed(() => Boolean(serviceQuery.value.trim()))
 const groupsElement = ref<HTMLElement | null>(null)
 const collapsedGroups = ref<ReadonlySet<string>>(new Set())
 const activeGroup = ref('')
+const groupNavigation = ref<HTMLElement | null>(null)
+// 与连续表单导航一致：长语言标签横向滚动时，当前分组保持在导航可见范围内。
+watch(activeGroup, async () => {
+  const current = capture()
+  await nextTick()
+  const nav = groupNavigation.value
+  const button = nav?.querySelector<HTMLElement>('[aria-current]')
+  if (!current() || !nav || !button || !nav.getClientRects().length) return
+  const navRect = nav.getBoundingClientRect()
+  const buttonRect = button.getBoundingClientRect()
+  if (buttonRect.left < navRect.left || buttonRect.right > navRect.right) {
+    nav.scrollTo({left: nav.scrollLeft + buttonRect.left - navRect.left - (nav.clientWidth - buttonRect.width) / 2, behavior: 'instant'})
+  }
+})
 // 末尾的短分组无法滚到目录顶部；点击导航后保持指向目标，直到用户自己操作目录。
 let pinnedGroup = ''
 
@@ -480,7 +499,7 @@ watch(active, (enabled, previous) => {
   if (enabled && !previous) resetConfigurationScroll(false)
 }, {flush: 'post'})
 function selectService(service: string): void {
-  if (!active.value || !allServices.value.some(item => item.value === service && !item.disabled)) return
+  if (!active.value || !allServices.value.some(item => item.value === service && (!item.disabled || item.value === services.chromeTranslator))) return
   expandGroupOf(service)
   if (service === props.service) {
     const restoreFocus = directoryOpen.value
@@ -498,6 +517,9 @@ const actions = computed(() => {
   const current = capture()
   return {
     selectService: (value: string) => {if (current()) selectService(value)},
+    removeService: (service: string) => {
+      if (current() && enabledServiceCount.value > 1 && allServices.value.some(item => item.value === service && !item.disabled)) emit('toggle-availability', service, false)
+    },
     setDefaultService: () => {if (current()) setDefaultService()},
     revealGroup: (id: string) => {if (current()) return revealGroup(id)},
     toggleGroup: (id: string) => {if (current()) toggleGroup(id)},
@@ -523,13 +545,9 @@ watch(() => props.service, (service) => {
 </script>
 
 <style scoped>
-.service-catalog { display: flex; flex-direction: column; height: min(650px, 70dvh); min-height: 0; color: var(--ink, #172033); background: var(--surface, #fff); }
-.service-group-navigation { display: flex; flex: none; gap: 20px; min-width: 0; padding: 0 16px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: thin; overscroll-behavior-x: contain; }
-.service-group-navigation button { flex: none; padding: 10px 2px 12px; border: 0; border-bottom: 2px solid transparent; color: var(--muted); background: transparent; font: inherit; font-size: 13px; font-weight: 600; line-height: 1.4; white-space: nowrap; cursor: pointer; }
-.service-group-navigation button:hover { color: var(--ink); }
-.service-group-navigation button[aria-current] { border-bottom-color: var(--brand); color: var(--brand-strong); font-weight: 650; }
-.service-group-navigation button:focus-visible { outline-offset: -3px; border-radius: 4px; }
-.catalog-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 0; flex: 1; overflow: hidden; }
+.service-catalog { display: flex; flex-direction: column; height: min(650px, 70dvh); min-height: 0; color: var(--ink, #172033); background: transparent; }
+.service-group-navigation { margin: 0 var(--settings-navigation-inset, 12px) var(--settings-navigation-gap, 18px); }
+.catalog-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr); min-height: 0; flex: 1; overflow: hidden; background: var(--surface, #fff); }
 .service-rail { display: flex; flex-direction: column; min-height: 0; padding: 12px 10px; border-right: 1px solid var(--line, #e4e7ef); background: var(--surface-soft, #fafbfc); }
 .rail-heading { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 0 6px 10px; }
 .rail-heading > div { display: flex; flex: none; align-items: baseline; gap: 5px; min-width: 0; }
@@ -540,25 +558,26 @@ watch(() => props.service, (service) => {
 .service-count { margin-left: 4px; font-variant-numeric: tabular-nums; }
 .service-groups { overflow-y: auto; min-height: 0; flex: 1; margin-top: 12px; overscroll-behavior: contain; }
 .directory-items { display: grid; gap: 1px; }
-.service-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; margin: 0; padding: 20px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; border: 0; border-radius: 0; background: var(--surface); overscroll-behavior: contain; }
+.service-detail { container: service-detail / inline-size; display: flex; flex-direction: column; min-width: 0; min-height: 0; margin: 0; padding: 20px; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; border: 0; border-radius: 0; background: var(--surface); overscroll-behavior: contain; }
 .detail-hero { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding-bottom: 12px; margin-bottom: 12px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .detail-hero > :deep(.service-icon) { margin-top: 2px; }
 .detail-heading { flex: 1 1 160px; min-width: 0; }
-.hero-service-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-width: 100%; margin-left: auto; }
-.hero-connection-action { flex: none; }
-.service-default-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; max-width: 100%; min-height: 36px; padding: 7px 12px; border: 1px solid var(--brand-border, #f3c0ce); border-radius: 9px; color: var(--brand-strong, #bd2853); background: var(--surface, #fff); font-size: 12px; font-weight: 600; cursor: pointer; }
+.hero-service-actions { display: flex; align-items: stretch; flex-wrap: wrap; gap: 8px; max-width: 100%; margin-left: auto; }
+.hero-connection-action { display: flex; min-width: 0; }
+.service-default-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; max-width: 100%; min-height: 36px; padding: 7px 12px; border: 1px solid var(--brand-border, #f3c0ce); border-radius: 8px; color: var(--brand-strong, #bd2853); background: var(--surface, #fff); font-size: 12px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; cursor: pointer; }
 .service-default-button > svg { flex: none; }
 .service-default-button:hover:not(:disabled) { border-color: var(--brand); background: var(--brand-soft); }
 .service-default-button:disabled { border-color: var(--line); color: var(--muted); cursor: default; }
+@container service-detail (max-width: 600px) {
+  .hero-service-actions { width: 100%; margin-left: 0; }
+}
 .detail-title-row { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
 .detail-title-row h4 { margin: 0; font-size: 20px; line-height: 1.4; overflow-wrap: anywhere; }
 .detail-hero p { margin: 5px 0 0; color: var(--muted, #737c8f); font-size: 12px; line-height: 1.6; }
-.active-badge { padding: 4px 8px; border-radius: 999px; color: var(--brand-strong); background: var(--brand-soft); font-size: 10px; font-weight: 600; white-space: nowrap; }
-.editing-badge { color: var(--muted, #737c8f); font-size: 11px; white-space: nowrap; }
 .service-description { max-width: 760px; margin: 0 0 12px; color: var(--muted, #737c8f); font-size: 12px; line-height: 1.65; }
 .service-website-link { display: inline-flex; align-items: center; gap: 4px; color: var(--brand-strong); font-size: 12px; font-weight: 550; text-decoration: none; }
 .service-website-link:hover { color: var(--brand-strong, #bd2853); text-decoration: underline; }
-.model-section { display: grid; grid-template-columns: 140px minmax(0, 1fr); align-items: center; gap: 16px; padding: 0 0 12px; margin: 0 0 12px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; flex-shrink: 0; }
+.model-section { display: grid; grid-template-columns: var(--fr-service-label-width, 140px) minmax(0, 1fr); align-items: center; gap: var(--fr-service-column-gap, 16px); padding: 0 0 12px; margin: 0 0 12px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; flex-shrink: 0; }
 .model-section > :deep(.model-picker) { width: 100%; max-width: 640px; justify-self: start; }
 .model-heading strong { font-size: 13px; font-weight: 550; }
 .service-configuration-slot { flex-shrink: 0; padding-bottom: 12px; }
@@ -575,8 +594,8 @@ watch(() => props.service, (service) => {
 .directory-section-toggle:not(:disabled):hover { background: color-mix(in srgb, var(--line) 40%, transparent); }
 .directory-section-toggle > span { min-width: 0; flex: 1; overflow-wrap: anywhere; }
 .directory-section-toggle small { color: var(--muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
-.directory-section-chevron { flex: none; width: 14px; height: 14px; color: var(--muted); transition: transform 150ms ease; }
-.directory-section-toggle[aria-expanded="true"] .directory-section-chevron { transform: rotate(90deg); }
+.directory-section-chevron { color: var(--muted); transform: rotate(-90deg); transition: transform 150ms ease; }
+.directory-section-toggle[aria-expanded="true"] .directory-section-chevron { transform: none; }
 .directory-section.is-collapsed .directory-section-toggle { border-radius: 8px; }
 @media (prefers-reduced-motion: reduce) { .directory-section-chevron { transition: none; } }
 .catalog-empty { padding: 32px 0; color: var(--muted, #737c8f); text-align: center; font-size: 13px; }
@@ -607,7 +626,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--brand-strong, #
 :global(:root.dark .credential-guide-link) { border-color: var(--line); color: var(--ink); background: var(--surface); }
 :global(:root.dark .credential-guide-link.is-primary) { color: var(--brand-strong); background: var(--brand-soft); }
 @media (max-width: 1100px) {
-  .catalog-layout { grid-template-columns: 200px minmax(0, 1fr); }
+  .catalog-layout { grid-template-columns: 220px minmax(0, 1fr); }
+  .service-rail { padding-inline: 4px; }
   .service-detail { padding: 16px; }
   .model-section { grid-template-columns: 1fr; gap: 8px; }
 }
@@ -618,7 +638,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--brand-strong, #
   .service-rail { border-right: 0; border-bottom: 1px solid var(--line, #e4e7ef); padding: 10px 12px; }
   .rail-heading { margin-bottom: 6px; }
   .service-groups { min-height: 80px; }
-  .directory-items { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .directory-items { grid-template-columns: minmax(0, 1fr); }
   .service-detail { margin: 0; padding: 14px; border: 0; border-radius: 0; overflow: visible; }
   .detail-hero { flex-wrap: wrap; gap: 10px; }
   .detail-title-row h4 { font-size: 18px; }
@@ -640,5 +660,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--brand-strong, #
   .service-groups { max-height: 240px; }
   .hero-service-actions { margin-left: 0; }
   .detail-hero { margin-bottom: 12px; padding-bottom: 12px; }
+}
+@media (max-width: 700px), (any-pointer: coarse) {
+  .service-add-button { min-width: 44px; min-height: 44px; white-space: normal; overflow-wrap: anywhere; }
 }
 </style>

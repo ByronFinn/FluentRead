@@ -1,0 +1,166 @@
+{
+  "provenance": {
+    "nativeUrl": "https://www.facebook.com/NASA/posts/look-up-this-week-you-might-spot-the-international-space-stationskywatchers-in-t/1116021799893195/",
+    "capturedAt": "2026-10-25",
+    "sourceSha256": "58d91da3b3529d277d1f6d9dc949e1ebe7a8096d385501dfa956689dc17bdc66",
+    "method": "Faithful native post article plus its accessible dialog heading, after one normal promotion dismissal. Preserve native nesting, all 10 comment articles/13 paragraphs, caption inline links and semantic attributes; remove only obfuscated class/style and decorative SVG/images. Added IDs label fixture nodes only. Synthetic negatives are confined to negative-corpus; dynamic comment clones the native Mike structure with authored text. Two reply-summary avatars retain their original sanitized SVG/mask/image nesting for semantic component regression; no image URL is present. The comment-sort control retains its original FEFF helper span and aria-hidden caret SVG/path for the observed UI-control regression.",
+    "scope": "Pure core candidate/snapshot/state regression; no network, browser, provider or native translation acceptance."
+  },
+  "url": "https://www.facebook.com/NASA/posts/example/1116021799893195/",
+  "html": "<div role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"_r_1_\"><h2 id=\"post-ui-heading\" dir=\"auto\"><span dir=\"auto\" id=\"_r_1_\">NASA - National Aeronautics and Space Administration 的帖子</span></h2><div id=\"native-post\" aria-posinset=\"1\" role=\"article\"><div><div><div><div><div><div></div><div><div><div><div></div><div><div><div><div><div><span><a aria-label=\"NASA - National Aeronautics and Space Administration\" href=\"https://www.facebook.com/NASA\" role=\"link\" tabindex=\"0\"><div><div role=\"none\"></div></div></a></span></div></div></div><div><div><div><span dir=\"ltr\"><div id=\"main-author\" data-ad-rendering-role=\"profile_name\"><h3><span><span><span><span><span><a href=\"https://www.facebook.com/NASA\" role=\"link\" tabindex=\"0\"><b><span>NASA - National Aeronautics and Space Administration</span></b></a></span></span></span></span><span>&#160;<span><span></span></span></span></span></h3></div></span></div><div><span dir=\"ltr\"><div><span><span><span><a id=\"post-date\" aria-label=\"2024年11月14日\" href=\"https://www.facebook.com/NASA/posts/pfbid0qNvPmP33e5gkdAguzR1wX8wRRzXgHmko8HSPYfzkhpXoJD1qEzxbL1bdzB9dA4wkl\" role=\"link\" tabindex=\"0\">2024年11月14日</a></span></span></span><span><span><span>&#160;</span><span aria-hidden=\"true\"> · </span></span></span><span><span><span></span></span></span></div></span></div></div></div></div></div><div><div dir=\"auto\"><div data-ad-rendering-role=\"story_message\"><div id=\"caption\" data-ad-comet-preview=\"message\" data-ad-preview=\"message\"><div><div><span dir=\"auto\"><div><div><div id=\"caption-0\" dir=\"auto\">Look up this week — you might spot the <span><a id=\"caption-iss-link\" href=\"https://www.facebook.com/ISS\" role=\"link\" tabindex=\"0\">International Space Station</a></span>!</div></div><div><div id=\"caption-1\" dir=\"auto\">Skywatchers in the eastern United States, among other locations, may be able to see the station pass overhead in the early evening hours. Download our free Spot the Station app for notifications: <span><a href=\"https://l.facebook.com/l.php\" role=\"link\" tabindex=\"0\">https://spotthestation.nasa.gov/</a></span></div></div></div></span></div></div></div></div></div><div><div><a href=\"https://www.facebook.com/photo/\" role=\"link\" tabindex=\"0\"><div><div><div><div></div></div></div></div><div></div><div role=\"none\"></div></a></div><div></div></div></div><div><div><div><div><div><div><div><div><span aria-label=\"查看留下心情的用户\" role=\"toolbar\"><span><span><span><span><div id=\"native-control-0\" aria-label=\"赞：2,875位用户\" role=\"button\" tabindex=\"0\"></div></span></span></span><span><span><span><div id=\"native-control-1\" aria-label=\"大爱：731位用户\" role=\"button\" tabindex=\"0\"></div></span></span></span></span></span><div>所有心情：</div><span aria-hidden=\"true\"><span><span>3,697</span></span></span></div><div><div><span><div id=\"native-control-2\" role=\"button\" tabindex=\"0\"><span dir=\"auto\"><span>185条评论</span></span></div></span></div><div><span><div id=\"native-control-3\" role=\"button\" tabindex=\"0\"><span dir=\"auto\"><span>658次分享</span></span></div></span></div></div></div></div><div><div><div><div id=\"native-control-4\" role=\"button\" tabindex=\"0\"><div><div><i></i></div><div><span dir=\"auto\">赞</span></div></div><div role=\"none\"></div></div></div><div><div id=\"native-control-5\" role=\"button\" tabindex=\"0\"><div><div><i></i></div><div><span dir=\"auto\">评论</span></div></div><div role=\"none\"></div></div></div></div></div></div></div><div><div><div><div id=\"native-control-6\" aria-expanded=\"false\" aria-haspopup=\"menu\" role=\"button\" tabindex=\"0\"><span dir=\"auto\">最相关<div><span>﻿</span><div><svg viewBox=\"0 0 16 16\" width=\"16\" height=\"16\" fill=\"currentColor\" aria-hidden=\"true\"><path d=\"M4.708 6c-1.114 0-1.672 1.346-.884 2.134l2.939 2.94a1.75 1.75 0 0 0 2.475 0l2.94-2.94c.787-.788.229-2.134-.885-2.134H4.708z\" /></svg></div></div></span></div></div></div><div><div><div><div><div><div id=\"comment-0\" aria-label=\"评论者：Mary Pat Berry1 年前\" role=\"article\" tabindex=\"-1\"><div><div></div></div><div><div><div><div><div><span id=\"comment-author-0\"><span dir=\"auto\">Mary Pat Berry</span></span><div><span id=\"comment-body-0\" dir=\"auto\" lang=\"en\"><div><div id=\"comment-0-paragraph-0\" dir=\"auto\">but that's not it in the picture</div><div id=\"comment-0-paragraph-1\" dir=\"auto\">saw it this am over so maryland</div><div id=\"comment-0-paragraph-2\" dir=\"auto\">it's a bright dot not a streak</div></div></span></div></div></div></div><div></div></div><div><ul aria-hidden=\"false\"><li><span><div><a id=\"comment-date-0\" href=\"https://www.facebook.com/NASA/posts/pfbid0qNvPmP33e5gkdAguzR1wX8wRRzXgHmko8HSPYfzkhpXoJD1qEzxbL1bdzB9dA4wkl\" role=\"link\" tabindex=\"0\">1年</a></div></span></li></ul><div><div><div><span><div id=\"native-control-7\" aria-label=\"13个心情，查看留下心情的用户\" role=\"button\" tabindex=\"0\"><div><span>13</span><div><span></span><span></span><span></span></div></div><div role=\"none\"></div></div></span></div></div></div></div></div></div><div><div><div><div></div><div id=\"native-control-8\" role=\"button\" tabindex=\"0\"><span><span dir=\"auto\"><div><div><div class=\"x1rg5ohu x1n2onr6 x3ajldb x1ja2u2z\"><svg aria-hidden=\"true\" class=\"x3ajldb\" role=\"none\"><mask id=\"_r_14_\"><circle fill=\"white\" /></mask><g><image data-fr-evidence-original-xlink-href=\"redacted\" height=\"100%\" width=\"100%\" /><circle class=\"xbh8q5q x1pwv2dq xvlca1e\" /></g></svg></div></div><div><span><span>NASA - National Aeronautics and Space Administration回复了</span></span></div><div><span><span><span>&#160;</span><span aria-hidden=\"true\"> · </span></span></span></div><div><span><span>9条回复</span></span></div></div></span></span></div></div></div></div></div></div></div></div><div><div><div><div><div id=\"comment-1\" aria-label=\"评论者：Mike Ramirez1 年前\" role=\"article\" tabindex=\"-1\"><div><div></div></div><div><div><div><div><div><span id=\"comment-author-1\"><span dir=\"auto\">Mike Ramirez</span></span><div><span id=\"comment-body-1\" dir=\"auto\" lang=\"en\"><div><div id=\"comment-1-paragraph-0\" dir=\"auto\">Will it ever be visible from the low desert from Imperial valley CA.  Southern California.</div></div></span></div></div></div></div><div></div></div><div><ul aria-hidden=\"false\"><li><span><div><a id=\"comment-date-1\" href=\"https://www.facebook.com/NASA/posts/pfbid0qNvPmP33e5gkdAguzR1wX8wRRzXgHmko8HSPYfzkhpXoJD1qEzxbL1bdzB9dA4wkl\" role=\"link\" tabindex=\"0\">1年</a></div></span></li></ul><div><div><div><span><div id=\"native-control-9\" aria-label=\"2个心情，查看留下心情的用户\" role=\"button\" tabindex=\"0\"><div><span>2</span><div><span></span></div></div><div role=\"none\"></div></div></span></div></div></div></div></div></div><div><div><div><div></div><div id=\"native-control-10\" role=\"button\" tabindex=\"0\"><span><span dir=\"auto\"><div><div><div class=\"x1rg5ohu x1n2onr6 x3ajldb x1ja2u2z\"><svg aria-hidden=\"true\" class=\"x3ajldb\" role=\"none\"><mask id=\"_r_18_\"><circle fill=\"white\" /></mask><g><image data-fr-evidence-original-xlink-href=\"redacted\" height=\"100%\" width=\"100%\" /><circle class=\"xbh8q5q x1pwv2dq xvlca1e\" /></g></svg></div></div><div><span><span>NASA - National Aeronautics and Space Administration回复了</span></span></div><div><span><span><span>&#160;</span><span aria-hidden=\"true\"> · </span></span></span></div><div><span><span>9条回复</span></span></div></div></span></span></div></div></div></div></div></div></div></div><div><div><div><div><div id=\"comment-2\" aria-label=\"评论者：Bonita Weiler1 年前\" role=\"article\" tabindex=\"-1\"><div><div></div></div><div><div><div><div><div><span id=\"comment-author-2\"><span dir=\"auto\">Bonita Weiler</span></span><div><span id=\"comment-body-2\" dir=\"auto\" lang=\"en\"><div><div id=\"comment-2-paragraph-0\" dir=\"auto\">A Maxfield Parrish painting immediately comes to mind. Thanks for ISS information.</div></div></span></div></div></div></div><div></div></div><div><ul aria-hidden=\"false\"><li><span><div><a id=\"comment-date-2\" href=\"https://www.facebook.com/NASA/posts/pfbid0qNvPmP33e5gkdAguzR1wX8wRRzXgHmko8HSPYfzkhpXoJD1qEzxbL1bdzB9dA4wkl\" role=\"link\" tabindex=\"0\">1年</a></div></span></li></ul><div><div><div><span><div id=\"native-control-11\" aria-label=\"1 个心情，查看留下心情的用户\" role=\"button\" tabindex=\"0\"><div><span>1</span><div><span></span></div></div><div role=\"none\"></div></div></span></div></div></div></div></div></div><div></div></div></div></div></div><div><div><div><div><div id=\"comment-3\" aria-label=\"评论者：Sue Delaune1 年前\" role=\"article\" tabindex=\"-1\"><div><div></div></div><div><div><div><div><div><span id=\"comment-author-3\"><span dir=\"auto\">Sue Delaune</span></span><div><span id=\"comment-body-3\" dir=\"auto\" lang=\"en\"><div><div id=\"comment-3-paragraph-0\" dir=\"auto\">Saw it in south Louisiana but mosquitoes were hungry. Plus a little overcast</div></div></span></div></div></div></div><div></div></div><div><ul aria-hidden=\"false\"><li><span><div><a id=\"comment-date-3\" href=\"https://www.facebook.com/NASA/posts/pfbid0qNvPmP33e5gkdAguzR1wX8wRRzXgHmko8HSPYfzkhpXoJD1qEzxbL1bdzB9dA4wkl\" role=\"link\" tabindex=\"0\">1年</a></div></span></li></ul><div><div><div><span><div id=\"native-control-12\" aria-label=\"1 个心情，查看留下心情的用户\" role=\"button\" tabindex=\"0\"><div><span>1</span><div><span></span></div></div><div role=\"none\"></div></div></span></div></div></div></div></div></div><div></div></div></div></div></div><div><div><div><div><div id=\"comment-4\" aria-label=\"评论者：Darla Jones1 年前\" role=\"article\" tabindex=\"-1\"><div><div></div></div><div><div><div><div><div><span id=\"comment-author-4\"><span dir=\"auto\">Darla Jones</span></span><div><span id=\"comment-body-4\" dir=\"auto\" lang=\"en\"><div><div id=\"comment-4-paragraph-0\" dir=\"auto\">Over my house tonight @6:41 EST <span></span>(Raleigh NC area).  Yes-I get the email 12 hrs before.</div></div></span></div></div></div></div><div></div></div><div><ul aria-hidden=\"false\"><li><span><div><a id=\"comment-date-4\" href=\"https://www.facebook.com/NASA/posts/pfbid0qNvPmP33e5gkdAguzR1wX8wRRzXgHmko8HSPYfzkhpXoJD1qEzxbL1bdzB9dA4wkl\" role=\"link\" tabindex=\"0\">1年</a></div></span></li></ul><div><div><div><span><div id=\"native-control-13\" aria-label=\"7个心情，查看留下心情的用户\" role=\"button\" tabindex=\"0\"><div><span>7</span><div><span></span><span></span></div></div><div role=\"none\"></div></div></span></div></div></div></div></div></div><div></div></div></div></div></div><div><div><div><div><div id=\"comment-5\" aria-label=\"评论者：Everything Science 1 年前\" role=\"article\" tabindex=\"-1\"><div><span><span><a aria-hidden=\"true\" href=\"https://www.facebook.com/people/Everything-Science/61568246023876/\" role=\"link\" tabindex=\"-1\"><div></div><div role=\"none\"></div></a></span></span></div><div><div><div><div><div><span id=\"comment-author-5\"><span><a aria-hidden=\"false\" href=\"https://www.facebook.com/people/Everything-Science/61568246023876/\" role=\"link\" tabindex=\"0\"><span><span dir=\"auto\">Everything Science </span></span></a></span></span><div><span id=\"comment-body-5\" dir=\"auto\" lang=\"en\"><div><div id=\"comment-5-paragraph-0\" dir=\"auto\">So it was international space station? Not ufo?</div></div></span></div></div></div></div><div></div></div><div><ul aria-hidden=\"false\"><li><span><div><a id=\"comment-date-5\" href=\"https://www.facebook.com/NASA/posts/pfbid0qNvPmP33e5gkdAguzR1wX8wRRzXgHmko8HSPYfzkhpXoJD1qEzxbL1bdzB9dA4wkl\" role=\"link\" tabindex=\"0\">1年</a></div></span></li></ul><div><div></div></div></div></div></div><div></div></div></div></div></div><div><div><div><div><div id=\"comment-6\" aria-label=\"评论者：Sierra Cheyenne1 年前\" role=\"article\" tabindex=\"-1\"><div><div></div></div><div><div><div><div><div><span id=\"comment-author-6\"><span dir=\"auto\">Sierra Cheyenne</span></span><div><span id=\"comment-body-6\" dir=\"auto\" lang=\"\"><div><div id=\"comment-6-paragraph-0\" dir=\"auto\"><a href=\"https://www.facebook.com/dakota.cox.549221\" role=\"link\" tabindex=\"0\">Dakota Cox</a></div></div></span></div></div></div></div><div></div></div><div><ul aria-hidden=\"false\"><li><span><div><a id=\"comment-date-6\" href=\"https://www.facebook.com/NASA/posts/pfbid0qNvPmP33e5gkdAguzR1wX8wRRzXgHmko8HSPYfzkhpXoJD1qEzxbL1bdzB9dA4wkl\" role=\"link\" tabindex=\"0\">1年</a></div></span></li></ul><div><div><div><span><div id=\"native-control-14\" aria-label=\"1 个心情，查看留下心情的用户\" role=\"button\" tabindex=\"0\"><div><span>1</span><div><span></span></div></div><div role=\"none\"></div></div></span></div></div></div></div></div></div><div></div></div></div></div></div><div><div><div><div><div id=\"comment-7\" aria-label=\"评论者：Ileana Escalante1 年前\" role=\"article\" tabindex=\"-1\"><div><span><span><a aria-hidden=\"true\" href=\"https://www.facebook.com/ileana.escalante.9\" role=\"link\" tabindex=\"-1\"><div></div><div role=\"none\"></div></a></span></span></div><div><div><div><div><div><span id=\"comment-author-7\"><span><a aria-hidden=\"false\" href=\"https://www.facebook.com/ileana.escalante.9\" role=\"link\" tabindex=\"0\"><span><span dir=\"auto\">Ileana Escalante</span></span></a></span></span><div><span id=\"comment-body-7\" dir=\"auto\" lang=\"es\"><div><div id=\"comment-7-paragraph-0\" dir=\"auto\">En la Península de Yucatán  se verá<span></span><span></span></div><div id=\"comment-7-paragraph-1\" dir=\"auto\"><a href=\"https://www.facebook.com/hashtag/nasa\" role=\"link\" tabindex=\"0\">#NASA</a>-National Aeronautics</div></div></span></div></div></div></div><div></div></div><div><ul aria-hidden=\"false\"><li><span><div><a id=\"comment-date-7\" href=\"https://www.facebook.com/NASA/posts/pfbid0qNvPmP33e5gkdAguzR1wX8wRRzXgHmko8HSPYfzkhpXoJD1qEzxbL1bdzB9dA4wkl\" role=\"link\" tabindex=\"0\">1年</a></div></span></li></ul><div><div></div></div></div></div></div><div></div></div></div></div></div><div><div><div><div><div id=\"comment-8\" aria-label=\"评论者：Miki Maruyama1 年前\" role=\"article\" tabindex=\"-1\"><div><span><span><a aria-hidden=\"true\" href=\"https://www.facebook.com/miki.maruyama.524\" role=\"link\" tabindex=\"-1\"><div></div><div role=\"none\"></div></a></span></span></div><div><div><div><div><div><span id=\"comment-author-8\"><span><a aria-hidden=\"false\" href=\"https://www.facebook.com/miki.maruyama.524\" role=\"link\" tabindex=\"0\"><span><span dir=\"auto\">Miki Maruyama</span></span></a></span></span><div><span id=\"comment-body-8\" dir=\"auto\" lang=\"en\"><div><div id=\"comment-8-paragraph-0\" dir=\"auto\">I hope the astronauts are enjoying their lives in the space station.</div></div></span></div></div></div></div><div></div></div><div><ul aria-hidden=\"false\"><li><span><div><a id=\"comment-date-8\" href=\"https://www.facebook.com/NASA/posts/pfbid0qNvPmP33e5gkdAguzR1wX8wRRzXgHmko8HSPYfzkhpXoJD1qEzxbL1bdzB9dA4wkl\" role=\"link\" tabindex=\"0\">1年</a></div></span></li></ul><div><div><div><span><div id=\"native-control-15\" aria-label=\"1 个心情，查看留下心情的用户\" role=\"button\" tabindex=\"0\"><div><span>1</span><div><span></span></div></div><div role=\"none\"></div></div></span></div></div></div></div></div></div><div><div><div><div></div><div id=\"native-control-16\" role=\"button\" tabindex=\"0\"><span><span dir=\"auto\">全部3条回复</span></span></div></div></div></div></div></div></div></div><div><div><div><div><div id=\"comment-9\" aria-label=\"评论者：Victoria Martinez1 年前\" role=\"article\" tabindex=\"-1\"><div><span><span><a aria-hidden=\"true\" href=\"https://www.facebook.com/victoria.martinez.552946\" role=\"link\" tabindex=\"-1\"><div></div><div role=\"none\"></div></a></span></span></div><div><div><div><div><div><span id=\"comment-author-9\"><span><a aria-hidden=\"false\" href=\"https://www.facebook.com/victoria.martinez.552946\" role=\"link\" tabindex=\"0\"><span><span dir=\"auto\">Victoria Martinez</span></span></a></span></span><div><span id=\"comment-body-9\" dir=\"auto\" lang=\"es\"><div><div id=\"comment-9-paragraph-0\" dir=\"auto\">Cuando pasan por Argentina casi siempre la veíamos por Mendoza !!!</div></div></span></div></div></div></div><div></div></div><div><ul aria-hidden=\"false\"><li><span><div><a id=\"comment-date-9\" href=\"https://www.facebook.com/NASA/posts/pfbid0qNvPmP33e5gkdAguzR1wX8wRRzXgHmko8HSPYfzkhpXoJD1qEzxbL1bdzB9dA4wkl\" role=\"link\" tabindex=\"0\">1年</a></div></span></li></ul><div><div><div><span><div id=\"native-control-17\" aria-label=\"1 个心情，查看留下心情的用户\" role=\"button\" tabindex=\"0\"><div><span>1</span><div><span></span></div></div><div role=\"none\"></div></div></span></div></div></div></div></div></div><div></div></div></div></div></div><div><div><div aria-label=\"正在加载...\" role=\"status\" tabindex=\"-1\"><div></div><div><div></div></div></div><div aria-label=\"正在加载...\" role=\"status\" tabindex=\"-1\"><div></div><div><div></div></div></div><div aria-label=\"正在加载...\" role=\"status\" tabindex=\"-1\"><div></div><div><div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div></div><section id=\"negative-corpus\"><div role=\"article\" aria-posinset=\"1\"><div data-ad-preview=\"message\" data-ad-comet-preview=\"message\"><div id=\"body-name\" dir=\"auto\">NASA and Mary Pat Berry explain why readers can observe the station.</div><div id=\"body-anchor\" dir=\"auto\">Read about <a id=\"ordinary-iss\" href=\"https://www.facebook.com/ISS\">International Space Station</a> and <a href=\"https://www.facebook.com/NASA\">NASA research</a> in this ordinary prose.</div><div id=\"body-profile-lookalike\" data-ad-rendering-role=\"profile_name\"><p>This quoted component mentions NASA in ordinary reading content.</p></div><div id=\"near-profile\" data-ad-rendering-role=\"profile_name_example\">This example discusses the author component in normal prose.</div><div id=\"reading-control\" role=\"button\" tabindex=\"0\"><p id=\"reading-control-body\">Readable story prose mentions NASA and Mike Ramirez inside an interactive card.</p></div><span dir=\"auto\" lang=\"en\"><span id=\"body-adjacent-lookalike\">An ordinary prose lead mentions NASA.</span><div><span dir=\"auto\" lang=\"en\">The following text remains ordinary reading prose.</span></div></span></div></div><div id=\"outside-comment\"><span id=\"outside-author-like\">An ordinary named source outside a comment article</span><div><span dir=\"auto\" lang=\"en\">This paragraph is not a native author component.</span></div></div><div role=\"article\" aria-label=\"Authored reading card\"><div data-ad-preview=\"message\" data-ad-comet-preview=\"message\"><span id=\"caption-author-lookalike\"><span dir=\"auto\">A quoted named source in an ordinary caption</span></span><div><span dir=\"auto\" lang=\"en\">This is readable caption content, not a comment author.</span></div></div></div></section>",
+  "authorIds": [
+    "main-author",
+    "comment-author-0",
+    "comment-author-1",
+    "comment-author-2",
+    "comment-author-3",
+    "comment-author-4",
+    "comment-author-5",
+    "comment-author-6",
+    "comment-author-7",
+    "comment-author-8",
+    "comment-author-9"
+  ],
+  "bodyIds": [
+    "caption-0",
+    "caption-1",
+    "comment-0-paragraph-0",
+    "comment-0-paragraph-1",
+    "comment-0-paragraph-2",
+    "comment-1-paragraph-0",
+    "comment-2-paragraph-0",
+    "comment-3-paragraph-0",
+    "comment-4-paragraph-0",
+    "comment-5-paragraph-0",
+    "comment-6-paragraph-0",
+    "comment-7-paragraph-0",
+    "comment-7-paragraph-1",
+    "comment-8-paragraph-0",
+    "comment-9-paragraph-0"
+  ],
+  "commentIds": [
+    "comment-0",
+    "comment-1",
+    "comment-2",
+    "comment-3",
+    "comment-4",
+    "comment-5",
+    "comment-6",
+    "comment-7",
+    "comment-8",
+    "comment-9"
+  ],
+  "bodySources": [
+    {
+      "id": "caption-0",
+      "text": "Look up this week — you might spot the International Space Station!"
+    },
+    {
+      "id": "caption-1",
+      "text": "Skywatchers in the eastern United States, among other locations, may be able to see the station pass overhead in the early evening hours. Download our free Spot the Station app for notifications: https://spotthestation.nasa.gov/"
+    },
+    {
+      "id": "comment-0-paragraph-0",
+      "text": "but that's not it in the picture"
+    },
+    {
+      "id": "comment-0-paragraph-1",
+      "text": "saw it this am over so maryland"
+    },
+    {
+      "id": "comment-0-paragraph-2",
+      "text": "it's a bright dot not a streak"
+    },
+    {
+      "id": "comment-1-paragraph-0",
+      "text": "Will it ever be visible from the low desert from Imperial valley CA.  Southern California."
+    },
+    {
+      "id": "comment-2-paragraph-0",
+      "text": "A Maxfield Parrish painting immediately comes to mind. Thanks for ISS information."
+    },
+    {
+      "id": "comment-3-paragraph-0",
+      "text": "Saw it in south Louisiana but mosquitoes were hungry. Plus a little overcast"
+    },
+    {
+      "id": "comment-4-paragraph-0",
+      "text": "Over my house tonight @6:41 EST (Raleigh NC area).  Yes-I get the email 12 hrs before."
+    },
+    {
+      "id": "comment-5-paragraph-0",
+      "text": "So it was international space station? Not ufo?"
+    },
+    {
+      "id": "comment-6-paragraph-0",
+      "text": "Dakota Cox"
+    },
+    {
+      "id": "comment-7-paragraph-0",
+      "text": "En la Península de Yucatán  se verá"
+    },
+    {
+      "id": "comment-7-paragraph-1",
+      "text": "#NASA-National Aeronautics"
+    },
+    {
+      "id": "comment-8-paragraph-0",
+      "text": "I hope the astronauts are enjoying their lives in the space station."
+    },
+    {
+      "id": "comment-9-paragraph-0",
+      "text": "Cuando pasan por Argentina casi siempre la veíamos por Mendoza !!!"
+    }
+  ],
+  "negativeIds": [
+    "body-name",
+    "body-anchor",
+    "body-profile-lookalike",
+    "near-profile",
+    "reading-control-body",
+    "body-adjacent-lookalike",
+    "outside-author-like",
+    "caption-author-lookalike"
+  ],
+  "metadataIds": [
+    "post-date",
+    "comment-date-0",
+    "comment-date-1",
+    "comment-date-2",
+    "comment-date-3",
+    "comment-date-4",
+    "comment-date-5",
+    "comment-date-6",
+    "comment-date-7",
+    "comment-date-8",
+    "comment-date-9",
+    "native-control-0",
+    "native-control-1",
+    "native-control-2",
+    "native-control-3",
+    "native-control-4",
+    "native-control-5",
+    "native-control-6",
+    "native-control-7",
+    "native-control-8",
+    "native-control-9",
+    "native-control-10",
+    "native-control-11",
+    "native-control-12",
+    "native-control-13",
+    "native-control-14",
+    "native-control-15",
+    "native-control-16",
+    "native-control-17"
+  ],
+  "dynamicHtml": "<div id=\"dynamic-comment\" aria-label=\"评论者：Mike Ramirez1 年前\" role=\"article\" tabindex=\"-1\"><div><div></div></div><div><div><div><div><div><span id=\"dynamic-author\">Newly Loaded Public Author</span><div><span id=\"dynamic-body\" dir=\"auto\" lang=\"en\"><div><div id=\"dynamic-paragraph\" dir=\"auto\">A newly loaded comment keeps complete readable prose and an ordinary link.</div></div></span></div></div></div></div><div></div></div><div><ul aria-hidden=\"false\"><li><span><div><a id=\"dynamic-date\" href=\"https://www.facebook.com/NASA/posts/pfbid0qNvPmP33e5gkdAguzR1wX8wRRzXgHmko8HSPYfzkhpXoJD1qEzxbL1bdzB9dA4wkl\" role=\"link\" tabindex=\"0\">1年</a></div></span></li></ul><div><div><div><span><div id=\"dynamic-control-9\" aria-label=\"2个心情，查看留下心情的用户\" role=\"button\" tabindex=\"0\"><div><span>2</span><div><span></span></div></div><div role=\"none\"></div></div></span></div></div></div></div></div></div>",
+  "replyIds": [
+    "native-control-8",
+    "native-control-10"
+  ],
+  "controlIds": {
+    "share": "native-control-3",
+    "sort": "native-control-6",
+    "expandReplies": "native-control-16"
+  }
+}

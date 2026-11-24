@@ -1,4 +1,202 @@
 {
+  "inco-blog-splash": {
+    "url": "https://inco.ai/blog/splash/",
+    "hoverSelector": "main#content > .post-page > header.post-head > p.post-dek",
+    "requiredSelectors": [
+      "main#content > .post-page > header.post-head > p.post-dek",
+      "header.post-head > h1.post-title",
+      "article.prose > p:first-of-type"
+    ],
+    "coverageRules": [
+      {"name": "article-summary", "selector": "main#content > .post-page > header.post-head > p.post-dek", "kind": "content", "minInitial": 1, "sourcePartition": {"excludeSelectors": []}},
+      {"name": "article-title", "selector": "header.post-head > h1.post-title", "kind": "heading", "minInitial": 1},
+      {"name": "first-body-paragraph", "selector": "article.prose > p:first-of-type", "kind": "content", "minInitial": 1}
+    ],
+    "forbiddenSelectors": ["header.nav", "header.post-head time", "article.prose pre"],
+    "interactionSelectors": ["header.post-head a.post-back[href='/blog/']", "article.prose > p:first-of-type a[href]"],
+    "modes": ["hover", "full"],
+    "tier": "required",
+    "fullPageScope": "initial-corpus",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "The article summary is a paragraph inside the article header. Check its complete source, repeated translation and restoration, and guard the site header, publication date, command blocks and links."
+  },
+  "llamaperf-mac-m5": {
+    "url": "https://llamaperf.com/mac/m5?utm_source=chatgpt.com",
+    "hoverSelector": "#main-content > div > header:has(> h1) > p",
+    "hoverTargets": [
+      {"name": "page-title", "selector": "#main-content > div > header > h1"},
+      {"name": "mac-introduction", "selector": "#main-content > div > header:has(> h1) > p", "index": 0, "sourcePartition": {"excludeSelectors": []}},
+      {"name": "configuration-counts", "selector": "#main-content > div > header:has(> h1) > p", "index": 1, "sourcePartition": {"excludeSelectors": []}},
+      {"name": "benchmark-summary", "selector": "#main-content > div > header:has(> h1) > div > p", "sourcePartition": {"excludeSelectors": []}}
+    ],
+    "requiredSelectors": [
+      "#main-content > div > header > h1",
+      "#main-content > div > header:has(> h1) > p",
+      "#main-content > div > header:has(> h1) > div > p"
+    ],
+    "coverageRules": [
+      {"name": "page-title", "selector": "#main-content > div > header > h1", "kind": "heading", "minInitial": 1},
+      {"name": "mac-introduction-and-counts", "selector": "#main-content > div > header:has(> h1) > p", "kind": "content", "minInitial": 2, "sourcePartition": {"excludeSelectors": []}},
+      {"name": "benchmark-summary", "selector": "#main-content > div > header:has(> h1) > div > p", "kind": "content", "minInitial": 1, "sourcePartition": {"excludeSelectors": []}}
+    ],
+    "forbiddenSelectors": ["body > header nav[aria-label='Primary']", "#main-content > div > header:has(> h1) > div > ul"],
+    "interactionSelectors": ["#main-content > div > header:has(> h1) > div > ul a[href]", "body > header a[href='/login']"],
+    "modes": ["hover", "full"],
+    "tier": "required",
+    "fullPageScope": "initial-corpus",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Mac overview places its introduction, configuration/report counts and dated benchmark summary inside header. Verify all three complete paragraphs, including Next.js comment-split text, while retaining benchmark cards and top-level navigation. Controlled-provider runs verify source transport, hover/full restoration and repeated translation; live provider quality is separate."
+  },
+  "jetbrains-idea-whatsnew": {
+    "url": "https://www.jetbrains.com/idea/whatsnew/2026-3/",
+    "prepareScrollSelector": "#agents-models-subscriptions > header h3",
+    "prepareDismissiblePromotion": {
+      "dialogSelector": "#ch2-dialog[role='dialog'][aria-modal='true']",
+      "buttonSelector": "#ch2-dialog a.ch2-dialog-close-btn[data-action='dismiss']",
+      "contentSelector": "#agents-models-subscriptions",
+      "waitForDialogMs": 10000
+    },
+    "hoverSelector": "#agents-models-subscriptions > header .whatsnew-feature-block__content p",
+    "hoverTargets": [
+      {"name": "compatible-agents", "selector": "#agents-models-subscriptions > header .whatsnew-feature-block__content p", "index": 0},
+      {"name": "existing-subscriptions", "selector": "#agents-models-subscriptions > header .whatsnew-feature-block__content p", "index": 1},
+      {"name": "free-junie-lite", "selector": "#agents-models-subscriptions > header .whatsnew-feature-block__content p", "index": 2},
+      {"name": "feature-title", "selector": "#agents-models-subscriptions > header h3"}
+    ],
+    "requiredSelectors": ["#agents-models-subscriptions > header h3", "#agents-models-subscriptions > header .whatsnew-feature-block__content p"],
+    "coverageRules": [
+      {"name": "feature-title", "selector": "#agents-models-subscriptions > header h3", "kind": "heading", "minInitial": 1},
+      {"name": "feature-prose", "selector": "#agents-models-subscriptions > header .whatsnew-feature-block__content p", "kind": "content", "minInitial": 3, "sourcePartition": {"excludeSelectors": []}}
+    ],
+    "forbiddenSelectors": ["#agents-models-subscriptions button[data-test='next-button']"],
+    "interactionSelectors": ["#agents-models-subscriptions p a[href='/acp/']", "#agents-models-subscriptions p a[href='https://junie.jetbrains.com/']", "#agents-models-subscriptions button[data-test='next-button']"],
+    "modes": ["hover", "full"],
+    "tier": "required",
+    "fullPageScope": "initial-corpus",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Pinned version of the reported What's New page. Verify the three feature paragraphs inside an article header, the adjacent heading, inline link destinations, and the media carousel control. Controlled-provider runs verify complete source transport and restoration."
+  },
+  "englio-article": {
+    "url": "https://englio.ai/article/89a4209f-974a-4d66-ac21-939da26ed7a2",
+    "hoverSelector": "main p[data-article-start]:has(> span[data-word-pos])",
+    "hoverTargets": [
+      {"name": "article", "selector": "main p[data-article-start]:has(> span[data-word-pos])", "sourcePartition": {"excludeSelectors": []}},
+      {"name": "title", "selector": "main h1", "sourcePartition": {"excludeSelectors": []}}
+    ],
+    "requiredSelectors": ["main h1", "main p[data-article-start]:has(> span[data-word-pos])"],
+    "coverageRules": [
+      {"name": "article-title", "selector": "main h1", "kind": "heading", "minInitial": 1, "sourcePartition": {"excludeSelectors": []}},
+      {"name": "complete-word-segmented-article", "selector": "main p[data-article-start]:has(> span[data-word-pos])", "kind": "content", "minInitial": 1, "sourcePartition": {"excludeSelectors": []}}
+    ],
+    "forbiddenSelectors": ["main button[role='switch']", "main button[title='查看译文']", "header nav"],
+    "interactionSelectors": ["header a[href]", "main button[role='switch']"],
+    "modes": ["hover", "full"],
+    "tier": "required",
+    "fullPageScope": "finite-page",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Native article renders one paragraph containing 1,345 word spans and 1,345 separators. Require every source Text in that paragraph, its title, two translation/restoration cycles, and native switch/navigation preservation. The source lang=zh-CN describes the Chinese interface, not the English article. Controlled-provider runs verify complete source transport and DOM behavior; online translation quality is separate."
+  },
+  "openai-community-hot": {
+    "url": "https://community.openai.com/hot",
+    "hoverSelector": ".topic-list-item .link-top-line",
+    "hoverTargets": [
+      {"name": "topic-title", "selector": ".topic-list-item .link-top-line"},
+      {"name": "pinned-excerpt", "selector": ".topic-list-item .topic-excerpt"}
+    ],
+    "requiredSelectors": [".topic-list-item .link-top-line", ".topic-list-item .topic-excerpt"],
+    "coverageRules": [
+      {"name": "topic-titles", "selector": ".topic-list-item .link-top-line", "kind": "content", "minInitial": 3},
+      {"name": "pinned-excerpts", "selector": ".topic-list-item .topic-excerpt", "kind": "content", "minInitial": 1}
+    ],
+    "forbiddenSelectors": [
+      ".d-header", ".sidebar-container", ".list-controls", ".topic-list > thead",
+      ".topic-list-item .link-bottom-line", ".topic-list-item > td.activity",
+      ".discourse-tags", ".discourse-tag", "h1.sr-only"
+    ],
+    "dynamicForbiddenSelectors": [
+      ".topic-list-item .link-bottom-line", ".topic-list-item > td.activity", ".discourse-tags", ".discourse-tag"
+    ],
+    "interactionSelectors": [".topic-list-item a.title[href]", ".topic-list-item a.topic-excerpt[href]", ".badge-category__wrapper[href]", ".discourse-tag[href]", ".list-controls summary", "#navigation-bar a[href]"],
+    "modes": ["hover", "full"],
+    "tier": "required",
+    "fullPageScope": "initial-corpus",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "OpenAI community hot list: topic titles and pinned excerpts translate while native navigation, filters, table headings, category badges such as API, topic tags and activity dates retain their text and structure. The visually hidden screen-reader H1 is guard-only. Controlled-provider acceptance does not measure translation quality."
+  },
+  "microsoft-learn-translator-v3": {
+    "url": "https://learn.microsoft.com/en-us/azure/ai-services/translator/text-translation/reference/v3/translate",
+    "hoverSelector": "main#main > div.reading-width > div > div.content:has(> pre.inner-focus) > p",
+    "hoverTargets": [
+      {
+        "name": "primary",
+        "selector": "main#main > div.reading-width > div > div.content:has(> pre.inner-focus) > p",
+        "index": 0
+      },
+      {
+        "name": "http-error-response-paragraph",
+        "selector": "main#main > div.reading-width > div > div.content:has(> pre.inner-focus) > p",
+        "sourceIncludes": [
+          "If an error occurs, the request returns a JSON error response.",
+          "The error code is a 6-digit number"
+        ]
+      }
+    ],
+    "requiredSelectors": [
+      "main#main h1#azure-translator-in-foundry-tools-30-translate",
+      "main#main > div.reading-width > div > div.content:has(> pre.inner-focus) > p"
+    ],
+    "coverageRules": [
+      {
+        "name": "translator-title",
+        "selector": "main#main h1#azure-translator-in-foundry-tools-30-translate",
+        "kind": "heading",
+        "minInitial": 1
+      },
+      {
+        "name": "translator-prose",
+        "selector": "main#main > div.reading-width > div > div.content:has(> pre.inner-focus) > p",
+        "kind": "content",
+        "minInitial": 3
+      }
+    ],
+    "forbiddenSelectors": [
+      "main#main pre",
+      "main#main code",
+      "main#main [data-code-block-header] > span.code-block-header-language",
+      "main#main table[aria-label=\"Required parameters\"] tbody tr > td:first-child",
+      "main#main table[aria-label=\"Response headers\"] tbody tr > td:first-child",
+      "main#main table[aria-label=\"Handle profanity\"] tbody tr > td:nth-child(-n+2)",
+      "nav#affixed-left-container",
+      "nav#side-doc-outline"
+    ],
+    "interactionSelectors": [
+      "main#main > div.reading-width > div > div.content:has(> pre.inner-focus) > p > a[href=\"../status-response-codes\"]",
+      "#article-header-breadcrumbs nav a[href]",
+      "nav#affixed-left-container a[href]",
+      "nav#side-doc-outline a[href]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "fullPageScope": "finite-page",
+    "skipUnscopedH1Coverage": true,
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Microsoft Learn Translator v3 reference: cover the separate document title and prose container while protecting code, code-language labels, required parameter names, response header names, the first two enum columns of Handle profanity, and navigation. Both Optional parameters tables contain different semantics, including the readable Authentication headers label; their token-only boundary is unit-tested rather than broadly forbidden here. Controlled-provider runs verify DOM compatibility, not translation quality."
+  },
   "bambu-dual-nozzles": {
     "url": "https://wiki.bambulab.com/en/software/bambu-studio/manual/dual-nozzles-slicing-filament-grouping",
     "hoverSelector": ".contents p",
@@ -10,7 +208,7 @@
     ],
     "forbiddenSelectors": ["header svg"],
     "interactionSelectors": [".contents a[href]"],
-    "prepareClickText": "OK",
+    "prepareClickText": "Reject All",
     "modes": ["hover", "full"],
     "tier": "required",
     "hoverHotkey": "Control",
@@ -101,6 +299,27 @@
     "fullPageHotkey": "Alt+T",
     "service": "freeTranslation"
   },
+  "github-repository-identities": {
+    "url": "https://github.com/Niko1221/Strata/pulls",
+    "hoverSelector": "main [data-listview-component='items-list'] > li:first-child h3:has(a[data-testid='listitem-title-link'])",
+    "hoverTargets": [
+      {"name": "pr-title", "selector": "main [data-listview-component='items-list'] > li:first-child h3:has(a[data-testid='listitem-title-link'])", "sourcePartition": {"excludeSelectors": []}}
+    ],
+    "requiredSelectors": ["main [data-listview-component='items-list'] > li:first-child h3:has(a[data-testid='listitem-title-link'])"],
+    "coverageRules": [
+      {"name": "pr-title", "selector": "main [data-listview-component='items-list'] > li:first-child h3:has(a[data-testid='listitem-title-link'])", "kind": "content", "minInitial": 1, "sourcePartition": {"excludeSelectors": []}}
+    ],
+    "forbiddenSelectors": ["header nav[data-component='Breadcrumbs'] a[data-component='Breadcrumbs.Item'][href]", "main a[data-testid='author-filter-link']"],
+    "interactionSelectors": ["header nav[data-component='Breadcrumbs'] a[data-component='Breadcrumbs.Item'][href]", "main a[data-testid='author-filter-link']"],
+    "modes": ["hover", "full"],
+    "tier": "quarantine",
+    "quarantineReason": "Live hover passes, but strict full-page source-owner checks fail when GitHub remounts the native title. Generic H1 coverage also does not recognize its in-place UI translation in detect-all-nodes mode. Retain this case for explicit investigation; saved native-DOM replay passes the reported identity and PR-title restore/retranslate checks.",
+    "fullPageScope": "initial-corpus",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Preserve the native repository owner, repository breadcrumb links and PR author names while translating the first pull request title. Run with --include-quarantine --controlled-provider; the title is not pinned because this is the live pull request list. Detect-all-nodes configuration must be verified separately from the default content scope."
+  },
   "github-project-pr": {
     "url": "https://github.com/FluentRead/FluentRead/pull/243",
     "hoverSelector": "main h1",
@@ -153,7 +372,7 @@
         "name": "github-quick-search-dialog",
         "triggerSelector": "button[aria-haspopup='dialog'][aria-label*='search' i]",
         "openKey": "click",
-        "dialogSelector": "[role='dialog'][aria-modal='true']",
+        "dialogSelector": "[role='dialog'][aria-modal='true']:has([role='combobox'])",
         "comboboxSelector": "[role='combobox']",
         "listboxSelector": "[role='listbox']",
         "inputText": "issues",
@@ -353,7 +572,7 @@
     "interactionSelectors": ["shreddit-post a[href]"],
     "modes": ["hover", "full"],
     "tier": "quarantine",
-    "quarantineReason": "当前隔离浏览器返回 Reddit - Prove your humanity 验证页，未取得评论正文；保留为动态 Web Component 联网观察样本，按钮控件必须保持原文。",
+    "quarantineReason": "2026-10-25 本轮隔离 Edge：此 URL 与另一条公开英文讨论均 HTTP200 但显示 Reddit - Prove your humanity，正文与评论选择器均为0；没有绕过。契约保留待公开正文可访问时验证，不能计为翻译通过。",
     "hoverHotkey": "Control",
     "fullPageHotkey": "Alt+T",
     "service": "freeTranslation"
@@ -431,9 +650,10 @@
   "dart-language": {
     "url": "https://dart.dev/language",
     "hoverSelector": "main article section.content > p",
-    "requiredSelectors": ["main article section.content > p"],
+    "requiredSelectors": ["main article section.content > p", "header#site-content-title > .page-description"],
     "coverageRules": [
       {"name": "page-title", "selector": "main article h1", "kind": "heading", "minInitial": 1},
+      {"name": "page-description", "selector": "header#site-content-title > .page-description", "kind": "content", "minInitial": 1, "sourceIncludes": ["A brief introduction to Dart programs"]},
       {"name": "language-overview", "selector": "main article section.content > p", "kind": "content", "minInitial": 3}
     ],
     "forbiddenSelectors": ["main article pre, main article code"],
@@ -902,5 +1122,1990 @@
     "fullPageHotkey": "Alt+T",
     "service": "freeTranslation",
     "notes": "真实首页产品介绍逐卡翻译；持久 case 严格保留产品名称、页脚和搜索，不能用帮助中心文章代替本页面。实时投票数会由宿主自动更新，投票控件的原文与无译文断言由专站 fixture 和本次隔离浏览器专项证据覆盖，不对实时数字进行静态文本比较。"
+  },
+  "index-luke-preface": {
+    "url": "https://use-the-index-luke.com/sql/preface",
+    "hoverSelector": "#article p",
+    "requiredSelectors": [
+      "#content h1",
+      "#article p"
+    ],
+    "coverageRules": [
+      {
+        "name": "chapter-title",
+        "selector": "#content h1",
+        "kind": "heading",
+        "minInitial": 1
+      },
+      {
+        "name": "preface-paragraphs",
+        "selector": "#article p",
+        "kind": "content",
+        "minInitial": 8
+      }
+    ],
+    "forbiddenSelectors": [
+      "#article pre"
+    ],
+    "interactionSelectors": [
+      "#article a[href]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Issue #969 新反馈；观察静置、窗口变化及恢复重译，不能由旧版 GitHub 原因推断本页。"
+  },
+  "nasa-webb-news": {
+    "url": "https://science.nasa.gov/missions/webb/nasas-webb-finds-clues-to-ancient-distant-origin-of-comet-3i-atlas/",
+    "hoverSelector": ".entry-content > p.wp-block-paragraph",
+    "requiredSelectors": [
+      "h1",
+      ".entry-content > p.wp-block-paragraph"
+    ],
+    "coverageRules": [
+      {
+        "name": "news-title",
+        "selector": "h1",
+        "kind": "heading",
+        "minInitial": 1
+      },
+      {
+        "name": "news-body",
+        "selector": ".entry-content > p.wp-block-paragraph",
+        "kind": "content",
+        "minInitial": 8
+      }
+    ],
+    "forbiddenSelectors": [
+      "input[type=\"search\"]",
+      ".entry-content a[href=\"https://science.nasa.gov/webb\"]"
+    ],
+    "interactionSelectors": [
+      ".entry-content a[href]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "NASA 科学新闻长文；正文与页面主标题逐节点覆盖，搜索框受保护。"
+  },
+  "youtube-search-results": {
+    "url": "https://www.youtube.com/results?search_query=machine+translation&hl=en",
+    "fullPageScope": "initial-corpus",
+    "hoverSelector": "ytd-video-renderer h3",
+    "hoverTargets": [
+      {
+        "name": "video-title",
+        "selector": "ytd-video-renderer h3",
+        "index": 0
+      },
+      {
+        "name": "video-description-snippet",
+        "selector": "ytd-video-renderer .metadata-snippet-text",
+        "index": 0,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "requiredSelectors": [
+      "ytd-video-renderer h3",
+      "ytd-video-renderer .metadata-snippet-text"
+    ],
+    "coverageRules": [
+      {
+        "name": "video-titles",
+        "selector": "ytd-video-renderer h3",
+        "kind": "heading",
+        "minInitial": 2
+      },
+      {
+        "name": "video-description-snippets",
+        "selector": "ytd-video-renderer .metadata-snippet-text",
+        "kind": "content",
+        "minInitial": 2,
+        "minSeen": 2,
+        "trackDynamic": false
+      }
+    ],
+    "forbiddenSelectors": [
+      "ytd-video-renderer ytd-channel-name a[href]",
+      "ytd-video-renderer #metadata-line .inline-metadata-item"
+    ],
+    "dynamicForbiddenSelectors": [
+      "ytd-video-renderer ytd-channel-name a[href]",
+      "ytd-video-renderer #metadata-line .inline-metadata-item"
+    ],
+    "interactionSelectors": [
+      "ytd-video-renderer h3 a[href]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "YouTube 搜索视频标题与普通卡片简介分别验证悬浮，全文覆盖初始可翻译正文集合；频道名、播放量和发布时间保持原文。时间导航摘录尚需独立验证；不代表首页、登录态或视频字幕验收。"
+  },
+  "bing-search-results": {
+    "url": "https://www.bing.com/search?q=machine+translation&setlang=en-us",
+    "fullPageScope": "initial-corpus",
+    "hoverSelector": "#b_results > .b_algo h2",
+    "requiredSelectors": [
+      "#b_results > .b_algo h2",
+      "#b_results > .b_algo .b_caption > p"
+    ],
+    "coverageRules": [
+      {
+        "name": "result-titles",
+        "selector": "#b_results > .b_algo h2",
+        "kind": "heading",
+        "minInitial": 2
+      },
+      {
+        "name": "result-summaries",
+        "selector": "#b_results > .b_algo .b_caption > p",
+        "kind": "content",
+        "minInitial": 2
+      }
+    ],
+    "forbiddenSelectors": [
+      "#b_results > .b_algo .b_attribution",
+      "#b_header"
+    ],
+    "interactionSelectors": [
+      "#b_results > .b_algo h2 a[href]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "普通网页搜索的标题与摘要；地址、搜索框与导航保持原文。验证码或页面无普通结果时记录站点限制。"
+  },
+  "bbc-france-protests-article": {
+    "url": "https://www.bbc.com/news/articles/c95ynd587ynzo",
+    "hoverSelector": "article p",
+    "hoverTargets": [
+      {
+        "name": "article-title",
+        "selector": "article h1"
+      },
+      {
+        "name": "article-body",
+        "selector": "article p"
+      },
+      {
+        "name": "article-caption",
+        "selector": "article figcaption"
+      }
+    ],
+    "requiredSelectors": [
+      "article h1",
+      "article p",
+      "article figcaption"
+    ],
+    "coverageRules": [
+      {
+        "name": "article-title",
+        "selector": "article h1",
+        "kind": "heading",
+        "minInitial": 1
+      },
+      {
+        "name": "article-body",
+        "selector": "article p",
+        "kind": "content",
+        "minInitial": 10
+      },
+      {
+        "name": "article-captions",
+        "selector": "article figcaption",
+        "kind": "content",
+        "minInitial": 2
+      }
+    ],
+    "forbiddenSelectors": [
+      "article [data-testid=\"byline\"]",
+      "article [data-testid=\"image\"] > span",
+      "nav",
+      "article button[aria-label=\"Share\"]",
+      "article button[aria-label=\"Save\"]"
+    ],
+    "interactionSelectors": [
+      "article p a[href]",
+      "article button[aria-label=\"Play video\"]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "2026-10-25公开DOM：1个主标题、30个正文p、5个图注。有限文章页追踪声明区域全部候选，最低数量仅作结构存在门槛；作者byline和图片直接署名保持原文，真正figcaption必须可译。视频播放按钮会原生加载时长，用交互语义契约核验；Share/Save保持DOM保护，不把视频时长更新归为翻译改动。"
+  },
+  "bluesky-official-profile": {
+    "url": "https://bsky.app/profile/bsky.app",
+    "fullPageScope": "initial-corpus",
+    "hoverSelector": "[data-testid=\"postText\"]",
+    "hoverTargets": [
+      {
+        "name": "plain-post",
+        "selector": "[data-testid=\"postText\"]",
+        "index": 0,
+        "sourceIncludes": [
+          "Bluesky is an open social network"
+        ]
+      },
+      {
+        "name": "rich-post",
+        "selector": "[data-testid=\"postText\"]:has(a[href])",
+        "index": 0,
+        "sourceIncludes": [
+          "You can learn a little more about profile links"
+        ]
+      },
+      {
+        "name": "profile-description",
+        "selector": "[data-testid=\"profileHeaderDescription\"]",
+        "index": 0,
+        "sourceIncludes": [
+          "official Bluesky account"
+        ]
+      },
+      {
+        "name": "quoted-post-body",
+        "selector": "[data-testid^=\"feedItem-by-\"] div[role=\"link\"][aria-label]:has(> div:nth-child(1) [data-testid=\"userAvatarImage\"]):has(> div:nth-child(1) [data-tooltip]) > div:nth-child(2)[dir=\"auto\"][data-word-wrap=\"1\"]",
+        "index": 0
+      }
+    ],
+    "requiredSelectors": [
+      "[data-testid=\"postText\"]",
+      "[data-testid=\"postText\"]:has(a[href])",
+      "[data-testid=\"profileHeaderDescription\"]",
+      "[data-testid^=\"feedItem-by-\"] div[role=\"link\"][aria-label]:has(> div:nth-child(1) [data-testid=\"userAvatarImage\"]):has(> div:nth-child(1) [data-tooltip]) > div:nth-child(2)[dir=\"auto\"][data-word-wrap=\"1\"]"
+    ],
+    "coverageRules": [
+      {
+        "name": "initial-post-bodies",
+        "selector": "[data-testid=\"postText\"]",
+        "kind": "content",
+        "minInitial": 4,
+        "sourceIncludes": [
+          "Bluesky is an open social network"
+        ]
+      },
+      {
+        "name": "initial-profile-description",
+        "selector": "[data-testid=\"profileHeaderDescription\"]",
+        "kind": "content",
+        "minInitial": 1,
+        "sourceIncludes": [
+          "official Bluesky account"
+        ]
+      },
+      {
+        "name": "initial-quoted-post-bodies",
+        "selector": "[data-testid^=\"feedItem-by-\"] div[role=\"link\"][aria-label]:has(> div:nth-child(1) [data-testid=\"userAvatarImage\"]):has(> div:nth-child(1) [data-tooltip]) > div:nth-child(2)[dir=\"auto\"][data-word-wrap=\"1\"]",
+        "kind": "content",
+        "minInitial": 1
+      }
+    ],
+    "forbiddenSelectors": [
+      "[data-testid=\"profileHeaderDisplayName\"]",
+      "[data-testid^=\"feedItem-by-\"] > div > div:nth-child(2) > div:nth-child(2) > a[role=\"link\"][aria-label][aria-pressed][data-no-underline][href^=\"/profile/\"]:not([href*=\"/post/\"]):has(> svg):has(> div > div > div[dir=\"auto\"]):not([data-testid=\"postText\"] a):not(div[role=\"link\"][aria-label] a)",
+      "[data-testid^=\"feedItem-by-\"] a[aria-label][dir=\"auto\"][href^=\"/profile/\"]:not([href*=\"/post/\"]):not([data-testid=\"postText\"] a):not(div[role=\"link\"][aria-label] a)",
+      "[data-testid^=\"feedItem-by-\"] a[data-tooltip][href*=\"/post/\"]",
+      "[data-testid^=\"feedItem-by-\"] div:has(> div > [data-testid=\"replyBtn\"]):has([data-testid=\"likeCount\"])",
+      "input[aria-autocomplete=\"list\"]",
+      "textarea, [contenteditable=\"true\"], [role=\"textbox\"]",
+      "div:has(> [data-testid=\"profileHeaderDisplayName\"]) + div > div[dir=\"auto\"]:not([data-testid=\"profileHeaderDescription\"]):only-child",
+      "div:has(> a[data-testid=\"profileHeaderFollowersButton\"]):has(> a[data-testid=\"profileHeaderFollowsButton\"])",
+      "[data-testid^=\"feedItem-by-\"] div[role=\"link\"][aria-label] > div:nth-child(1):has([data-testid=\"userAvatarImage\"]):has([data-tooltip])"
+    ],
+    "forbiddenMustExistSelectors": [
+      "[data-testid=\"profileHeaderDisplayName\"]",
+      "[data-testid^=\"feedItem-by-\"] a[aria-label][dir=\"auto\"][href^=\"/profile/\"]:not([href*=\"/post/\"]):not([data-testid=\"postText\"] a):not(div[role=\"link\"][aria-label] a)",
+      "[data-testid^=\"feedItem-by-\"] a[data-tooltip][href*=\"/post/\"]",
+      "[data-testid^=\"feedItem-by-\"] div:has(> div > [data-testid=\"replyBtn\"]):has([data-testid=\"likeCount\"])",
+      "input[aria-autocomplete=\"list\"]",
+      "div:has(> [data-testid=\"profileHeaderDisplayName\"]) + div > div[dir=\"auto\"]:not([data-testid=\"profileHeaderDescription\"]):only-child",
+      "div:has(> a[data-testid=\"profileHeaderFollowersButton\"]):has(> a[data-testid=\"profileHeaderFollowsButton\"])",
+      "[data-testid^=\"feedItem-by-\"] div[role=\"link\"][aria-label] > div:nth-child(1):has([data-testid=\"userAvatarImage\"]):has([data-tooltip])"
+    ],
+    "optionalForbiddenSelectors": [
+      "textarea, [contenteditable=\"true\"], [role=\"textbox\"]",
+      "[data-testid^=\"feedItem-by-\"] > div > div:nth-child(2) > div:nth-child(2) > a[role=\"link\"][aria-label][aria-pressed][data-no-underline][href^=\"/profile/\"]:not([href*=\"/post/\"]):has(> svg):has(> div > div > div[dir=\"auto\"]):not([data-testid=\"postText\"] a):not(div[role=\"link\"][aria-label] a)"
+    ],
+    "dynamicForbiddenSelectors": [
+      "[data-testid^=\"feedItem-by-\"] > div > div:nth-child(2) > div:nth-child(2) > a[role=\"link\"][aria-label][aria-pressed][data-no-underline][href^=\"/profile/\"]:not([href*=\"/post/\"]):has(> svg):has(> div > div > div[dir=\"auto\"]):not([data-testid=\"postText\"] a):not(div[role=\"link\"][aria-label] a)",
+      "[data-testid^=\"feedItem-by-\"] a[aria-label][dir=\"auto\"][href^=\"/profile/\"]:not([href*=\"/post/\"]):not([data-testid=\"postText\"] a):not(div[role=\"link\"][aria-label] a)",
+      "[data-testid^=\"feedItem-by-\"] a[data-tooltip][href*=\"/post/\"]",
+      "[data-testid^=\"feedItem-by-\"] div:has(> div > [data-testid=\"replyBtn\"]):has([data-testid=\"likeCount\"])",
+      "textarea, [contenteditable=\"true\"], [role=\"textbox\"]",
+      "[data-testid^=\"feedItem-by-\"] div[role=\"link\"][aria-label] > div:nth-child(1):has([data-testid=\"userAvatarImage\"]):has([data-tooltip])"
+    ],
+    "interactionSelectors": [
+      "[data-testid=\"postText\"] a[href]",
+      "[data-testid=\"replyBtn\"]",
+      "input[aria-autocomplete=\"list\"]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "公开官方 profile：正文与简介按首次配置正文集合冻结，逐节点完成翻译/恢复/再次翻译；hover另取普通正文和带提及链接正文。作者、handle、时间和整个计数操作行、资料顶部账号及关注/帖子计数必须保留；作者选择器明确排除 postText 中的提及。转发身份组件使用精确结构的 optional dynamic guard，未出现不算该边界已验收。页面未登录，没有实际编辑器样本，optional editor guard 不算编辑器已验收。契约登记不代表实站通过，结果见对应运行产物；不代表无限滚动、登录信息流或私信验收。"
+  },
+  "amazon-echo-dot-product": {
+    "url": "https://www.amazon.com/dp/B09B8V1LZ3?language=en_US&th=1",
+    "fullPageScope": "finite-page",
+    "hoverSelector": "#feature-bullets li",
+    "hoverTargets": [
+      {
+        "name": "product-title",
+        "selector": "h1#title",
+        "index": 0
+      },
+      {
+        "name": "feature-description",
+        "selector": "#feature-bullets li",
+        "index": 0
+      },
+      {
+        "name": "product-detail-paragraph",
+        "selector": ".content-grid-block p",
+        "index": 0
+      },
+      {
+        "name": "product-detail-heading",
+        "selector": ".content-grid-block h2",
+        "index": 0
+      },
+      {
+        "name": "product-detail-subheading",
+        "selector": ".content-grid-block h3",
+        "index": 0
+      },
+      {
+        "name": "technical-description",
+        "selector": "#tech p",
+        "index": 0,
+        "sourceIncludes": [
+          "Dual-band Wi-Fi"
+        ]
+      }
+    ],
+    "requiredSelectors": [
+      "h1#title",
+      "#feature-bullets li",
+      "#atfCenter14_feature_div .content-grid-block p",
+      ".content-grid-block h2",
+      ".content-grid-block h3",
+      "#tech p"
+    ],
+    "coverageRules": [
+      {
+        "name": "product-title",
+        "selector": "h1#title",
+        "kind": "heading",
+        "minInitial": 1
+      },
+      {
+        "name": "feature-descriptions",
+        "selector": "#feature-bullets li",
+        "kind": "list",
+        "minInitial": 4
+      },
+      {
+        "name": "product-detail-paragraphs",
+        "selector": ".content-grid-block p",
+        "kind": "content",
+        "minInitial": 30,
+        "trackDynamic": true
+      },
+      {
+        "name": "product-detail-headings",
+        "selector": ".content-grid-block h2",
+        "kind": "heading",
+        "minInitial": 5,
+        "trackDynamic": true
+      },
+      {
+        "name": "product-detail-subheadings",
+        "selector": ".content-grid-block h3",
+        "kind": "heading",
+        "minInitial": 5,
+        "trackDynamic": true
+      },
+      {
+        "name": "technical-detail-paragraphs",
+        "selector": "#tech p",
+        "kind": "content",
+        "minInitial": 20,
+        "trackDynamic": true
+      }
+    ],
+    "forbiddenSelectors": [
+      ".a-price",
+      "#add-to-cart-button",
+      "#buy-now-button",
+      "#acrPopover",
+      "#acrCustomerReviewText",
+      "#nav-search-bar-form"
+    ],
+    "dynamicForbiddenSelectors": [
+      ".a-price",
+      "#add-to-cart-button",
+      "#buy-now-button"
+    ],
+    "optionalForbiddenSelectors": [
+      "#add-to-cart-button",
+      "#buy-now-button"
+    ],
+    "interactionSelectors": [
+      "#tech a[href]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "2026-10-25 公开商品 DOM：主标题1、功能介绍6、content-grid p83/h2 11/h3 14、tech p42；逐个跟踪所有符合条件的节点，minInitial只是结构门槛。保留原固定英文/variant查询 language=en_US&th=1；2026-11-01无query入口复跑原生转到?th=1且详情正文缺失，不能视为等价入口，technical-description的英文sourceIncludes继续验证正文。保留query的该次 #availability 明示商品无法配送到当前地址，两个购买按钮原生缺席；仅这两个按钮使用optional dynamic保护，未出现不算购物控件或购买交互已验收。有限滚动到18,001px稳定底部；价格、评分和出现的购物控件须保持原文，不执行购买/加购/登录。本次无 figcaption、评论正文及可见评论用户名，不宣称覆盖这些区域。规格说明参与翻译，数字/型号是否跳过由真实候选完成记录核验；controlled provider不提供翻译质量证据。"
+  },
+  "steam-dota2-product": {
+    "url": "https://store.steampowered.com/app/570/Dota_2/?l=english",
+    "fullPageScope": "finite-page",
+    "prepareScrollSelector": "#app_reviews_hash h2",
+    "hoverSelector": ".game_description_snippet",
+    "hoverTargets": [
+      {
+        "name": "game-name",
+        "selector": "#appHubAppName",
+        "index": 0
+      },
+      {
+        "name": "game-summary",
+        "selector": ".game_description_snippet",
+        "index": 0
+      },
+      {
+        "name": "game-body",
+        "selector": "#game_area_description",
+        "index": 0,
+        "textIncludes": [
+          "When it comes to diversity of heroes"
+        ],
+        "sourceIncludes": [
+          "When it comes to diversity of heroes"
+        ]
+      },
+      {
+        "name": "body-heading",
+        "selector": "#game_area_description h2",
+        "index": 0
+      },
+      {
+        "name": "system-requirement",
+        "selector": ".game_area_sys_req li",
+        "index": 0
+      },
+      {
+        "name": "loaded-review-body",
+        "selector": "#app_reviews_hash a[href*=\"/recommended/570\"] + div > div:nth-child(2) > div > div:first-child",
+        "index": 0
+      }
+    ],
+    "requiredSelectors": [
+      "#appHubAppName",
+      ".game_description_snippet",
+      "#game_area_description",
+      "#game_area_description h2",
+      ".game_area_sys_req li",
+      "#app_reviews_hash a[href*=\"/recommended/570\"] + div > div:nth-child(2) > div > div:first-child"
+    ],
+    "coverageRules": [
+      {
+        "name": "game-name",
+        "selector": "#appHubAppName",
+        "kind": "content",
+        "minInitial": 1
+      },
+      {
+        "name": "game-summary",
+        "selector": ".game_description_snippet",
+        "kind": "content",
+        "minInitial": 1
+      },
+      {
+        "name": "game-body",
+        "selector": "#game_area_description",
+        "kind": "content",
+        "minInitial": 1,
+        "sourcePartition": {
+          "excludeSelectors": [
+            "h2"
+          ]
+        },
+        "sourceIncludes": [
+          "When it comes to diversity of heroes",
+          "Bring your friends and party up."
+        ]
+      },
+      {
+        "name": "game-body-heading",
+        "selector": "#game_area_description h2",
+        "kind": "heading",
+        "minInitial": 1
+      },
+      {
+        "name": "visible-system-requirements",
+        "selector": ".game_area_sys_req li",
+        "kind": "list",
+        "minInitial": 8
+      },
+      {
+        "name": "loaded-review-bodies",
+        "selector": "#app_reviews_hash a[href*=\"/recommended/570\"] + div > div:nth-child(2) > div > div:first-child",
+        "kind": "content",
+        "minInitial": 4,
+        "trackDynamic": true
+      }
+    ],
+    "forbiddenSelectors": [
+      ".game_purchase_price",
+      "#freeGameBtn",
+      "#dlc_purchase_action",
+      "#userReviews .responsive_hidden",
+      "#app_reviews_hash a[data-miniprofile]",
+      "button"
+    ],
+    "dynamicForbiddenSelectors": [
+      "#app_reviews_hash a[data-miniprofile]",
+      "button"
+    ],
+    "interactionSelectors": [
+      "#app_reviews_hash a[href*=\"/recommended/570\"]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "2026-10-25 英文公开商品 DOM 无年龄门槛、无 H1；主名称、游戏简介、BR/strong正文、Windows可见规格8条与当前React评论正文逐节点验收。评论通过当前实际推荐链接邻接结构定位，旧.review_box为0。有限滚动到8,051px稳定底部，已加载20评论卡，未点击更多评论；规则跟踪本页所有符合英文自然文本条件的评论，不能代表该游戏全部历史评论。用户名由data-miniprofile语义属性定位，价格与启动/加购控件保持原文。评分的自然语言评价可翻译，数值计数保持；无figcaption，不宣称图注覆盖。正文hover必须命中指定原生Text Range，不能由子H2代替；sourcePartition在首次翻译前绑定去除H2后的完整原生Text+BR顺序，两轮正文译文及恢复均须与该基线核验。必须传--controlled-provider，未配置时拒绝运行，不能跳过完整正文来源校验。"
+  },
+  "chatgpt-positive-density-share": {
+    "url": "https://chatgpt.com/share/68f124d4-30b4-8005-b2d9-fcb64fc1e4ea",
+    "hoverSelector": "[data-message-author-role='assistant'] .markdown > p:first-of-type",
+    "prepareScrollSelector": "[data-message-author-role='assistant'] .markdown > p:first-of-type",
+    "hoverTargets": [
+      {
+        "name": "assistant-first-prose",
+        "selector": "[data-message-author-role='assistant'] .markdown > p:first-of-type",
+        "sourceIncludes": [
+          "asymptotic"
+        ]
+      },
+      {
+        "name": "user-message",
+        "selector": "[data-message-author-role='user'] .whitespace-pre-wrap",
+        "sourceIncludes": [
+          "Please find a solution"
+        ]
+      },
+      {
+        "name": "assistant-proof-heading",
+        "selector": "[data-message-author-role='assistant'] .markdown h3",
+        "sourceIncludes": [
+          "Very brief proof sketch"
+        ]
+      },
+      {
+        "name": "assistant-proof-step",
+        "selector": "[data-message-author-role='assistant'] .markdown ol > li > p",
+        "sourceIncludes": [
+          "periodic structure"
+        ]
+      },
+      {
+        "name": "assistant-conclusion",
+        "selector": "[data-message-author-role='assistant'] .markdown > p:last-of-type",
+        "sourceIncludes": [
+          "So the problem in your slide"
+        ]
+      }
+    ],
+    "requiredSelectors": [
+      "[data-message-author-role='user'] .whitespace-pre-wrap",
+      "[data-message-author-role='assistant'] .markdown p",
+      "[data-message-author-role='assistant'] .markdown h3",
+      "[data-message-author-role='assistant'] .markdown li"
+    ],
+    "coverageRules": [
+      {
+        "name": "public-user-message",
+        "selector": "[data-message-author-role='user'] .whitespace-pre-wrap",
+        "kind": "content",
+        "minInitial": 1,
+        "sourceIncludes": [
+          "Please find a solution"
+        ]
+      },
+      {
+        "name": "assistant-paragraphs",
+        "selector": "[data-message-author-role='assistant'] .markdown p",
+        "kind": "content",
+        "minInitial": 13
+      },
+      {
+        "name": "assistant-proof-headings",
+        "selector": "[data-message-author-role='assistant'] .markdown h3",
+        "kind": "heading",
+        "minInitial": 2,
+        "sourceIncludes": [
+          "Very brief proof sketch"
+        ]
+      },
+      {
+        "name": "assistant-list-steps-and-references",
+        "selector": "[data-message-author-role='assistant'] .markdown li",
+        "kind": "list",
+        "minInitial": 6,
+        "sourceIncludes": [
+          "periodic structure"
+        ]
+      }
+    ],
+    "forbiddenSelectors": [
+      "[data-message-author-role='assistant'] [role='math'][data-math-source]",
+      "#prompt-textarea",
+      "[data-message-author-role='assistant'] .markdown pre, [data-message-author-role='assistant'] .markdown code"
+    ],
+    "forbiddenMustExistSelectors": [
+      "[data-message-author-role='assistant'] [role='math'][data-math-source]",
+      "#prompt-textarea"
+    ],
+    "optionalForbiddenSelectors": [
+      "[data-message-author-role='assistant'] .markdown pre, [data-message-author-role='assistant'] .markdown code"
+    ],
+    "interactionSelectors": [
+      "[data-message-author-role='assistant'] .markdown a[href]"
+    ],
+    "scrollContainer": "[data-scroll-root]",
+    "fullPageScope": "finite-page",
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Public static shared conversation linked by the official OpenAI paper Early science acceleration experiments with GPT-5 [Saw25a] (p.88); observed 1 user message, 13 assistant paragraphs, 2 H3 headings, 6 list items, 43 formula wrappers. No login or prompt submission. The sample contains no code: optional code selectors do not establish live code coverage. Static share does not establish authenticated streaming, new-turn insertion or route-switch acceptance. Exact native resource 403/404 diagnostics are retained separately."
+  },
+  "google-news-home": {
+    "url": "https://news.google.com/home?hl=en-US&gl=US&ceid=US:en",
+    "fullPageScope": "initial-corpus",
+    "hoverSelector": "main a[href^=\"./read/\"]:not([aria-hidden=\"true\"])",
+    "hoverTargets": [
+      {
+        "name": "leading-headline",
+        "selector": "main a[href^=\"./read/\"]:not([aria-hidden=\"true\"])",
+        "index": 0
+      },
+      {
+        "name": "later-headline",
+        "selector": "main a[href^=\"./read/\"]:not([aria-hidden=\"true\"])",
+        "index": 4
+      },
+      {
+        "name": "homepage-heading",
+        "selector": "main h1",
+        "sourceIncludes": [
+          "Your briefing"
+        ]
+      }
+    ],
+    "requiredSelectors": [
+      "main a[href^=\"./read/\"]:not([aria-hidden=\"true\"])",
+      "main h1"
+    ],
+    "coverageRules": [
+      {
+        "name": "initial-home-headlines",
+        "selector": "main a[href^=\"./read/\"]:not([aria-hidden=\"true\"])",
+        "kind": "content",
+        "minInitial": 8
+      },
+      {
+        "name": "homepage-heading",
+        "selector": "main h1",
+        "kind": "heading",
+        "minInitial": 1
+      }
+    ],
+    "forbiddenSelectors": [
+      "[role=\"navigation\"]",
+      "main time",
+      "main [data-n-tid=\"9\"]",
+      "header input[role=\"combobox\"][aria-label=\"Search for topics, locations & sources\"]"
+    ],
+    "forbiddenMustExistSelectors": [
+      "[role=\"navigation\"]",
+      "main time",
+      "main [data-n-tid=\"9\"]",
+      "header input[role=\"combobox\"][aria-label=\"Search for topics, locations & sources\"]"
+    ],
+    "interactionSelectors": [
+      "main a[href^=\"./read/\"]:not([aria-hidden=\"true\"])",
+      "header input[role=\"combobox\"][aria-label=\"Search for topics, locations & sources\"]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "公开英文首页，按首次可读 /read/ 标题集合冻结并检查翻译/恢复/再次翻译；媒体名称、时间、导航与实际搜索combobox保留；SSR disabled占位input会被宿主替换，不把它或未打开的高级搜索表单列作已验收控件。2026-10-25 只读DOM有10个标题，数量门槛只检查版式，不代表实测通过。首页主h1也应翻译；stories全报道入口不属于当前标题规则；动态刷新、其他栏目、搜索、外链文章正文和登录个性化另验。 普通滚动会新增新闻卡片，因此time和媒体名以动态保护契约检查新增节点，仍禁止译文/owned污染和既有节点改写。",
+    "dynamicForbiddenSelectors": [
+      "main time",
+      "main [data-n-tid=\"9\"]"
+    ]
+  },
+  "cnn-starry-night-article": {
+    "url": "https://www.cnn.com/2026/10/24/science/van-goghs-starry-night-astronomy-intl-scli",
+    "hoverSelector": "article p.paragraph-elevate",
+    "prepareScrollSelector": "article p.paragraph-elevate",
+    "hoverTargets": [
+      {
+        "name": "cnn-first-body-paragraph",
+        "selector": "article p.paragraph-elevate",
+        "sourceIncludes": [
+          "For more than a century"
+        ]
+      },
+      {
+        "name": "cnn-main-headline",
+        "selector": "h1#maincontent",
+        "sourceIncludes": [
+          "real celestial arrangement"
+        ]
+      },
+      {
+        "name": "cnn-body-subheading",
+        "selector": "article h2.subheader",
+        "sourceIncludes": [
+          "with caution"
+        ]
+      },
+      {
+        "name": "cnn-main-image-caption",
+        "selector": "article .image_large-elevate__metadata:has(.image_large-elevate__caption[itemprop=\"caption\"])",
+        "sourceIncludes": [
+          "painted in Provence"
+        ]
+      },
+      {
+        "name": "cnn-final-body-paragraph",
+        "selector": "article p.paragraph-elevate",
+        "sourceIncludes": [
+          "Kim said finding more historical French weather records"
+        ]
+      }
+    ],
+    "requiredSelectors": [
+      "h1#maincontent",
+      "article p.paragraph-elevate",
+      "article h2.subheader",
+      "article .image_large-elevate__metadata:has(.image_large-elevate__caption[itemprop=\"caption\"])"
+    ],
+    "coverageRules": [
+      {
+        "name": "cnn-article-headline",
+        "selector": "h1#maincontent",
+        "kind": "heading",
+        "minInitial": 1,
+        "sourceIncludes": [
+          "real celestial arrangement"
+        ]
+      },
+      {
+        "name": "cnn-body-paragraphs",
+        "selector": "article p.paragraph-elevate",
+        "kind": "content",
+        "minInitial": 34,
+        "sourceIncludes": [
+          "For more than a century",
+          "Kim said finding more historical French weather records"
+        ]
+      },
+      {
+        "name": "cnn-body-subheadings",
+        "selector": "article h2.subheader",
+        "kind": "heading",
+        "minInitial": 2,
+        "sourceIncludes": [
+          "with caution",
+          "Tying art with astronomy"
+        ]
+      },
+      {
+        "name": "cnn-main-image-captions",
+        "selector": "article .image_large-elevate__metadata:has(.image_large-elevate__caption[itemprop=\"caption\"])",
+        "kind": "content",
+        "minInitial": 2,
+        "sourceIncludes": [
+          "painted in Provence",
+          "The first row shows star patterns"
+        ]
+      }
+    ],
+    "forbiddenSelectors": [
+      ".byline__name",
+      ".timestamp__time-since",
+      "time",
+      "article figcaption.image_large-elevate__credit",
+      "article figcaption.image-elevate__credit"
+    ],
+    "forbiddenMustExistSelectors": [
+      ".byline__name",
+      ".timestamp__time-since",
+      "time",
+      "article figcaption.image_large-elevate__credit",
+      "article figcaption.image-elevate__credit"
+    ],
+    "interactionSelectors": [
+      "article p.paragraph-elevate a[href]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "fullPageScope": "finite-page",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Public CNN article observed HTTP200 after native main-frame exact-text Agree click in a fresh disposable profile. Observed 34 body p.paragraph-elevate, unique main h1, two body h2.subheader and two main-image captions. Caption translation belongs to the surrounding image_large-elevate__metadata inline-run owner; the renderer places a translation segment around the caption child, so descendant :has() preserves owner identity before and after rendering. Count2 and both caption source fragments remain required. Four figcaption credit nodes, byline name and visible relative timestamp are protected metadata; captions are separate siblings. Related-card paragraphs/captions are outside the required body corpus. Production baseline captured actual translation wrappers in the author, relative timestamp and two main-image credits; raw baseline failures are retained separately.",
+    "prepareClickText": "Agree"
+  },
+  "steam-community-dota2-discussion-list": {
+    "tier": "quarantine",
+    "quarantineReason": "讨论列表原生标题被同卡片空链接覆盖；当前标准悬浮命中安全契约未接受该关系，不能计为required通过。保留严格全文验收和待验证悬浮契约，不放宽命中策略。",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "url": "https://steamcommunity.com/app/570/discussions/",
+    "fullPageScope": "initial-corpus",
+    "hoverSelector": "#AppHubContent .forum_topics .forum_topic_name",
+    "hoverTargets": [
+      {
+        "name": "pinned-title-native-overlay-pending",
+        "selector": "#AppHubContent .forum_topics .forum_topic_name",
+        "index": 0,
+        "textIncludes": ["HELP!"],
+        "sourceIncludes": ["HELP!"]
+      }
+    ],
+    "requiredSelectors": [
+      "#AppHubContent .forum_topics .forum_topic_name"
+    ],
+    "coverageRules": [
+      {
+        "name": "loaded-discussion-titles",
+        "selector": "#AppHubContent .forum_topics .forum_topic_name",
+        "kind": "content",
+        "minInitial": 10
+      }
+    ],
+    "forbiddenSelectors": [
+      ".forum_topic_details",
+      ".forum_topic_op",
+      ".forum_topic_label",
+      ".forum_topic_overlay",
+      ".forum_paging",
+      ".rightcol",
+      "#global_header",
+      "input.discussionSearchText"
+    ],
+    "interactionSelectors": [
+      ".forum_topic_overlay"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "notes": "Native HTTP200:15 mixed-language titles and15 empty overlay links. Freeze all currently eligible loaded titles each pass; minInitial10, never exact15 or the whole archive. Real title Text hits its sibling overlay; core resolves the title, but current standard hover safety policy rejects this relation, so full only. Pinned labels are production-omitted metadata; retain all titles and investigate any controlled evidence mismatch instead of narrowing the corpus. Quarantine: required matrix acceptance needs both hover/full; full-only evidence cannot satisfy that gate. Latin heuristic eligibility is a test corpus, not every language on the page.",
+    "forbiddenMustExistSelectors": [
+      ".forum_topic_details",
+      ".forum_topic_op",
+      ".forum_topic_label",
+      ".forum_topic_overlay",
+      ".forum_paging",
+      ".rightcol",
+      "#global_header",
+      "input.discussionSearchText"
+    ]
+  },
+  "steam-community-dota2-crash-thread": {
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "url": "https://steamcommunity.com/app/570/discussions/0/807973945275884795/",
+    "fullPageScope": "finite-page",
+    "hoverSelector": "#AppHubContent .forum_op > .content[id^=\"forum_op_content_\"]",
+    "requiredSelectors": [
+      "#AppHubContent .forum_op > .topic",
+      "#AppHubContent .forum_op > .content[id^=\"forum_op_content_\"]",
+      "#AppHubContent .commentthread_comment_text"
+    ],
+    "coverageRules": [
+      {
+        "name": "thread-topic",
+        "selector": "#AppHubContent .forum_op > .topic",
+        "kind": "content",
+        "minInitial": 1
+      },
+      {
+        "name": "complete-original-post",
+        "selector": "#AppHubContent .forum_op > .content[id^=\"forum_op_content_\"]",
+        "kind": "content",
+        "minInitial": 1,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "all-loaded-reply-bodies",
+        "selector": "#AppHubContent .commentthread_comment_text",
+        "kind": "content",
+        "minInitial": 3,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "hoverTargets": [
+      {
+        "name": "thread-topic",
+        "selector": "#AppHubContent .forum_op > .topic",
+        "index": 0
+      },
+      {
+        "name": "original-post-direct-text",
+        "selector": "#AppHubContent .forum_op > .content[id^=\"forum_op_content_\"]",
+        "index": 0,
+        "textIncludes": [
+          "1 file is from yesterday"
+        ],
+        "sourceIncludes": [
+          "Till now i have tried:"
+        ]
+      },
+      {
+        "name": "first-reply-direct-text",
+        "selector": "#AppHubContent .commentthread_comment_text",
+        "index": 0
+      }
+    ],
+    "forbiddenSelectors": [
+      ".forum_op_header",
+      ".forum_op_footer",
+      ".commentthread_comment_author",
+      ".commentthread_comment_timestamp",
+      ".commentthread_comment_actions",
+      ".forum_paging",
+      ".rightcol",
+      "#global_header",
+      "input.discussionSearchText",
+      "textarea#forum_report_reason",
+      "#AppHubContent .forum_op > .content[id^=\"forum_op_content_\"] a[href^=\"https://steamcommunity.com/linkfilter/\"]"
+    ],
+    "interactionSelectors": [
+      "#AppHubContent .forum_op > .content[id^=\"forum_op_content_\"] a[href^=\"https://steamcommunity.com/linkfilter/\"]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "notes": "Native HTTP200:1 title,1 complete OP and3 English replies; native pager shows1-3 of3. OP has direct Text,11 BR and one literal external-reference link. OP/all-replies sourcePartition excludeSelectors[] verifies complete native source. Each full pass freezes every reply loaded at that pass start; minInitial3 is this sample readiness floor, not an exact total. Later native replies, expansion and pagination require separate acceptance. Hover uses title, OP and reply0 with explicit-index partition capture. Preserve author/date/action/paging/search/hidden report textarea and the native literal link text/href; do not open external references. Actual .bb_code/pre/code/quote/button/reply-editor nodes are absent, so no real coverage claimed for them."
+  },
+  "linkedin-public-pulse-article": {
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "url": "https://www.linkedin.com/pulse/what-linkedin-pulse-article-why-matters-more-than-you-kerry-baker-adlwe",
+    "fullPageScope": "finite-page",
+    "prepareScrollSelector": "article.article-main .article-main__content > p:first-of-type",
+    "prepareDismissiblePromotion": {
+      "dialogSelector": "[role=\"dialog\"][aria-modal=\"true\"][aria-labelledby=\"base-contextual-sign-in-modal-modal-header\"]",
+      "buttonSelector": "button.contextual-sign-in-modal__modal-dismiss[data-tracking-control-name=\"pulse-article_contextual-sign-in-modal_modal_dismiss\"]",
+      "contentSelector": "article.article-main"
+    },
+    "hoverSelector": "article.article-main .article-main__content > p",
+    "requiredSelectors": [
+      "article.article-main > header h1.pulse-title",
+      "article.article-main .article-main__content > p",
+      "article.article-main .inline-articles .inline-article-title",
+      "main .right-rail .aside-article-card h3.base-aside-card__title"
+    ],
+    "coverageRules": [
+      {
+        "name": "article-title",
+        "selector": "article.article-main > header h1.pulse-title",
+        "kind": "heading",
+        "minInitial": 1,
+        "sourceIncludes": [
+          "What Is a LinkedIn Pulse Article"
+        ]
+      },
+      {
+        "name": "complete-article-paragraphs",
+        "selector": "article.article-main .article-main__content > p",
+        "kind": "content",
+        "minInitial": 10,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "loaded-inline-recommendation-titles",
+        "selector": "article.article-main .inline-articles .inline-article-title",
+        "kind": "content",
+        "minInitial": 3
+      },
+      {
+        "name": "loaded-aside-recommendation-titles",
+        "selector": "main .right-rail .aside-article-card h3.base-aside-card__title",
+        "kind": "heading",
+        "minInitial": 6
+      }
+    ],
+    "hoverTargets": [
+      {
+        "name": "article-title",
+        "selector": "article.article-main > header h1.pulse-title",
+        "index": 0
+      },
+      {
+        "name": "complete-first-paragraph",
+        "selector": "article.article-main .article-main__content > p",
+        "index": 0
+      },
+      {
+        "name": "inline-recommendation-title",
+        "selector": "article.article-main .inline-articles .inline-article-title",
+        "index": 0
+      },
+      {
+        "name": "aside-recommendation-title",
+        "selector": "main .right-rail .aside-article-card h3.base-aside-card__title",
+        "index": 0
+      }
+    ],
+    "forbiddenSelectors": [
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__title",
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__metadata",
+      "article.article-main .inline-articles .inline-article-meta",
+      "main .right-rail .aside-article-card .base-aside-card__metadata",
+      "main .article-social-activity a.social-action-bar__button",
+      "main .comments section.comment .comment__actions a.comment__reply[data-feed-action=\"replyToComment\"]:not(.comment__text *)"
+    ],
+    "optionalForbiddenSelectors": [
+      "main .comments section.comment .comment__actions a.comment__reply[data-feed-action=\"replyToComment\"]:not(.comment__text *)"
+    ],
+    "dynamicForbiddenSelectors": [
+      "main .comments section.comment .comment__actions a.comment__reply[data-feed-action=\"replyToComment\"]:not(.comment__text *)"
+    ],
+    "interactionSelectors": [
+      "article.article-main .inline-articles a[href]",
+      "main .right-rail a.aside-article-card[href]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "notes": "Public native article observed HTTP200; dismiss only the exact optional contextual sign-in promotion with its native non-form dismissal button. Stop on authwall/challenge or unrecognized blocking UI; never mutate visibility/ARIA or authentication state. Sample contains one title, ten direct article paragraphs, three inline and ten aside recommendation titles, of which six aside titles have native layout and four are hidden behind the native expansion; every currently eligible visible title/paragraph is required, with complete Text/BR source ledgers for each main paragraph. Protect publisher name/date, inline/aside recommendation metadata and article action anchors. Comment reply actions use an exact optional dynamic guard; absence does not count as reply-control acceptance. Native article has no body list/code/reading href, so those boundaries remain authored fixture evidence. Native expansion of the four hidden recommendations remains separate pending coverage. Readiness floor six is confirmed by actual per-node rects, not a reduction of the six visible-title corpus. The raw pre-fix run translated ten metadata owners and changed author class whitespace on restoration; retain that failure and global exact restoration guards."
+  },
+  "x-nasa-public-post": {
+    "tier": "required",
+    "url": "https://x.com/NASA/status/1571977394151383042",
+    "fullPageScope": "initial-corpus",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "hoverSelector": "main article:has(a[href=\"/NASA/status/1571977394151383042\"]) div[dir=\"auto\"].whitespace-pre-wrap",
+    "requiredSelectors": [
+      "main article:has(a[href=\"/NASA/status/1571977394151383042\"]) div[dir=\"auto\"].whitespace-pre-wrap",
+      "main article div[dir=\"auto\"].whitespace-pre-wrap"
+    ],
+    "coverageRules": [
+      {
+        "name": "all-loaded-public-post-bodies",
+        "selector": "main article div[dir=\"auto\"].whitespace-pre-wrap",
+        "kind": "content",
+        "minInitial": 6,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "hoverTargets": [
+      {
+        "name": "primary-public-post-complete-body",
+        "selector": "main article div[dir=\"auto\"].whitespace-pre-wrap",
+        "index": 0,
+        "sourceIncludes": [
+          "To all of you who suggested"
+        ],
+        "textIncludes": [
+          "To all of you who suggested"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "forbiddenSelectors": [
+      "main article span:has(+ span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1) > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > div.text-body.font-bold.line-clamp-1:not([dir=\"auto\"] *)",
+      "main article span + span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1:not([dir=\"auto\"] *)",
+      "main article a[data-base-ui-tooltip-trigger][href*=\"/status/\"]",
+      "main article [data-engagement-action]",
+      "main article div:has(> [data-engagement-action=\"reply\"]):has(> [data-engagement-action=\"retweet\"]):has(> [data-engagement-action=\"like\"])",
+      ":is(main article button[data-slot=\"xds-menu-trigger\"], main article [role=\"button\"][data-base-ui-click-trigger], main article button.cursor-pointer.bg-transparent):not(main article div.aspect-video:has(> video) button[data-slot=\"xds-menu-trigger\"]:has(svg[data-icon=\"icon-settings-stroke\"]))",
+      "nav",
+      "main article div.aspect-video:has(> video) button[data-slot=\"xds-menu-trigger\"]:has(svg[data-icon=\"icon-settings-stroke\"])"
+    ],
+    "forbiddenMustExistSelectors": [
+      "main article span:has(+ span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1) > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > div.text-body.font-bold.line-clamp-1:not([dir=\"auto\"] *)",
+      "main article span + span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1:not([dir=\"auto\"] *)",
+      "main article a[data-base-ui-tooltip-trigger][href*=\"/status/\"]",
+      "main article [data-engagement-action]",
+      "main article div:has(> [data-engagement-action=\"reply\"]):has(> [data-engagement-action=\"retweet\"]):has(> [data-engagement-action=\"like\"])",
+      ":is(main article button[data-slot=\"xds-menu-trigger\"], main article [role=\"button\"][data-base-ui-click-trigger], main article button.cursor-pointer.bg-transparent):not(main article div.aspect-video:has(> video) button[data-slot=\"xds-menu-trigger\"]:has(svg[data-icon=\"icon-settings-stroke\"]))",
+      "nav"
+    ],
+    "interactionSelectors": [
+      "main article:has(a[href=\"/NASA/status/1571977394151383042\"]) div[dir=\"auto\"].whitespace-pre-wrap a[href=\"/hashtag/NASAMoonSnap\"]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "notes": "Official NASA page links this exact post ID. Native HTTP200; no login/challenge. New deployed layout has no data-testid:6 loaded article rich bodies (antecedent, quote, primary and3 replies); initial-corpus freezes every loaded body at each pass, min6 is readiness floor, not a total timeline or language count. Complete Text sourcePartition[] per native body; hover source filter selects the unique primary post (observed raw index2), not the hidden sr-only H1. Preserve author/handle6 each, date permalinks6, engagement25, native X menu/translation/badge controls20 and nav1 semantically after host remount. Pre-fix production demonstrated3 author-name requests/wrappers; this required case needs the unified fresh fix and both modes before acceptance. Keep exact X guide404 and GSI runtime attribution evidence; no blanket whitelist, no site action clicks. Exact native video-settings menu (aspect-video direct video + xds-menu-trigger + icon-settings-stroke) starts0 then1 after native player initialization. Preserve original20 static controls; separately optional+dynamic protect this one empty menu component with strict adopted baseline/multiset/owned0 semantics. No whole-player mutable exemption.",
+    "dynamicForbiddenSelectors": [
+      "main article div.aspect-video:has(> video) button[data-slot=\"xds-menu-trigger\"]:has(svg[data-icon=\"icon-settings-stroke\"])"
+    ],
+    "optionalForbiddenSelectors": [
+      "main article div.aspect-video:has(> video) button[data-slot=\"xds-menu-trigger\"]:has(svg[data-icon=\"icon-settings-stroke\"])"
+    ]
+  },
+  "bbc-future-neck-feature": {
+    "url": "https://www.bbc.com/future/article/20261001-five-exercises-to-help-reduce-neck-pain",
+    "fullPageScope": "finite-page",
+    "hoverSelector": "article p",
+    "hoverTargets": [
+      {
+        "name": "feature-title",
+        "selector": "article h1",
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "feature-lead",
+        "selector": "article p",
+        "sourceIncludes": [
+          "The modern world is a challenging place for necks"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "later-section-heading",
+        "selector": "article h2",
+        "sourceIncludes": [
+          "4. Build neck flexor endurance"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "later-feature-paragraph",
+        "selector": "article p",
+        "sourceIncludes": [
+          "Over time, these exercises can help make your neck more resilient"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "descriptive-caption",
+        "selector": "article figure:has(> div[data-testid=\"image\"]) > figcaption",
+        "sourceIncludes": [
+          "Modern life is hard on the human neck"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "requiredSelectors": [
+      "article h1",
+      "article p",
+      "article h2",
+      "article figure:has(> div[data-testid=\"image\"]) > figcaption"
+    ],
+    "coverageRules": [
+      {
+        "name": "feature-title",
+        "selector": "article h1",
+        "kind": "heading",
+        "minInitial": 1,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "feature-paragraphs",
+        "selector": "article p",
+        "kind": "content",
+        "minInitial": 30
+      },
+      {
+        "name": "feature-section-headings",
+        "selector": "article h2",
+        "kind": "heading",
+        "minInitial": 6,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "feature-captions",
+        "selector": "article figure:has(> div[data-testid=\"image\"]) > figcaption",
+        "kind": "content",
+        "minInitial": 1,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "forbiddenSelectors": [
+      "article [data-testid=\"byline\"]",
+      "article [data-testid=\"image\"] > span",
+      "article [data-testid=\"hero-image\"] > span",
+      "nav",
+      "article button[aria-label=\"Share\"]",
+      "article button[aria-label=\"Save\"]",
+      "input[data-testid=\"search-input-field\"]",
+      "article [data-component=\"image-block\"] figure:has([data-testid=\"hero-image\"]) > div > figcaption"
+    ],
+    "forbiddenMustExistSelectors": [
+      "article [data-testid=\"byline\"]",
+      "article [data-testid=\"image\"] > span",
+      "article [data-testid=\"hero-image\"] > span",
+      "nav",
+      "article button[aria-label=\"Share\"]",
+      "article button[aria-label=\"Save\"]",
+      "input[data-testid=\"search-input-field\"]",
+      "article [data-component=\"image-block\"] figure:has([data-testid=\"hero-image\"]) > div > figcaption"
+    ],
+    "interactionSelectors": [
+      "article a[href]"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Native public BBC Future longform on 2026-10-25: 1 h1, 38 p (37 core candidates plus a literal -- separator), 6 h2, 2 figcaption, 24 links. Finite-page completion must reveal and verify every eligible configured node including later sections, callout, More-like-this links, final disclaimer and newsletter prose; minInitial is only a readiness floor. Pure credit caption and standalone hero/body image credits must remain original; the separate descriptive caption remains translatable. Strict source partitions bind headings, descriptive caption and all selected hover bodies. All article links retain their native href and structural semantics. No video, medical advice quality, authenticated or paywalled scope is claimed. Full paragraph sourcePartition is not claimed: the native article includes a punctuation-only -- p without a stable unique attribute; every eligible paragraph is still tracked through completion, restore, retranslate and complete per-owner decoded attribution. No nth-based omission or source projection removal is used."
+  },
+  "wikipedia-bayes-math-article": {
+    "url": "https://en.wikipedia.org/wiki/Bayes'_theorem",
+    "hoverSelector": "#mw-content-text .mw-parser-output p",
+    "hoverTargets": [
+      {
+        "name": "article-title",
+        "selector": "h1#firstHeading",
+        "sourceIncludes": [
+          "Bayes' theorem"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "lead-prose",
+        "selector": "#mw-content-text .mw-parser-output p",
+        "sourceIncludes": [
+          "In probability theory"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "formula-bearing-derivation",
+        "selector": "#mw-content-text .mw-parser-output p",
+        "sourceIncludes": [
+          "Bayes' theorem may be derived from the relation between joint and conditional probabilities"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "formula-definition-list",
+        "selector": "#mw-content-text .mw-parser-output li:not([role=\"navigation\"]):not([role=\"navigation\"] li)",
+        "sourceIncludes": [
+          "It is also called the posterior probability"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "later-cryptanalysis-prose",
+        "selector": "#mw-content-text .mw-parser-output p",
+        "sourceIncludes": [
+          "Alan Turing and his collaborators at Bletchley Park"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "descriptive-figure-caption",
+        "selector": "#mw-content-text figcaption",
+        "sourceIncludes": [
+          "Visual proof of Bayes' theorem"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "requiredSelectors": [
+      "h1#firstHeading",
+      "#mw-content-text .mw-parser-output p",
+      "#mw-content-text h2",
+      "#mw-content-text figcaption",
+      "#mw-content-text .mw-parser-output ol.references > li > span.mw-reference-text:has(> ul)"
+    ],
+    "coverageRules": [
+      {
+        "name": "article-title",
+        "selector": "h1#firstHeading",
+        "kind": "heading",
+        "minInitial": 1,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "article-prose-paragraphs",
+        "selector": "#mw-content-text .mw-parser-output p",
+        "kind": "content",
+        "minInitial": 40
+      },
+      {
+        "name": "article-h2-headings",
+        "selector": "#mw-content-text h2",
+        "kind": "heading",
+        "minInitial": 10,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "article-h3-headings",
+        "selector": "#mw-content-text h3",
+        "kind": "heading",
+        "minInitial": 14,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "article-h4-headings",
+        "selector": "#mw-content-text h4",
+        "kind": "heading",
+        "minInitial": 1,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "article-reading-list-items",
+        "selector": "#mw-content-text .mw-parser-output li:not([role=\"navigation\"]):not([role=\"navigation\"] li)",
+        "kind": "content",
+        "minInitial": 50
+      },
+      {
+        "name": "nested-reference-introduction",
+        "selector": "#mw-content-text .mw-parser-output ol.references > li > span.mw-reference-text:has(> ul)",
+        "kind": "content",
+        "minInitial": 1,
+        "sourceIncludes": [
+          "Laplace refined Bayes's theorem over a period of decades:"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": [
+            "ul"
+          ]
+        }
+      },
+      {
+        "name": "figure-descriptions",
+        "selector": "#mw-content-text figcaption",
+        "kind": "content",
+        "minInitial": 3,
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "forbiddenSelectors": [
+      ".mwe-math-element",
+      "sup.reference",
+      ".mw-editsection",
+      ".mw-cite-backlink",
+      "nav",
+      "#vector-toc",
+      "input[name=\"search\"]",
+      "button",
+      "#mw-content-text [role=\"navigation\"]"
+    ],
+    "forbiddenMustExistSelectors": [
+      ".mwe-math-element",
+      "sup.reference",
+      ".mw-editsection",
+      ".mw-cite-backlink",
+      "nav",
+      "#vector-toc",
+      "input[name=\"search\"]",
+      "button",
+      "#mw-content-text [role=\"navigation\"]"
+    ],
+    "interactionSelectors": [
+      "#mw-content-text a[href]"
+    ],
+    "fullPageScope": "initial-corpus",
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Bounded initial loaded Wikipedia mathematical article: freeze all eligible configured prose paragraphs, section headings, non-navigation reading list items, the independently owned nested-reference introduction and descriptive captions; require two real full cycles and native restoration. Native52P includes4 formula-only roots; core sees48P, so do not attach unfiltered full paragraph Text+BR sourcePartition. Strict ledgers cover title/headings/captions, the complete direct introduction run in the nested reference, and selected formula-bearing hover P/LI. The introduction ledger excludes its UL only because its three child LI owners remain independently mandatory in the unchanged minimum50 list group; a hover of the introduction translates that run only. Table headers/labels, hatnotes and interwiki sidebar text are not separately mandatory completion groups; no claim that every English string, bibliography item, or table cell has been individually accepted. Formula/citation/edit/backlink/nav/search/button guards use the existing standard signature without a new class/HTML exemption. Broad interaction selector records total matching count plus representative interaction; no individual all551 href/structure proof claim. The wave5 original hover PASS and full FAIL remain historical evidence. The corrected navigation contract and nested-reference product rule await fresh-build standard hover/full; this case does not yet establish an accepted pair or additional priority host."
+  },
+  "github-vue-computed-issue": {
+    "url": "https://github.com/vuejs/core/issues/1932",
+    "hoverSelector": "main h1 [data-testid='issue-title']",
+    "hoverTargets": [
+      {
+        "name": "issue-title",
+        "selector": "main h1 [data-testid='issue-title']",
+        "sourceIncludes": [
+          "Computed generators compute to the same iterator"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "reproduction-heading",
+        "selector": ".markdown-body h3",
+        "sourceIncludes": [
+          "Steps to reproduce"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "expected-result-paragraph",
+        "selector": ".markdown-body p",
+        "sourceIncludes": [
+          "The Paragraph should contain an increasing number for each click"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "first-comment-with-inline-code",
+        "selector": ".markdown-body p",
+        "sourceIncludes": [
+          "Your computed property has no dependencies"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "reproduction-step-with-code",
+        "selector": ".markdown-body p",
+        "sourceIncludes": [
+          "Run using"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "requiredSelectors": [
+      "main h1 [data-testid='issue-title']",
+      ".markdown-body h3",
+      ".markdown-body p"
+    ],
+    "coverageRules": [
+      {
+        "name": "issue-title",
+        "selector": "main h1 [data-testid='issue-title']",
+        "kind": "heading",
+        "minInitial": 1,
+        "minSeen": 1,
+        "trackDynamic": false,
+        "sourceIncludes": [
+          "Computed generators compute to the same iterator"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "all-markdown-subheadings",
+        "selector": ".markdown-body h3",
+        "kind": "heading",
+        "minInitial": 5,
+        "minSeen": 5,
+        "trackDynamic": false,
+        "sourceIncludes": [
+          "Version",
+          "Reproduction link",
+          "Steps to reproduce",
+          "What is expected?",
+          "What is actually happening?"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "all-eligible-markdown-paragraphs",
+        "selector": ".markdown-body p",
+        "kind": "content",
+        "minInitial": 30,
+        "minSeen": 30,
+        "trackDynamic": false,
+        "sourceIncludes": [
+          "The Paragraph should contain an increasing number",
+          "Your computed property has no dependencies",
+          "Please if you continue to have questions",
+          "Ok, thanks"
+        ]
+      }
+    ],
+    "forbiddenSelectors": [
+      "main a[data-testid='issue-body-header-author'][data-hovercard-type='user'][href]:not(.markdown-body):not(.markdown-body *)",
+      "main [data-testid='comment-header']:not(.markdown-body):not(.markdown-body *):not(:has(.markdown-body))",
+      "main #issue-timeline a[data-testid='actor-link'][href]:not(.markdown-body):not(.markdown-body *)",
+      "main relative-time",
+      ".markdown-body pre",
+      ".markdown-body code",
+      "button[aria-haspopup='dialog'][aria-label*='search' i]"
+    ],
+    "forbiddenMustExistSelectors": [
+      "main a[data-testid='issue-body-header-author'][data-hovercard-type='user'][href]:not(.markdown-body):not(.markdown-body *)",
+      "main [data-testid='comment-header']:not(.markdown-body):not(.markdown-body *):not(:has(.markdown-body))",
+      "main #issue-timeline a[data-testid='actor-link'][href]:not(.markdown-body):not(.markdown-body *)",
+      "main relative-time",
+      ".markdown-body pre",
+      ".markdown-body code",
+      "button[aria-haspopup='dialog'][aria-label*='search' i]"
+    ],
+    "interactionSelectors": [
+      "main a[data-testid='issue-body-header-author'][data-hovercard-type='user'][href]:not(.markdown-body):not(.markdown-body *)",
+      "#issuecomment-678623820 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678643328 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678644833 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678645678 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678646036 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678646654 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678648351 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678648820 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678649009 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678649223 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678649847 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678650042 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678650228 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issuecomment-678650434 a[data-testid='avatar-link'][data-hovercard-type='user'][href]",
+      "#issue-timeline > li[data-timeline-event-id='MDExOkNsb3NlZEV2ZW50MzY4MTg5MzgwMA=='] a[data-testid='actor-link'][href]",
+      "#issue-timeline > li[data-timeline-event-id='LOE_lADOCCum184oxHL6zwAAAAKHrjgb'] a[data-testid='actor-link'][href]",
+      ".markdown-body a[href='https://github.com/SebastianSpeitel/vue-bugs/tree/bug-generator']",
+      ".markdown-body a[href='https://user-images.githubusercontent.com/22002580/90953089-e2248f80-e468-11ea-91c0-8d6327256b99.png']",
+      ".markdown-body a[href='https://user-images.githubusercontent.com/4620458/90958192-b4e8d900-e48a-11ea-9bb4-0f8ea811d7f5.png']",
+      ".markdown-body a[href='https://vue.land/']",
+      ".markdown-body a[href='https://forum.vuejs.org/']"
+    ],
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "tier": "required",
+    "fullPageScope": "finite-page",
+    "skipUnscopedH1Coverage": true,
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation",
+    "notes": "Public closed/locked official Vue issue:1 issue+14 comments=15 logical bodies;30 .markdown-body elements are nested pairs, not30 messages. Native core owners are30P+5H3=35;33 rawP include1URL-only reproduction link+2image-only anchors. All eligible P are verified through both finite-page passes, exact-owner completion, complete controlled per-owner decoded attribution and restoration. Four numbered steps already use P owners; do not double-count their ol/li. Strict pre-translation Text+BR source partitions bind title/all5H3/selected hover P. No strict partition over the complete rawP set is claimed because it contains nontext/URL-only roots. All baseline identity/header/actor/code/custom-time nodes receive individual forbidden signatures. Exactly17 author links and5Markdown reading/image links have22unique interaction selectors, so their href/focusability is checked per link. The31time elements are signature-only guards, not31interaction tests; all34user links are not claimed. No editor/checklist/load-more/streaming interaction is present or claimed; no external demo/source link is opened. Derived runtime ownership requires exact3native404 requests with same-session Log.requestId binding and version-pinned full6/277/226-frame stacks after accepted explicit2048capture; preserve raw diagnostics. This proposal adds no acceptance until both standard modes pass."
+  },
+  "facebook-nasa-public-post": {
+    "url": "https://www.facebook.com/NASA/posts/look-up-this-week-you-might-spot-the-international-space-stationskywatchers-in-t/1116021799893195/",
+    "tier": "required",
+    "selector": "[role=\"article\"][aria-posinset=\"1\"] [data-ad-preview=\"message\"][data-ad-comet-preview=\"message\"] div[dir=\"auto\"]",
+    "modes": [
+      "hover",
+      "full"
+    ],
+    "fullPageScope": "initial-corpus",
+    "prepareFacebookPublicPost": true,
+    "requiredSelectors": [
+      "[role=\"article\"][aria-posinset=\"1\"] [data-ad-preview=\"message\"][data-ad-comet-preview=\"message\"] div[dir=\"auto\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]"
+    ],
+    "forbiddenSelectors": [
+      "[role=\"dialog\"][aria-modal=\"true\"][aria-labelledby]:has([role=\"article\"][aria-posinset=\"1\"] [data-ad-preview=\"message\"][data-ad-comet-preview=\"message\"]) h2[dir=\"auto\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [data-ad-rendering-role=\"profile_name\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span:has(+ div > span[dir=\"auto\"][lang]):not(span[dir=\"auto\"][lang] *)",
+      "[role=\"article\"][aria-posinset=\"1\"] a[role=\"link\"][tabindex=\"0\"][aria-label][href*=\"/posts/\"]:not([data-ad-preview=\"message\"] *):not([role=\"article\"][aria-label] *)",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] ul[aria-hidden=\"false\"] a[role=\"link\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"button\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"toolbar\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"toolbar\"] ~ span[aria-hidden=\"true\"]",
+      "input[type=\"email\"]",
+      "input[type=\"password\"]",
+      "textarea",
+      "[contenteditable]:not([contenteditable=\"false\"])"
+    ],
+    "forbiddenMustExistSelectors": [
+      "[role=\"dialog\"][aria-modal=\"true\"][aria-labelledby]:has([role=\"article\"][aria-posinset=\"1\"] [data-ad-preview=\"message\"][data-ad-comet-preview=\"message\"]) h2[dir=\"auto\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [data-ad-rendering-role=\"profile_name\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span:has(+ div > span[dir=\"auto\"][lang]):not(span[dir=\"auto\"][lang] *)",
+      "[role=\"article\"][aria-posinset=\"1\"] a[role=\"link\"][tabindex=\"0\"][aria-label][href*=\"/posts/\"]:not([data-ad-preview=\"message\"] *):not([role=\"article\"][aria-label] *)",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] ul[aria-hidden=\"false\"] a[role=\"link\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"button\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"toolbar\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"toolbar\"] ~ span[aria-hidden=\"true\"]",
+      "input[type=\"email\"]",
+      "input[type=\"password\"]"
+    ],
+    "optionalForbiddenSelectors": [
+      "textarea",
+      "[contenteditable]:not([contenteditable=\"false\"])"
+    ],
+    "dynamicForbiddenSelectors": [
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span:has(+ div > span[dir=\"auto\"][lang]):not(span[dir=\"auto\"][lang] *)",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] ul[aria-hidden=\"false\"] a[role=\"link\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"button\"]"
+    ],
+    "interactionSelectors": [
+      "[role=\"article\"][aria-posinset=\"1\"] a[role=\"link\"][aria-label=\"NASA - National Aeronautics and Space Administration\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [data-ad-rendering-role=\"profile_name\"] a[href]",
+      "[role=\"article\"][aria-posinset=\"1\"] a[role=\"link\"][aria-label=\"2024年11月14日\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [data-ad-preview=\"message\"][data-ad-comet-preview=\"message\"] a[href^=\"https://www.facebook.com/ISS\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [data-ad-preview=\"message\"][data-ad-comet-preview=\"message\"] a[href^=\"https://l.facebook.com/l.php\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] a[href^=\"https://www.facebook.com/photo/\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Mary Pat Berry1 年前\"] ul[aria-hidden=\"false\"] a[role=\"link\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Mike Ramirez1 年前\"] ul[aria-hidden=\"false\"] a[role=\"link\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Bonita Weiler1 年前\"] ul[aria-hidden=\"false\"] a[role=\"link\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Sue Delaune1 年前\"] ul[aria-hidden=\"false\"] a[role=\"link\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Darla Jones1 年前\"] ul[aria-hidden=\"false\"] a[role=\"link\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Everything Science 1 年前\"] a[href^=\"https://www.facebook.com/people/Everything-Science/61568246023876/\"][aria-hidden=\"true\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Everything Science 1 年前\"] a[href^=\"https://www.facebook.com/people/Everything-Science/61568246023876/\"][aria-hidden=\"false\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Everything Science 1 年前\"] ul[aria-hidden=\"false\"] a[role=\"link\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Sierra Cheyenne1 年前\"] a[href^=\"https://www.facebook.com/dakota.cox.549221\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Sierra Cheyenne1 年前\"] ul[aria-hidden=\"false\"] a[role=\"link\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Ileana Escalante1 年前\"] a[href^=\"https://www.facebook.com/ileana.escalante.9\"][aria-hidden=\"true\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Ileana Escalante1 年前\"] a[href^=\"https://www.facebook.com/ileana.escalante.9\"][aria-hidden=\"false\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Ileana Escalante1 年前\"] a[href^=\"https://www.facebook.com/hashtag/nasa\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Ileana Escalante1 年前\"] ul[aria-hidden=\"false\"] a[role=\"link\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Miki Maruyama1 年前\"] a[href^=\"https://www.facebook.com/miki.maruyama.524\"][aria-hidden=\"true\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Miki Maruyama1 年前\"] a[href^=\"https://www.facebook.com/miki.maruyama.524\"][aria-hidden=\"false\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Miki Maruyama1 年前\"] ul[aria-hidden=\"false\"] a[role=\"link\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Victoria Martinez1 年前\"] a[href^=\"https://www.facebook.com/victoria.martinez.552946\"][aria-hidden=\"true\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Victoria Martinez1 年前\"] a[href^=\"https://www.facebook.com/victoria.martinez.552946\"][aria-hidden=\"false\"]",
+      "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label=\"评论者：Victoria Martinez1 年前\"] ul[aria-hidden=\"false\"] a[role=\"link\"]",
+      "input[type=\"email\"]",
+      "input[type=\"password\"]"
+    ],
+    "coverageRules": [
+      {
+        "name": "post-caption-paragraphs",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [data-ad-preview=\"message\"][data-ad-comet-preview=\"message\"] div[dir=\"auto\"]",
+        "kind": "content",
+        "minInitial": 2,
+        "minSeen": 2,
+        "trackDynamic": false,
+        "sourceIncludes": [
+          "Look up this week — you might spot the International Space Station!",
+          "Skywatchers in the eastern United States, among other locations, may be able to see the station pass overhead in the early evening hours. Download our free Spot the Station app for notifications: https://spotthestation.nasa.gov/"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "loaded-comment-paragraphs",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "kind": "content",
+        "minInitial": 13,
+        "minSeen": 13,
+        "trackDynamic": false,
+        "sourceIncludes": [
+          "but that's not it in the picture",
+          "saw it this am over so maryland",
+          "it's a bright dot not a streak",
+          "Will it ever be visible from the low desert from Imperial valley CA. Southern California.",
+          "A Maxfield Parrish painting immediately comes to mind. Thanks for ISS information.",
+          "Saw it in south Louisiana but mosquitoes were hungry. Plus a little overcast",
+          "Over my house tonight @6:41 EST (Raleigh NC area). Yes-I get the email 12 hrs before.",
+          "So it was international space station? Not ufo?",
+          "Dakota Cox",
+          "En la Península de Yucatán se verá",
+          "#NASA-National Aeronautics",
+          "I hope the astronauts are enjoying their lives in the space station.",
+          "Cuando pasan por Argentina casi siempre la veíamos por Mendoza !!!"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "hoverTargets": [
+      {
+        "name": "caption-1",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [data-ad-preview=\"message\"][data-ad-comet-preview=\"message\"] div[dir=\"auto\"]",
+        "index": 0,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "Look up this week — you might spot "
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "caption-2",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [data-ad-preview=\"message\"][data-ad-comet-preview=\"message\"] div[dir=\"auto\"]",
+        "index": 1,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "Skywatchers in the eastern United S"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "comment-1",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "index": 0,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "but that's not it in the picture"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "comment-2",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "index": 1,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "saw it this am over so maryland"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "comment-3",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "index": 2,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "it's a bright dot not a streak"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "comment-4",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "index": 3,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "Will it ever be visible from the lo"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "comment-5",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "index": 4,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "A Maxfield Parrish painting immedia"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "comment-6",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "index": 5,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "Saw it in south Louisiana but mosqu"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "comment-7",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "index": 6,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "Over my house tonight @6:41 EST"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "comment-8",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "index": 7,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "So it was international space stati"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "comment-9",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "index": 8,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "Dakota Cox"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "comment-10",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "index": 9,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "En la Península de Yucatán se verá"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "comment-11",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "index": 10,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "#NASA"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "comment-12",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "index": 11,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "I hope the astronauts are enjoying "
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      },
+      {
+        "name": "comment-13",
+        "selector": "[role=\"article\"][aria-posinset=\"1\"] [role=\"article\"][aria-label] span[dir=\"auto\"][lang] > div > div[dir=\"auto\"]",
+        "index": 12,
+        "sourceIncludes": [],
+        "textIncludes": [
+          "Cuando pasan por Argentina casi sie"
+        ],
+        "sourcePartition": {
+          "excludeSelectors": []
+        }
+      }
+    ],
+    "notes": "Exact public NASA permalink; after verified normal promotion dismissal only. Full freezes every eligible loaded caption/comment paragraph at each pass: saved baseline2 caption +13 comment paragraphs, including Spanish, hashtag and body profile mention. Each paragraph has a complete Text+BR source partition with no excludes;15 selected hover targets require1/0/1 and all other body owners0. Preserve dialog author-copy, author/date/reaction/reply/control semantics and26 individual native hrefs. Login fields are guard-only: no typing, submit, navigation or account action. New replies, pagination, signed-in/editor/mobile flows and whole Facebook are unverified; no claims based on live39 vs saved41/30 core counts.",
+    "hoverHotkey": "Control",
+    "fullPageHotkey": "Alt+T",
+    "service": "freeTranslation"
   }
 }

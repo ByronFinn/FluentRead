@@ -1,7 +1,7 @@
 /**
  * @file src/features/vocabulary/content/reencounter.ts
  * 文件职责：把收藏匹配、后台读取和隔离 Vue 浮层接入统一内容生命周期。
- * 主要内容：按开关与无痕边界挂载，接收跨页收藏变更，按需读取选中收藏；用代次与取消信号阻止关闭后的迟到读取及浮层复活，支持本次暂停与永久关闭。
+ * 主要内容：按开关与无痕边界挂载，消息订阅失败或挂载途中失效时回滚扫描器与监听；接收跨页收藏变更，按需读取选中收藏，用代次与取消信号阻止关闭后的迟到读取及浮层复活，支持本次暂停与永久关闭。
  * 模块边界：不访问 Dexie 或模型端点，不更改宿主正文、收藏次数或复习状态；匹配归 scanner，讲解归既有 reading-assistant 流式客户端。
  */
 import browser from 'webextension-polyfill';
@@ -75,7 +75,7 @@ export function mountVocabularyReencounter(ctx: ContentScriptContext, signal: Ab
     catch (error) { if (current()) state.error = error instanceof Error ? error.message : '设置保存失败'; }
   }
   const changed = (message: unknown): undefined => {
-    if ((message as {type?: string})?.type === VOCABULARY_BOOK_CHANGED_MESSAGE && !state.paused) { close(); void load(); }
+    if (current() && (message as {type?: string})?.type === VOCABULARY_BOOK_CHANGED_MESSAGE && !state.paused) { close(); void load(); }
     return undefined;
   };
   scanner = installReencounterScanner(document, {
@@ -97,7 +97,13 @@ export function mountVocabularyReencounter(ctx: ContentScriptContext, signal: Ab
     if (owner === instance) owner = undefined;
   }};
   owner = instance;
-  messages.addListener(changed);
-  signal.addEventListener('abort', instance.dispose, {once: true});
+  try {
+    messages.addListener(changed);
+    signal.addEventListener('abort', instance.dispose, {once: true});
+  } catch (error) {
+    instance.dispose();
+    throw error;
+  }
+  if (!current()) {instance.dispose(); return;}
   void load();
 }

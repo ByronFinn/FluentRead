@@ -1,7 +1,7 @@
 /**
  * @file src/services/config/autoBackupStore.ts
  * 文件职责：在配置 store 与后台加密 IndexedDB 之间持久化自动备份，并为设置页提供订阅、捕获和安全恢复入口。
- * 主要内容：按端口原子能力初始化备份基线，保留回读和写入期间的外部更新，串行捕获最多十份快照，隔离监听者的异常与快照修改，并优先通过后台消息恢复后返回最新历史状态。
+ * 主要内容：按端口原子能力初始化备份基线，保留回读和写入期间的外部更新，串行捕获最多十份快照，统一隔离初次回放与后续通知中的监听者异常和快照修改，并优先通过后台消息恢复后返回最新历史状态。
  * 模块边界：本文件编排存储和跨上下文通信，不定义快照领域规则或定时周期；纯状态转换位于 autoBackup，alarm 调度位于 app/background runtime。
  */
 import {configStorage as storage} from '@/src/platform/storage/configStorageRuntime';
@@ -57,12 +57,14 @@ let pendingWrite: {serialized: string; revision: number} | undefined;
 let writeQueue: Promise<void> = Promise.resolve();
 let captureQueue: Promise<void> = Promise.resolve();
 
+function notifyListener(listener: ConfigAutoBackupListener, snapshot: ConfigAutoBackupState): void {
+    try {listener(snapshot);}
+    catch (error) {console.warn('[FluentRead] 自动配置备份订阅通知失败', error);}
+}
+
 function notifyListeners(): void {
     const snapshot = cloneConfigAutoBackups(backupState);
-    listeners.forEach((listener) => {
-        try {listener(cloneConfigAutoBackups(snapshot));}
-        catch (error) {console.warn('[FluentRead] 自动配置备份订阅通知失败', error);}
-    });
+    listeners.forEach((listener) => notifyListener(listener, cloneConfigAutoBackups(snapshot)));
 }
 
 function setBackupState(nextState: ConfigAutoBackupState, notify = true): void {
@@ -173,7 +175,7 @@ export function getConfigAutoBackupsSnapshot(): ConfigAutoBackupState {
 
 export function subscribeConfigAutoBackups(listener: ConfigAutoBackupListener): () => void {
     listeners.add(listener);
-    if (initialized && backupState) listener(getConfigAutoBackupsSnapshot());
+    if (initialized && backupState) notifyListener(listener, getConfigAutoBackupsSnapshot());
     return () => listeners.delete(listener);
 }
 

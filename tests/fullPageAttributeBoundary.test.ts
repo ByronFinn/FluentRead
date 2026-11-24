@@ -1,7 +1,8 @@
+import {translateBilingualFixture} from './helpers/translateBilingualFixture';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {parseHTML} from 'linkedom';
 import {TranslationCandidateCore} from '@/src/core/translation/engine';
-import {createTranslationCore} from '@/src/core/translation/public';
+import {createTranslationCore} from './helpers/translationCore';
 import {createDeclarativeAdapter} from '@/src/core/translation/adapters/declarative';
 import {compileSiteRulePack, getSiteAdapterAttributeFilter} from '@/src/core/site-adaptation/compiler';
 import {createAttributeMutationBatch, type AttributeMutationBatchPorts} from '@/src/features/full-page-translation/content/attributeMutationBatch';
@@ -24,6 +25,8 @@ const fixture = vi.hoisted(() => ({
         maxConcurrentTranslations: 3, pageTitleTranslationEnabled: false, uiLanguage: 'zh-CN',
     },
 }));
+// 可选浏览器证据由预检边界套件验证；这里保留原有纯识别与请求/DOM契约。
+vi.mock('@/src/services/translation/languagePreflight', () => ({shouldSkipTranslationWithEvidence: async () => false}));
 vi.mock('@/src/features/full-page-translation/content/configCheck', () => ({checkConfig: () => true}));
 vi.mock('@/src/services/config/store', () => ({config: fixture.config}));
 vi.mock('@/src/core/config/catalog', () => ({
@@ -56,12 +59,11 @@ vi.mock('@/src/features/full-page-translation/content/layout', () => ({
 vi.mock('@/src/features/full-page-translation/ui/modalProgressHint', () => ({syncModalTranslationHint: () => undefined}));
 vi.mock('@/src/features/full-page-translation/content/titleTranslation', () => ({
     startFullPageTitleTranslation: () => undefined, stopFullPageTitleTranslation: () => undefined,
-    isFullPageTitleTranslationActive: () => false,
 }));
 vi.mock('@/src/features/page-notice/public', () => ({showPageNotice: () => undefined}));
 vi.mock('@/src/core/config/customOpenAI', () => ({getCustomOpenAIProviderLabel: () => 'Fixture provider'}));
 
-import {autoTranslateEnglishPage, handleBilingualTranslation, restoreOriginalContent} from '@/src/features/full-page-translation/content/runtime';
+import {autoTranslateEnglishPage, restoreOriginalContent} from '@/src/features/full-page-translation/content/runtime';
 import {getTranslationState} from '@/src/features/full-page-translation/content/state';
 import * as indicators from '@/src/features/full-page-translation/ui/translationIndicators';
 import * as translationState from '@/src/features/full-page-translation/content/state';
@@ -185,6 +187,40 @@ describe('full page site attribute boundary lifecycle', () => {
         globals.clear();
     });
 
+    it.each(['resolve', 'reject'] as const)('issue #1251 discards a late %s after forceTranslate loses its selector, then allows a new translation after permission returns', async outcome => {
+        document.body.innerHTML = `<main><div id="comments" translate="no" data-ready="yes"><p id="owner">${source}<code>KEEP_CODE_PRIVATE</code></p></div></main>`;
+        const shell = document.querySelector<HTMLElement>('#comments')!;
+        const owner = document.querySelector<HTMLElement>('#owner')!;
+        const originalHTML = document.body.innerHTML;
+        Object.defineProperty(owner, 'getClientRects', {configurable: true, value: () => [{width: 600, height: 60}]});
+        fixture.core = new TranslationCandidateCore({url: new URL('https://example.com/comments'), adapters: compileSiteRulePack({version: 1, rules: [{
+            id: 'comments', name: 'Comments', match: {hosts: ['example.com']},
+            forceTranslate: ['#comments[data-ready="yes"]'], mode: 'focus', content: [{css: ['#owner']}],
+        }]})});
+        const pending = deferred<string[]>(); fixture.requests.mockReturnValueOnce(pending.promise);
+        autoTranslateEnglishPage(); await vi.advanceTimersByTimeAsync(60);
+        const state = getTranslationState(owner)!;
+        expect(state.phase).toBe('loading');
+        expect(fixture.requests.mock.calls[0]![0]).toEqual([source]);
+        const observer = FixtureMutationObserver.instances.at(-1)!;
+        observer.emit([epochAttribute(shell, 'data-ready', 'no')]);
+        await vi.advanceTimersByTimeAsync(100);
+        if (outcome === 'resolve') pending.resolve(['迟到的译文不能提交。']);
+        else pending.reject(new Error('Controlled provider rejection after permission loss'));
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(owner.querySelector('.fluent-read-bilingual-content,.fluent-read-retry-wrapper')).toBeNull();
+        expect(getTranslationState(owner)).toBeUndefined();
+        expect(state.controller.signal.aborted).toBe(true);
+        restoreOriginalContent();
+        shell.setAttribute('data-ready', 'yes');
+        autoTranslateEnglishPage();
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(owner.querySelector('.fluent-read-bilingual-content')).not.toBeNull();
+        expect(shell.getAttribute('translate')).toBe('no');
+        restoreOriginalContent();
+        expect(document.body.innerHTML).toBe(originalHTML);
+    });
+
     it.each(['div', 'span'] as const)('HN %s opening survives actual source-move records before the deferred full-page spinner', async tag => {
         document.body.innerHTML = `<${tag} class="commtext c00" id="comment">The lede is being missed imo.<p>First independent paragraph.</p><p>Second independent paragraph.</p><p>Third independent paragraph.</p><p>Fourth independent paragraph.</p></${tag}>`;
         fixture.core = createTranslationCore({url: new URL('https://news.ycombinator.com/item?id=44800746')});
@@ -240,7 +276,7 @@ describe('full page site attribute boundary lifecycle', () => {
         const originalHTML = host.innerHTML;
         const pending = deferred<string[]>();
         fixture.requests.mockImplementationOnce(() => pending.promise);
-        handleBilingualTranslation(host, false);
+        translateBilingualFixture(host, false);
         await vi.advanceTimersByTimeAsync(50);
         const segment = host.querySelector<HTMLElement>('[data-fr-translation-segment="true"]')!;
         const state = getTranslationState(segment)!;

@@ -1,18 +1,28 @@
 /**
  * @file src/features/video-subtitle/content/ui.ts
  *
- * 文件职责：封装视频字幕 content UI 的界面语言转换与可访问名称刷新，避免 YouTube 播放器运行时承载重复的文案拼装。
- * 主要内容：提供视频菜单本地化、菜单与完整句学习共享的局部外观变量、按逐字高亮开关写入字幕行、校时与就地模型选择控件样式、节点创建、播放器定位；每次原生字幕读取按候选集合与局部父链排除嵌套内层，保留外层全文和顺序，避免片段两两包含扫描，不跨调用缓存节点；过滤 YouTube 滚动窗口裁掉的旧行，按实际画面约束字幕几何、换行与大字号完整高度，并封装字幕清理、媒体时钟读取、样式及字幕下载。
+ * 文件职责：封装视频字幕 content UI 的界面语言转换、可访问名称刷新及桌面/触屏安全视口菜单样式，并以播放器级样式持续隐藏由 FluentRead 接管的 YouTube 原生字幕。
+ * 主要内容：提供视频菜单本地化、局部外观变量、显式读音开关与示例说明、紧凑下载折叠入口、独立纯文本读音行及按语言命名；双语顺序用原文与译文双行示意并标记暂未生效的偏好，字幕按偏好交换原译文顺序，读音始终紧跟原文并计入字幕布局，防止缩成不可读小字；菜单仅管理自身交互，不参与字幕的宽度与水平居中计算；保留逐字高亮、校时与就地模型选择控件，仅过滤 YouTube 滚动窗口实际裁切的旧行并完整保留可见片段中的合法重复，按实际画面及同视频可见底控约束字幕几何、换行与大字号完整高度，并封装字幕清理、媒体时钟读取、样式及字幕下载。
  * 模块边界：只读取界面配置并操作视频 feature 拥有的节点、样式和下载链接，不发起翻译或识别请求；任务生命周期由 runtime 管理。
+ * 课程菜单：样式工厂可在课程 Shadow Root 内复用同一份品牌色、图标、分段按钮和正文密度，避免各平台维护不同外观。
  */
 
+import {serializeSubtitleFile, type SubtitleExportFormat} from './subtitleExport';
+import {htmlMediaForPlayer} from './htmlMedia';
 import {getVideoSubtitleAppearanceCssVars, normalizeVideoSubtitleAppearance} from '@/src/core/config/videoSubtitleAppearance';
 import {config} from '@/src/services/config/store';
 import {type VideoSubtitleDisplayMode} from '@/src/core/config/model';
-import {cuesToSrt, sanitizeSubtitleFilename, type VideoSubtitleCue} from './youtubeSubtitleData';
+import {sanitizeSubtitleFilename, type VideoSubtitleCue} from './youtubeSubtitleData';
 import {getCaptionPlatform} from './platforms';
+import {timedTextTrackKey} from './timedTextTrackCache';
 import {fitVideoSubtitleFontSize} from './subtitleLayout';
+import {getYoutubeSubtitleControlsScope} from './youtubeControlsScope';
+import {getVisibleYoutubeSubtitleControls, positionMobileYoutubeSubtitle, resetSubtitlePanelLayout, finishSubtitlePanelLayout,
+  prepareSubtitlePanelLayout, findOwnedSubtitlePanel, syncSubtitleScrollHostState, setSubtitlePanelScrollable, VIDEO_SUBTITLE_SCROLL_HOST_ID} from './subtitleControlLayout';
 import {createVideoKaraokeController, setVideoCaptionText, type VideoKaraokeController, VIDEO_KARAOKE_FILL_PROPERTY, VIDEO_KARAOKE_STATE_ATTRIBUTE, VIDEO_KARAOKE_TEXT_ATTRIBUTE, VIDEO_KARAOKE_UNIT_CLASS} from './karaoke';
+import {VIDEO_NATIVE_CAPTION_HIDDEN_CLASS} from './youtubeNativeCaptionVisibility';
+
+export {VIDEO_NATIVE_CAPTION_HIDDEN_CLASS} from './youtubeNativeCaptionVisibility';
 
 import {
     normalizeUiLanguage,
@@ -52,33 +62,45 @@ function readI18nParams(element: HTMLElement): TranslationParams | undefined {
 /** 界面语言变化时按节点上记录的文案键重新填充文字、可访问名称与提示。 */
 export function refreshVideoUiText(root: HTMLElement, language: UiLanguage): void {
     root.querySelectorAll<HTMLElement>('[data-i18n-key]').forEach((element) => {
-        element.textContent = translateVideoUi(element.dataset.i18nKey!, language, readI18nParams(element));
+        const text = translateVideoUi(element.dataset.i18nKey!, language, readI18nParams(element));
+        if (element.textContent !== text) element.textContent = text;
     });
     root.querySelectorAll<HTMLElement>('[data-i18n-aria-key]').forEach((element) => {
-        const label = translateVideoUi(element.dataset.i18nAriaKey!, language);
-        element.setAttribute('aria-label', label);
-        element.title = label;
+        const label = translateVideoUi(element.dataset.i18nAriaKey!, language, readI18nParams(element));
+        if (element.getAttribute('aria-label') !== label) element.setAttribute('aria-label', label);
+        if (!element.dataset.i18nTitleKey && element.title !== label) element.title = label;
     });
     root.querySelectorAll<HTMLElement>('[data-i18n-title-key]').forEach((element) => {
-        element.title = translateVideoUi(element.dataset.i18nTitleKey!, language);
+        const title = translateVideoUi(element.dataset.i18nTitleKey!, language);
+        if (element.title !== title) element.title = title;
     });
 }
 
+/** 菜单关闭时仍更新可见的入口和字幕层，无变化的名称不触发 DOM 观察器。 */
 export function refreshVideoUiAccessibility(
-    menu: HTMLElement,
+    menu: HTMLElement | null,
     button: HTMLElement | null,
     document: Document,
     language: UiLanguage,
     status: string,
 ): void {
-    menu.setAttribute('aria-label', translateVideoUi('video.menuAriaLabel', language));
-    menu.querySelector<HTMLElement>('.fluent-read-video-menu-mode-group')?.setAttribute('aria-label', translateVideoUi('video.displayMode', language));
-    const buttonLabel = translateVideoUi('video.buttonAriaLabel', language, {status});
-    button?.setAttribute('aria-label', buttonLabel);
-    if (button) button.title = buttonLabel;
-    document.getElementById('fluent-read-video-subtitle-panel')?.setAttribute('aria-label', translateVideoUi('video.panelAriaLabel', language));
-    document.getElementById('fluent-read-video-subtitle')?.setAttribute('aria-label', translateVideoUi('video.translationOverlayAriaLabel', language));
-    document.getElementById('fluent-read-video-subtitle-original')?.setAttribute('aria-label', translateVideoUi('video.originalOverlayAriaLabel', language));
+    const setLabel = (element: HTMLElement | null, label: string) => {
+        if (element && element.getAttribute('aria-label') !== label) element.setAttribute('aria-label', label);
+    };
+    if (menu) {
+        setLabel(menu, translateVideoUi('video.menuAriaLabel', language));
+        setLabel(menu.querySelector('.fluent-read-video-menu-mode-group'), translateVideoUi('video.displayMode', language));
+    }
+    if (button) {
+        const buttonLabel = translateVideoUi('video.buttonAriaLabel', language, {status});
+        setLabel(button, buttonLabel);
+        if (button.title !== buttonLabel) button.title = buttonLabel;
+    }
+    setLabel(document.getElementById(VIDEO_SUBTITLE_PANEL_ID), translateVideoUi('video.panelAriaLabel', language));
+    setLabel(document.getElementById(VIDEO_TRANSLATION_OVERLAY_ID), translateVideoUi('video.translationOverlayAriaLabel', language));
+    setLabel(document.getElementById(VIDEO_NORMALIZED_CAPTION_OVERLAY_ID), translateVideoUi('video.originalOverlayAriaLabel', language));
+    const reading = document.getElementById(VIDEO_READING_OVERLAY_ID);
+    if (reading) setLabel(reading, translateVideoUi(reading.dataset.readingLabelKey || 'video.readingAnnotation.label', language));
 }
 
 export const VIDEO_AI_CAPTION_CONTAINER_ID = 'fluent-read-video-ai-caption-container';
@@ -86,6 +108,7 @@ export const VIDEO_CAPTION_CONTAINER_SELECTOR = '#ytp-caption-window-container, 
 export const VIDEO_CAPTION_SEGMENT_SELECTOR = '.ytp-caption-segment';
 export const VIDEO_TRANSLATION_OVERLAY_ID = 'fluent-read-video-subtitle';
 export const VIDEO_NORMALIZED_CAPTION_OVERLAY_ID = 'fluent-read-video-subtitle-original';
+export const VIDEO_READING_OVERLAY_ID = 'fluent-read-video-subtitle-reading';
 export const VIDEO_SUBTITLE_PANEL_ID = 'fluent-read-video-subtitle-panel';
 export const VIDEO_TRANSLATION_LAYER_ID = 'fluent-read-video-subtitle-layer';
 export const VIDEO_TRANSLATION_BUTTON_ID = 'fluent-read-video-subtitle-button';
@@ -142,7 +165,7 @@ export function writeVideoCaptionText(element: Element, text: string): void {
 
 /** 为播放器字幕装配逐字高亮：当前句的起点计入手动校时；sync 在配置变化后按新的开关重写已显示的字幕行。 */
 export function createVideoSubtitleKaraoke(
-  getVideo: () => HTMLVideoElement | null,
+  getVideo: () => HTMLMediaElement | null,
   getCue: () => VideoSubtitleCue | null,
   getOffsetMs: () => number,
 ): VideoKaraokeController {
@@ -171,26 +194,34 @@ export function createVideoSubtitleKaraoke(
 /** 人工轨到达时原文与译文一起更新；网站字幕节点及原始时间轴保持不变。 */
 export function renderHumanVideoCaption(player: HTMLElement, container: HTMLElement, source: string, translation: string): void {
   writeVideoCaptionText(getOrCreateNormalizedCaptionOverlay(player), source);
-  player.querySelector(`#${VIDEO_TRANSLATION_LAYER_ID}`)?.classList.add(VIDEO_NORMALIZED_CAPTION_ACTIVE_CLASS);
+  const layer = player.querySelector<HTMLElement>(`#${VIDEO_TRANSLATION_LAYER_ID}`);
+  layer?.classList.add(VIDEO_NORMALIZED_CAPTION_ACTIVE_CLASS);
+  if (layer) syncSubtitleScrollHostState(layer);
   container.classList.add(VIDEO_NORMALIZED_CAPTION_CLASS);
   writeVideoCaptionText(getOrCreateTranslationOverlay(player), translation);
   syncTranslationOverlayPosition(container);
 }
 
-
-export function getTimedTextCacheKey(url: string): string {
-  try {
-    const parsed = new URL(url, window.location.href);
-    return [
-      parsed.searchParams.get('v') || '',
-      parsed.searchParams.get('lang') || '',
-      parsed.searchParams.get('tlang') || '',
-      parsed.searchParams.get('kind') || '',
-    ].join(':');
-  } catch {
-    return url;
+/** 读音为独立纯文本行，不污染原文 textContent 或参与估算的逐字高亮。 */
+export function renderVideoReadingAnnotation(player: HTMLElement, text: string, language = ''): boolean {
+  let line = document.getElementById(VIDEO_READING_OVERLAY_ID);
+  if (!line && !text) return false;
+  const panel = getOrCreateVideoSubtitlePanel(player);
+  if (!line) {
+    line = document.createElement('div'); line.id = VIDEO_READING_OVERLAY_ID;
+    markVideoUi(line); line.setAttribute('dir','ltr'); panel.appendChild(line);
   }
+  if (line.parentElement !== panel) panel.appendChild(line);
+  const changed = line.textContent !== text;
+  if (changed) line.textContent = text;
+  line.lang = language ? `${language}-Latn` : '';
+  line.dataset.readingLabelKey = `video.readingAnnotation.${language || 'label'}`;
+  line.setAttribute('aria-label', videoUi(line.dataset.readingLabelKey));
+  return changed;
 }
+
+
+export function getTimedTextCacheKey(url: string): string { return timedTextTrackKey(url, window.location.href); }
 
 export function isOriginalTimedTextUrl(url: string): boolean {
   try {
@@ -200,16 +231,16 @@ export function isOriginalTimedTextUrl(url: string): boolean {
   }
 }
 
-export function downloadSubtitleSrt(cues: VideoSubtitleCue[], languageCode: string): void {
-  const srt = cuesToSrt(cues);
+export function downloadSubtitleSrt(srt: string, languageCode: string, cues?: readonly VideoSubtitleCue[], format: SubtitleExportFormat = 'srt'): void {
   if (!srt.trim()) throw new Error('字幕轨道没有可下载的内容');
 
   const title = sanitizeSubtitleFilename(document.title.replace(/\s*-\s*(?:YouTube|X)\s*$/i, ''));
   const language = sanitizeSubtitleFilename(languageCode || 'original');
-  const blobUrl = URL.createObjectURL(new Blob([srt], { type: 'application/x-subrip;charset=utf-8' }));
+  const file = cues ? serializeSubtitleFile(cues, format) : {text: srt, extension: 'srt', mime: 'application/x-subrip;charset=utf-8'};
+  const blobUrl = URL.createObjectURL(new Blob([file.text], { type: file.mime }));
   const anchor = document.createElement('a');
   anchor.href = blobUrl;
-  anchor.download = `${title}-${language}.srt`;
+  anchor.download = `${title}-${language}.${file.extension}`;
   anchor.style.display = 'none';
   (document.body || document.documentElement).appendChild(anchor);
   anchor.click();
@@ -219,7 +250,13 @@ export function downloadSubtitleSrt(cues: VideoSubtitleCue[], languageCode: stri
 
 export function isYouTubeVideoPage(locationLike: Pick<Location, 'hostname' | 'pathname'> = window.location): boolean {
   return YOUTUBE_HOST_PATTERN.test(locationLike.hostname)
-    && (locationLike.pathname === '/watch' || locationLike.pathname.startsWith('/shorts/'));
+    && (locationLike.pathname === '/watch' || locationLike.pathname.startsWith('/shorts/') || isYouTubeEmbedPage(locationLike));
+}
+
+/** YouTube iframe 播放器使用独立 /embed/{videoId} 文档；只接受真实视频 ID。 */
+export function isYouTubeEmbedPage(locationLike: Pick<Location, 'hostname' | 'pathname'> = window.location): boolean {
+  return YOUTUBE_HOST_PATTERN.test(locationLike.hostname)
+    && /^\/embed\/[\w-]{11}\/?$/u.test(locationLike.pathname);
 }
 
 export function isXVideoPage(locationLike: Pick<Location, 'hostname' | 'pathname'> = window.location): boolean {
@@ -230,8 +267,14 @@ export function isXHostPage(locationLike: Pick<Location, 'hostname'> = window.lo
   return /(^|\.)x\.com$|(^|\.)twitter\.com$/i.test(locationLike.hostname.toLowerCase());
 }
 
+export function isHtmlMediaPage(locationLike: Pick<Location, 'hostname' | 'pathname'> = window.location): boolean {
+  const platform = getCaptionPlatform(locationLike);
+  return Boolean(locationLike.hostname) && !YOUTUBE_HOST_PATTERN.test(locationLike.hostname) && !isXVideoPage(locationLike)
+    && (!platform || (import.meta.env.BROWSER !== 'userscript' && platform === 'coursera'));
+}
+
 export function isSupportedVideoPage(locationLike: Pick<Location, 'hostname' | 'pathname'> = window.location): boolean {
-  return isYouTubeVideoPage(locationLike) || isXVideoPage(locationLike) || getCaptionPlatform(locationLike) !== null;
+  return isYouTubeVideoPage(locationLike) || isXVideoPage(locationLike) || getCaptionPlatform(locationLike) !== null || isHtmlMediaPage(locationLike);
 }
 
 /** 读取当前播放器可见的原生字幕，不读取插件自己的译文节点。 */
@@ -265,11 +308,13 @@ export function readVisibleCaptionText(container: Element | null): string {
     .map((segment) => segment.textContent?.replace(/[\s\u3000]+/g, ' ').trim() || '')
     .filter(Boolean);
 
+  // segment 可能只是逐词或样式片段，同文不能证明是滚动残留。
+  // 裁切旧行已在上游排除；有时间轴时由 runtime 选择当前 cue，无时间轴时保留完整台词。
   return segments.join(' ').replace(/[\s\u3000]+/g, ' ').trim();
 }
 
 export function findCaptionContainer(): HTMLElement | null {
-  if (isXVideoPage()) return document.getElementById(VIDEO_AI_CAPTION_CONTAINER_ID);
+  if (isXVideoPage() || isHtmlMediaPage()) return document.getElementById(VIDEO_AI_CAPTION_CONTAINER_ID);
   const candidates = Array.from((findVideoPlayer() || document).querySelectorAll<HTMLElement>(VIDEO_CAPTION_CONTAINER_SELECTOR));
   return candidates.find((candidate) => readVisibleCaptionText(candidate))
     || candidates[0]
@@ -381,13 +426,17 @@ export function getOrCreateVideoSubtitleLayer(player: HTMLElement): HTMLElement 
     layer.setAttribute('data-fluent-read-ui', 'video-subtitle');
     layer.setAttribute('translate', 'no');
   }
-  if (layer.parentElement !== player) player.appendChild(layer);
+  if (layer.parentElement !== player) {
+    const panel = findOwnedSubtitlePanel(layer, VIDEO_SUBTITLE_PANEL_ID);
+    if (panel) resetSubtitlePanelLayout(panel, true);
+    player.appendChild(layer);
+  }
   return layer;
 }
 
 export function getOrCreateVideoSubtitlePanel(player: HTMLElement): HTMLElement {
   const layer = getOrCreateVideoSubtitleLayer(player);
-  const existing = layer.querySelector<HTMLElement>(`#${VIDEO_SUBTITLE_PANEL_ID}`);
+  const existing = findOwnedSubtitlePanel(layer, VIDEO_SUBTITLE_PANEL_ID);
   if (existing) return existing;
 
   const panel = document.createElement('div');
@@ -441,23 +490,26 @@ export function getOrCreateNormalizedCaptionOverlay(player: HTMLElement): HTMLEl
 
 /** 字幕运行时只保留状态所有权，自有 DOM 的清空交由 UI 层完成。 */
 export function clearRenderedVideoTranslation(owner: Document): void {
+  owner.querySelectorAll<HTMLElement>(`#${VIDEO_SUBTITLE_PANEL_ID}`).forEach(panel => resetSubtitlePanelLayout(panel));
   owner.querySelectorAll(`#${VIDEO_TRANSLATION_OVERLAY_ID}`).forEach(node => writeVideoCaptionText(node, ''));
+  owner.querySelectorAll(`#${VIDEO_READING_OVERLAY_ID}`).forEach(node => {node.textContent='';});
 }
 
 export function deactivateNormalizedVideoCaption(owner: Document): void {
   owner.querySelectorAll(VIDEO_CAPTION_CONTAINER_SELECTOR).forEach(node => node.classList.remove(VIDEO_NORMALIZED_CAPTION_CLASS));
-  owner.querySelectorAll(`#${VIDEO_TRANSLATION_LAYER_ID}`).forEach(node => node.classList.remove(VIDEO_NORMALIZED_CAPTION_ACTIVE_CLASS));
+  owner.querySelectorAll<HTMLElement>(`#${VIDEO_TRANSLATION_LAYER_ID}`).forEach(node => {node.classList.remove(VIDEO_NORMALIZED_CAPTION_ACTIVE_CLASS); syncSubtitleScrollHostState(node);});
   owner.querySelectorAll(`#${VIDEO_NORMALIZED_CAPTION_OVERLAY_ID}`).forEach(node => writeVideoCaptionText(node, ''));
 }
 
 /** 读取当前播放器媒体；暂未挂载或时间无效时不编造播放位置。 */
-export function readVideoPlaybackTimeMs(player: HTMLElement | null, fallback: HTMLVideoElement | null): number {
+export function readVideoPlaybackTimeMs(player: HTMLElement | null, fallback: HTMLMediaElement | null): number {
   const video = player?.querySelector<HTMLVideoElement>('video.html5-main-video, video') || fallback;
   const time = video?.currentTime;
   return typeof time === 'number' && Number.isFinite(time) ? time * 1000 : Number.NaN;
 }
 
 export function removeTranslationOverlay(): void {
+  document.querySelectorAll<HTMLElement>(`#${VIDEO_SUBTITLE_PANEL_ID}`).forEach(panel => resetSubtitlePanelLayout(panel, true));
   document.querySelectorAll(`#${VIDEO_TRANSLATION_LAYER_ID}`).forEach((node) => node.remove());
   document.querySelectorAll(`#${VIDEO_TRANSLATION_OVERLAY_ID}`).forEach((node) => node.remove());
   document.querySelectorAll(`#${VIDEO_NORMALIZED_CAPTION_OVERLAY_ID}`).forEach((node) => node.remove());
@@ -488,8 +540,10 @@ export function getXSubtitleBottomInset(player: HTMLElement, viewport?: Pick<DOM
   return 12;
 }
 
-/** 将 X 的实际视频画面（扣除 contain 留白）换算到字幕层坐标；不改写宿主视频的布局。 */
-export function getXVideoSubtitleViewport(player: HTMLElement, layer: HTMLElement) {
+/** 将实际视频画面（扣除 contain 留白）换算到字幕层坐标；YouTube 移动页面和 X 共用，不改写宿主视频布局。 */
+export function getVideoSubtitleViewport(player: HTMLElement, layer: HTMLElement) {
+  const media = htmlMediaForPlayer(player);
+  if (media) return {left: 0, top: 0, width: player.clientWidth || player.getBoundingClientRect().width, height: player.clientHeight || player.getBoundingClientRect().height, right: 0, bottom: 0, controlsInset: media.tagName === 'AUDIO' ? 8 : 56};
   const video = player.querySelector('video');
   const layerRect = layer.getBoundingClientRect();
   const playerRect = player.getBoundingClientRect();
@@ -508,15 +562,18 @@ export function getXVideoSubtitleViewport(player: HTMLElement, layer: HTMLElemen
     width = video.videoWidth * fit * scaleX;
     height = video.videoHeight * fit * scaleY;
   }
-  const positions = (style.objectPosition || '50% 50%').split(/\s+/);
+  // 浏览器把 right 10px bottom 5px 序列化为两个 calc，表达式内部空格不能拆成坐标。
+  const positions = (style.objectPosition || '50% 50%').match(/calc\([^)]*\)|\S+/g) || [];
   const positionOffset = (value: string, space: number, scale: number) => {
     if (value === 'left' || value === 'top') return 0;
     if (value === 'right' || value === 'bottom') return space;
     if (/^-?[\d.]+%$/.test(value)) return space * Number.parseFloat(value) / 100;
     if (/^-?[\d.]+px$/.test(value)) return Number.parseFloat(value) * scale;
+    const calculated = /^calc\(\s*(-?[\d.]+)%\s*([+-])\s*([\d.]+)px\s*\)$/.exec(value);
+    if (calculated) return space * Number(calculated[1]) / 100 + (calculated[2] === '-' ? -1 : 1) * Number(calculated[3]) * scale;
     return space / 2;
   };
-  const x = videoRect.left + positionOffset(positions[0], videoRect.width - width, video.offsetWidth > 0 ? videoRect.width / video.offsetWidth : 1);
+  const x = videoRect.left + positionOffset(positions[0] || '50%', videoRect.width - width, video.offsetWidth > 0 ? videoRect.width / video.offsetWidth : 1);
   const y = videoRect.top + positionOffset(positions[1] || '50%', videoRect.height - height, video.offsetHeight > 0 ? videoRect.height / video.offsetHeight : 1);
   const left = Math.max(x, videoRect.left, playerRect.left, layerRect.left);
   const top = Math.max(y, videoRect.top, playerRect.top, layerRect.top);
@@ -531,8 +588,19 @@ export function getXVideoSubtitleViewport(player: HTMLElement, layer: HTMLElemen
     height: Math.max(0, bottom - top) / scaleY,
     right: (layerRect.right - right) / scaleX,
     bottom: (layerRect.bottom - bottom) / scaleY,
-    controlsInset: getXSubtitleBottomInset(player, {left, right, top, bottom, height: Math.max(0, bottom - top)}) / scaleY,
+    controlsInset: (isXVideoPage() ? getXSubtitleBottomInset(player, {left, right, top, bottom, height: Math.max(0, bottom - top)})
+      : getYoutubeSubtitleBottomInset(player, {left, right, top, bottom, height: Math.max(0, bottom - top)})) / scaleY,
   };
+}
+
+/** 只避开真实可见的底部控件；移动视频高度不足时不能保留桌面的 52px 起步底距。 */
+function getYoutubeSubtitleBottomInset(player: HTMLElement, viewport: Pick<DOMRect, 'left' | 'right' | 'top' | 'bottom' | 'height'>): number {
+  let inset = 12;
+  for (const rect of getVisibleYoutubeSubtitleControls(player)) {
+    if (rect.right <= viewport.left || rect.left >= viewport.right || rect.top < viewport.top + viewport.height * .65 || rect.top >= viewport.bottom) continue;
+    inset = Math.max(inset, viewport.bottom - rect.top + 8);
+  }
+  return inset;
 }
 
 export function syncTranslationOverlayPosition(container: HTMLElement | null): void {
@@ -545,28 +613,24 @@ export function syncTranslationOverlayPosition(container: HTMLElement | null): v
   if (!overlay || !panel || !player || !layer) return;
 
   const playerRect = player.getBoundingClientRect();
-  const viewport = isXVideoPage() ? getXVideoSubtitleViewport(player, layer) : null;
+  const viewport = getVideoSubtitleViewport(player, layer);
   if (viewport) {
     layer.style.setProperty('clip-path', `inset(${viewport.top}px ${viewport.right}px ${viewport.bottom}px ${viewport.left}px)`, 'important');
   } else {
     if (isXVideoPage()) layer.style.setProperty('clip-path', 'inset(50%)', 'important');
     else layer.style.removeProperty('clip-path');
   }
-  const visibleCaptionSegments = getVisibleCaptionSegments(container)
-    .map((element) => element.getBoundingClientRect())
-    .filter((rect) => rect.width > 0 && rect.height > 0);
-  // YouTube 在字幕切换期间会短暂保留一个空的、甚至回到播放器顶部的容器。
-  // 没有真实字幕片段时保留上一次位置，避免译文被重新定位到顶部后闪过。
+  // 测量阶段不解除同句滚动交互；临时宿主与原 layer 始终使用相同坐标与显示状态。
+  prepareSubtitlePanelLayout(panel, layer, player);
 
   const playerWidth = viewport ? viewport.width : playerRect.width || 960;
   const menu = document.getElementById(VIDEO_TRANSLATION_MENU_ID);
-  const menuReserve = menu instanceof HTMLElement && !menu.hidden && playerWidth >= 640
-    ? Math.min(menu.getBoundingClientRect().width + 20, playerWidth * .34)
-    : 0;
+  const menuOpen = menu instanceof HTMLElement && !menu.hidden;
+  const learningOpen = Boolean(getYoutubeSubtitleControlsScope(player).querySelector('#fluent-read-video-learning-panel.fluent-read-video-ui[data-fluent-read-ui="video-subtitle"]'));
   const appearance = normalizeVideoSubtitleAppearance(config.videoSubtitleAppearance);
   Object.entries(getVideoSubtitleAppearanceCssVars(appearance)).forEach(([name, value]) => panel.style.setProperty(name, value));
   panel.dataset.fluentReadSubtitleSkin = appearance.skin;
-  const availableWidth = Math.max(0, Math.min(playerWidth - 24 - menuReserve, playerWidth * appearance.maxWidth / 100));
+  const availableWidth = Math.max(0, Math.min(playerWidth - 24, playerWidth * appearance.maxWidth / 100));
   const baseFontSize = Math.min(Math.max(playerWidth * .022, 16), 30);
   const fontScale = appearance.fontScale / 100;
   panel.style.setProperty('--fluent-read-video-subtitle-font-size', `${baseFontSize * fontScale}px`);
@@ -576,38 +640,64 @@ export function syncTranslationOverlayPosition(container: HTMLElement | null): v
   const active = Boolean(overlay.textContent?.trim() || normalizedOverlay?.textContent?.trim());
   panel.classList.toggle(VIDEO_SUBTITLE_PANEL_ACTIVE_CLASS, active);
   panel.style.width = 'max-content';
-  panel.style.setProperty('max-width', `${availableWidth}px`, 'important');
+  const fullscreen = Boolean(document.fullscreenElement?.contains(player));
+  panel.style.setProperty('max-width', fullscreen
+    ? `min(${availableWidth}px, calc(100% - max(12px, env(safe-area-inset-left, 0px)) - max(12px, env(safe-area-inset-right, 0px))))`
+    : `${availableWidth}px`, 'important');
   const playerHeight = viewport ? viewport.height : playerRect.height || 540;
-  const autoBottom = isXVideoPage() && appearance.position === 'bottom' && appearance.autoBottom;
+  const compactPlayer = playerWidth <= 600 || window.matchMedia?.('(pointer: coarse)').matches === true;
+  const autoBottom = (isXVideoPage() || isHtmlMediaPage() || compactPlayer) && appearance.position === 'bottom' && appearance.autoBottom;
   const requestedOffset = autoBottom ? viewport?.controlsInset ?? getXSubtitleBottomInset(player) : appearance.bottomOffset === 10 ? Math.min(Math.max(playerHeight * .1, 52), 96) : Math.max(12, playerHeight * appearance.bottomOffset / 100);
   const offset = Math.min(requestedOffset, Math.max(0, playerHeight - 24));
-  panel.style.setProperty('--fluent-read-video-subtitle-bottom', `${(viewport?.bottom || 0) + offset}px`);
-  panel.style.setProperty('top', appearance.position === 'top' ? `${(viewport?.top || 0) + offset}px` : appearance.position === 'center' ? viewport ? `${viewport.top + playerHeight / 2}px` : '50%' : 'auto', 'important');
+  const bottomInset = `${(viewport?.bottom || 0) + offset}px`;
+  panel.style.setProperty('--fluent-read-video-subtitle-bottom', fullscreen ? `max(${bottomInset}, calc(env(safe-area-inset-bottom, 0px) + 12px))` : bottomInset);
+  const topInset = `${(viewport?.top || 0) + offset}px`;
+  panel.style.setProperty('top', appearance.position === 'top' ? fullscreen ? `max(${topInset}, calc(env(safe-area-inset-top, 0px) + 12px))` : topInset : appearance.position === 'center' ? viewport ? `${viewport.top + playerHeight / 2}px` : '50%' : 'auto', 'important');
   panel.style.setProperty('bottom', appearance.position === 'bottom' ? 'var(--fluent-read-video-subtitle-bottom)' : 'auto', 'important');
-  panel.style.setProperty('max-height', `${Math.max(0, playerHeight - (appearance.position === 'center' ? 24 : offset + 12))}px`, 'important');
+  const maximumHeight = Math.max(0, playerHeight - (appearance.position === 'center' ? 24 : offset + 12));
+  panel.style.setProperty('max-height', fullscreen ? `min(${maximumHeight}px, calc(100% - max(env(safe-area-inset-top, 0px), env(safe-area-inset-bottom, 0px)) - max(env(safe-area-inset-top, 0px), env(safe-area-inset-bottom, 0px)) - 24px))` : `${maximumHeight}px`, 'important');
   panel.style.transform = appearance.position === 'center' ? 'translateY(-50%)' : 'none';
-  if (!active) return;
-  fitVideoSubtitleFontSize(baseFontSize * fontScale,
-    Math.max(0, playerHeight - (appearance.position === 'center' ? 24 : offset + 12)),
-    size => panel.style.setProperty('--fluent-read-video-subtitle-font-size', `${size}px`),
-    () => panel.scrollHeight);
+  if (!active) {resetSubtitlePanelLayout(panel); return;}
 
-  // 背景只包住双语文本，并以播放器中心为锚点。长字幕仍受播放器宽度限制，
-  // 超出时在面板内部换行，而不是把半透明背景铺满整行。
-  panel.style.left = `${(viewport?.left || 0) + 12}px`;
-  const layerRect = layer.getBoundingClientRect();
-  const measuredWidth = panel.getBoundingClientRect().width / (layer.clientWidth > 0 && layerRect.width > 0 ? layerRect.width / layer.clientWidth : 1);
-  const width = Math.min(Math.max(measuredWidth, 0), availableWidth);
-  const usableRight = playerWidth - menuReserve - 12;
-  const left = Math.max(12, Math.min((usableRight - width + 12) / 2, usableRight - width));
-  panel.style.left = `${(viewport?.left || 0) + left}px`;
+  // 背景只包住双语文本，并始终以视频画面中心为锚点；菜单浮层不挤占字幕空间。
+  // 长字幕仍受播放器宽度限制，超出时在面板内部换行，而不是把半透明背景铺满整行。
+  const centerPanel = () => {
+    panel.style.left = `${(viewport?.left || 0) + 12}px`;
+    const layerRect = layer.getBoundingClientRect();
+    const measuredWidth = panel.getBoundingClientRect().width / (layer.clientWidth > 0 && layerRect.width > 0 ? layerRect.width / layer.clientWidth : 1);
+    const width = Math.min(Math.max(measuredWidth, 0), availableWidth);
+    const usableRight = playerWidth - 12;
+    const left = Math.max(12, Math.min((usableRight - width + 12) / 2, usableRight - width));
+    const panelLeft = `${(viewport?.left || 0) + left}px`;
+    panel.style.left = fullscreen
+      ? `max(${(viewport?.left || 0) + 12}px, env(safe-area-inset-left, 0px), min(${panelLeft}, calc(100% - max(12px, env(safe-area-inset-right, 0px)) - ${width}px)))`
+      : panelLeft;
+  };
+  // 菜单或学习面板开启时撤回兄弟宿主；字幕回原层且不接收指针，避免遮挡当前交互面板。
+  if (!menuOpen && !learningOpen && isYouTubeVideoPage() && compactPlayer && autoBottom && config.on !== false
+    && config.videoTranslationEnabled !== false && config.videoSubtitleVisible !== false && viewport) {
+    centerPanel();
+    if (positionMobileYoutubeSubtitle(panel, player, layer, viewport, availableWidth)) return;
+  }
+  finishSubtitlePanelLayout(panel, menuOpen || learningOpen);
+  fitVideoSubtitleFontSize(baseFontSize * fontScale,
+    fullscreen ? Math.min(maximumHeight, panel.clientHeight || maximumHeight) : maximumHeight,
+    size => panel.style.setProperty('--fluent-read-video-subtitle-font-size', `${size}px`),
+    () => panel.scrollHeight, panel.querySelector(`#${VIDEO_READING_OVERLAY_ID}`)?.textContent ? 16 : 8);
+  if (!menuOpen && panel.querySelector(`#${VIDEO_READING_OVERLAY_ID}`)?.textContent && panel.scrollHeight > maximumHeight + 1) setSubtitlePanelScrollable(panel, true);
+  centerPanel();
 
   // 双语模式下原生字幕仍然可见时，译文面板要放在原生字幕上方，不能用固定底部
   // 位置压住 YouTube 的分段字幕。逐词合并已经显示整段原文时，原文在同一个面板内，
   // 则继续使用固定底部锚点，避免随着原生 DOM 的词宽变化上下跳动。
   const displayMode = normalizeVideoSubtitleDisplayMode(config.videoSubtitleDisplayMode);
   const normalizedCaptionActive = layer?.classList.contains(VIDEO_NORMALIZED_CAPTION_ACTIVE_CLASS) === true;
-  if (!isXVideoPage() && appearance.position === 'bottom' && displayMode === 'bilingual' && !normalizedCaptionActive && visibleCaptionSegments.length > 0) {
+  if (!isXVideoPage() && !compactPlayer && appearance.position === 'bottom' && displayMode === 'bilingual' && !normalizedCaptionActive) {
+    // 仅在译文需要避开桌面原生行时测量，忽略切换期间空的原生容器。
+    const visibleCaptionSegments = getVisibleCaptionSegments(container)
+      .map(element => element.getBoundingClientRect())
+      .filter(rect => rect.width > 0 && rect.height > 0);
+    if (visibleCaptionSegments.length === 0) return;
     const playerHeight = playerRect.height || 540;
     const nativeCaptionTop = Math.min(...visibleCaptionSegments.map((rect) => rect.top - playerRect.top));
     const panelHeight = panel.getBoundingClientRect().height;
@@ -615,28 +705,31 @@ export function syncTranslationOverlayPosition(container: HTMLElement | null): v
     const maxBottom = Math.max(12, playerHeight - panelHeight - 12);
     const requestedBottom = playerHeight - nativeCaptionTop + 8;
     const bottom = Math.max(fallbackBottom, Math.min(requestedBottom, maxBottom));
-    panel.style.setProperty('--fluent-read-video-subtitle-bottom', `${bottom}px`);
+    panel.style.setProperty('--fluent-read-video-subtitle-bottom', fullscreen ? `max(${bottom}px, calc(env(safe-area-inset-bottom, 0px) + 12px))` : `${bottom}px`);
   }
 }
 
 export function applyVideoDisplayState(container: HTMLElement): void {
+  if (config.on === false || config.videoTranslationEnabled === false || config.videoSubtitleVisible === false) {
+    document.querySelectorAll<HTMLElement>(`#${VIDEO_SUBTITLE_PANEL_ID}`).forEach(panel => resetSubtitlePanelLayout(panel));
+  }
   const mode = normalizeVideoSubtitleDisplayMode(config.videoSubtitleDisplayMode);
-  container.classList.toggle(VIDEO_DISPLAY_TRANSLATION_ONLY_CLASS, mode === 'translation-only');
-  container.classList.toggle(VIDEO_DISPLAY_ORIGINAL_ONLY_CLASS, mode === 'original-only');
-  container.classList.toggle(VIDEO_DISPLAY_HIDDEN_CLASS, config.videoSubtitleVisible === false);
+  const enabled = config.on !== false && config.videoTranslationEnabled !== false;
+  container.classList.toggle(VIDEO_DISPLAY_TRANSLATION_ONLY_CLASS, enabled && mode === 'translation-only');
+  container.classList.toggle(VIDEO_DISPLAY_ORIGINAL_ONLY_CLASS, enabled && mode === 'original-only');
+  container.classList.toggle(VIDEO_DISPLAY_HIDDEN_CLASS, enabled && config.videoSubtitleVisible === false);
   container.setAttribute('data-fluent-read-video-display-mode', mode);
   const layer = document.getElementById(VIDEO_TRANSLATION_LAYER_ID);
-  layer?.classList.toggle(VIDEO_DISPLAY_TRANSLATION_ONLY_CLASS, mode === 'translation-only');
-  layer?.classList.toggle(VIDEO_DISPLAY_ORIGINAL_ONLY_CLASS, mode === 'original-only');
-  layer?.classList.toggle(VIDEO_DISPLAY_HIDDEN_CLASS, config.videoSubtitleVisible === false);
+  layer?.classList.toggle(VIDEO_DISPLAY_TRANSLATION_ONLY_CLASS, enabled && mode === 'translation-only');
+  layer?.classList.toggle(VIDEO_DISPLAY_ORIGINAL_ONLY_CLASS, enabled && mode === 'original-only');
+  layer?.classList.toggle(VIDEO_DISPLAY_HIDDEN_CLASS, enabled && config.videoSubtitleVisible === false);
   layer?.setAttribute('data-fluent-read-video-display-mode', mode);
+  if (layer) syncSubtitleScrollHostState(layer);
 }
 
-export function installVideoSubtitleStyle(): HTMLStyleElement {
-  const existing = document.getElementById('fluent-read-video-subtitle-style');
-  if (existing instanceof HTMLStyleElement) return existing;
-
-  const style = document.createElement('style');
+/** 同一份播放器样式可供顶层页面与课程字幕 Shadow Root 使用。 */
+export function createVideoSubtitleStyle(ownerDocument: Document = document): HTMLStyleElement {
+  const style = ownerDocument.createElement('style');
   style.id = 'fluent-read-video-subtitle-style';
   style.textContent = `
     #${VIDEO_AI_CAPTION_CONTAINER_ID} {
@@ -653,13 +746,23 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
     #${VIDEO_AI_CAPTION_CONTAINER_ID} .${VIDEO_CAPTION_SEGMENT_SELECTOR.slice(1)} {
       display: block !important;
     }
-    #${VIDEO_TRANSLATION_LAYER_ID} {
+    :is(#${VIDEO_TRANSLATION_LAYER_ID}, #${VIDEO_SUBTITLE_SCROLL_HOST_ID}) {
       position: absolute !important;
       inset: 0 !important;
       z-index: 2147483645 !important;
       overflow: hidden !important;
       pointer-events: none !important;
       visibility: visible !important;
+    }
+    #${VIDEO_SUBTITLE_SCROLL_HOST_ID} {
+      inset: auto !important;
+      left: 0 !important;
+      top: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border: 0 !important;
+      transform-origin: 0 0 !important;
+      z-index: 2147483646 !important;
     }
     #${VIDEO_SUBTITLE_PANEL_ID} {
       display: none !important;
@@ -670,7 +773,7 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
       min-width: 0 !important;
       bottom: var(--fluent-read-video-subtitle-bottom, clamp(52px, 10%, 96px)) !important;
       margin: 0 !important;
-      padding: 5px 8px 6px !important;
+      padding: var(--fluent-read-video-subtitle-padding, 5px 8px 6px) !important;
       border: 1px solid var(--fluent-read-video-subtitle-border, rgba(255, 255, 255, .1)) !important;
       border-radius: 6px !important;
       background: var(--fluent-read-video-subtitle-background, rgba(12, 15, 22, .56)) !important;
@@ -678,7 +781,7 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
       backdrop-filter: var(--fluent-read-video-subtitle-backdrop-filter, blur(2px)) !important;
       flex-direction: column !important;
       align-items: center !important;
-      gap: 6px !important;
+      gap: var(--fluent-read-video-subtitle-gap, 6px) !important;
       overflow: hidden !important;
       pointer-events: none !important;
       user-select: none !important;
@@ -687,7 +790,17 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
     #${VIDEO_SUBTITLE_PANEL_ID}.${VIDEO_SUBTITLE_PANEL_ACTIVE_CLASS} {
       display: flex !important;
     }
+    #${VIDEO_SUBTITLE_PANEL_ID}[data-fluent-read-subtitle-scrollable="true"] {
+      overflow-y: auto !important;
+      overflow-x: hidden !important;
+      pointer-events: auto !important;
+      touch-action: pan-y pinch-zoom !important;
+      overscroll-behavior: contain !important;
+    }
+    #${VIDEO_SUBTITLE_PANEL_ID}[data-fluent-read-subtitle-scrollable="true"] > div { flex-shrink: 0 !important; }
+    #${VIDEO_SUBTITLE_PANEL_ID}[data-fluent-read-subtitle-scrollable="true"]:focus-visible { outline: 2px solid currentColor !important; outline-offset: -2px !important; }
     #${VIDEO_TRANSLATION_OVERLAY_ID} {
+      order: var(--fluent-read-video-subtitle-translation-order, 3) !important;
       display: block !important;
       position: relative !important;
       z-index: 2 !important;
@@ -714,6 +827,7 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
     }
     #${VIDEO_TRANSLATION_OVERLAY_ID}:empty { display: none !important; }
     #${VIDEO_NORMALIZED_CAPTION_OVERLAY_ID} {
+      order: 1 !important;
       display: none !important;
       position: relative !important;
       z-index: 1 !important;
@@ -739,6 +853,17 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
       visibility: visible !important;
     }
     #${VIDEO_NORMALIZED_CAPTION_OVERLAY_ID}:empty { display: none !important; }
+    #${VIDEO_READING_OVERLAY_ID} {
+      order: 2 !important; display: block !important; max-width: 100% !important; min-width: 0 !important;
+      margin: 0 !important; padding: 0 !important; border: 0 !important;
+      font: 500 max(12px, calc(var(--fluent-read-video-subtitle-font-size, 20px) * .72))/1.4 Arial, sans-serif !important;
+      color: var(--fluent-read-video-subtitle-text-color, #fff) !important;
+      text-align: center !important; white-space: pre-wrap !important; overflow-wrap: anywhere !important;
+      text-shadow: var(--fluent-read-video-subtitle-text-shadow, 0 1px 2px #000) !important;
+      pointer-events: none !important; user-select: none !important;
+    }
+    #${VIDEO_READING_OVERLAY_ID}:empty,
+    :is(#${VIDEO_TRANSLATION_LAYER_ID}, #${VIDEO_SUBTITLE_SCROLL_HOST_ID}).${VIDEO_DISPLAY_TRANSLATION_ONLY_CLASS} #${VIDEO_READING_OVERLAY_ID} {display:none !important;}
     /* 逐字高亮：未唱到的字用本行颜色的淡色，唱过的恢复原色，正在唱的字由同字高亮层从行首方向扫过。 */
     #${VIDEO_TRANSLATION_OVERLAY_ID} { --fluent-read-video-karaoke-color: var(--fluent-read-video-subtitle-translation-color, #ffe45c); }
     #${VIDEO_NORMALIZED_CAPTION_OVERLAY_ID} { --fluent-read-video-karaoke-color: var(--fluent-read-video-subtitle-text-color, #fff); }
@@ -761,24 +886,29 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
     .${VIDEO_KARAOKE_UNIT_CLASS}[${VIDEO_KARAOKE_STATE_ATTRIBUTE}="active"]:dir(rtl)::after {
       clip-path: inset(-.3em -.3em -.3em calc(100% - var(${VIDEO_KARAOKE_FILL_PROPERTY}, 0%))) !important;
     }
-    #${VIDEO_TRANSLATION_LAYER_ID}.${VIDEO_NORMALIZED_CAPTION_ACTIVE_CLASS} #${VIDEO_NORMALIZED_CAPTION_OVERLAY_ID} {
+    :is(#${VIDEO_TRANSLATION_LAYER_ID}, #${VIDEO_SUBTITLE_SCROLL_HOST_ID}).${VIDEO_NORMALIZED_CAPTION_ACTIVE_CLASS} #${VIDEO_NORMALIZED_CAPTION_OVERLAY_ID} {
       display: block !important;
     }
-    #${VIDEO_TRANSLATION_LAYER_ID}.${VIDEO_DISPLAY_TRANSLATION_ONLY_CLASS} #${VIDEO_NORMALIZED_CAPTION_OVERLAY_ID},
-    #${VIDEO_TRANSLATION_LAYER_ID}.${VIDEO_DISPLAY_ORIGINAL_ONLY_CLASS} #${VIDEO_TRANSLATION_OVERLAY_ID},
-    #${VIDEO_TRANSLATION_LAYER_ID}.${VIDEO_DISPLAY_HIDDEN_CLASS} {
+    :is(#${VIDEO_TRANSLATION_LAYER_ID}, #${VIDEO_SUBTITLE_SCROLL_HOST_ID}).${VIDEO_DISPLAY_TRANSLATION_ONLY_CLASS} #${VIDEO_NORMALIZED_CAPTION_OVERLAY_ID},
+    :is(#${VIDEO_TRANSLATION_LAYER_ID}, #${VIDEO_SUBTITLE_SCROLL_HOST_ID}).${VIDEO_DISPLAY_ORIGINAL_ONLY_CLASS} #${VIDEO_TRANSLATION_OVERLAY_ID},
+    :is(#${VIDEO_TRANSLATION_LAYER_ID}, #${VIDEO_SUBTITLE_SCROLL_HOST_ID}).${VIDEO_DISPLAY_HIDDEN_CLASS} {
       visibility: hidden !important;
     }
-    #${VIDEO_TRANSLATION_LAYER_ID}.${VIDEO_DISPLAY_TRANSLATION_ONLY_CLASS} #${VIDEO_NORMALIZED_CAPTION_OVERLAY_ID} {
+    :is(#${VIDEO_TRANSLATION_LAYER_ID}, #${VIDEO_SUBTITLE_SCROLL_HOST_ID}).${VIDEO_DISPLAY_TRANSLATION_ONLY_CLASS} #${VIDEO_NORMALIZED_CAPTION_OVERLAY_ID} {
       display: none !important;
     }
+    /* 播放器接管期间，空档、seek 和原生容器重建都不能露出网站字幕；保留几何与文字供读取。 */
+    .${VIDEO_NATIVE_CAPTION_HIDDEN_CLASS} :is(#ytp-caption-window-container, .ytp-caption-window-container) {
+      opacity: 0 !important;
+    }
+    .${VIDEO_NATIVE_CAPTION_HIDDEN_CLASS} :is(#ytp-caption-window-container, .ytp-caption-window-container) :is(.ytp-caption-segment, .captions-text),
     #ytp-caption-window-container.${VIDEO_NORMALIZED_CAPTION_CLASS} .ytp-caption-segment,
     #ytp-caption-window-container.${VIDEO_NORMALIZED_CAPTION_CLASS} .captions-text,
     .ytp-caption-window-container.${VIDEO_NORMALIZED_CAPTION_CLASS} .ytp-caption-segment,
     .ytp-caption-window-container.${VIDEO_NORMALIZED_CAPTION_CLASS} .captions-text {
       visibility: hidden !important;
     }
-    #${VIDEO_TRANSLATION_LAYER_ID}.${VIDEO_DISPLAY_HIDDEN_CLASS} {
+    :is(#${VIDEO_TRANSLATION_LAYER_ID}, #${VIDEO_SUBTITLE_SCROLL_HOST_ID}).${VIDEO_DISPLAY_HIDDEN_CLASS} {
       visibility: hidden !important;
     }
     #${VIDEO_TRANSLATION_BUTTON_ID} {
@@ -858,6 +988,11 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
     .${VIDEO_PLAYER_HOST_CLASS}[data-fluent-read-video-fullscreen="true"] .${VIDEO_FALLBACK_CONTROLS_CLASS} {
       display: flex !important;
     }
+    .fluent-read-html-media-host > .fluent-read-video-controls {
+      top: 4px !important; bottom: auto !important; right: 4px !important;
+      display: flex !important; pointer-events: auto !important;
+    }
+    .fluent-read-html-media-host > #${VIDEO_TRANSLATION_MENU_ID} { pointer-events: auto !important; }
     /* 视频界面的外观只赋给自有节点，不向宿主网页或独立设置页注入主题。 */
     #${VIDEO_TRANSLATION_MENU_ID}, #fluent-read-video-learning-panel {
       --fr-video-menu-brand: #ef4776;
@@ -899,13 +1034,14 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
       word-break: normal !important;
       white-space: normal !important;
       overflow: auto !important;
+      scroll-padding-top: calc(28px + 6px) !important;
       overscroll-behavior: contain !important;
       scrollbar-width: thin !important;
       cursor: default !important;
     }
     #${VIDEO_TRANSLATION_MENU_ID}[data-layout="wide"] { width: min(440px, calc(100% - 16px)) !important; }
     /* hidden 必须高于带 compact/layout 状态的组件规则，收起的选项页不能被 grid 再次显示。 */
-    #${VIDEO_TRANSLATION_MENU_ID}[hidden],
+    #${VIDEO_TRANSLATION_MENU_ID}#${VIDEO_TRANSLATION_MENU_ID}[hidden],
     #${VIDEO_TRANSLATION_MENU_ID}#${VIDEO_TRANSLATION_MENU_ID} [hidden] { display: none !important; }
     #${VIDEO_TRANSLATION_MENU_ID} * {
       box-sizing: border-box !important;
@@ -966,6 +1102,7 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-learning-label { flex: 1 !important; }
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-learning .fluent-read-video-menu-icon-next { width: 16px !important; height: 16px !important; }
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-main,
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-body,
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-section {
       display: grid !important;
       grid-template-columns: minmax(0, 1fr) !important;
@@ -997,11 +1134,16 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
     #${VIDEO_TRANSLATION_MENU_ID}[data-layout="wide"] .fluent-read-video-menu-download-status { flex: 1 0 100% !important; }
 
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-title {
+      position: sticky !important;
+      top: -6px !important;
+      z-index: 1 !important;
+      background: var(--fr-video-menu-surface) !important;
       display: flex !important;
       align-items: center !important;
       justify-content: space-between !important;
       gap: 6px !important;
       min-height: 22px !important;
+      margin-bottom: 6px !important;
       padding: 0 0 0 4px !important;
     }
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-brand {
@@ -1011,6 +1153,7 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
       font-weight: 650 !important;
     }
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-settings {
+      min-width: 0 !important;
       min-height: 22px !important;
       padding: 0 5px !important;
       color: var(--fr-video-menu-muted) !important;
@@ -1108,7 +1251,7 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
     #${VIDEO_TRANSLATION_MENU_ID}[data-compact="true"] .fluent-read-video-menu-secondary-ai .fluent-read-video-menu-ai[data-ready="true"] .fluent-read-video-menu-value { display: none !important; }
     #${VIDEO_TRANSLATION_MENU_ID}[data-compact="true"] .fluent-read-video-menu-tools > .fluent-read-video-menu-secondary { justify-content: flex-start !important; padding: 0 4px !important; }
     #${VIDEO_TRANSLATION_MENU_ID}[data-compact="true"][data-layout="wide"] .fluent-read-video-menu-tools { gap: 4px !important; }
-    #${VIDEO_TRANSLATION_MENU_ID}[data-compact="true"][data-layout="wide"] .fluent-read-video-menu-export { grid-template-columns: auto minmax(0, 1fr) !important; align-items: center !important; }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-compact="true"][data-layout="wide"] .fluent-read-video-menu-export { grid-template-columns: minmax(0, 1fr) !important; }
     #${VIDEO_TRANSLATION_MENU_ID}[data-compact="true"][data-layout="wide"] .fluent-read-video-menu-export .fluent-read-video-menu-download-status { grid-column: 1 / -1 !important; }
 
     #${VIDEO_TRANSLATION_MENU_ID}[data-layout="wide"] .fluent-read-video-menu-source {
@@ -1129,7 +1272,17 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
     #${VIDEO_TRANSLATION_MENU_ID}[data-layout="wide"] .fluent-read-video-menu-mode { min-height: 28px !important; }
     #${VIDEO_TRANSLATION_MENU_ID}[data-layout="wide"] .fluent-read-video-menu-ai { min-height: 30px !important; }
 
-    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-mode-group {
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-controls { min-width: 0 !important; flex: 1 1 auto !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-setting { display: grid !important; gap: 3px !important; min-width: 0 !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-choice { display: inline-flex !important; align-items: center !important; justify-content: center !important; gap: 5px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-choice > span:last-child { min-width: 0 !important; overflow: hidden !important; text-overflow: ellipsis !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-diagram { display: grid !important; gap: 3px !important; flex: 0 0 12px !important; width: 12px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-diagram > span { display: block !important; height: 2px !important; border-radius: 1px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-original { background: var(--fr-video-menu-text) !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-translation { background: var(--fr-video-menu-brand-text) !important; width: 9px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-setting[data-active="false"] .fluent-read-video-menu-mode[aria-checked="true"] { background: var(--fr-video-menu-control) !important; box-shadow: inset 0 0 0 1px var(--fr-video-menu-border) !important; color: var(--fr-video-menu-muted) !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-mode-group,
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-order-controls {
       display: flex !important;
       gap: 2px !important;
       padding: 2px !important;
@@ -1322,6 +1475,94 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-download-status:empty,
     #${VIDEO_TRANSLATION_MENU_ID}[data-measuring] .fluent-read-video-menu-download-status { display: none !important; }
 
+    /* 高频设置保留清楚的开关；解释与低频导出按需展开，不占常驻卡片高度。 */
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-export {
+      display: grid !important;
+      grid-template-columns: minmax(0, 1fr) !important;
+      gap: 4px !important;
+      min-width: 0 !important;
+      width: 100% !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading,
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-feedback { display: contents !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-header { flex: 0 0 auto !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-toggle {
+      position: relative !important;
+      width: 28px !important;
+      height: 28px !important;
+      padding: 3px !important;
+      border: 1px solid transparent !important;
+      background: transparent !important;
+      color: var(--fr-video-menu-muted) !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-toggle .fluent-read-video-menu-icon { width: 20px !important; height: 20px !important; stroke-width: 1.7 !important; }
+    /* 与标题栏图标及显示方式选中态统一：透明底、柔和品牌色；悬停不能覆盖开启状态。 */
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-toggle[aria-checked="false"]:is(:hover, :focus-visible):not(:disabled) {
+      background: var(--fr-video-menu-control) !important;
+      color: var(--fr-video-menu-text) !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-toggle[aria-checked="true"] {
+      background: var(--fr-video-menu-brand-soft) !important;
+      border-color: rgba(239, 71, 118, .32) !important;
+      color: var(--fr-video-menu-brand-text) !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-toggle[aria-checked="true"]:hover:not(:disabled) {
+      background: rgba(239, 71, 118, .28) !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-help {
+      padding: 9px !important;
+      border: 1px solid var(--fr-video-menu-border) !important;
+      border-radius: 8px !important;
+      background: var(--fr-video-menu-control) !important;
+      font-size: 11px !important;
+      line-height: 1.55 !important;
+      white-space: normal !important;
+      overflow-wrap: anywhere !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-help[popover] {
+      position: fixed !important;
+      inset: auto !important;
+      top: var(--fr-reading-help-top, 8px) !important;
+      left: var(--fr-reading-help-left, 8px) !important;
+      margin: 0 !important;
+      width: var(--fr-reading-help-width, 280px) !important;
+      max-height: var(--fr-reading-help-max-height, calc(100vh - 16px)) !important;
+      overflow: auto !important;
+      background: var(--fr-video-menu-surface) !important;
+      color: var(--fr-video-menu-text) !important;
+      box-shadow: var(--fr-video-menu-shadow) !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-help::backdrop { background: transparent !important; pointer-events: none !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-help p { margin: 0 !important; padding: 0 !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-example {
+      display: grid !important;
+      gap: 2px !important;
+      margin: 8px 0 !important;
+      padding: 7px 9px !important;
+      border-radius: 6px !important;
+      background: var(--fr-video-menu-surface) !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-example-label,
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-note { color: var(--fr-video-menu-muted) !important; font-size: 10.5px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-example-text { color: var(--fr-video-menu-brand-text) !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading-help .fluent-read-video-menu-reading-note + p { margin-top: 6px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-reading > .fluent-read-video-menu-source-hint { padding: 0 4px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-download-toggle {
+      flex: 0 0 28px !important;
+      width: 28px !important;
+      height: 28px !important;
+      padding: 3px !important;
+      color: var(--fr-video-menu-muted) !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-download-toggle:hover { color: var(--fr-video-menu-text) !important; background: var(--fr-video-menu-control) !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-download-toggle[aria-expanded="true"] { color: var(--fr-video-menu-brand-text) !important; background: var(--fr-video-menu-brand-soft) !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-export .fluent-read-video-menu-download {
+      flex-direction: row !important;
+      gap: 4px !important;
+      min-height: 28px !important;
+      padding: 4px !important;
+    }
+
     #${VIDEO_TRANSLATION_MENU_ID}[data-view="export-prompt"] .fluent-read-video-model-prompt.fluent-read-video-export-prompt { display: flex !important; flex-direction: column !important; gap: 8px !important; }
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-export-actions { flex-wrap: wrap !important; }
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-export-actions button { white-space: normal !important; }
@@ -1443,14 +1684,217 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-model-prompt-confirm { background: var(--fr-video-menu-brand) !important; color: #fff !important; font-weight: 600 !important; }
     #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-model-prompt-confirm:hover { background: #dc315f !important; }
 
-    /* 触屏上略微放大可点区域；仍保持单行结构，不额外增加行数。 */
-    @media (pointer: coarse) {
-      #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-mode { min-height: 28px !important; }
-      #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-step { width: 28px !important; height: 28px !important; }
-      #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-ai { min-height: 32px !important; }
-      #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-download { min-height: 34px !important; }
-      #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-model-prompt-actions button { min-height: 32px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-native-fullscreen-hint {
+      margin: 4px 0 0 !important;
+      color: var(--fr-video-menu-muted) !important;
+      font-size: 11px !important;
+      line-height: 1.45 !important;
+      white-space: normal !important;
+      overflow-wrap: anywhere !important;
     }
+    /* 触屏目标至少 44px；安全视口菜单在下方单独安排正文滚动。 */
+    @media (pointer: coarse) {
+      #${VIDEO_TRANSLATION_BUTTON_ID} { min-width: 44px !important; min-height: 44px !important; }
+      #${VIDEO_TRANSLATION_MENU_ID} { scroll-padding-top: calc(44px + 6px) !important; }
+      /* 双 ID 优先于 compact/wide 的次级按钮规则，关闭、模式、返回与操作均保留完整触控面积。 */
+      #${VIDEO_TRANSLATION_MENU_ID}#${VIDEO_TRANSLATION_MENU_ID} button {
+        min-width: 44px !important;
+        min-height: 44px !important;
+        touch-action: manipulation !important;
+      }
+      #${VIDEO_TRANSLATION_MENU_ID}[data-layout] .fluent-read-video-menu-step { width: 44px !important; height: 44px !important; }
+      /* 触屏步进器变宽后独立成行，时间标签保留全文，长语言可换行而不截成省略号。 */
+      #${VIDEO_TRANSLATION_MENU_ID}[data-layout] .fluent-read-video-menu-timing {
+        flex: 1 0 100% !important;
+        flex-wrap: wrap !important;
+      }
+      #${VIDEO_TRANSLATION_MENU_ID}[data-layout] .fluent-read-video-menu-timing .fluent-read-video-menu-row-label {
+        contain: none !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+      }
+    }
+    /* 手机菜单使用安全可见视口宿主，不随 16:9 的短播放器裁切；标题与正文分别布局。 */
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] {
+      left: 50% !important;
+      right: auto !important;
+      bottom: 8px !important;
+      transform: translateX(-50%) !important;
+      display: flex !important;
+      flex-direction: column !important;
+      width: min(560px, calc(100% - 16px)) !important;
+      max-height: calc(100% - 16px) !important;
+      padding: 8px !important;
+      border-radius: 16px !important;
+      font-size: 14px !important;
+      overflow: hidden !important;
+      scroll-padding-top: 0 !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-main {
+      display: flex !important;
+      flex-direction: column !important;
+      min-height: 0 !important;
+      gap: 6px !important;
+      overflow: hidden !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-title {
+      position: static !important;
+      flex: 0 0 auto !important;
+      min-height: 44px !important;
+      gap: 4px !important;
+      padding: 0 !important;
+      margin-bottom: 6px !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-body {
+      display: flex !important;
+      flex-direction: column !important;
+      min-height: 0 !important;
+      gap: 10px !important;
+      padding: 0 8px 4px !important;
+      overflow: auto !important;
+      overscroll-behavior: contain !important;
+      scrollbar-width: thin !important;
+      scrollbar-gutter: stable !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-brand { font-size: 13px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-settings {
+      flex: 1 1 0 !important;
+      min-width: 0 !important;
+      justify-content: flex-end !important;
+      padding: 0 4px !important;
+      font-size: 12px !important;
+      overflow: hidden !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-close,
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-back {
+      flex: 0 0 44px !important;
+      width: 44px !important;
+      height: 44px !important;
+    }
+    /* 窄屏与带鼠标的手机测试视口也保留完整触控面积，长标签自然换行。 */
+    #${VIDEO_TRANSLATION_MENU_ID}#${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] button {
+      min-width: 44px !important;
+      min-height: 44px !important;
+      flex-shrink: 0 !important;
+      touch-action: manipulation !important;
+    }
+    /* 安全高度不足 128px 时只保留关闭；正常态需在 84px 外框/标题之外留出完整 44px 正文窗口。 */
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"][data-viewport-state="close-only"] {
+      bottom: 0 !important;
+      max-height: 100% !important;
+      padding: 0 !important;
+      border: 0 !important;
+      border-radius: 0 !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"][data-viewport-state="close-only"] .fluent-read-video-menu-title {
+      flex: 0 0 44px !important;
+      height: 44px !important;
+      justify-content: flex-end !important;
+      margin-bottom: 0 !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"][data-viewport-state="close-only"] > :not(.fluent-read-video-menu-title),
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"][data-viewport-state="close-only"] > .fluent-read-video-menu-title > :not(.fluent-read-video-menu-close) {
+      display: none !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-section,
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-watch,
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-tools {
+      display: grid !important;
+      flex: 0 0 auto !important;
+      grid-template-columns: minmax(0, 1fr) !important;
+      gap: 10px !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-mode-group {
+      display: grid !important;
+      grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+      gap: 4px !important;
+      padding: 3px !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"][data-layout="wide"] .fluent-read-video-menu-mode-group {
+      grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-mode {
+      padding: 6px 4px !important;
+      font-size: 14px !important;
+      white-space: normal !important;
+      overflow-wrap: anywhere !important;
+      text-overflow: clip !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-timing {
+      display: flex !important;
+      flex-wrap: wrap !important;
+      gap: 4px 8px !important;
+      padding-left: 4px !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-timing .fluent-read-video-menu-row-label {
+      contain: none !important;
+      overflow: visible !important;
+      text-overflow: clip !important;
+      white-space: normal !important;
+      overflow-wrap: anywhere !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-step { width: 44px !important; height: 44px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-download-toggle { flex-basis: 44px !important; width: 44px !important; height: 44px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-reading-toggle { width: 44px !important; height: 44px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-timing-value { font-size: 14px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-downloads {
+      display: grid !important;
+      grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+      gap: 6px !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-download {
+      flex-direction: row !important;
+      gap: 4px !important;
+      padding: 6px !important;
+      font-size: 12px !important;
+      white-space: normal !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-download .fluent-read-video-menu-label {
+      min-width: 0 !important;
+      white-space: normal !important;
+      overflow-wrap: anywhere !important;
+      text-overflow: clip !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-learning {
+      flex: 0 0 auto !important;
+      padding: 6px 8px !important;
+      background: transparent !important;
+      font-size: 13px !important;
+      font-weight: 500 !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-menu-learning-label { white-space: normal !important; }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-native-fullscreen-hint { font-size: 12px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-model-prompt {
+      grid-template-columns: minmax(0, 1fr) !important;
+      min-height: 0 !important;
+      overflow: auto !important;
+      overscroll-behavior: contain !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-model-prompt-head,
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-model-prompt-description,
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-model-options,
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-model-prompt-actions {
+      grid-area: auto !important;
+      grid-column: auto !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-model-prompt-title,
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-model-option-name { font-size: 14px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-model-prompt-description,
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-model-option-hint { font-size: 12px !important; }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-model-prompt-actions {
+      flex-wrap: wrap !important;
+      gap: 6px !important;
+    }
+    #${VIDEO_TRANSLATION_MENU_ID}[data-presentation="viewport"] .fluent-read-video-model-prompt-actions button {
+      padding: 6px 10px !important;
+      white-space: normal !important;
+      font-size: 13px !important;
+    }
+    /* 确认页有自己的取消/返回，不能暴露仍指向隐藏工具页的返回按钮。 */
+    #${VIDEO_TRANSLATION_MENU_ID}[data-view="model-prompt"] .fluent-read-video-menu-back,
+    #${VIDEO_TRANSLATION_MENU_ID}[data-view="export-prompt"] .fluent-read-video-menu-back { display: none !important; }
     @keyframes fluent-read-video-download-spin { to { transform: rotate(360deg); } }
     @media (prefers-reduced-motion: reduce) {
       #${VIDEO_TRANSLATION_MENU_ID} .fluent-read-video-menu-download[aria-busy="true"]::before,
@@ -1469,6 +1913,13 @@ export function installVideoSubtitleStyle(): HTMLStyleElement {
       visibility: hidden !important;
     }
   `;
+  return style;
+}
+
+export function installVideoSubtitleStyle(): HTMLStyleElement {
+  const existing = document.getElementById('fluent-read-video-subtitle-style');
+  if (existing instanceof HTMLStyleElement) return existing;
+  const style = createVideoSubtitleStyle();
   (document.head || document.documentElement).appendChild(style);
   return style;
 }

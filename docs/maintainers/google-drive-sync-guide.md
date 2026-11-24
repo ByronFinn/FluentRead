@@ -57,6 +57,16 @@ FluentRead 直接把配置保存到**每位用户自己的 Google Drive**。开�
 
 ## 3 从用户点击到云端保存
 
+### 浏览器支持边界
+
+当前原生授权仅支持桌面版 Google Chrome。`Chrome/` UA 和 `chrome.identity.getAuthToken` 的存在都不能证明兼容：Chromium 官方说明其默认实现依赖受限 Google API，在 Chrome 之外会失败（[官方说明](https://github.com/chromium/chromium/blob/main/docs/api_keys.md#polyfilling-chromeidentity-api-in-your-chromium-derivative)）。
+
+后台使用 `navigator.userAgentData` 的低熵 `brands` 确认 `Google Chrome` 品牌，并排除移动端与已识别的衍生浏览器；不读取高熵信息、不发起网络或授权探测。缺少品牌信息或只有 Chromium 品牌时关闭同步及删除入口，提示 WebDAV 或本地备份。Aside、Ego Lite、Vivaldi（含移动版）目前不在支持范围；后续支持须单独完成授权适配及真实浏览器验证，不能仅放宽品牌判断。
+
+浏览器品牌可能被修改，不能作为安全身份凭据。若已通过检查的环境授权失败或未返回令牌，界面仍说明桌面 Chrome 支持边界与替代方案，不暴露提供商的原始错误。取消或暂时失败不会永久禁用 Chrome 的重试入口。
+
+### 同步流程
+
 ```mermaid
 sequenceDiagram
     actor U as 用户
@@ -196,7 +206,7 @@ https://www.googleapis.com/auth/drive.appdata
 
 ### 6.6 添加测试用户
 
-进入 **目标对象 / Audience**，应用保持 Testing 时，在 **测试用户 / Test users** 添加你要用于联调的账号并保存。测试邮箱只在这里填写，不能写入 `.env.example`、测试夹具、代码或 PR 描述。
+进入 **目标对象 / Audience**，应用保持 Testing 时，在 **测试用户 / Test users** 添加你要用于联调的账号并保存。测试邮箱只在这里填写，不能写入 `docs/development/.env.example`、测试夹具、代码或 PR 描述。
 
 这意味着客户端创建弹窗中的“只有测试用户拥有访问权限”是开发阶段限制，不是创建失败。公开发布需要完成目标对象的发布设置及 Google 实际要求的验证。
 
@@ -222,7 +232,7 @@ Chrome 扩展原生路线不需要把 Client Secret 放进扩展，也不需要�
 
 当前 Chrome 构建已连接默认公开 Client ID 和商店公开公钥。公钥从已发布 CRX 的签名信息取得，并核对其 SHA-256 派生的扩展 ID；它只稳定身份，不授予账号访问权。
 
-如需自己的独立开发客户端，复制 `.env.example` 为 `.env.local`，设置公开标识：
+如需自己的独立开发客户端，复制 `docs/development/.env.example` 为 `.env.local`，设置公开标识：
 
 ```dotenv
 WXT_GOOGLE_CLIENT_ID=你的开发客户端.apps.googleusercontent.com

@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import {parseHTML} from 'linkedom';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 
@@ -6,7 +7,6 @@ import {
     buildWholeBlockTranslationSource,
     collectLiveTranslationTextSlots,
     createDeclarativeAdapter,
-    createTranslationCore,
     createCurrentTranslationResolverBatch,
     createTranslationSourceSnapshot,
     extractTranslationText,
@@ -21,6 +21,7 @@ import {
     TranslationCandidateCore,
     resolveTranslationCandidateAtPoint,
 } from '@/src/core/translation/public';
+import {createTranslationCore} from './helpers/translationCore';
 import {shouldSkipTranslationForTarget} from '@/src/core/language/detect';
 import productionReleaseCases from './fixtures/target-language-releases.json';
 import {
@@ -48,6 +49,7 @@ import {
     hasMeaningfulTranslationTextInNodes,
     isIdentifierLikeText,
     isTranslationTextNodeProtected,
+    setMinimumTranslationTextLength,
 } from '@/src/core/translation/text';
 import {
     findAdapterPrunedAncestor,
@@ -179,7 +181,7 @@ describe('Hacker News reading boundaries', () => {
         expect(candidates.every(candidate => readableText(core, candidate).length < 100)).toBe(true);
         expect(steps.some(step => step.element.id.startsWith('metadata-'))).toBe(false);
         expect(steps.length).toBeLessThan(count * 21 + 10);
-    });
+    }, 30_000);
 });
 
 describe('Explicit non-atomic inline reading containers', () => {
@@ -1977,7 +1979,9 @@ describe('translation candidate core', () => {
             value: () => ({offsetNode: text, offset: 1}),
         });
         const restoreRange = installRangeStub(document, text, (startOffset) =>
-            startOffset > breakOffset ? [{top: 100, bottom: 110, height: 10}] : [{top: 0, bottom: 10, height: 10}],
+            startOffset > breakOffset
+                ? [{top: 102, bottom: 112, height: 10}, {top: 100, bottom: 110, height: 10}]
+                : [{top: 2, bottom: 12, height: 10}, {top: 0, bottom: 10, height: 10}],
         );
         try {
             const candidate = core.resolveAtPoint(document, 10, 20);
@@ -2515,6 +2519,16 @@ describe('translation candidate core', () => {
             .toBe('___FLUENTREAD_slots_0_BEGIN___');
     });
 
+    it('round-trips the configurable maximum of 32 AI text slots with exact indexed ownership', () => {
+        const sources = Array.from({length: 32}, (_, index) => `Source ${index} 👩🏽‍🔬`);
+        const translations = sources.map((_, index) => `第${index}段译文。`);
+        const packet = serializeTranslationSlots(sources);
+        const slots = packet.starts.map((start, index) => `${start}${translations[index]}${packet.ends[index]}`);
+        expect(parseTranslationSlots(packet, slots.join('\n'))).toEqual(translations);
+        expect(parseTranslationSlots(packet, [...slots.slice(0, 30), slots[31], slots[30]].join('\n'))).toBeNull();
+        expect(parseTranslationSlots(packet, slots.slice(0, 31).join('\n'))).toBeNull();
+    });
+
     it('keeps snapshot serialization bounded to live readable slots', () => {
         const {document, core} = page(`
             <main><p id="target">
@@ -2693,6 +2707,356 @@ describe('translation candidate core', () => {
         expect(core.resolve(document.querySelector('#unscoped-copy')?.firstChild)).toBeNull();
     });
 
+    it.each([
+        ['slot', '<div slot="comment" data-comment-body>', '</div>'],
+        ['rtjson', '<div id="t1_rich-comment-rtjson-content" data-comment-body>', '</div>'],
+    ])('Reddit 普通评论 %s 的完整富文本块同时支持全文发现与悬浮，保留操作和代码', (_name, open, close) => {
+        const headings = Array.from({length: 6}, (_, index) =>
+            `<h${index + 1} id="rich-heading-${index + 1}">Readable section heading number ${index + 1}</h${index + 1}>`).join('');
+        const {document, core} = page(`<main><shreddit-comment>
+            <h3 id="comment-author">Example reader with a long display name</h3>
+            ${open}<p id="rich-paragraph">An ordinary paragraph keeps its reading context.</p>${headings}
+                <ul><li id="rich-list">A separate list item describes another useful detail.</li></ul>
+                <blockquote id="rich-quote">A quoted explanation stays independently readable.</blockquote>
+                <table><thead><tr><th id="rich-table-heading">Reading method</th></tr></thead><tbody>
+                    <tr><td id="rich-table-cell">Follow <a id="rich-link" href="/r/example/wiki/">this practical guide</a> and keep <code id="rich-code">KEEP_SOURCE_CODE</code>.</td></tr>
+                    <tr><td id="rich-table-paragraph-cell"><p id="rich-table-paragraph">A paragraph inside a cell must be translated only once.</p></td></tr>
+                </tbody></table>
+                <pre id="rich-pre"><code>KEEP_BLOCK_CODE</code></pre>
+                <button id="rich-button"><span>Reply to this comment</span></button>
+                <div contenteditable="true"><h3 id="rich-draft">A private reply draft remains unchanged.</h3></div>
+                <h3 id="rich-no-translate" translate="no">Original protected heading</h3>
+            ${close}<button id="outside-button">Open comment options</button>
+        </shreddit-comment><h3 id="outside-heading">Other page navigation remains original</h3>
+        <div slot="comment"><h3 id="unscoped-slot">A matching slot outside a comment is not body content</h3></div>
+        <shreddit-comment><div id="t1_rich-comment-rtjson-content-extra"><h3 id="near-miss-body">A near-miss content identifier remains outside the body</h3></div></shreddit-comment></main>`,
+        'https://www.reddit.com/r/example/comments/123/topic/');
+        const before = document.body.innerHTML;
+        const protectedCode = document.getElementById('rich-code')!;
+        const protectedCodeText = protectedCode.firstChild;
+        const originalCodeHTML = protectedCode.outerHTML;
+        const required = ['rich-paragraph', ...Array.from({length: 6}, (_, index) => `rich-heading-${index + 1}`),
+            'rich-list', 'rich-quote', 'rich-table-heading', 'rich-table-cell', 'rich-table-paragraph'];
+        const candidates = core.discover(document);
+        expect(candidates.map(candidate => candidate.element.id).sort()).toEqual([...required].sort());
+        const sourceText = candidates.map(candidate => extractTranslationTextFromNodes(
+            candidate.nodes ?? [candidate.element], core.shouldStayOriginal)).join('\n');
+        for (const id of required) {
+            const owner = document.getElementById(id)!;
+            const text = id === 'rich-table-cell' ? owner.querySelector('a')!.firstChild : owner.firstChild;
+            const resolved = core.resolve(text);
+            expect({id: resolved?.element.id, adapterId: resolved?.adapterId, reason: resolved?.reason}, id)
+                .toEqual({id: owner.id, adapterId: 'reddit', reason: 'reddit-comment-prose'});
+            expect(resolved?.element, id).toBe(owner);
+            if (id === 'rich-table-paragraph') {
+                const fullOwner = candidates.filter(candidate => candidate.element === owner);
+                expect(fullOwner).toHaveLength(1);
+                const fullSource = extractTranslationTextFromNodes(
+                    fullOwner[0]!.nodes ?? [owner], core.shouldStayOriginal);
+                const hoverSource = extractTranslationTextFromNodes(
+                    resolved!.nodes ?? [resolved!.element], core.shouldStayOriginal);
+                expect(fullSource).toBe('A paragraph inside a cell must be translated only once.');
+                expect(hoverSource).toBe(fullSource);
+                expect(resolved!.nodes).toBeUndefined();
+            }
+        }
+        // 含独立段落的单元格由段落持有；外层 TD 不能再生成重复译文。
+        expect(candidates.some(candidate => candidate.element.id === 'rich-table-paragraph-cell')).toBe(false);
+        expect(sourceText).toContain('this practical guide');
+        expect(sourceText.match(/A paragraph inside a cell must be translated only once\./g)).toHaveLength(1);
+        expect(sourceText).not.toMatch(/KEEP_SOURCE_CODE|KEEP_BLOCK_CODE|Reply to|private reply|protected heading|display name|navigation|matching slot|near-miss/);
+        for (const id of ['comment-author', 'rich-pre', 'rich-button', 'rich-draft', 'rich-no-translate',
+            'outside-button', 'outside-heading', 'unscoped-slot', 'near-miss-body']) {
+            expect(core.resolve(document.getElementById(id)!.firstChild), id).toBeNull();
+        }
+        const cell = document.getElementById('rich-table-cell')!;
+        const link = document.getElementById('rich-link')!;
+        // 命中 inline code 可解析到包围正文，但代码本身不能进入翻译槽或被改写。
+        expect(core.resolve(protectedCodeText)?.element).toBe(cell);
+        const snapshot = createTranslationSourceSnapshot(cell as unknown as HTMLElement, core.shouldStayOriginal);
+        expect(snapshot.slots.map(slot => slot.source).join(' ')).not.toContain('KEEP_SOURCE_CODE');
+        const output = applyTranslationsToSnapshot(snapshot, snapshot.slots.map(() => '已翻译的阅读内容'));
+        expect(output).toContain('href="/r/example/wiki/"');
+        expect(output).toContain(originalCodeHTML);
+        expect(document.getElementById('rich-code')).toBe(protectedCode);
+        expect(protectedCode.firstChild).toBe(protectedCodeText);
+        expect(protectedCode.outerHTML).toBe(originalCodeHTML);
+        expect(link.getAttribute('href')).toBe('/r/example/wiki/');
+        expect(document.getElementById('rich-link')).toBe(link);
+        expect(document.body.innerHTML).toBe(before);
+    });
+
+    it.each([
+        ['slot', 'slot="comment"'],
+        ['rtjson', 'id="t1_nested-comment-rtjson-content"'],
+    ])('Reddit %s 评论表格、列表和引用中的独立段落保留全文与悬浮边界', (_name, marker) => {
+        const {document, core} = page(`<main><shreddit-comment><div ${marker}>
+            <table><thead><tr><th id="nested-th"><p id="head-one">A first descriptive table heading.</p><p id="head-two">A second descriptive table heading.</p></th></tr></thead>
+            <tbody><tr><td id="nested-td"><p id="body-one">The first paragraph has <a id="nested-link" href="/guide">a useful link</a>.</p>
+                <p id="body-two">The second paragraph keeps <code id="nested-code">PROTECTED_CODE</code> separately.</p>
+                <ul><li id="nested-li"><p id="list-one">The first list paragraph is independently readable.</p><p id="list-two">The second list paragraph is independently readable.</p></li></ul>
+                <blockquote id="nested-quote"><p id="quote-one">The first quoted paragraph remains readable.</p><p id="quote-two">The second quoted paragraph remains readable.</p></blockquote>
+                <div contenteditable="true"><p id="nested-editor">A private draft should remain protected.</p></div>
+            </td></tr><tr><td id="plain-cell">A plain cell remains an independent readable candidate.</td></tr>
+            <tr><td id="single-cell"><p id="single-paragraph">A single paragraph remains an independent readable candidate.</p></td></tr></tbody></table>
+        </div></shreddit-comment></main>`, 'https://www.reddit.com/r/example/comments/123/topic/');
+        const original = document.body.innerHTML;
+        const expected = ['head-one', 'head-two', 'body-one', 'body-two', 'list-one', 'list-two',
+            'quote-one', 'quote-two', 'plain-cell', 'single-paragraph'];
+        const candidates = core.discover(document);
+        expect(candidates.map(candidate => candidate.element.id).sort()).toEqual([...expected].sort());
+        for (const id of expected) {
+            const element = document.getElementById(id)!;
+            const resolved = core.resolve(element.firstChild);
+            expect(resolved?.element, id).toBe(element);
+            expect(candidates.filter(candidate => candidate.element === element), id).toHaveLength(1);
+        }
+        expect(core.resolve(document.getElementById('nested-editor')!.firstChild)).toBeNull();
+        expect(extractTranslationTextFromNodes(candidates.flatMap(candidate => candidate.nodes ?? [candidate.element]),
+            core.shouldStayOriginal)).not.toContain('PROTECTED_CODE');
+        expect(document.getElementById('nested-link')!.getAttribute('href')).toBe('/guide');
+        expect(document.body.innerHTML).toBe(original);
+    });
+
+    it.each(['slot="comment"', 'id="t1_mixed-comment-rtjson-content"'])(
+        'Reddit %s 表格单元格在子块前后的正文均可被全文和悬浮独立翻译', (marker) => {
+            const {document, core} = page(`<main><shreddit-comment><div ${marker}><table><tr><td id="mixed-cell">A readable introduction with <a id="mixed-link" href="/guide">an original link</a> and <code id="mixed-code">DO_NOT_SEND</code>.
+                <p id="mixed-child">The first independently readable paragraph.</p>
+                <p id="mixed-child-two">The second independently readable paragraph.</p>
+                A readable closing explanation with <strong>important details</strong>.</td></tr></table></div></shreddit-comment></main>`,
+            'https://www.reddit.com/r/example/comments/123/topic/');
+            const before = document.body.innerHTML;
+            const cell = document.getElementById('mixed-cell')!;
+            const intro = cell.firstChild!;
+            const tail = [...cell.childNodes].find(node => node.textContent?.includes('A readable closing explanation'))!;
+            const candidates = core.discover(document);
+            const runs = candidates.filter(candidate => candidate.element === cell && candidate.nodes);
+            expect(runs).toHaveLength(2);
+            const runSources = runs.map(candidate => extractTranslationTextFromNodes(candidate.nodes!, core.shouldStayOriginal));
+            expect(runSources[0]).toContain('A readable introduction with');
+            expect(runSources[0]).toContain('an original link');
+            expect(runSources[0]).not.toContain('DO_NOT_SEND');
+            expect(runSources[1]).toContain('A readable closing explanation');
+            expect(runSources[1]).toContain('important details');
+            expect(core.resolve(intro)?.nodes).toEqual(runs[0]!.nodes);
+            expect(core.resolve(tail)?.nodes).toEqual(runs[1]!.nodes);
+            for (const id of ['mixed-child', 'mixed-child-two']) {
+                const child = document.getElementById(id)!;
+                expect(candidates.filter(candidate => candidate.element === child)).toHaveLength(1);
+                expect(core.resolve(child.firstChild)?.element).toBe(child);
+            }
+            expect(document.getElementById('mixed-link')!.getAttribute('href')).toBe('/guide');
+            expect(document.getElementById('mixed-code')!.textContent).toBe('DO_NOT_SEND');
+            expect(document.body.innerHTML).toBe(before);
+        },
+    );
+
+    it.each([
+        ['slot="comment"', 'td'], ['slot="comment"', 'th'],
+        ['slot="comment"', 'li'], ['slot="comment"', 'blockquote'],
+        ['id="t1_nested-comment-rtjson-content"', 'td'], ['id="t1_nested-comment-rtjson-content"', 'th'],
+        ['id="t1_nested-comment-rtjson-content"', 'li'], ['id="t1_nested-comment-rtjson-content"', 'blockquote'],
+    ])('Reddit %s 的 %s 内容同时含 DIV、段落与行内文字时不遗漏正文', (marker, tag) => {
+        const opening = tag === 'td' || tag === 'th' ? '<table><tbody><tr>' : tag === 'li' ? '<ul>' : '';
+        const closing = tag === 'td' || tag === 'th' ? '</tr></tbody></table>' : tag === 'li' ? '</ul>' : '';
+        const {document, core} = page(`<main><shreddit-comment><div ${marker}>
+            ${opening}<${tag} id="container">An opening explanation with <a id="source-link" href="/guide">a practical guide</a>.
+                <div id="outer">The outer introduction provides useful background.
+                    <div id="inner">The nested explanation keeps <code id="protected-code">DO_NOT_TRANSLATE</code> safe.</div>
+                    <p id="inner-paragraph">A paragraph inside the outer block remains separate.</p>
+                    The outer conclusion remains readable.
+                    <button id="protected-button"><div>Do not translate this action.</div></button>
+                    <div contenteditable="true" id="protected-editor"><p>Do not translate this draft.</p></div>
+                </div>
+                <p id="peer">The peer paragraph remains independently readable.</p>
+                A final explanation follows the paragraph.</${tag}>${closing}
+        </div><div id="outside-container"><div id="outside-body">Comment metadata should remain unchanged.</div></div></shreddit-comment>
+        <div slot="comment"><div id="unscoped-body">An unrelated page section remains unchanged.</div></div></main>`,
+        'https://www.reddit.com/r/example/comments/123/topic/');
+        const before = document.body.innerHTML;
+        const candidates = core.discover(document);
+        const sources = candidates.map(candidate => extractTranslationTextFromNodes(candidate.nodes ?? [candidate.element], core.shouldStayOriginal));
+        const required = [
+            'An opening explanation with a practical guide .',
+            'The outer introduction provides useful background.',
+            'The nested explanation keeps  safe.',
+            'A paragraph inside the outer block remains separate.',
+            'The outer conclusion remains readable.',
+            'The peer paragraph remains independently readable.',
+            'A final explanation follows the paragraph.',
+        ];
+        expect(candidates).toHaveLength(required.length);
+        for (const text of required) expect(sources.filter(source => source.replace(/\s+/gu, ' ').trim() === text.replace(/\s+/gu, ' ').trim()), text).toHaveLength(1);
+        expect(sources.join(' ')).not.toMatch(/DO_NOT_TRANSLATE|Do not translate this action|Do not translate this draft/);
+        for (const id of ['outer', 'inner', 'inner-paragraph', 'peer']) {
+            const element = document.getElementById(id)!;
+            const node = [...element.childNodes].find(child => child.nodeType === 3 && child.textContent?.trim())!;
+            const hover = core.resolve(node);
+            expect(hover, id).not.toBeNull();
+            const hoverSource = extractTranslationTextFromNodes(hover!.nodes ?? [hover!.element], core.shouldStayOriginal).replace(/\s+/gu, ' ').trim();
+            expect(required.map(text => text.replace(/\s+/gu, ' ').trim()), id).toContain(hoverSource);
+            expect(sources.filter(source => source.replace(/\s+/gu, ' ').trim() === hoverSource), id).toHaveLength(1);
+        }
+        expect(core.resolve(document.querySelector('#protected-button div')!.firstChild)).toBeNull();
+        expect(core.resolve(document.querySelector('#protected-editor p')!.firstChild)).toBeNull();
+        expect(core.resolve(document.getElementById('outside-body')!.firstChild)).toBeNull();
+        expect(core.resolve(document.getElementById('unscoped-body')!.firstChild)).toBeNull();
+        expect(document.querySelector('#source-link')!.getAttribute('href')).toBe('/guide');
+        expect(document.body.innerHTML).toBe(before);
+    });
+
+    it.each(['slot="comment"', 'id="t1_dynamic-comment-rtjson-content"'])(
+        'Reddit %s 的单个 DIV 及动态替换 DIV 重新发现与悬浮一致', (marker) => {
+            const {document, core} = page(`<main><shreddit-comment><div ${marker}><table><tbody><tr><td id="dynamic-container">
+                <div id="initial-div">The initial independent explanation remains complete.</div>
+            </td></tr></tbody></table></div></shreddit-comment></main>`, 'https://www.reddit.com/r/example/comments/123/topic/');
+            const container = document.getElementById('dynamic-container')!;
+            const initial = document.getElementById('initial-div')!;
+            let candidates = core.discover(document);
+            expect(candidates).toHaveLength(1);
+            expect(candidates[0]!.element).toBe(initial);
+            expect(extractTranslationTextFromNodes(candidates[0]!.nodes ?? [initial], core.shouldStayOriginal))
+                .toBe('The initial independent explanation remains complete.');
+            expect(core.resolve(initial.firstChild)?.element).toBe(initial);
+            initial.remove();
+            container.insertAdjacentHTML('beforeend', '<div id="replacement-div">The replacement independent explanation remains complete.</div>'
+                + '<p id="replacement-paragraph">The additional paragraph remains separate.</p>');
+            const replacement = document.getElementById('replacement-div')!;
+            const paragraph = document.getElementById('replacement-paragraph')!;
+            candidates = core.discover(document);
+            expect(candidates.map(candidate => candidate.element.id).sort()).toEqual(['replacement-div', 'replacement-paragraph']);
+            expect(core.resolve(initial.firstChild)).toBeNull();
+            expect(core.resolve(replacement.firstChild)?.element).toBe(replacement);
+            expect(core.resolve(paragraph.firstChild)?.element).toBe(paragraph);
+            replacement.remove();
+            expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(['replacement-paragraph']);
+            expect(core.resolve(replacement.firstChild)).toBeNull();
+        },
+    );
+
+    it('Reddit 普通评论富文本在正文标记变化和动态新增后重新验证候选', () => {
+        const {document, core} = page('<main><shreddit-comment><div id="t1_dynamic-comment-rtjson-content">'
+            + '<h3 id="dynamic-heading">A dynamically loaded section remains readable.</h3></div></shreddit-comment></main>',
+        'https://www.reddit.com/r/example/comments/123/topic/');
+        const body = document.getElementById('t1_dynamic-comment-rtjson-content')!;
+        const heading = document.getElementById('dynamic-heading')!;
+        expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(['dynamic-heading']);
+        expect(core.resolve(heading.firstChild)?.element).toBe(heading);
+        body.removeAttribute('id');
+        expect(core.discover(document)).toEqual([]);
+        expect(core.resolve(heading.firstChild)).toBeNull();
+        body.setAttribute('slot', 'comment');
+        body.insertAdjacentHTML('beforeend', '<table><tr><td id="dynamic-cell">Another readable comparison loaded later.</td></tr></table>');
+        const cell = document.getElementById('dynamic-cell')!;
+        expect(core.discover(body).map(candidate => candidate.element.id)).toEqual(['dynamic-heading', 'dynamic-cell']);
+        expect(core.resolve(cell.firstChild)?.element).toBe(cell);
+        body.remove();
+        expect(core.discover(document)).toEqual([]);
+    });
+
+    it.each(['/search/?q=language&type=posts', '/r/languagelearning/search/?q=reading&type=comments'])(
+        'Reddit 搜索 %s 在 focus 范围发现 SDUI 标题和评论，保护元数据与操作', (pathname) => {
+            const fixture = readFileSync(new URL('./fixtures/translation-pages/reddit-search.html', import.meta.url), 'utf8');
+            const {document} = parseHTML(fixture);
+            const core = createTranslationCore({url: new URL(pathname, 'https://www.reddit.com')});
+            const expected = ['search-title', 'search-comment', 'comment-first', 'comment-second', 'comment-list'];
+            const before = document.body.innerHTML;
+            const candidates = core.discover(document);
+            expect(candidates.map(candidate => candidate.element.id)).toEqual(expected);
+            for (const id of expected) {
+                const owner = document.getElementById(id)!;
+                expect(core.resolve(owner.firstChild)).toMatchObject({element: owner, adapterId: 'reddit'});
+            }
+            expect(core.resolve(document.querySelector('#search-title mark')!.firstChild)?.element.id).toBe('search-title');
+            expect(core.resolve(document.querySelector('#search-comment mark')!.firstChild)?.element.id).toBe('search-comment');
+            for (const selector of ['nav a', 'button', 'input', '#post-metadata a', '#author', 'faceplate-timeago',
+                '#search-heading', '#result-label', '#sidebar p']) {
+                for (const element of document.querySelectorAll(selector)) {
+                    expect(core.resolve(element.firstChild ?? element), selector).toBeNull();
+                }
+            }
+            const sources = candidates.map(candidate => extractTranslationText(candidate.element, core.shouldStayOriginal));
+            expect(sources.join('\n')).not.toMatch(/KEEP_ORIGINAL_CODE|Upvote|Share|Reply|Show more|u\/example|r\/languagelearning|hours ago/);
+            expect(document.body.innerHTML).toBe(before);
+
+            const late = document.createElement('article');
+            late.setAttribute('data-testid', 'sdui-post-unit');
+            late.innerHTML = '<a href="/r/example/comments/late/"><span id="late-title" data-testid="post-title-text">A newly loaded search result about daily reading</span></a><button>Share</button>';
+            document.querySelector('main')!.append(late);
+            expect(core.discover(late).map(candidate => candidate.element.id)).toEqual(['late-title']);
+            const title = late.querySelector('#late-title')!;
+            title.removeAttribute('data-testid');
+            expect(core.resolve(title.firstChild)).toBeNull();
+            title.setAttribute('data-testid', 'post-title-text');
+            expect(core.resolve(title.firstChild)?.element).toBe(title);
+            late.remove();
+            expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(expected);
+        },
+    );
+
+    it.each(['/user/example/', '/user/example/comments/', '/u/example/'])(
+        'Reddit 用户主页 %s 发现父帖标题、分块评论与裸正文，保留普通帖子边界', (pathname) => {
+            const fixture = readFileSync(new URL('./fixtures/translation-pages/reddit-profile.html', import.meta.url), 'utf8');
+            const {document} = parseHTML(fixture);
+            const core = createTranslationCore({url: new URL(pathname, 'https://www.reddit.com')});
+            const expected = ['profile-title', 'profile-comment', 'profile-title-second', 'profile-comment-second',
+                'profile-comment-third', 'profile-comment-list', 'profile-comment-quote', 'profile-comment-heading',
+                'profile-title-bare', 't1_bare-post-rtjson-content', 'ordinary-title', 'ordinary-body', 'ordinary-comment'];
+            const before = document.body.innerHTML;
+            const candidates = core.discover(document);
+            expect(candidates.map(candidate => candidate.element.id)).toEqual(expected);
+            for (const id of expected) {
+                const owner = document.getElementById(id)!;
+                expect(core.resolve(owner.firstChild)).toMatchObject({element: owner, adapterId: 'reddit'});
+            }
+            for (const [selector, id] of [
+                ['#profile-title-emphasis', 'profile-title'], ['#profile-source-link', 'profile-comment-second'],
+                ['#profile-comment-emphasis', 'profile-comment-third'], ['#profile-bare-emphasis', 't1_bare-post-rtjson-content'],
+                ['#profile-bare-link', 't1_bare-post-rtjson-content'],
+            ]) {
+                expect(core.resolve(document.querySelector(selector!)!.firstChild)?.element.id, selector).toBe(id);
+            }
+            for (const selector of ['#profile-navigation a', 'button', '.metadata a', 'faceplate-timeago',
+                '#profile-heading', '#profile-sidebar h2', '#profile-sidebar p']) {
+                for (const element of document.querySelectorAll(selector)) {
+                    expect(core.resolve(element.firstChild ?? element), selector).toBeNull();
+                }
+            }
+            const sources = candidates.map(candidate => extractTranslationTextFromNodes(
+                candidate.nodes ?? [candidate.element], core.shouldStayOriginal));
+            expect(sources.join('\n')).not.toMatch(/KEEP_ORIGINAL_CODE|Reddit Home|Share|Reply|Show more|u\/example|r\/languagelearning|hours ago|About this user/);
+            expect(sources.filter(source => source.includes('Compare the original meaning'))).toHaveLength(1);
+            expect(sources.filter(source => source.includes('Start with familiar topics'))).toHaveLength(1);
+            expect(document.body.innerHTML).toBe(before);
+        },
+    );
+
+    it('Reddit 用户主页动态评论拆分直接文本与嵌套段落，替换和移除后不复用旧候选', () => {
+        const {document, core} = page('<main></main>', 'https://www.reddit.com/user/example/comments/');
+        const card = document.createElement('shreddit-profile-comment');
+        card.innerHTML = '<h2 class="inline-block m-0"><a class="rpl" id="late-profile-title" href="/r/example/comments/late/">A recently loaded parent discussion</a></h2>'
+            + '<div class="md" id="t1_late-post-rtjson-content"><span id="late-profile-intro">A direct introduction before the paragraph.</span>'
+            + '<p id="late-profile-paragraph">A nested paragraph remains an independent translation.</p>'
+            + '<span id="late-profile-after">A direct conclusion after the paragraph.</span></div><button>Reply</button>';
+        document.querySelector('main')!.append(card);
+        const sources = core.discover(card).map(candidate => extractTranslationTextFromNodes(
+            candidate.nodes ?? [candidate.element], core.shouldStayOriginal));
+        expect(sources).toHaveLength(4);
+        expect(sources).toEqual(expect.arrayContaining(['A recently loaded parent discussion', 'A direct introduction before the paragraph.',
+            'A nested paragraph remains an independent translation.', 'A direct conclusion after the paragraph.']));
+        expect(core.resolve(card.querySelector('#late-profile-intro')!.firstChild)?.nodes?.length).toBeGreaterThan(0);
+        expect(core.resolve(card.querySelector('#late-profile-paragraph')!.firstChild)?.element.id).toBe('late-profile-paragraph');
+        expect(core.resolve(card.querySelector('#late-profile-after')!.firstChild)?.nodes?.length).toBeGreaterThan(0);
+        const body = card.querySelector('[id$="-post-rtjson-content"]')!;
+        body.removeAttribute('id');
+        expect(core.resolve(body.querySelector('p')!.firstChild)).toBeNull();
+        body.setAttribute('id', '-post-rtjson-content');
+        body.innerHTML = '<p id="replacement-profile-comment">The host replaced the previous comment body.</p>';
+        expect(core.discover(card).map(candidate => candidate.element.id)).toEqual(['late-profile-title', 'replacement-profile-comment']);
+        card.remove();
+        expect(core.discover(document)).toEqual([]);
+    });
+
     it.each(['content', 'all'] as const)('Reddit %s 范围不叠加外部译文，也不吞掉未翻译的相邻正文', (scope) => {
         const {document} = page(`<main><shreddit-post>
             <h1 slot="title" id="translated-title">A model with strong potential
@@ -2766,6 +3130,71 @@ describe('translation candidate core', () => {
 
         expect(() => core.resolveAtPoint(document, 10, 20)).not.toThrow();
         expect(core.resolveAtPoint(document, 10, 20)).toBeNull();
+    });
+
+    it.each(['content', 'all'] as const)('protects GitHub repository breadcrumb and author identities in %s scope', scope => {
+        // Public /Niko1221/Strata/pulls DOM observed on 2026-11-13; hashed classes are deliberately omitted.
+        const {document} = page(`
+            <header><nav data-component="Breadcrumbs" aria-label="Breadcrumbs"><ol>
+                <li><a id="owner" data-component="Breadcrumbs.Item" href="/Niko1221"><span>Niko1221</span></a></li>
+                <li><a id="repository" data-component="Breadcrumbs.Item" href="/Niko1221/Strata"><span>Strata</span></a></li>
+            </ol></nav><nav><a id="code" href="/Niko1221/Strata">Code</a><a id="pulls" href="/Niko1221/Strata/pulls">Pull requests</a></nav></header>
+            <main><h3><a id="title" data-testid="listitem-title-link" href="/Niko1221/Strata/pull/1">Improve the translation of repository discussions</a></h3>
+                <ul data-listview-component="items-list"><li id="identities"><a id="pr-author" data-testid="author-filter-link" href="/Niko1221/Strata/pulls?author=FixtureAuthor"><span>Fixture Author</span></a>
+                    <a id="profile-user" data-hovercard-type="user" href="/FixtureUser">Fixture User</a>
+                    <a id="profile-org" data-hovercard-type="organization" href="/FixtureOrg">Fixture Organization</a>
+                    <a id="profile-repo" data-hovercard-type="repository" href="/FixtureOrg/FixtureRepo">Fixture Repository</a>
+                    <a id="missing-href" data-hovercard-type="user">A readable example without a user destination</a></li></ul>
+                <article class="markdown-body"><p id="prose">A readable explanation links to <a id="reading-link" href="/Niko1221">the project author</a>.</p>
+                <p><a id="body-profile" data-hovercard-type="user" href="/Niko1221">An ordinary reading link inside the discussion</a></p>
+                <header><nav data-component="Breadcrumbs"><a id="example" data-component="Breadcrumbs.Item" href="/example">A breadcrumb example inside a discussion remains readable</a></nav></header></article>
+            </main>
+        `, 'https://github.com/Niko1221/Strata/pulls');
+        const core = createTranslationCore({url: new URL('https://github.com/Niko1221/Strata/pulls'), scope});
+        const before = new TranslationCandidateCore({url: core.url, scope,
+            adapters: core.adapters.filter(adapter => adapter.id !== 'github-repository-identity')});
+        expect(before.shouldStayOriginal(document.getElementById('owner')!)).toBe(false);
+        const header = document.querySelector<HTMLElement>('header')!;
+        const original = header.outerHTML;
+        const checkIdentity = (id: string) => {
+            const element = document.getElementById(id)!;
+            for (const target of [element, ...element.querySelectorAll('*')]) {
+                expect(core.shouldStayOriginal(target), id).toBe(true);
+                expect(core.shouldOmitFromTranslation(target), id).toBe(true);
+                expect(core.shouldIgnoreMutation(target), id).toBe(true);
+                expect(core.resolve(target.firstChild), id).toBeNull();
+            }
+            expect(core.discover(element), id).toEqual([]);
+        };
+        checkIdentity('owner');
+        checkIdentity('repository');
+        checkIdentity('pr-author');
+        const identities = document.querySelector<HTMLElement>('#identities')!;
+        const identitySnapshot = createTranslationSourceSnapshot(identities, core.shouldStayOriginal, undefined, undefined, core.shouldOmitFromTranslation);
+        expect(identitySnapshot.slots.map(slot => slot.source).join(' ')).not.toContain('Fixture Author');
+        for (const id of ['code', 'pulls', 'reading-link', 'profile-user', 'profile-org', 'profile-repo', 'body-profile', 'missing-href', 'example']) {
+            expect(core.shouldStayOriginal(document.getElementById(id)!), id).toBe(false);
+        }
+        for (const id of ['title', 'prose']) {
+            const element = document.getElementById(id)!;
+            expect(core.discover(document).some(candidate => candidate.element.contains(element)), id).toBe(true);
+            expect(core.resolve(element.firstChild)?.element.contains(element), id).toBe(true);
+        }
+        for (let pass = 0; pass < 2; pass += 1) {
+            const snapshot = createTranslationSourceSnapshot(header, core.shouldStayOriginal, undefined, undefined, core.shouldOmitFromTranslation);
+            const source = snapshot.slots.map(slot => slot.source).join(' ');
+            expect(source).not.toContain('Niko1221');
+            expect(source).not.toContain('Strata');
+            applyTranslationsToSnapshot(snapshot, snapshot.slots.map(() => '导航译文'));
+            expect(header.outerHTML).toBe(original);
+        }
+        header.querySelector('ol')!.insertAdjacentHTML('beforeend', '<li><a id="new-owner" data-component="Breadcrumbs.Item" href="/NewOwner"><span>New Owner</span></a></li>');
+        checkIdentity('new-owner');
+        document.querySelector('#repository span')!.textContent = 'AnotherRepository';
+        checkIdentity('repository');
+        expect(document.getElementById('repository')!.getAttribute('href')).toBe('/Niko1221/Strata');
+        const elsewhere = createTranslationCore({url: new URL('https://example.com/article'), scope});
+        expect(elsewhere.shouldStayOriginal(document.getElementById('owner')!)).toBe(false);
     });
 
     it('translates GitHub PR titles instead of pruning repository-content', () => {
@@ -2883,6 +3312,107 @@ describe('translation candidate core', () => {
         metadata.querySelector('relative-time')!.textContent = '2 months ago';
         expect(core.discover(metadata)).toEqual([]);
         expect(metadata.outerHTML).toBe(before.replace('last month</relative-time>', '2 months ago</relative-time>'));
+    });
+
+    it('protects the native GitHub PR-list heading while retaining PR and Markdown titles and non-list pages', () => {
+        const {document, core} = page(`<main><react-app><div data-target="react-app.reactRoot"><meta name="react-app-name" content="pull-requests">
+            <header data-component="PageLayout.Header"><h1 id="list-heading" data-testid="header-title">All pull requests</h1></header>
+            <a id="pr-title" data-testid="listitem-title-link" href="/owner/repo/pull/1">Fix the translated paragraph layout</a>
+            <article class="markdown-body"><header data-component="PageLayout.Header"><h1 id="readme-title" data-testid="header-title">An article heading</h1></header><p id="body">A complete source paragraph.</p></article>
+            </div></react-app></main>`, 'https://github.com/owner/repo/pulls');
+        const heading = document.getElementById('list-heading')!, before = heading.outerHTML;
+        expect(core.shouldStayOriginal(heading)).toBe(true); expect(core.shouldIgnoreMutation(heading)).toBe(true);
+        expect(core.resolve(heading.firstChild)).toBeNull();
+        expect(core.discover(document).map(item => item.element.id)).toEqual(['pr-title', 'readme-title', 'body']);
+        expect(createTranslationSourceSnapshot(document.querySelector('main')!, core.shouldStayOriginal).slots.map(slot => slot.source).join(' ')).not.toContain('All pull requests');
+        expect(heading.outerHTML).toBe(before);
+        document.querySelector('meta')!.setAttribute('content', 'pull-request');
+        expect(core.shouldStayOriginal(heading)).toBe(false); expect(core.shouldIgnoreMutation(heading)).toBe(false);
+        expect(core.resolve(heading.firstChild)?.element).toBe(heading);
+    });
+
+    it('protects current GitHub PR list author and timestamp metadata without hiding nearby prose', () => {
+        const {document, core} = page(`
+            <main>
+                <ul data-listview-component="items-list">
+                    <li id="row"><div data-listview-item-title-container="true"><h3>
+                        <a id="current-title" data-testid="listitem-title-link" href="/FluentRead/FluentRead/pull/100"><span id="inside-title" data-testid="timestamp-container">A descriptive pull request title</span></a>
+                    </h3></div><div class="container__W45oI6 description__mZjLFE">
+                        <span id="metadata" data-testid="timestamp-container"><span aria-hidden="true">·</span>
+                            <a id="current-author" data-testid="author-filter-link" href="/FluentRead/FluentRead/pulls?author=ExampleUser">ExampleUser</a>
+                            <span> opened </span><relative-time id="current-time" datetime="2026-10-27T00:30:26Z">Oct 27, 2026</relative-time>
+                        </span><span id="association" data-testid="comment-author-association">Member</span>
+                    </div></li>
+                    <li><span id="timestamp-includes-title" data-testid="timestamp-container"><a id="wrapped-title" data-testid="listitem-title-link" href="/owner/repo/pull/4">A readable nested title</a></span></li>
+                    <li id="no-title"><span id="near-no-title" data-testid="timestamp-container"><a data-testid="author-filter-link">Readable author note</a><relative-time>yesterday</relative-time></span></li>
+                    <li><a data-testid="listitem-title-link" href="/owner/repo/pull/1">Another descriptive title</a><span id="near-no-author" data-testid="timestamp-container">Readable explanation<relative-time>yesterday</relative-time></span></li>
+                    <li><a data-testid="listitem-title-link" href="/owner/repo/pull/2">A third descriptive title</a><span id="temporarily-no-time" data-testid="timestamp-container"><a data-testid="author-filter-link">A readable author paragraph</a></span></li>
+                </ul>
+                <p id="ordinary" data-testid="timestamp-container">Ordinary prose remains readable and independently translatable.</p>
+                <article class="markdown-body"><ul data-listview-component="items-list"><li><a data-testid="listitem-title-link" href="/owner/repo/pull/3">A fourth descriptive title</a><span id="markdown-near" data-testid="timestamp-container"><a data-testid="author-filter-link">Readable markdown mention</a><relative-time>yesterday</relative-time></span></li></ul></article>
+            </main>
+        `, 'https://github.com/FluentRead/FluentRead/pulls');
+        const title = document.querySelector<HTMLElement>('#current-title')!;
+        const row = document.querySelector<HTMLElement>('#row')!;
+        const metadata = document.querySelector<HTMLElement>('#metadata')!;
+        const author = document.querySelector<HTMLElement>('#current-author')!;
+        const time = document.querySelector<HTMLElement>('#current-time')!;
+        const association = document.querySelector<HTMLElement>('#association')!;
+        const originalHTML = metadata.outerHTML, originalNodes = [...metadata.childNodes], originalHref = author.getAttribute('href');
+        const candidates = core.discover(document);
+        expect(candidates.some(({element}) => element === title)).toBe(true);
+        expect(core.resolve(title.querySelector('span')!.firstChild)).toMatchObject({element: title, adapterId: 'github'});
+        expect(candidates.some(({element}) => element.id === 'ordinary')).toBe(true);
+        const wrappedTitle = document.getElementById('wrapped-title')!;
+        expect(candidates.some(({element}) => element === wrappedTitle)).toBe(true);
+        expect(core.resolve(wrappedTitle.firstChild)).toMatchObject({element: wrappedTitle, adapterId: 'github'});
+        expect(core.shouldStayOriginal(association)).toBe(false);
+        for (const element of [metadata, ...metadata.querySelectorAll('*')]) {
+            expect(core.shouldStayOriginal(element)).toBe(true);
+            expect(core.shouldOmitFromTranslation(element)).toBe(true);
+            expect(core.shouldIgnoreMutation(element)).toBe(true);
+            expect(core.resolve(element.firstChild)).toBeNull();
+        }
+        expect(candidates.some(({element}) => element === metadata || metadata.contains(element))).toBe(false);
+        expect(createTranslationSourceSnapshot(row, core.shouldStayOriginal).slots.map(({source}) => source).join(' ')).not.toContain('ExampleUser');
+        for (const id of ['near-no-title', 'ordinary', 'markdown-near', 'inside-title', 'timestamp-includes-title']) {
+            const near = document.getElementById(id)!;
+            expect(core.shouldStayOriginal(near), id).toBe(false);
+            expect(core.shouldOmitFromTranslation(near), id).toBe(false);
+        }
+        const temporarilyNoAuthor = document.getElementById('near-no-author')!;
+        expect(core.shouldStayOriginal(temporarilyNoAuthor)).toBe(true);
+        expect(core.shouldIgnoreMutation(temporarilyNoAuthor)).toBe(true);
+        expect(core.discover(temporarilyNoAuthor)).toEqual([]);
+        const followingAuthor = author.nextSibling;
+        author.remove();
+        expect(core.shouldStayOriginal(metadata)).toBe(true);
+        expect(core.shouldIgnoreMutation(metadata)).toBe(true);
+        expect(core.discover(metadata)).toEqual([]);
+        metadata.insertBefore(author, followingAuthor);
+        const temporarilyNoTime = document.getElementById('temporarily-no-time')!;
+        expect(core.shouldStayOriginal(temporarilyNoTime)).toBe(true);
+        expect(core.shouldIgnoreMutation(temporarilyNoTime)).toBe(true);
+        expect(core.discover(temporarilyNoTime)).toEqual([]);
+        const followingTime = time.nextSibling;
+        time.remove();
+        expect(core.shouldStayOriginal(metadata)).toBe(true);
+        expect(core.shouldIgnoreMutation(metadata)).toBe(true);
+        expect(core.discover(metadata)).toEqual([]);
+        metadata.insertBefore(time, followingTime);
+        time.textContent = 'Oct 28, 2026';
+        author.textContent = 'AnotherUser';
+        expect(core.discover(metadata)).toEqual([]);
+        expect(core.shouldIgnoreMutation(time)).toBe(true);
+        expect(author.getAttribute('href')).toBe(originalHref);
+        expect([...metadata.childNodes]).toEqual(originalNodes);
+        expect(metadata.outerHTML).toBe(originalHTML.replace('ExampleUser</a>', 'AnotherUser</a>').replace('Oct 27, 2026</relative-time>', 'Oct 28, 2026</relative-time>'));
+        const clone = metadata.cloneNode(true) as HTMLElement;
+        clone.id = 'dynamic-metadata';
+        row.append(clone);
+        expect(core.shouldStayOriginal(clone)).toBe(true);
+        expect(core.shouldIgnoreMutation(clone)).toBe(true);
+        expect(core.discover(clone)).toEqual([]);
     });
 
     it('keeps GitHub issue-list labels and metadata original while translating titles', () => {
@@ -3560,6 +4090,26 @@ describe('translation candidate core', () => {
         }
     });
 
+    it('最短字符阈值以空白归一后的 UTF-16 长度计算，同时保留标识符和时间过滤', () => {
+        try {
+            setMinimumTranslationTextLength(6);
+            expect(isMeaningfulTranslationText('  Go   now  ')).toBe(true);
+            expect(isMeaningfulTranslationText('  Go  ')).toBe(false);
+            expect(isMeaningfulTranslationText('12:30 UTC')).toBe(false);
+            expect(isMeaningfulTranslationText('https://example.test')).toBe(false);
+            setMinimumTranslationTextLength(2);
+            expect(isMeaningfulTranslationText('你好')).toBe(true);
+            expect(isMeaningfulTranslationText('𝒜')).toBe(false);
+            expect(isMeaningfulTranslationText('𝒜𝒞')).toBe(true);
+            setMinimumTranslationTextLength(1);
+            expect(isMeaningfulTranslationText('')).toBe(false);
+            expect(isMeaningfulTranslationText('a')).toBe(false);
+            expect(isMeaningfulTranslationText('Go')).toBe(true);
+        } finally {
+            setMinimumTranslationTextLength(2);
+        }
+    });
+
     it('长正文的可读性判断不收集与正文长度相同的字母结果数组', () => {
         const match = String.prototype.match;
         let largestLetterArray = 0;
@@ -4173,6 +4723,9 @@ describe('translation candidate core', () => {
 
     it('guards extreme text ancestry and layout edge cases without provider work', () => {
         const {document, core} = page('<main><div id="root"></div></main>');
+        const shallow = document.createElement('p'); shallow.textContent = 'A readable source paragraph survives absent discovery roots.'; document.body.append(shallow);
+        const sparseRoots = new Array<Node>(2); sparseRoots[1] = shallow;
+        expect(hasMeaningfulTranslationTextInNodes(sparseRoots)).toBe(true);
         const root = document.querySelector('#root')!;
         let parent = root;
         for (let index = 0; index < maxComposedAncestorDepth + 2; index += 1) {
@@ -4294,6 +4847,49 @@ describe('translation candidate core', () => {
 });
 
 describe('X 动态正文候选形态回归', () => {
+    it('excludes engagement counts while keeping post text and adjacent prose readable', () => {
+        const {document, core} = page(`
+            <main><article id="post">
+                <div id="body" data-testid="tweetText">The Moon shines above our planet.</div>
+                <p id="nearby">The neighboring explanation remains readable.</p>
+                <div id="engagement">
+                    <div data-engagement-action="reply"><a href="/compose/post"><span>318</span></a></div>
+                    <div data-engagement-action="retweet"><button><span>1万</span></button></div>
+                    <div data-engagement-action="like"><button><span>2.2万</span></button></div>
+                    <div><div><div data-engagement-action="bookmark"><button><span>430</span></button></div></div></div>
+                </div>
+                <div id="other"><div data-engagement-action="reply">A readable reply explanation.</div></div>
+            </article></main>
+        `, 'https://x.com/NASA/status/1571977394151383042');
+        const body = document.getElementById('body')!;
+        const nearby = document.getElementById('nearby')!;
+        const engagement = document.getElementById('engagement')!;
+        const reply = engagement.querySelector('[data-engagement-action="reply"] span')!;
+        const candidates = core.discover(document);
+        expect(candidates.some(candidate => candidate.element === body)).toBe(true);
+        expect(candidates.some(candidate => candidate.element === nearby)).toBe(true);
+        expect(candidates.some(candidate => candidate.element === engagement || engagement.contains(candidate.element))).toBe(false);
+        expect(core.resolve(reply.firstChild)).toBeNull();
+        expect(core.resolve(body.firstChild)?.element).toBe(body);
+        expect(core.resolve(nearby.firstChild)?.element).toBe(nearby);
+        expect(core.shouldStayOriginal(engagement)).toBe(true);
+        expect(core.shouldStayOriginal(document.getElementById('other')!)).toBe(false);
+        expect(core.resolve(document.querySelector('#other [data-engagement-action="reply"]')!.firstChild)).not.toBeNull();
+        const articleSource = extractTranslationText(document.getElementById('post')!, core.shouldStayOriginal);
+        expect(articleSource).toContain('The Moon shines above our planet.');
+        expect(articleSource).toContain('The neighboring explanation remains readable.');
+        expect(articleSource).not.toMatch(/318|1万|2\.2万|430/u);
+
+        const replyAction = engagement.querySelector('[data-engagement-action="reply"]')!;
+        const nextSibling = replyAction.nextSibling;
+        replyAction.remove();
+        expect(core.shouldStayOriginal(engagement)).toBe(false);
+        expect(core.discover(document).some(candidate => candidate.element === engagement || engagement.contains(candidate.element))).toBe(true);
+        engagement.insertBefore(replyAction, nextSibling);
+        expect(core.shouldStayOriginal(engagement)).toBe(true);
+        expect(core.discover(document).some(candidate => candidate.element === engagement || engagement.contains(candidate.element))).toBe(false);
+    });
+
     it('含 emoji 与链接的 tweetText 仍由 X 适配器作为原子 owner，不 materialize synthetic run', () => {
         const {document, core} = page(`
             <article data-testid="tweet">
@@ -4687,4 +5283,26 @@ describe('整块请求的整段原文重建', () => {
     it('被快照省略的隐藏文字与图标不阻止整块请求', () => {
         expect(source('<p>Open <span hidden>secret</span> the <b>door</b></p>')).toBe('Open the door');
     });
+});
+
+
+describe('候选扫描的失效 DOM 边界', () => {
+    it('跳过入口枚举中已经失效的 collection 条目', () => {
+        const {core} = page('<p>Readable paragraph.</p>');
+        const root = {nodeType: 11, children: {length: 1, item: () => null}} as unknown as Node;
+        expect([...core.discoverSteps(root)]).toEqual([]);
+    });
+
+    it('开放根发现跳过宿主 walker 返回的非元素节点', () => {
+        const {document} = page('<article-card></article-card>');
+        const host = document.querySelector('article-card')!;
+        const shadow = host.attachShadow({mode: 'open'});
+        Object.defineProperty(document, 'createTreeWalker', {value: () => {
+            const nodes = [document.createTextNode('Unexpected walker text'), host];
+            return {nextNode: () => nodes.shift() ?? null};
+        }});
+        expect(getOpenShadowRoots(document)).toEqual([shadow]);
+    });
+
+
 });

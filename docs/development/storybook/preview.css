@@ -1,0 +1,31 @@
+/* Restore document scrolling after loading the real Options theme. All showcase styling is scoped. */
+html, body { height: auto; min-height: 100%; overflow: auto; }
+body, :root.dark body { background: var(--surface); color: var(--ink); }
+.fr-story-surface { width: 100%; color: var(--ink); font-family: var(--interface-font-family); font-size: 14px; line-height: 1.6; }
+.fr-story-surface :where(h1, h2, h3, p) { margin: 0 0 12px; }
+.fr-story-surface :where(h1) { font-size: 28px; }
+.fr-story-surface :where(h2) { font-size: 20px; }
+.fr-story-surface :where(h3) { font-size: 15px; }
+.fr-story-surface code { overflow-wrap: anywhere; font-size: 12px; }
+.fr-story-surface a { color: var(--brand-strong); }
+.fr-story-surface :where(small), .fr-story-note { color: var(--muted); font-size: 12px; }
+.fr-story-stack { display: grid; gap: 20px; max-width: 760px; }
+.fr-story-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.fr-story-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 14px; }
+.fr-story-tile { min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+.fr-story-tile code, .fr-story-tile small { display: block; }
+.fr-story-field { display: grid; gap: 6px; min-width: 0; }
+.fr-story-field > span { font-size: 13px; font-weight: 600; }
+.fr-story-surface table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.fr-story-surface th, .fr-story-surface td { padding: 10px; border-bottom: 1px solid var(--line); text-align: start; overflow-wrap: anywhere; }
+.fr-story-surface .settings-card { padding: 0; overflow: visible; }
+.fr-story-surface .feature-enable-card { margin-bottom: 0; }
+.fr-story-surface .fr-story-value { margin-top: 8px; font-variant-numeric: tabular-nums; }
+/* Autodocs lives in the same iframe and follows the toolbar's active theme. */
+:root.dark .sbdocs-wrapper, :root.dark .sbdocs-content { background: var(--surface); color: var(--ink); }
+:root.dark .sbdocs :is(h1,h2,h3,h4,p,li,label,th,td) { color: var(--ink); }
+:root.dark .sbdocs-preview { border-color: var(--line); background: var(--surface); }
+:root.dark .sbdocs-wrapper a { color: var(--brand-strong); }
+:root.dark .docblock-argstable :is(th, td) { border-color: var(--line); background: var(--surface) !important; color: var(--ink); }
+:root.dark .docblock-argstable :is(span, code, p, label) { color: var(--ink); }
+:root.dark .docblock-argstable :is(input, textarea, select, button) { border-color: var(--line); background: var(--surface-soft); color: var(--ink); }

@@ -1,6 +1,6 @@
 /**
  * @file src/features/video-subtitle/content/video-ai/cueTimeline.ts
- * 文件职责：合并 AI 字幕 cue、维护有限可变尾部并按 spoken 时间选择当前 cue。
+ * 文件职责：合并 AI 字幕 cue、规范化有界时间轴并按 spoken 时间选择当前 cue。
  * 主要内容：处理重叠窗口、短暂时间孔洞、迟到识别元数据和严格播放头可见性，将完成的识别字幕转换为可立即回放的原文时间轴。
  * 模块边界：只处理时间轴数据结构，不读取播放器、不触发翻译，也不修改页面 DOM。
  */
@@ -24,7 +24,6 @@ export const VIDEO_AI_CUE_MIN_DURATION_MS = 500;
 export const VIDEO_AI_CUE_MERGE_GAP_MS = 500;
 export const VIDEO_AI_CUE_GAP_FILL_MS = 560;
 export const VIDEO_AI_MAX_CUE_COUNT = 1_200;
-export const VIDEO_AI_MUTABLE_TAIL_MS = 12_000;
 
 type VideoAiTimelineCue = VideoSubtitleCue
   & Partial<Pick<VideoAiStabilizedCue, 'availableAtMs' | 'spokenEndMs'>>
@@ -202,27 +201,6 @@ export function mergeVideoAiSubtitleCues(cues: VideoSubtitleCue[]): VideoSubtitl
   }
 
   return result.slice(-VIDEO_AI_MAX_CUE_COUNT);
-}
-
-/**
- * 只重算播放头附近的可变尾部。已经离开重叠 Whisper 窗口的稳定前缀不再
- * 排序或改写，避免长视频每次出一个 cue 都对完整历史做 O(n log n) 工作。
- */
-export function upsertVideoAiSubtitleCue(
-  cues: VideoSubtitleCue[],
-  cue: VideoSubtitleCue,
-): VideoSubtitleCue[] {
-  const mutableAfterMs = Math.max(0, cue.startMs - VIDEO_AI_MUTABLE_TAIL_MS);
-  const stablePrefix: VideoSubtitleCue[] = [];
-  const mutableTail: VideoSubtitleCue[] = [];
-  for (const existing of cues) {
-    if (getAiCueSpokenEndMs(existing) < mutableAfterMs) stablePrefix.push(existing);
-    else mutableTail.push(existing);
-  }
-  const normalizedTail = normalizeVideoAiSubtitleTimeline(
-    mergeVideoAiSubtitleCues([...mutableTail, cue]),
-  );
-  return [...stablePrefix, ...normalizedTail].slice(-VIDEO_AI_MAX_CUE_COUNT);
 }
 
 /** 找到当前播放头应显示的最新 cue，而不是让重叠 cue 来回抢占字幕层。 */

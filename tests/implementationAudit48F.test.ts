@@ -131,13 +131,13 @@ describe('audit48F: actual provider response parsing', () => {
         await expect(translateFreeChineseWebText(provider, 'hello', 'en', 'zh-Hans')).rejects.toMatchObject({freeFailure: 'unavailable'});
     });
     it('Gemini returns every final text part and omits thought and binary parts', async () => {
-        fetchPort.mockResolvedValue(json({candidates: [{content: {parts: [
+        fetchPort.mockResolvedValue(json({modelVersion: 'gemini-runtime-version', candidates: [{content: {parts: [
             {thought: true, text: 'private reasoning'}, {inlineData: {data: 'binary'}},
             {text: '甲'}, {text: '乙'}, null,
         ]}}, {content: {parts: [{text: 'alternative'}]}}],
         usageMetadata: {promptTokenCount: 3, candidatesTokenCount: 2, thoughtsTokenCount: 1}}));
         await expect(gemini(withProviderSnapshot(request('gemini'), config))).resolves.toBe('甲乙');
-        expect(observations).toEqual([expect.objectContaining({outcome: 'success', inputTokens: 3, outputTokens: 3, reasoningTokens: 1})]);
+        expect(observations).toEqual([expect.objectContaining({outcome: 'success', actualModel: 'gemini-runtime-version', inputTokens: 3, outputTokens: 3, reasoningTokens: 1})]);
     });
     it.each([
         null, {}, {candidates: []}, {candidates: [{content: {parts: []}}]},
@@ -171,8 +171,9 @@ describe('audit48F: actual provider response parsing', () => {
     });
     it('preserves whitespace in valid final text for every direct chat adapter', async () => {
         for (const [service, provider] of [['tongyi', tongyi], ['zhipu', zhipu], ['deepseek', deepseek]] as const) {
-            fetchPort.mockResolvedValue(json({choices: [{message: {content: '  译文\n'}}]}));
+            fetchPort.mockResolvedValue(json({model: 'runtime-model-version', choices: [{message: {content: '  译文\n'}}]}));
             await expect(provider(withProviderSnapshot(request(service), config))).resolves.toBe(service === 'deepseek' ? '译文' : '  译文\n');
+            expect(observations.at(-1)).toMatchObject({outcome: 'success', actualModel: 'runtime-model-version'});
         }
         fetchPort.mockResolvedValue(json({translations: [{text: '  译文\n'}]}));
         await expect(deepl(withProviderSnapshot(request('deepL'), config))).resolves.toBe('  译文\n');
@@ -219,7 +220,7 @@ describe('audit48F: cancellation at controlled external boundaries', () => {
         });
         const client = createOffscreenClient({getRuntime: () => ({getContexts: async () => [{}], sendMessage}),
             getOffscreen: () => ({createDocument: unexpected}), readyRetryAttempts: 1, preparationTimeoutMs: 1000});
-        const provider = createChromeTranslator({capabilities: {chromeTranslation: true}, offscreenClient: client,
+        const provider = createChromeTranslator({capabilities: {browserTranslation: true}, offscreenClient: client,
             createRequestId: () => 'contract-request', preparationStore: {set: vi.fn()},
         });
         const controller = new AbortController(); controller.abort();
@@ -251,6 +252,9 @@ describe('audit48F: cancellation at controlled external boundaries', () => {
         await expect(doubaoSeedTranslation(withProviderSnapshot({...request('doubao'), origin: ['one', 'two'], abortSignal: controller.signal}, config))).rejects.toMatchObject({name: 'AbortError'});
         expect(fetchPort).toHaveBeenCalledOnce();
         expect(observations[0]?.outcome).toBe('cancelled');
+        fetchPort.mockClear();
+        await expect(doubaoSeedTranslation(withProviderSnapshot({...request('doubao'), abortSignal: controller.signal}, config))).rejects.toMatchObject({name: 'AbortError'});
+        expect(fetchPort).not.toHaveBeenCalled();
     });
     it.each([
         ['gemini', gemini, {candidates: [{content: {parts: [{text: 'late'}]}}]}],
@@ -260,13 +264,20 @@ describe('audit48F: cancellation at controlled external boundaries', () => {
         ['deepseek', deepseek, {choices: [{message: {content: 'late'}}]}],
         ['deepL', deepl, {translations: [{text: 'late'}]}],
     ] as const)('%s rejects late JSON after cancellation and prevents pre-cancelled transport', async (service, provider, body) => {
-        const controller = new AbortController();
-        fetchPort.mockResolvedValue({ok: true, json: async () => {controller.abort(); return body;}} as Response);
+        const controller = new AbortController(), reason = new Error('owner left while reading');
+        let finish!: () => void;
+        const received = new Response(new ReadableStream<Uint8Array>({start(stream) {
+            finish = () => {controller.abort(reason);stream.enqueue(new TextEncoder().encode(JSON.stringify(body)));stream.close();};
+        }}));
+        const fetched = new Promise<void>(resolve => fetchPort.mockImplementation(async () => {resolve();return received;}));
         const message = {...request(service), abortSignal: controller.signal};
-        await expect(provider(withProviderSnapshot(message, config))).rejects.toMatchObject({name: 'AbortError'});
+        const pending = provider(withProviderSnapshot(message, config));
+        const rejected = expect(pending).rejects.toBe(reason);
+        await fetched;finish();await rejected;
+        expect(received.bodyUsed).toBe(true);
         if (service !== 'deepL') expect(observations).toEqual([expect.objectContaining({outcome: 'cancelled'})]);
         fetchPort.mockClear(); observations.length = 0;
-        await expect(provider(withProviderSnapshot(message, config))).rejects.toMatchObject({name: 'AbortError'});
+        await expect(provider(withProviderSnapshot(message, config))).rejects.toBe(reason);
         expect(fetchPort).not.toHaveBeenCalled();
         expect(observations).toEqual([]);
     });
@@ -276,21 +287,21 @@ describe('audit48F: cancellation at controlled external boundaries', () => {
             controller.abort();
             return {success: true, result: 'late', requestId: payload.requestId};
         });
-        const provider = createChromeTranslator({capabilities: {chromeTranslation: true}, offscreenClient: {send} as never, createRequestId: () => 'audit-request'});
+        const provider = createChromeTranslator({capabilities: {browserTranslation: true}, offscreenClient: {send} as never, createRequestId: () => 'audit-request'});
         await expect(provider(withProviderSnapshot({origin: 'hello', abortSignal: controller.signal}, config))).rejects.toMatchObject({name: 'AbortError'});
         expect(send).toHaveBeenCalledOnce();
     });
     it('Chrome does not send an already cancelled request', async () => {
         const controller = new AbortController(); controller.abort();
         const send = vi.fn();
-        const provider = createChromeTranslator({capabilities: {chromeTranslation: true}, offscreenClient: {send}, createRequestId: () => 'audit-request'});
+        const provider = createChromeTranslator({capabilities: {browserTranslation: true}, offscreenClient: {send}, createRequestId: () => 'audit-request'});
         await expect(provider(withProviderSnapshot({origin: 'hello', abortSignal: controller.signal}, config))).rejects.toMatchObject({name: 'AbortError'});
         expect(send).not.toHaveBeenCalled();
     });
     it('Chrome retains model-unavailable identity from offscreen', async () => {
         const send = vi.fn(async () => ({success: false, requestId: 'audit-request', errorCode: 'model-unavailable', error: 'offline'}));
-        const provider = createChromeTranslator({capabilities: {chromeTranslation: true}, offscreenClient: {send} as never, createRequestId: () => 'audit-request'});
-        await expect(provider(withProviderSnapshot({origin: 'hello'}, config))).rejects.toMatchObject({name: 'ChromeModelUnavailableError', message: 'Chrome Translation API 不可用：offline'});
+        const provider = createChromeTranslator({capabilities: {browserTranslation: true}, offscreenClient: {send} as never, createRequestId: () => 'audit-request'});
+        await expect(provider(withProviderSnapshot({origin: 'hello'}, config))).rejects.toMatchObject({name: 'ChromeModelUnavailableError', message: 'offline', code: 'browser-translation-unavailable', retryable: false});
     });
     it('DeepLX refuses a body read that completes after cancellation and does not fail over', async () => {
         config.deeplx = 'https://fixture.invalid/one\nhttps://fixture.invalid/two';
@@ -348,17 +359,14 @@ describe('audit48F: bounded production performance and output contracts', () => 
         expect(output).toBe(expected);
         expect(requests.map(q => Buffer.byteLength(q))).toEqual([499, 499, 5]);
     });
-    it('Sogou reuses its bootstrap only within one request across chunks and slots', async () => {
-        const bootstrap = vi.fn(() => new Response('"secretCode":1234'));
-        fetchPort.mockImplementation(async (url, init) => String(url).endsWith('/') ? bootstrap() : json({status: 0, data: {translate: {dit: '译:' + JSON.parse(String(init?.body)).text}}}));
+    it('Reverso preserves chunk and slot boundaries without shared bootstrap state', async () => {
+        fetchPort.mockImplementation(async (_url, init) => json({translation: ['译:' + JSON.parse(String(init?.body)).input]}));
         const slots = serializeTranslationSlots(['a'.repeat(1001), '  b\r\nc  '], 'audit-f');
-        const start = performance.now();
-        const output = await translateExtraFreeWebText('sogouFree', slots.payload, 'en', 'zh-Hans');
-        if (process.env.AUDIT_F_SOGOU_PERF) writeFileSync(process.env.AUDIT_F_SOGOU_PERF, JSON.stringify({inputCodeUnits: slots.payload.length, durationMs: performance.now() - start, bootstrapRequests: bootstrap.mock.calls.length, totalRequests: fetchPort.mock.calls.length, outputSHA256: createHash('sha256').update(output).digest('hex')}, null, 2));
+        const output = await translateExtraFreeWebText('reversoFree', slots.payload, 'en', 'zh-Hans');
         expect(parseTranslationSlots(slots, output)).toEqual(['译:' + 'a'.repeat(1000) + '译:a', '  译:b\r\n译:c  ']);
-        expect(bootstrap).toHaveBeenCalledOnce();
-        await translateExtraFreeWebText('sogouFree', 'next request', 'en', 'zh-Hans');
-        expect(bootstrap).toHaveBeenCalledTimes(2);
+        expect(fetchPort).toHaveBeenCalledTimes(4);
+        await translateExtraFreeWebText('reversoFree', 'next request', 'en', 'zh-Hans');
+        expect(fetchPort).toHaveBeenCalledTimes(5);
     });
     it('Apertium reuses the validated pair only within one request across chunks', async () => {
         const list = vi.fn(() => json(['eng-spa']));
@@ -380,14 +388,14 @@ describe('audit48F: bounded production performance and output contracts', () => 
         expect(list).toHaveBeenCalledTimes(2);
     });
     it('empty extra-web text performs no bootstrap work', async () => {
-        await expect(translateExtraFreeWebText('sogouFree', ' \r\n ', 'en', 'zh-Hans')).resolves.toBe(' \r\n ');
+        await expect(translateExtraFreeWebText('reversoFree', ' \r\n ', 'en', 'zh-Hans')).resolves.toBe(' \r\n ');
         expect(fetchPort).not.toHaveBeenCalled();
     });
-    it('Sogou bootstrap failure remains visible and a later request can retry', async () => {
+    it('Apertium pair-list failure remains visible and a later request can retry', async () => {
         fetchPort.mockResolvedValueOnce(new Response('', {status: 503}));
-        await expect(translateExtraFreeWebText('sogouFree', 'hello', 'en', 'zh-Hans')).rejects.toMatchObject({statusCode: 503});
-        fetchPort.mockResolvedValueOnce(new Response('"secretCode":5678')).mockResolvedValueOnce(json({status: 0, data: {translate: {dit: '你好'}}}));
-        await expect(translateExtraFreeWebText('sogouFree', 'hello', 'en', 'zh-Hans')).resolves.toBe('你好');
+        await expect(translateExtraFreeWebText('apertiumFree', 'hello', 'en', 'es')).rejects.toMatchObject({statusCode: 503});
+        fetchPort.mockResolvedValueOnce(json(['eng-spa'])).mockResolvedValueOnce(json({responseStatus: 200, responseData: {translatedText: 'Hola'}}));
+        await expect(translateExtraFreeWebText('apertiumFree', 'hello', 'en', 'es')).resolves.toBe('Hola');
     });
     it('a cancelled Apertium list read cannot start the translation request', async () => {
         const controller = new AbortController();

@@ -1,7 +1,7 @@
 /**
  * @file src/features/information-highlight/content/runtime.ts
  * 文件职责：拥有单个阅读页面的信息高亮会话，协调只读分帧扫描、评分取消、文本缓存和原生 CSS Highlight 绘制。
- * 主要内容：按视口优先分帧扫描和绘制，滚动复用未变化段落；评分与选区按分析方式、模型和纯文本缓存，切换模型取消旧请求并重新评分，迟到结果复验代次和 Text 身份；关闭或释放清理本实例的绘制、观察器和请求。
+ * 主要内容：按视口优先分帧扫描和绘制，滚动仅复用 Text 映射与原生 Range 端点都未变化的段落；评分与选区按分析方式、模型和纯文本缓存，切换模型取消旧请求并重新评分，迟到结果复验代次和 Text 身份；关闭或释放清理本实例的绘制、观察器和请求。
  * 模块边界：不访问配置存储或扩展消息、不改变宿主原文、class 和布局；本地模型评分、翻译根及状态通知由应用组合根注入，无原生绘制支持时诚实返回 unsupported。
  */
 import type {InformationHighlightPreferences} from '@/src/core/config/informationHighlight';
@@ -17,7 +17,8 @@ interface CachedParagraph {
     result: InformationHighlightResult;
     selections: Map<string, Array<InformationHighlightSpan & {level?: number}>>;
 }
-interface PaintedParagraph {text: string; signature: string; nodes: Text[]; spans: number; ranges: Array<[Set<Range>, Range]>}
+interface PaintedRange {paint: Set<Range>; range: Range; startContainer: Node; startOffset: number; endContainer: Node; endOffset: number}
+interface PaintedParagraph {text: string; signature: string; runs: InformationParagraph['runs']; spans: number; ranges: PaintedRange[]}
 export interface InformationHighlightController {
     getState(): InformationHighlightState;
     setEnabled(enabled: boolean): InformationHighlightState;
@@ -76,7 +77,7 @@ export function installInformationHighlight(document: Document, initial: Informa
         if (registry!.get(name) !== paint) registry!.set(name, paint);
         return paint;
     };
-    const erase = (entry: PaintedParagraph) => {for (const [paint, range] of entry.ranges) paint.delete(range); paintedRanges -= entry.ranges.length;};
+    const erase = (entry: PaintedParagraph) => {for (const {paint, range} of entry.ranges) paint.delete(range); paintedRanges -= entry.ranges.length;};
     const clearPaint = () => {for (const paint of paints.values()) paint.clear(); painted.clear(); seen.clear(); paintedRanges = 0; notify({highlightedSpans: 0});};
     /** 回收本轮扫描未再遇到的段落；仍在阅读区域内的绘制对象保持不动。 */
     const sweep = () => {
@@ -165,9 +166,13 @@ export function installInformationHighlight(document: Document, initial: Informa
             scoreAbort = new AbortController(); const signal = scoreAbort.signal;
             try {
                 let count: number;
-                // 滚动后的重扫：正文、节点和呈现方式都未变化的段落直接沿用已有 Range，不重新评分和绘制。
-                if (previous && previous.text === paragraph.text && previous.signature === signature && previous.nodes.length === paragraph.runs.length
-                    && paragraph.runs.every((run, index) => run.node === previous.nodes[index]) && isInformationParagraphCurrent(paragraph)) {
+                // Text.data 同值重写也会移动 live Range 端点；正文相同不能单独证明旧绘制仍有效。
+                if (previous && previous.text === paragraph.text && previous.signature === signature && previous.runs.length === paragraph.runs.length
+                    && paragraph.runs.every((run, index) => {const before = previous.runs[index]; return run.node === before.node && run.data === before.data
+                        && run.offset === before.offset && run.start === before.start && run.end === before.end;})
+                    && previous.ranges.every(({range, startContainer, startOffset, endContainer, endOffset}) => range.startContainer === startContainer
+                        && range.startOffset === startOffset && range.endContainer === endContainer && range.endOffset === endOffset)
+                    && isInformationParagraphCurrent(paragraph)) {
                     seen.add(previous); count = previous.spans;
                 } else {
                     let cached = cache.get(key);
@@ -197,8 +202,9 @@ export function installInformationHighlight(document: Document, initial: Informa
                     }
                     if (paintedRanges + ranges.length > 4096) sweep();
                     if (paintedRanges + ranges.length > 4096) {active = -1; notify({phase: 'error', errorCode: 'INFORMATION_HIGHLIGHT_PAGE_LIMIT'}); return;}
-                    const entry: PaintedParagraph = {text: paragraph.text, signature, nodes: paragraph.runs.map(run => run.node), spans: spans.length,
-                        ranges: ranges.map(([name, range]) => {const paint = bucket(name); paint.add(range); return [paint, range];})};
+                    const entry: PaintedParagraph = {text: paragraph.text, signature, runs: paragraph.runs, spans: spans.length,
+                        ranges: ranges.map(([name, range]) => {const paint = bucket(name); paint.add(range); return {paint, range,
+                            startContainer: range.startContainer, startOffset: range.startOffset, endContainer: range.endContainer, endOffset: range.endOffset};})};
                     paintedRanges += ranges.length; seen.add(entry); touched = true;
                     let entries = painted.get(first.node);
                     if (!entries) {entries = new Map(); painted.set(first.node, entries);}

@@ -7,6 +7,7 @@ import FeatureDemo from './FeatureDemo.vue'
 import TransferFlow from './TransferFlow.vue'
 import DemoSteps from './DemoSteps.vue'
 import SettingsGuide from './SettingsGuide.vue'
+import HighlightGuide from './HighlightGuide.vue'
 import { useDemoPlayback } from './useDemoPlayback'
 const props = defineProps<{ kind: string; en?: boolean; compact?: boolean }>()
 const { lang } = useData()
@@ -237,6 +238,7 @@ const activeStage = computed(() => (step.value === 0 ? 0 : step.value < 3 ? 1 : 
     :kind="kind"
     :en="english"
   />
+  <HighlightGuide v-else-if="kind === 'highlight'" :en="english" />
   <BrandReader v-else-if="kind === 'webpage'" :en="english" />
   <FeatureDemo v-else-if="kind === 'document'" kind="document" :en="english" />
   <SettingsGuide
@@ -251,6 +253,7 @@ const activeStage = computed(() => (step.value === 0 ? 0 : step.value < 3 ? 1 : 
         'rules',
         'stats',
         'learning',
+        'webdav',
       ].includes(kind)
     "
     :kind="kind"
@@ -399,7 +402,7 @@ const activeStage = computed(() => (step.value === 0 ? 0 : step.value < 3 ? 1 : 
         </div>
         <div v-if="changed" class="gv-result">
           <strong>{{ t('识别与翻译', 'Recognition & translation') }}</strong>
-          <p>Stay curious → {{ t('保持好奇', 'Stay curious') }}</p>
+          <p>{{ t('Stay curious', '保持好奇') }} → {{ t('保持好奇', 'Stay curious') }}</p>
         </div>
       </template>
       <template v-else-if="kind === 'video'">
@@ -421,7 +424,7 @@ const activeStage = computed(() => (step.value === 0 ? 0 : step.value < 3 ? 1 : 
       <template v-else-if="['input', 'writing'].includes(kind)">
         <div class="gv-editor">
           <span>
-            {{ kind === 'writing' ? t('回复草稿', 'Reply draft') : t('输入框', 'Input field') }}
+            {{ kind === 'writing' ? t('回复草稿', 'Reply draft') : t('输入框 · 双语输出示例', 'Input field · bilingual output example') }}
           </span>
           <p>
             {{

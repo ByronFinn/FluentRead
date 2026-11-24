@@ -6,7 +6,6 @@ import {
     createNextCompositeTranslationProviderId,
     getCompositeTranslationConfigFingerprint,
     getCompositeTranslationProvider,
-    getCompositeTranslationProviderLabel,
     getCompositeTranslationServiceOptions,
     hasCompositeTranslationAIContext,
     isCompositeTranslationMemberService,
@@ -74,9 +73,6 @@ describe('组合翻译公开配置', () => {
         expect(getCompositeTranslationProvider(undefined, item.id)).toBeUndefined();
         expect(isConfiguredCompositeTranslationProvider([item], item.id)).toBe(true);
         expect(isConfiguredCompositeTranslationProvider([item], 'composite:missing')).toBe(false);
-        expect(getCompositeTranslationProviderLabel([item], item.id)).toBe(item.name);
-        expect(getCompositeTranslationProviderLabel(undefined, item.id)).toBe(item.id);
-        expect(getCompositeTranslationProviderLabel([provider({name: ''})], item.id)).toBe(item.id);
         expect(getCompositeTranslationServiceOptions(undefined)).toEqual([]);
         expect(getCompositeTranslationServiceOptions([item, provider({strategy: 'random'}), provider({strategy: 'smart'})]).map(option => option.description)).toEqual(['轮流 · 2 个翻译服务', '随机 · 2 个翻译服务', '智能 · 2 个翻译服务']);
         expect(withCompositeTranslationServiceOptions([{value: 'google', label: 'Google'}, {value: item.id, label: '旧目录'}], [item])).toEqual([{value: 'google', label: 'Google'}, ...getCompositeTranslationServiceOptions([item])]);
@@ -211,6 +207,10 @@ describe('组合翻译公开配置', () => {
         config.model.tongyi = 'qwen-mt-plus';
         expect(hasCompositeTranslationAIContext(config, provider().id)).toBe(false);
         config.model.tongyi = 'qwen-plus';
+        expect(hasCompositeTranslationAIContext(config, provider().id)).toBe(true);
+        config.disabledTranslationServices = ['tongyi'];
+        expect(hasCompositeTranslationAIContext(config, provider().id)).toBe(false);
+        config.disabledTranslationServices = [];
         expect(hasCompositeTranslationAIContext(config, provider().id)).toBe(true);
         expect(hasCompositeTranslationAIContext({compositeTranslationProviders: [provider({services: ['google', 'openai']})]}, provider().id)).toBe(true);
     });

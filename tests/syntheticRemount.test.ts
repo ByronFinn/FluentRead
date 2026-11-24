@@ -11,6 +11,8 @@ vi.mock('@/src/core/translation/public', async (importOriginal) => {
     return {
         ...actual,
         getCurrentTranslationCore: () => ({
+            adapters: [],
+            textOptions: (options?: import('@/src/core/translation/public').TranslationTextProtectionOptions) => options,
             resolve: translationCore.resolve,
             shouldStayOriginal: translationCore.shouldStayOriginal,
         }),
@@ -128,6 +130,45 @@ afterEach(() => {
 });
 
 describe('synthetic 双语片段 source-only 重挂', () => {
+    it('位置对应的新根不匹配时仍能找到同批唯一的等价行内宿主',()=>{
+        const scenario=createCommittedSyntheticScenario(),other=scenario.document.createElement('p'),unrelated=scenario.document.createElement('p'),replacement=scenario.document.createElement('div');
+        other.textContent='Old other';unrelated.textContent='Unrelated';scenario.document.body.appendChild(other);
+        replacement.innerHTML='Inline <strong>source.</strong><p>Independent block.</p>';resolveCandidates([candidate(replacement,[replacement.firstChild!,replacement.querySelector('strong')!])]);
+        scenario.document.body.replaceChildren(unrelated,replacement);
+        const result=transferEquivalentSyntheticBilingualSegments([childListRecord(scenario.document.body,[unrelated,replacement],[scenario.host,other])],()=>true);
+        expect(result.transfers).toHaveLength(1);expect(replacement.querySelector('.fluent-read-bilingual-content')).toBe(scenario.wrapper);
+    });
+    it('候选解析期间宿主离开文档时，熔断不会保存不存在的父边界',()=>{
+        const scenario=createCommittedSyntheticScenario();
+        for(let i=0;i<3;i++){const replacement=replaceWithEquivalentSource(scenario);expect(transferEquivalentSyntheticBilingualSegments([replacement.record],()=>true).transfers).toHaveLength(1);}
+        const replacement=replaceWithEquivalentSource(scenario),resolve=translationCore.resolve.getMockImplementation()!;let removed=false;
+        translationCore.resolve.mockImplementation((...args:any[])=>{if(!removed){removed=true;scenario.host.remove();}return resolve(...args);});
+        const result=transferEquivalentSyntheticBilingualSegments([replacement.record],()=>true);
+        expect(result.transfers).toHaveLength(0);expect(result.capitulations).toHaveLength(0);expect(getTranslationState(scenario.owner)).toBeUndefined();
+    });
+    it('行内来源换代保留已提交的译文前置顺序，恢复后仍保留新来源节点', () => {
+        const scenario = createCommittedSyntheticScenario();
+        scenario.owner.prepend(scenario.wrapper);
+        setBilingualContent(scenario.owner, scenario.wrapper);
+        const {record, firstText, strong, block} = replaceWithEquivalentSource(scenario);
+        const result = transferEquivalentSyntheticBilingualSegments([record], () => true);
+        expect(result.transfers).toHaveLength(1);
+        expect(Array.from(scenario.owner.childNodes)).toEqual([scenario.wrapper, firstText, strong]);
+        expect(scenario.state.bilingualBeforeSource).toBe(true);
+        restoreAllTranslations();
+        expect(Array.from(scenario.host.childNodes)).toEqual([firstText, strong, block]);
+        expect(scenario.host.textContent).toBe('Inline source.Independent block.');
+    });
+
+    it('只允许完整段落的自动外壳授权不能迁移为没有对应授权的行内片段', () => {
+        const scenario = createCommittedSyntheticScenario();
+        scenario.state.applicationShellPolicyId = 'mastodon';
+        const {record} = replaceWithEquivalentSource(scenario);
+        const result = transferEquivalentSyntheticBilingualSegments([record], () => true);
+        expect(result.transfers).toEqual([]);
+        expect(scenario.wrapper.isConnected).toBe(false);
+        expect(translationCore.resolve).not.toHaveBeenCalled();
+    });
     it('祖先组件整体 source-only 换代时按宿主相对路径原子迁移旧译文', () => {
         const scenario = createCommittedSyntheticScenario();
         const component = scenario.document.createElement('article');

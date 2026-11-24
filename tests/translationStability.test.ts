@@ -1,9 +1,12 @@
 import {collectLiveTranslationTextSlots, extractTranslationText, getCurrentTranslationCore} from '@/src/core/translation/public';
+import {identifyTextLanguage} from '@/src/core/language/identify';
+import {getSupplementalLanguageCandidate} from '@/src/core/language/supplement';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {parseHTML} from 'linkedom';
 import {
     canKeepTranslationAttempt,
     getCurrentTranslationStateSourceSnapshot,
+    getCurrentTranslationStateTextNodes,
     createCurrentTranslationStateSourceSnapshotBatch,
     createTranslationMutationStabilityChecks,
     createAcceptedUnchangedCompletion,
@@ -19,6 +22,7 @@ import {
     isTranslationArtifactCurrent,
     isTranslationCandidateCurrent,
     isTranslationStateCandidateCurrent,
+    isTranslationStateSourceCurrent,
     mutationTouchesCurrentTranslationArtifact,
     reboundLiveTextResult,
     statefulSourceAndTextSlotsAreCurrent,
@@ -66,6 +70,30 @@ function childListRecord(
 }
 
 describe('动态翻译稳定性判定', () => {
+    it('来源 HTML 回退复验保留图片与相对链接原属性、实时 Text 身份及宿主节点', () => {
+        const {document} = parseHTML('<html><body><p id="owner"><a href="../paper">Source text.</a>' +
+            '<img src="../icon.png" srcset="../icon@2x.png 2x"></p></body></html>');
+        const owner = document.querySelector<HTMLElement>('#owner')!;
+        const link = owner.querySelector('a')!;
+        const image = owner.querySelector('img')!;
+        const source = link.firstChild as Text;
+        const current = state({phase: 'translated', sourceText: 'Source text.', sourceHTML: owner.innerHTML,
+            sourceTextNodes: [source], sourceStructureSignature: undefined});
+        const wrapper = document.createElement('span');
+        wrapper.className = 'fluent-read-bilingual-content'; wrapper.setAttribute('data-fr-translation-owned', 'true');
+        wrapper.textContent = '译文'; owner.appendChild(wrapper);
+        const before = owner.outerHTML;
+        expect(statefulSourceAndTextSlotsAreCurrent(owner, current)).toBe(true);
+        expect(owner.outerHTML).toBe(before);
+        expect(current.sourceTextNodes).toEqual([source]);
+        expect(owner.querySelector('a')).toBe(link); expect(owner.querySelector('img')).toBe(image);
+        expect(link.getAttribute('href')).toBe('../paper');
+        expect(image.getAttribute('srcset')).toBe('../icon@2x.png 2x');
+        image.setAttribute('src', '../changed-icon.png');
+        expect(statefulSourceAndTextSlotsAreCurrent(owner, current)).toBe(false);
+        expect(link.firstChild).toBe(source); expect(image.parentElement).toBe(owner);
+    });
+
     it('单个直接文本重挂时只遍历一次，并同时取得规范化原文与精确槽身份', () => {
         const {document} = parseHTML('<html><body><p>  Read\n the source.  </p></body></html>');
         const owner = document.querySelector<HTMLElement>('p')!;
@@ -103,6 +131,24 @@ describe('动态翻译稳定性判定', () => {
         expect(isTranslationCandidateCurrent(candidate)).toBe(true);
         owner.remove();
         expect(isTranslationCandidateCurrent(candidate)).toBe(false);
+    });
+
+    it('先前自动外壳许可不适用于当前页面时，同值来源也不能提供重绑文本槽', () => {
+        const {document} = parseHTML('<html><body><main><p>Readable public source.</p></main></body></html>');
+        const owner = document.querySelector<HTMLElement>('p')!;
+        const source = owner.firstChild as Text;
+        const current = state({sourceText: source.data});
+        expect(isTranslationStateSourceCurrent(owner, current)).toBe(true);
+        expect(getCurrentTranslationStateTextNodes(owner, current)).toEqual([source]);
+
+        // 当前普通页面没有原自动站点的授权；原文相同不能把过期能力降级成手动外壳例外。
+        const previousAutomatic = state({sourceText: source.data,
+            allowTopLevelApplicationShell: true, applicationShellPolicyId: 'mastodon'});
+        expect(isTranslationStateSourceCurrent(owner, previousAutomatic)).toBe(false);
+        expect(getCurrentTranslationStateTextNodes(owner, previousAutomatic)).toEqual([]);
+        source.data = 'The website replaced this public source.';
+        expect(isTranslationStateSourceCurrent(owner, current)).toBe(false);
+        expect(getCurrentTranslationStateTextNodes(owner, previousAutomatic)).toEqual([]);
     });
 
     it('视觉手动分块只要仍是已标记的合成段且挂在文档中就保持有效', () => {
@@ -1083,6 +1129,35 @@ describe('observer epoch 的真实 owner/state 与独立只读边界', () => {
 
 
 describe('仅译文合成段原文搬移回归', () => {
+    it('数字旁的仅译文槽保持稳定，真实来源变化仍会使其失效', () => {
+        const {document} = parseHTML('<html><body><div class="count"><span>0</span> Comments</div></body></html>');
+        const owner = document.querySelector<HTMLElement>('.count')!;
+        const count = owner.firstElementChild!.firstChild as Text;
+        const source = owner.lastChild as Text;
+        const host = document.createElement('span');
+        host.className = 'fluent-read-single-slot';
+        host.setAttribute('data-fr-translation-owned', 'true');
+        host.setAttribute('translate', 'no');
+        owner.insertBefore(host, source);
+        host.appendChild(source);
+        const current = state({mode: 'single', phase: 'translated', sourceText: 'Comments',
+            sourceTextNodes: [source], singleTextSlotHosts: [{host, source, sourceValue: ' Comments'}]});
+
+        expect(statefulSourceAndTextSlotsAreCurrent(owner, current)).toBe(true);
+        expect(isOwnSingleTextSlotMove(childListRecord(owner, [], [source]), owner, current)).toBe(true);
+        count.data = '1';
+        expect(statefulSourceAndTextSlotsAreCurrent(owner, current)).toBe(true);
+        count.data = 'New';
+        expect(statefulSourceAndTextSlotsAreCurrent(owner, current)).toBe(false);
+        count.data = '1';
+        const added = document.createTextNode(' added by the page');
+        host.appendChild(added);
+        expect(statefulSourceAndTextSlotsAreCurrent(owner, current)).toBe(false);
+        added.remove();
+        source.data = ' Replies';
+        expect(statefulSourceAndTextSlotsAreCurrent(owner, current)).toBe(false);
+    });
+
     it('Latest 原父移除与槽内加入均属于自身操作，真实内容变动仍需重译', () => {
         const {document} = parseHTML('<html><body><div><span data-fr-translation-segment="true"><a href="/releases/latest"><span class="Label">Latest</span></a></span></div></body></html>');
         const owner = document.querySelector<HTMLElement>('[data-fr-translation-segment]')!;
@@ -1404,11 +1479,24 @@ describe('同值完成证据的真实来源与会话边界', () => {
         const chinese = beginCompletionUnit('<p id="completion">这是已经属于目标语言的完整中文句子。</p>');
         expect(captureCompletionUnit(chinese)).toBeUndefined();
         const english = beginCompletionUnit('<p id="completion">This paragraph explains how the translation extension keeps the original text and shows the translated sentence below it.</p>');
+        expect(identifyTextLanguage(english.state.sourceText).status).toBe('identified');
         expect(captureCompletionUnit(english, undefined, {excludedLanguages: ['en']})).toBeUndefined();
         for (const service of ['openai', 'unknown-client']) {
             expect(captureCompletionUnit(english, undefined, {service})).toBeUndefined();
         }
         expect(captureCompletionUnit(english)).toBeDefined();
+    });
+
+    it('符合补充检测资格的真实长未知正文同值回填不能认证为供应商完成结果', () => {
+        const source = 'Astronomical instruments capture electromagnetic radiation across distant interstellar regions enabling detailed spectroscopic measurements alongside sophisticated computational simulations.';
+        const fixture = beginCompletionUnit('<p id="completion">' + source + '</p>');
+        expect(fixture.state.sourceText).toBe(source);
+        expect(identifyTextLanguage(source).status).toBe('unknown');
+        expect(getSupplementalLanguageCandidate(source)).toBe('en');
+        expect(captureCompletionUnit(fixture, [source], {targetLanguage: 'en'})).toBeUndefined();
+        expect(captureCompletionUnit(fixture, [source])).toBeUndefined();
+        expect(getTranslationState(fixture.owner)).toBe(fixture.state);
+        expect(fixture.owner.textContent).toBe(source);
     });
 
     it('仅译文、按钮、合成段和多个真实槽均不提供 direct single-slot bilingual content 证据', () => {

@@ -1,10 +1,14 @@
 /**
  * @file src/features/image-translation/background/handlers.ts
+ * 图片与漫画的后端偏好仅从后台当前配置读取，并随已有可取消任务发送。
  * 文件职责：定义跨域图片读取、整图翻译、文本批译、阶段进度、取消和语言包下载后台消息，并对来自页面或扩展 UI 的未知输入执行严格校验。
- * 主要内容：按设置选择单图 OCR，漫画俄语和韩语要求既有语言包，其他漫画走 PaddleOCR；包含消息解析、OCR 语言白名单、阶段通知和取消预算，待启动取消只保留尚未消费的有界 ID，避免旧历史误删重复 ID 的新取消；逐包下载排队、去重、部分成功保存和跨页状态查询；图片文本冻结目标语言，统一过滤同目标正文与无需翻译的标识，保留显式术语覆盖，附加内部策略将有效原样响应视为成功；去重批量和有界并发翻译同时保留原行映射、可信页面范围与术语版本。
- * 模块边界：本文件只负责协议入口与用例编排，不直接运行 Tesseract、Canvas、网络 fetch 或 Offscreen；图像读取和运算能力均由 Offscreen adapter 与 services 实现并由 app 注入。
+ * 同图语境：AI 上下文开启且模型支持时，逐位置提供前后各两段 OCR 原文，通过既有篇章证据通道送达提示词、隔离缓存并跳过摘要；Google 批次附加不可序列化的同图标记并保留重复位置，由 adapter 进行有界邻文和严格回填；普通图片的同栏短标签只附加已验证的相邻位置。其他服务沿用原生批译或标题参考，取消所有权不变。
+ * 编号说明：图片中的有界全大写多词短语加独立整数不能仅因大小写被认定为产品版本，交给已有服务判断；不改原文、编号或共享语言识别规则，明确技术形式仍沿用原过滤，原样响应仍保留原图。
+ * 主要内容：按设置选择单图 OCR，标准字表之外的受支持源语走按需语言包，其他漫画走 PaddleOCR；包含消息解析、OCR 语言白名单、阶段通知和取消预算，待启动取消只保留尚未消费的有界 ID，避免旧历史误删重复 ID 的新取消；逐包下载排队、去重、部分成功保存和跨页状态查询；图片文本冻结目标语言，统一过滤同目标正文与无需翻译的标识，保留显式术语覆盖，附加内部策略将有效原样响应视为成功；去重批量和有界并发翻译同时保留原行映射、可信页面范围与术语版本。
+ * 模块边界：可选漫画可见范围保留原值交给最终绘制端校验，不把异常空值降为缺省；本文件只负责协议入口与用例编排，不直接运行 Tesseract、Canvas、网络 fetch 或 Offscreen；图像读取和运算能力均由 Offscreen adapter 与 services 实现并由 app 注入。
  */
 import {normalizeRemoteImageUrl} from '../services/remoteImage';
+import type {ImageViewport} from '@/src/shared/image/types';
 import {createImageTranslationFailure, imageTranslationFailureCode, imageTranslationFailureResponse} from '../failure';
 import {identifyTextLanguage} from '@/src/core/language/identify';
 import {shouldSkipTranslationForTarget} from '@/src/core/language/detect';
@@ -14,7 +18,7 @@ import {buildGlossaryRevision, resolveGlossaryEntries, type GlossaryLibrary} fro
 import {IMAGE_PROGRESS_MESSAGE_TYPE, isImageTranslationStage, normalizeImageProgress, type ImageTranslationStage} from '../progress';
 import {
     IMAGE_OCR_LANGUAGE_PACKS,
-    getMangaOcrEngine,
+    getImageOcrEngine,
     normalizeImageOcrLanguageCodes,
     type ImageOcrLanguageCode,
     type ImageOcrDownloadState,
@@ -25,6 +29,7 @@ import {
     getTranslationGlossaryContext,
     markTranslationRemainingBudget,
     allowUnchangedTranslationResult,
+    markImageTextBatch,
 } from '@/src/services/translation/requestSnapshot';
 
 export const IMAGE_TRANSLATE_MESSAGE_TYPE = 'fluentReadImageTranslate' as const;
@@ -36,6 +41,7 @@ export const IMAGE_OPERATION_TIMEOUT_MS = 180_000;
 
 export interface ImageTranslateMessage {
     manga?: unknown;
+    mangaViewport?: ImageViewport;
     type: typeof IMAGE_TRANSLATE_MESSAGE_TYPE;
     image?: unknown;
     sourceLanguage?: unknown;
@@ -52,6 +58,8 @@ export interface ImageCancelMessage {
 export interface ImageTranslateTextsMessage {
     type: typeof IMAGE_TRANSLATE_TEXTS_MESSAGE_TYPE;
     texts?: unknown;
+    /** 仅接收组合根验证过的 Offscreen 同栏标签位置。 */
+    imageLabelSlots?: unknown;
     title?: unknown;
     requestId?: unknown;
     timeoutMs?: unknown;
@@ -95,6 +103,8 @@ type ImageTextTranslationRequestBase = {
     glossaryRevision?: string;
     sourceLanguage?: string;
     targetLanguage?: string;
+    discourseContext?: string;
+    enableAIContext?: true;
 };
 
 type ImageTextTranslationRequest = ImageTextTranslationRequestBase & (
@@ -104,7 +114,8 @@ type ImageTextTranslationRequest = ImageTextTranslationRequestBase & (
 
 export interface ImageTranslationBackgroundDependencies {
     readonly getImageOcrEngine?: () => 'tesseract' | 'paddle';
-    readonly getMangaModelStatus?: () => Promise<{ready: boolean; bytes: number; inpaintingReady: boolean}>;
+    readonly getImageInferenceBackend?: () => 'auto' | 'cpu';
+    readonly getMangaModelStatus?: () => Promise<{ready: boolean; bytes: number; inpaintingReady: boolean; segmentationReady?: boolean}>;
     readonly removeMangaModels?: () => Promise<void>;
     readonly assertLanguagesDownloaded: (sourceLanguage: string) => Promise<void>;
     readonly translateImage: (
@@ -117,6 +128,8 @@ export interface ImageTranslationBackgroundDependencies {
     readonly assertImageSource?: (url: string, options: ImageOperationOptions, context: ImageProgressContext) => Promise<void>;
     readonly getTranslationService: () => string;
     readonly supportsBatchTranslation: (service: string) => boolean;
+    /** 组合根冻结用户上下文开关和所选模型的提示词能力；不能由消息体自报开启。 */
+    readonly isTextContextEnabled?: (service: string) => boolean;
     /** 明确的用户固定译名优先于标识跳过策略；组合根只提供当前配置。 */
     readonly getGlossaryConfig?: () => {glossaryEnabled: boolean; glossaryLibraries: GlossaryLibrary[]; from: string; to: string};
     readonly translateTexts: (request: ImageTextTranslationRequest) => Promise<string | string[]>;
@@ -132,9 +145,11 @@ export interface ImageTranslationBackgroundDependencies {
 
 export interface ImageOperationOptions {
     readonly ocrEngine?: 'paddle';
+    readonly inferenceBackend?: 'auto' | 'cpu';
     /** 仅由已复核的消息 sender 提供，不接受消息体自报来源。 */
     readonly documentUrl?: string;
     readonly manga?: true;
+    readonly mangaViewport?: ImageViewport;
     readonly requestId: string;
     readonly signal: AbortSignal;
     readonly timeoutMs: number;
@@ -258,7 +273,8 @@ export function createImageOperationRegistry(legacyPrefix = 'image'): ImageOpera
                 });
             } finally {
                 clearTimeout(timer);
-                if (activeOperations.get(requestId) === controller) activeOperations.delete(requestId);
+                // 重复身份在准入时拒绝；取消只abort，本次run退出并释放身份后，重试才能成为新的owner。
+                activeOperations.delete(requestId);
             }
         },
         cancel(requestIdValue) {
@@ -299,18 +315,57 @@ function getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
+/** 单段供应商保留同图相邻段落作为有界参考；不拼入待译正文，也不触发额外摘要请求。 */
+function imageTextContext(texts: string[], index: number, title: string): string {
+    const start = Math.max(0, index - 2);
+    const nearby = texts.slice(start, index + 3)
+        .filter((_value, offset) => start + offset !== index).map(value => value.slice(0, 480));
+    if (!nearby.length) return title;
+    return [title.slice(0, 320), 'Other text from the same image (reference only):', ...nearby].filter(Boolean).join('\n');
+}
+
+/** 每个邻段同时限制原文长度和 JSON 编码长度，保留完整 Unicode 码点。 */
+function imageContextSnippet(text: string): string {
+    let value = '', encodedLength = 0;
+    for (const character of text) {
+        const encoded = JSON.stringify(character).length - 2;
+        if (value.length + character.length > 240 || encodedLength + encoded > 384) break;
+        value += character;
+        encodedLength += encoded;
+    }
+    return value;
+}
+
+/** 使用原图位置选邻文；同一句话在不同气泡出现时不得复用第一次出现处的语境。 */
+function imageTextDiscourse(texts: string[], sourceIndex: number): string {
+    const neighbors = [];
+    for (let index = Math.max(0, sourceIndex - 2); index <= Math.min(texts.length - 1, sourceIndex + 2); index++) {
+        if (index !== sourceIndex) neighbors.push({region: index + 1, text: imageContextSnippet(texts[index])});
+    }
+    return neighbors.length ? JSON.stringify({source: 'neighboring image OCR', currentRegion: sourceIndex + 1, neighbors}) : '';
+}
+
+/** 两至六个较长全大写词和独立编号也可能是说明；语法不能证明它是型号。
+ * 保留短缩写、连写/带连接符或小数版本的原过滤，仅放行这一有界歧义；不猜词义或改写源文字。
+ */
+function hasImageTranslationText(text:string):boolean {
+    return hasTranslatableText(text)||/^[A-Z]{4,40}(?:[ \t]{1,8}[A-Z]{4,40}){1,5}[ \t]{1,8}\d{1,4}$/u.test(text.trim());
+}
+
 async function translateImageTexts(
     texts: string[],
     title: string,
     dependencies: ImageTranslationBackgroundDependencies,
     options: ImageOperationOptions,
     message: ImageTranslateTextsMessage,
-): Promise<string[]> {
+): Promise<{translations: string[]; targetLanguage?: string}> {
     if (options.signal.aborted) throw imageAbortError(false);
     const glossaryContext = getTranslationGlossaryContext(message);
     const sourceLanguage = glossaryContext ? parseRequiredString(message.sourceLanguage, 'sourceLanguage') : undefined;
     const glossaryConfig = dependencies.getGlossaryConfig?.();
     const targetLanguage = glossaryConfig?.to;
+    // 返回用于这次翻译的目标语言。排版阶段不再读取可能已被修改的设置。
+    const language = targetLanguage ? {targetLanguage} : {};
     const glossaryRevision = glossaryContext ? parseRequiredString(message.glossaryRevision, 'glossaryRevision') : undefined;
     // OCR 事务冻结的词库版本仍须经过 broker 校验；期间关闭或删除词库不能被同目标早退吞掉。
     const glossaryChanged = glossaryRevision !== undefined && glossaryConfig !== undefined
@@ -321,12 +376,22 @@ async function translateImageTexts(
             pageUrl: glossaryContext?.pageUrl,
         }).terms.length > 0;
         if (hasExplicitGlossary) return true;
-        return hasTranslatableText(text)
+        return hasImageTranslationText(text)
             && (!targetLanguage || glossaryChanged || !shouldSkipTranslationForTarget(text, targetLanguage));
     });
     // 不删 OCR 行，阅读面板与图片坐标仍以原行对齐；纯标识整图无需外发请求。
-    if (uniqueTexts.length === 0) return [...texts];
+    if (uniqueTexts.length === 0) return {translations: [...texts], ...language};
     const service = dependencies.getTranslationService();
+    const useImageContext = dependencies.isTextContextEnabled?.(service) === true;
+    const batchTranslation = dependencies.supportsBatchTranslation(service) && !useImageContext;
+    const orderedRegions = useImageContext || (service === 'google' && batchTranslation);
+    const translatedSources = new Set(uniqueTexts);
+    const sourceIndexes = orderedRegions ? texts.flatMap((text, index) => translatedSources.has(text) ? [index] : []) : [];
+    const requestTexts = orderedRegions ? sourceIndexes.map(index => texts[index]) : uniqueTexts;
+    const slots = message.imageLabelSlots;
+    const candidates = service === 'google' && Array.isArray(slots) && slots.length <= texts.length ? new Set(slots) : undefined;
+    const imageLabelSlots = candidates && sourceIndexes.flatMap((index, position) => candidates.has(index)
+        && sourceIndexes[position - 1] === index - 1 && sourceIndexes[position + 1] === index + 1 ? [position] : []);
     const imageDetectionText = uniqueTexts.join('\n');
     // 只借用可靠、单一文字体系的同图上下文；混合语种不能把短外语词误判成目标语言而漏译。
     const useImageDetectionText = service === 'localTranslation'
@@ -339,7 +404,7 @@ async function translateImageTexts(
         pageContext: '' as const,
         useCache: true as const,
         serviceOverride: service,
-        ...(targetLanguage ? {targetLanguage} : {}),
+        ...language,
         ...(glossaryContext ? {
             glossaryRevision,
             sourceLanguage: parseRequiredString(message.sourceLanguage, 'sourceLanguage'),
@@ -356,6 +421,7 @@ async function translateImageTexts(
         return remaining;
     };
     const controlledRequest = <T extends ImageTextTranslationRequest>(request: T) => {
+        if (service === 'google' && Array.isArray(request.origin)) markImageTextBatch(request, imageLabelSlots);
         const controlled = attachTranslationRequestControl(allowUnchangedTranslationResult(markTranslationRemainingBudget(request)), {
             signal: controller.signal, ownershipKey: `image:${options.requestId}`,
         });
@@ -363,12 +429,12 @@ async function translateImageTexts(
     };
     try {
         let translations: string[];
-        if (dependencies.supportsBatchTranslation(service)) {
+        if (batchTranslation) {
             try {
                 const result = await dependencies.translateTexts(controlledRequest({
-                    ...baseRequest, origin: uniqueTexts, requestTimeoutMs: remainingBudget(),
+                    ...baseRequest, origin: requestTexts, requestTimeoutMs: remainingBudget(),
                 }));
-                if (!Array.isArray(result) || result.length !== uniqueTexts.length
+                if (!Array.isArray(result) || result.length !== requestTexts.length
                     || !result.every(value => typeof value === 'string' && value.trim())) {
                     throw new Error('provider 未返回等长非空字符串数组');
                 }
@@ -377,17 +443,20 @@ async function translateImageTexts(
                 throw createImageTranslationFailure(`图片文字批量翻译失败：${getErrorMessage(error)}`, error);
             }
         } else {
-            translations = new Array<string>(uniqueTexts.length);
+            translations = new Array<string>(requestTexts.length);
             let cursor = 0;
             let failed = false;
-            // 窗口最多三条，实际供应商并发仍由共享 broker 限流；保序且重复文案只翻译一次。
+            // 窗口最多三条，实际供应商并发仍由共享 broker 限流；有语境的重复文本按位置处理。
             const worker = async () => {
-                while (cursor < uniqueTexts.length && !failed) {
+                while (cursor < requestTexts.length && !failed) {
                     const index = cursor++;
+                    const sourceIndex = orderedRegions ? sourceIndexes[index] : texts.indexOf(requestTexts[index]);
                     try {
                         const translation = await dependencies.translateTexts(controlledRequest({
-                            ...baseRequest, origin: uniqueTexts[index], requestTimeoutMs: remainingBudget(),
-                            ...(useImageDetectionText && identifyTextLanguage(uniqueTexts[index]).status === 'unknown'
+                            ...baseRequest, origin: requestTexts[index], requestTimeoutMs: remainingBudget(),
+                            context: imageTextContext(texts, sourceIndex, title),
+                            ...(useImageContext ? {enableAIContext: true as const, discourseContext: imageTextDiscourse(texts, sourceIndex)} : {}),
+                            ...(useImageDetectionText && identifyTextLanguage(requestTexts[index]).status === 'unknown'
                                 ? {sourceLanguageDetectionText: imageDetectionText} : {}),
                         }));
                         if (typeof translation !== 'string') throw new Error('provider 未返回字符串译文');
@@ -396,15 +465,20 @@ async function translateImageTexts(
                     } catch (error) {
                         failed = true;
                         controller.abort();
-                        throw createImageTranslationFailure(`图片第 ${texts.indexOf(uniqueTexts[index]) + 1} 段文字翻译失败：${getErrorMessage(error)}`, error);
+                        throw createImageTranslationFailure(`图片第 ${sourceIndex + 1} 段文字翻译失败：${getErrorMessage(error)}`, error);
                     }
                 }
             };
-            await Promise.all(Array.from({length: Math.min(3, uniqueTexts.length)}, worker));
+            await Promise.all(Array.from({length: Math.min(3, requestTexts.length)}, worker));
         }
         if (controller.signal.aborted) throw imageAbortError(false);
+        if (orderedRegions) {
+            const result = [...texts];
+            sourceIndexes.forEach((sourceIndex, index) => {result[sourceIndex] = translations[index];});
+            return {translations: result, ...language};
+        }
         const byText = new Map(uniqueTexts.map((text, index) => [text, translations[index]]));
-        return texts.map(text => byText.get(text) ?? text);
+        return {translations: texts.map(text => byText.get(text) ?? text), ...language};
     } finally {
         options.signal.removeEventListener('abort', abort);
     }
@@ -496,8 +570,7 @@ export function createImageTranslationBackgroundHandlers(
                 try {
                     const result = parseObjectResult(
                         await operationRegistry.run(message, async (options) => {
-                            const paddle = message.manga ? getMangaOcrEngine(sourceLanguage) === 'paddle'
-                                : dependencies.getImageOcrEngine?.() === 'paddle';
+                            const paddle = getImageOcrEngine(sourceLanguage, message.manga ? 'paddle' : dependencies.getImageOcrEngine?.()) === 'paddle';
                             if (!paddle) await dependencies.assertLanguagesDownloaded(sourceLanguage);
                             if (options.signal.aborted) throw imageAbortError(false);
                             const progressOwner = {context};
@@ -507,7 +580,11 @@ export function createImageTranslationBackgroundHandlers(
                             };
                             options.signal.addEventListener('abort', clearProgressOwner, {once: true});
                             try {
-                                return await dependencies.translateImage(image, sourceLanguage, title, message.manga ? {...options, manga: true} : paddle ? {...options, ocrEngine: 'paddle'} : options);
+                                const scopedOptions=message.manga ? {...options, manga: true as const} : paddle ? {...options, ocrEngine: 'paddle' as const} : options;
+                                const inferenceBackend = dependencies.getImageInferenceBackend?.();
+                                return await dependencies.translateImage(image, sourceLanguage, title,
+                                    {...scopedOptions, ...(inferenceBackend ? {inferenceBackend} : {}),
+                                        ...(message.mangaViewport !== undefined ? {mangaViewport:message.mangaViewport} : {})});
                             } finally {
                                 clearProgressOwner();
                                 options.signal.removeEventListener('abort', clearProgressOwner);
@@ -552,10 +629,10 @@ export function createImageTranslationBackgroundHandlers(
             async handle(message: ImageTranslateTextsMessage) {
                 const texts = parseTexts(message.texts);
                 try {
-                    const translations = await textOperationRegistry.run(message, options => translateImageTexts(
+                    const result = await textOperationRegistry.run(message, options => translateImageTexts(
                         texts, parseOptionalTitle(message.title), dependencies, options, message,
                     ));
-                    return {success: true, translations};
+                    return {success: true, ...result};
                 } catch (error) {
                     if (!imageTranslationFailureCode(error)) throw error;
                     return imageTranslationFailureResponse(error);

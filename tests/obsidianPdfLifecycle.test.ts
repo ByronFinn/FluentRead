@@ -1,4 +1,4 @@
-import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import {afterEach, beforeEach, describe, expect, it, vi, type Mock} from 'vitest';
 
 const ports = vi.hoisted(() => ({
     apiGate: undefined as Promise<void> | undefined,
@@ -29,12 +29,14 @@ function task(pages = [page(), page(['Second page'])]) {
 }
 type Module = typeof import('../integrations/obsidian/pdf');
 const extract = (module: Module, signal?: AbortSignal) => (module.extractPdfSegments as (bytes: ArrayBuffer, signal?: AbortSignal) => Promise<unknown>)(bytes(), signal);
-let module: Module; let createUrl: ReturnType<typeof vi.fn>; let revokeUrl: ReturnType<typeof vi.fn>;
+let module: Module; let createUrl: Mock<typeof URL.createObjectURL>; let revokeUrl: Mock<typeof URL.revokeObjectURL>;
 beforeEach(async () => {
     vi.resetModules(); vi.clearAllMocks(); ports.apiGate = undefined; ports.workerGate = undefined; ports.options.workerSrc = '';
     ports.getDocument.mockReset();
     vi.stubGlobal('window', {}); createUrl = vi.fn(() => 'blob:owned-pdf-worker'); revokeUrl = vi.fn();
-    vi.stubGlobal('URL', {createObjectURL: createUrl, revokeObjectURL: revokeUrl});
+    // 保留 URL 构造器契约；只替换本用例拥有的 blob 分配与回收端口。
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(createUrl);
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(revokeUrl);
     vi.doMock('pdfjs-dist/legacy/build/pdf.mjs', async () => {
         ports.apiStarted(); await ports.apiGate;
         return {GlobalWorkerOptions: ports.options, getDocument: ports.getDocument};
@@ -44,7 +46,7 @@ beforeEach(async () => {
     });
     module = await import('../integrations/obsidian/pdf');
 });
-afterEach(() => {module.disposePdfWorker(); vi.unstubAllGlobals();});
+afterEach(() => {module.disposePdfWorker(); vi.restoreAllMocks(); vi.unstubAllGlobals();});
 
 describe('Obsidian PDF extraction resource ownership', () => {
     it('rejects an invalid signature before importing PDF.js or creating a worker', async () => {
@@ -59,10 +61,26 @@ describe('Obsidian PDF extraction resource ownership', () => {
         ]);
         expect(fixture.pages.every(value => value.cleanup.mock.calls.length === 1)).toBe(true);
         expect(fixture.result.destroy).toHaveBeenCalledOnce(); expect(createUrl).toHaveBeenCalledOnce();
-        expect(ports.getDocument.mock.calls[0][0]).toMatchObject({disableFontFace: true, isEvalSupported: false, useWorkerFetch: false});
+        expect(ports.getDocument.mock.calls[0][0]).toMatchObject({disableFontFace: true, disableWorkerRendering: true, useWorkerFetch: false});
     });
     it('reuses one worker across concurrent documents and revokes it once', async () => {
-        task(); await Promise.all([extract(module), extract(module)]); expect(createUrl).toHaveBeenCalledOnce();
+        // 先固定 API mock；并发边界由 worker gate 控制，不依赖测试器同时解析动态 mock 的时序。
+        const api = await import('pdfjs-dist/legacy/build/pdf.mjs');
+        expect(api.getDocument).toBe(ports.getDocument);
+        const gate = deferred<void>(); ports.workerGate = gate.promise;
+        const first = task(); const second = task();
+        ports.getDocument.mockReturnValueOnce(first.result).mockReturnValueOnce(second.result);
+        const pending = Promise.all([extract(module), extract(module)]); pending.catch(() => {});
+        try {
+            await vi.waitFor(() => expect(ports.workerStarted).toHaveBeenCalledOnce());
+            expect(ports.getDocument).not.toHaveBeenCalled();
+        } finally {gate.resolve();}
+        expect(await pending).toHaveLength(2);
+        expect(ports.getDocument).toHaveBeenCalledTimes(2);
+        expect(first.result.destroy).toHaveBeenCalledOnce(); expect(second.result.destroy).toHaveBeenCalledOnce();
+        expect(createUrl).toHaveBeenCalledOnce();
+        expect(await (createUrl.mock.calls[0][0] as Blob).text()).toBe('/* controlled worker */');
+        expect(ports.workerStarted).toHaveBeenCalledOnce();
         module.disposePdfWorker(); module.disposePdfWorker(); expect(revokeUrl).toHaveBeenCalledOnce();
     });
     it('does not recreate a worker after disposal during a delayed API import', async () => {

@@ -10,6 +10,65 @@ const xml = '<d:multistatus xmlns:d="DAV:"><d:response><d:href>/base/</d:href><d
 const response = (body: string | null, status = 200, headers: Record<string, string> = {}) => new Response(body, {status, headers});
 const metadata = (etag = '&quot;one&quot;', href = '/base/FluentRead/fluentread-config.encrypted.json') => `<d:multistatus xmlns:d="DAV:"><d:response><d:href>${href}</d:href><d:propstat><d:prop><d:getetag>${etag}</d:getetag></d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response></d:multistatus>`;
 describe('WebDAV 文件协议', () => {
+    it('未包含备份子目录的旧会话仍读取原 FluentRead 备份', async () => {
+        const legacy = {...connection, backupPath: undefined};
+        const fetcher = vi.fn<typeof fetch>(async () => response(null, 404));
+        expect(await createWebDavApi(fetcher).read(createWebDavSession(legacy, async () => legacy))).toBeNull();
+        expect(fetcher.mock.calls[0][0]).toBe(connection.url + 'FluentRead/fluentread-config.encrypted.json');
+    });
+    it.each(['', 'Backups/流畅阅读'])('备份子目录 %j 的首次保存、读取和删除使用同一路径，不创建服务器入口', async backupPath => {
+        const saved = parseWebDavConnection({url: 'https://nas.fixture.invalid:5006/shared/', backupPath, username: 'fixture', password: 'fixture-only', revision: null}, null);
+        const active = createWebDavSession(saved, async () => saved);
+        let current: string | null = null;
+        const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+            if (init?.method === 'MKCOL') return response(null, 201);
+            if (init?.method === 'PUT') {current = init.body as string; return response(null, 201);}
+            if (init?.method === 'DELETE') {current = null; return response(null, 204);}
+            return current === null ? response(null, 404) : response(current, 200, {etag: '"one"'});
+        });
+        const api = createWebDavApi(fetcher);
+        const first = await api.write(active, content, null);
+        const expected = saved.url + saved.backupPath + 'fluentread-config.encrypted.json';
+        expect(first.id).toBe(expected);
+        expect((await api.read(active))?.content).toBe(content);
+        await api.remove(active, first);
+        expect(await api.read(active)).toBeNull();
+        const folders = fetcher.mock.calls.filter(([, init]) => init?.method === 'MKCOL').map(([url]) => url);
+        expect(folders).toEqual(backupPath ? [saved.url + 'Backups/', saved.url + 'Backups/%E6%B5%81%E7%95%85%E9%98%85%E8%AF%BB/'] : []);
+        expect(fetcher.mock.calls.filter(([, init]) => init?.method !== 'MKCOL').every(([url]) => url === expected)).toBe(true);
+        expect(fetcher.mock.calls.find(([, init]) => init?.method === 'PUT')?.[1]?.headers).toMatchObject({'If-None-Match': '*'});
+        expect(fetcher.mock.calls.find(([, init]) => init?.method === 'DELETE')?.[1]?.headers).toMatchObject({'If-Match': '"one"'});
+    });
+    it('备份缺失时取消未读响应，不等服务器取消握手且继续正常处理下一次读取', async () => {
+        const cancel = vi.fn(() => new Promise<void>(() => {}));
+        const fetcher = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(new ReadableStream({cancel}), {status: 404}))
+            .mockResolvedValueOnce(response(content, 200, {etag: '"current"'}));
+        const api = createWebDavApi(fetcher);
+        await expect(api.read(session)).resolves.toBeNull();
+        expect(cancel).toHaveBeenCalledOnce();
+        await expect(api.read(session)).resolves.toMatchObject({content, file: {etag: '"current"'}});
+        expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    it('超限流立即释放读取锁，取消握手未决不阻断大小错误', async () => {
+        vi.useFakeTimers();
+        try {
+            const cancel = vi.fn(() => new Promise<void>(() => {}));
+            const body = new ReadableStream<Uint8Array>({
+                start(controller) {controller.enqueue(new Uint8Array(9));}, cancel,
+            });
+            const fetcher = vi.fn<typeof fetch>(async () => new Response(body));
+            let settled = false;
+            const result = createWebDavApi(fetcher, {maxBytes: 8}).read(session).catch(error => {settled = true; return error;});
+            await vi.advanceTimersByTimeAsync(0);
+            expect(cancel).toHaveBeenCalledOnce();
+            expect(body.locked).toBe(false);
+            expect(settled).toBe(true);
+            expect(await result).toMatchObject({code: 'tooLarge'});
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {vi.useRealTimers();}
+    });
+
     it('保留无引号 ETag，在内容核验后使用最新原值覆盖和删除，拒绝陈旧内容', async () => {
         let current: string | null = content;
         let etag = 'fixture_version-1';
@@ -317,4 +376,18 @@ describe('WebDAV 文件协议', () => {
             expect(fetcher.mock.calls.filter(([,init])=>['PUT','DELETE'].includes(init!.method!))).toHaveLength(1);
         }
     });
+});
+
+it('aborted preview read cannot start follow-up DAV requests when fetch ignores cancellation', async () => {
+    const controller=new AbortController();
+    let release!: (value:Response)=>void;
+    const fetcher=vi.fn<typeof fetch>(()=>new Promise(resolve=>{release=resolve;}));
+    const pending=createWebDavApi(fetcher).read(session,controller.signal).catch(error=>error);
+    await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
+    const requestSignal=fetcher.mock.calls[0][1]!.signal!;
+    controller.abort();
+    expect(requestSignal.aborted).toBe(true);
+    release(response(null,409));
+    await pending;
+    expect(fetcher).toHaveBeenCalledTimes(1);
 });

@@ -20,6 +20,7 @@ const VALUE_FLAGS = new Set([
     'browser-path',
     'extension-dir',
     'focus-safe-helper',
+    'runtime-diagnostics-helper',
     'playwright-root',
     'timeout',
 ]);
@@ -157,6 +158,7 @@ function printUsage() {
         '  --playwright-root <path>     默认 PLAYWRIGHT_ROOT',
         '  --browser-path <path>        默认 FLUENTREAD_BROWSER_PATH',
         '  --focus-safe-helper <path>   默认 FLUENTREAD_FOCUS_SAFE_HELPER 或仓库 helper',
+        '  --runtime-diagnostics-helper <path> 网络矩阵必需，或设置 FLUENTREAD_RUNTIME_DIAGNOSTICS_HELPER',
         '  --artifacts-dir <path>       默认系统临时目录下的 fluentread-full-regression-*',
         '  --timeout <ms>               传给支持 timeout 的浏览器脚本',
     ].join('\n'));
@@ -186,6 +188,7 @@ export function parseCli(argv, env = process.env, runtime = {}) {
         playwrightRoot: env.PLAYWRIGHT_ROOT || '',
         browserPath: env.FLUENTREAD_BROWSER_PATH || '',
         focusSafeHelper: env.FLUENTREAD_FOCUS_SAFE_HELPER || path.join(PROJECT_ROOT, 'scripts/testing/focus-safe-browser.cjs'),
+        runtimeDiagnosticsHelper: env.FLUENTREAD_RUNTIME_DIAGNOSTICS_HELPER || '',
         artifactsDir: env.FLUENTREAD_REGRESSION_ARTIFACTS_DIR ||
             path.join(os.tmpdir(), `fluentread-full-regression-${process.pid}-${runtime.now ?? Date.now()}`),
         timeout: env.FLUENTREAD_BROWSER_TIMEOUT || '',
@@ -230,6 +233,9 @@ export function parseCli(argv, env = process.env, runtime = {}) {
             case 'focus-safe-helper':
                 options.focusSafeHelper = value;
                 break;
+            case 'runtime-diagnostics-helper':
+                options.runtimeDiagnosticsHelper = value;
+                break;
             case 'playwright-root':
                 options.playwrightRoot = value;
                 break;
@@ -250,6 +256,7 @@ function normalizeOptions(options) {
         artifactsDir: path.resolve(options.artifactsDir),
         extensionDir: path.resolve(options.extensionDir),
         focusSafeHelper: options.focusSafeHelper ? path.resolve(options.focusSafeHelper) : '',
+        runtimeDiagnosticsHelper: options.runtimeDiagnosticsHelper ? path.resolve(options.runtimeDiagnosticsHelper) : '',
         playwrightRoot: options.playwrightRoot ? path.resolve(options.playwrightRoot) : '',
         browserPath: options.browserPath ? path.resolve(options.browserPath) : '',
         timeout: options.timeout ? String(options.timeout) : '',
@@ -273,6 +280,9 @@ function normalizeOptions(options) {
     }
     if ((normalized.browser || normalized.network) && !normalized.focusSafeHelper) {
         throw new Error('后台浏览器/网络回归必须传入 --focus-safe-helper 或设置 FLUENTREAD_FOCUS_SAFE_HELPER');
+    }
+    if (normalized.network && !normalized.runtimeDiagnosticsHelper) {
+        throw new Error('真实站点矩阵必须传入 --runtime-diagnostics-helper 或设置 FLUENTREAD_RUNTIME_DIAGNOSTICS_HELPER');
     }
     return normalized;
 }
@@ -311,7 +321,7 @@ function deterministicSteps(options) {
             label: 'complete Vitest suite with strict coverage',
             command: 'pnpm',
             args: [
-                'exec', 'vitest', 'run', '--coverage', '--config', 'vitest.coverage.config.ts',
+                'exec', 'vitest', 'run', '--coverage', '--config', 'tests/config/vitest.coverage.config.ts',
                 '--reporter=default', '--reporter=json',
                 `--outputFile=${path.join(options.artifactsDir, 'vitest-results.json')}`,
                 `--coverage.reportsDirectory=${path.join(options.artifactsDir, 'coverage')}`,
@@ -487,6 +497,7 @@ function networkSteps(options) {
             '--browser-path', options.browserPath,
             '--artifacts-dir', path.join(options.artifactsDir, fixture.id),
             '--allow-network',
+            '--runtime-diagnostics-helper', options.runtimeDiagnosticsHelper,
             ...(options.timeout ? ['--timeout', options.timeout] : []),
             ...(options.headed && fixture.supportsHeaded
                 ? ['--headed']

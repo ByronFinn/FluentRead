@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const {guardBrowserClose} = require('./testing/owned-browser-close.cjs');
+const {controlledProviderRuntime} = require('./site-translation/controlled-provider.cjs');
 const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
@@ -32,7 +33,7 @@ function parseArgs(argv, env = process.env) {
     index += 1;
   }
   args.timeout = Number(args.timeout);
-  if (!['full', 'selects', 'options', 'options-route'].includes(args.suite)) throw new Error(`无法识别测试套件：${args.suite}`);
+  if (!['full', 'selects', 'compact-save', 'options', 'options-route'].includes(args.suite)) throw new Error(`无法识别测试套件：${args.suite}`);
   if (!['legacy', 'modern'].includes(args.gmMode)) throw new Error(`无法识别 GM 模式：${args.gmMode}`);
   if (!['chromium', 'webkit'].includes(args.engine)) throw new Error(`无法识别浏览器引擎：${args.engine}`);
   if (args.engine === 'webkit' && !args.background) throw new Error('WebKit 回归只允许无窗口的后台模式');
@@ -356,6 +357,7 @@ async function main() {
       sharedGmStore.delete(key);
     });
     await context.exposeFunction('__fluentReadGmList', () => [...sharedGmStore.keys()]);
+    await context.addInitScript(`globalThis.__frFixtureEncode = (${controlledProviderRuntime.toString()})(false).encode;`);
     await context.addInitScript(({modern}) => {
       // Reproduce issue #524's Dexie collision by making a different version
       // visible in the same execution realm before FluentRead's bundle runs.
@@ -397,7 +399,7 @@ async function main() {
           try {
             const body = JSON.parse(String(details.data || '[]'));
             const responseText = JSON.stringify(body.map((text) => ({
-              translations: [{text: `译文：${String(text).replace(/<[^>]+>/g, '')}`}],
+              translations: [{text: globalThis.__frFixtureEncode(String(text), 'microsoft-escaped-text')}],
             })));
             const response = {
               status: 200,
@@ -642,8 +644,8 @@ async function main() {
       await page.waitForFunction(() => window.__fluentReadGmGet('local:config', null)
         .then((raw) => JSON.parse(raw || '{}').theme === 'dark'), undefined, {timeout: args.timeout});
       const unavailableSections = [
-        'settings-image-translation', 'settings-area-translation', 'settings-video',
-        'settings-writing', 'settings-translation-stats', 'settings-model-usage',
+        // 圈选与模型用量已合并进对应父页面，不再是独立导航按钮。
+        'settings-image-translation', 'settings-video', 'settings-writing', 'settings-translation-stats',
       ];
       const visitedSections = [];
       for (const id of [...unavailableSections, 'settings-vocabulary', 'settings-data', 'settings-about']) {
@@ -707,8 +709,11 @@ async function main() {
       await page.evaluate(() => {
         window.__fluentReadUserscriptSettingsShadow.querySelector('button[data-section="settings-services"]').click();
       });
-      await page.waitForFunction(() => window.__fluentReadUserscriptSettingsShadow
-        ?.querySelector('.settings-app h1')?.textContent?.includes('翻译服务'), undefined, {timeout: args.timeout});
+      await page.waitForFunction(() => {
+        const root = window.__fluentReadUserscriptSettingsShadow;
+        return root?.querySelector('button[data-section="settings-services"]')?.getAttribute('aria-current') === 'page'
+          && Boolean(root.querySelector('#settings-services'));
+      }, undefined, {timeout: args.timeout});
       if (await page.evaluate(() => location.hash) !== '#host-route') {
         throw new Error('页内设置导航改写了宿主网页路由');
       }
@@ -746,7 +751,8 @@ async function main() {
       if (narrow.appWidth > narrow.width + 2 || narrow.scrollWidth > narrow.width + 2) {
         throw new Error(`窄屏完整设置页横向溢出：${JSON.stringify(narrow)}`);
       }
-      const section = await page.evaluate(() => window.__fluentReadUserscriptSettingsShadow.querySelector('.settings-app h1')?.textContent?.trim());
+      const section = await page.evaluate(() => window.__fluentReadUserscriptSettingsShadow
+        .querySelector('button[data-section="settings-services"]')?.textContent?.trim());
       await page.evaluate(() => {
         const closeButton = window.__fluentReadUserscriptSettingsShadow.querySelector('button.userscript-settings-close');
         if (closeButton?.getAttribute('aria-label') !== '关闭') throw new Error('页内完整设置缺少可访问的关闭按钮');
@@ -770,7 +776,7 @@ async function main() {
     }
 
     // Keep UI draft/persistence checks isolated from the translation smoke fixture.
-    if (args.suite === 'selects') {
+    if (args.suite === 'selects' || args.suite === 'compact-save') {
       // Observe only the fixture's settings root; production still uses a closed ShadowRoot.
       async function openSettings() {
         await page.evaluate(() => {
@@ -817,12 +823,118 @@ async function main() {
       }
       async function saveSettings() {
         await page.evaluate(() => window.__fluentReadUserscriptSettingsShadow.querySelector('footer .primary').click());
-        await page.waitForFunction(() => window.__fluentReadUserscriptSettingsShadow.querySelector('.status')?.textContent.includes('设置已保存'));
+        await page.waitForFunction(() => {
+          const status = window.__fluentReadUserscriptSettingsShadow.querySelector('.status');
+          return status?.textContent.includes('本次提交已保存') && !status.classList.contains('error');
+        });
       }
       await openSettings();
       const settingsHost = page.locator('#fluent-read-userscript-settings-container');
       const settingsSecurity = await settingsHost.evaluate((host) => ({closedShadow: host.shadowRoot === null, lightDomText: host.textContent || ''}));
       if (!settingsSecurity.closedShadow || settingsSecurity.lightDomText.trim()) throw new Error('设置面板未使用 closed Shadow DOM');
+      if (args.suite === 'compact-save') {
+        const uiTimeout = Math.min(args.timeout, 15_000);
+        page.setDefaultTimeout(uiTimeout);
+        const stored = () => decodeStoredValue(sharedGmStore.get('local:config'));
+        const readFields = () => page.evaluate(() => Object.fromEntries(['服务', '译文显示', '双语样式'].map(label => {
+          const select = window.__fluentReadUserscriptSettingsShadow.querySelector(`input[aria-label="${label}"]`)?.closest('.fluentread-select');
+          return [label, select?.querySelector('.el-select__placeholder')?.textContent.trim() || ''];
+        })));
+        const storedState = () => ({service: stored().service, display: stored().display, style: stored().style,
+          hasDisplay: Object.hasOwn(stored(), 'display'), hasStyle: Object.hasOwn(stored(), 'style')});
+        const waitForHydratedPanel = () => page.waitForFunction(() => {
+          const root = window.__fluentReadUserscriptSettingsShadow;
+          return root?.querySelector('footer .primary')?.disabled === false && ['服务', '译文显示', '双语样式'].every(label =>
+            root.querySelector(`input[aria-label="${label}"]`)?.closest('.fluentread-select')?.querySelector('.el-select__placeholder')?.textContent.trim());
+        }, undefined, {timeout: uiTimeout});
+        await waitForHydratedPanel();
+        const initial = {ui: await readFields(), ...storedState()};
+        const fail = async (message, details = {}) => {
+          const diagnostic = {suite: 'compact-save', message, initial, ui: await readFields(), stored: storedState(), ...details};
+          const json = JSON.stringify(diagnostic, (_key, value) => value === undefined ? '<absent>' : value, 2);
+          fs.writeFileSync(path.join(artifactsDir, 'compact-save-failure.json'), `${json}\n`);
+          throw new Error(`${message}: ${json}`);
+        };
+        const waitForSelectedLabel = async (label, text) => {
+          try {
+            await page.waitForFunction(({label, text}) => {
+              const root = window.__fluentReadUserscriptSettingsShadow;
+              const input = root.querySelector(`input[aria-label="${label}"]`);
+              const select = input?.closest('.fluentread-select');
+              // 本专项等待实际选择值，菜单挂载及关闭行为仍由独立 selects 专项检查。
+              return select?.querySelector('.el-select__placeholder')?.textContent.trim() === text;
+            }, {label, text}, {timeout: uiTimeout});
+          } catch (error) {await fail('选项点击后公开标签尚未结算', {label, expected: text, cause: error.message});}
+        };
+        const chooseCompactOption = async (label, text) => {
+          await openSelect(label);
+          if (label === '服务') {
+            await page.keyboard.type(text);
+            await page.waitForFunction(text => {
+              const items = [...window.__fluentReadUserscriptSettingsShadow.querySelectorAll('.el-select-dropdown__item')]
+                .filter(item => item.getBoundingClientRect().height > 0);
+              return items.length === 1 && items[0].textContent.trim() === text;
+            }, text, {timeout: uiTimeout});
+            await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+          } else {
+            const point = await page.evaluate(text => {
+              const root = window.__fluentReadUserscriptSettingsShadow;
+              const option = [...root.querySelectorAll('.el-popper .el-select-dropdown__item')]
+                .find(item => item.getBoundingClientRect().height > 0 && item.textContent.trim() === text);
+              if (!option) throw new Error(`找不到可见选项：${text}`);
+              option.scrollIntoView({block: 'nearest', inline: 'nearest'});
+              const bounds = option.getBoundingClientRect();
+              const x = bounds.left + bounds.width / 2, y = bounds.top + bounds.height / 2;
+              if (x < 0 || x >= innerWidth || y < 0 || y >= innerHeight) throw new Error(`选项点击位置不在视口内：${text}`);
+              return {x, y};
+            }, text);
+            await page.mouse.click(point.x, point.y);
+          }
+          await waitForSelectedLabel(label, text);
+        };
+        const cases = [];
+        await chooseCompactOption('服务', 'DeepSeek');
+        const serviceDraft = await readFields();
+        if (stored().service !== initial.service) await fail('服务草稿尚未点击保存就被提交');
+        await closeSettings(); await openSettings(); await waitForHydratedPanel(); await waitForSelectedLabel('服务', initial.ui['服务']);
+        const discarded = await readFields();
+        if (stored().service !== initial.service) await fail('关闭后重开改变了持久化服务');
+        if (discarded['服务'] !== initial.ui['服务']) await fail('关闭后重开没有丢弃未保存的服务草稿');
+        cases.push({name: 'discard-unsaved-service', passed: true, draft: serviceDraft['服务'], reopened: discarded['服务'], storedService: stored().service});
+
+        await chooseCompactOption('译文显示', '仅译文模式');
+        const displayDraft = await readFields();
+        if (stored().display !== initial.display) await fail('译文显示尚未点击保存就被提交');
+        await saveSettings();
+        if (stored().display !== 0 || stored().service !== initial.service) throw new Error('手动保存译文显示失败，或回灌了已取消的服务草稿');
+        cases.push({name: 'save-display', passed: true, before: initial.display, draft: displayDraft['译文显示'], storedDisplay: stored().display});
+
+        const beforeStyle = stored().style;
+        if (initial.style === 2 || beforeStyle === 2) await fail('测试初始样式已经是优雅斜体，无法证明手动保存发生变更', {beforeStyle});
+        await chooseCompactOption('双语样式', '优雅斜体');
+        const styleDraft = await readFields();
+        if (stored().style !== beforeStyle) await fail('双语样式尚未点击保存就被提交', {beforeStyle});
+        await saveSettings();
+        if (stored().style !== 2 || stored().display !== 0 || stored().service !== initial.service) throw new Error('手动保存双语样式失败，或覆盖了前一次提交');
+        cases.push({name: 'save-style', passed: true, before: beforeStyle, draft: styleDraft['双语样式'], storedStyle: stored().style});
+
+        await closeSettings(); await openSettings(); await waitForHydratedPanel();
+        await waitForSelectedLabel('译文显示', '仅译文模式'); await waitForSelectedLabel('双语样式', '优雅斜体');
+        const reopened = await readFields();
+        if (!reopened['译文显示'].includes('仅译文模式') || !reopened['双语样式'].includes('优雅斜体')
+          || reopened['服务'] !== initial.ui['服务'] || stored().display !== 0 || stored().style !== 2) throw new Error(`保存后重开丢失设置：${JSON.stringify(reopened)}`);
+        cases.push({name: 'reopen-saved-settings', passed: true, reopened, stored: {service: stored().service, display: stored().display, style: stored().style}});
+        await page.screenshot({path: path.join(artifactsDir, 'userscript-compact-save-reopened.png'), fullPage: false});
+        await closeSettings();
+        const evidence = {suite: 'compact-save', cases, settingsSecurity, initial, consoleErrors, launchMode, focusPolicy, windowPlacement,
+          scope: 'manual save and draft disposal only; this result does not certify the separate selects suite',
+          excludedChecks: ['selects menuOutsideScrollArea, dark-menu and narrow-menu layout assertions remain unchanged in --suite selects'],
+          transport: 'local fixture with deterministic GM shim; no live provider or userscript manager certification'};
+        fs.writeFileSync(path.join(artifactsDir, 'compact-save-evidence.json'), `${JSON.stringify(evidence, null, 2)}\n`);
+        if (consoleErrors.length) throw new Error(`浏览器控制台出现错误：${JSON.stringify(consoleErrors)}`);
+        console.log(JSON.stringify(evidence, null, 2));
+        return;
+      }
       await openSelect('服务');
       const settingsSelectState = await page.evaluate(() => {
         const root = window.__fluentReadUserscriptSettingsShadow;

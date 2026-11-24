@@ -1,7 +1,7 @@
 <!--
  * @file src/features/full-page-translation/ui/TranslationProgressPanel.vue
  * 文件职责：以半透明工作面板和低存在感状态勾选展示全文翻译进度，并允许用户临时收起，同时跟随扩展主题与系统深浅色偏好。
- * 主要内容：组件订阅实时进度和配置更新，通过展示控制器延迟短任务的展开并等待连续空闲后收起；失败时保留完成/失败摘要和局部重试入口；弹窗等待时保留静态提示，仅剩离屏候选且悬浮球关闭或被站点名单隐藏时退化为淡勾选。
+ * 主要内容：组件订阅实时进度和配置更新，通过展示控制器延迟短任务的展开并等待连续空闲后收起；失败时保留完成/失败摘要和局部重试入口；按可视视口与安全区保持工作面板和触摸操作在软键盘上方，后台恢复后重新定位并在卸载时释放视口监听；弹窗等待时保留静态提示，仅剩离屏候选且悬浮球关闭或被站点名单隐藏时退化为淡勾选。
  * 模块边界：组件通过会话限定端口请求失败重试或定位，不直接发出翻译请求，也不保存业务进度；数据只来自 progress.ts，是否创建 Shadow UI 由 content/progressPanel.ts 决定，样式局限于组件作用域。
  -->
 <template>
@@ -9,6 +9,7 @@
     <aside
       v-if="isVisible"
       class="fr-translation-progress"
+      :style="viewportStyle"
       :class="{ 'fr-dark': isDark, 'fr-static': !animationsEnabled, 'fr-modal-waiting': isModalWaiting, 'fr-compact': isCompact, 'fr-failed': hasFailures, 'fr-idle': progress.running === 0 && progress.queued === 0 }"
       :data-session-id="progress.sessionId"
       :data-running="progress.running"
@@ -52,17 +53,11 @@
           <strong>{{ panelTitle }}</strong>
           <span class="fr-progress-counts">
             <span>{{ t('fullPage.progress.running') }} <b>{{ progress.running }}</b></span>
-            <span class="fr-progress-divider" aria-hidden="true" />
             <span>{{ t('fullPage.progress.remaining') }} <b>{{ progress.remaining }}</b></span>
           </span>
           <span class="fr-progress-counts" v-if="(progress.completed ?? 0) > 0 || hasFailures">
             <span>{{ t('fullPage.progress.completed') }} <b>{{ progress.completed ?? 0 }}</b></span>
-            <span class="fr-progress-divider" aria-hidden="true" />
             <span>{{ t('fullPage.progress.failed') }} <b>{{ progress.failed ?? 0 }}</b></span>
-          </span>
-          <span v-if="hasFailures" class="fr-progress-actions">
-            <button type="button" class="fr-progress-action" :disabled="!canRecover" @click="runFailureAction('retry')">{{ t('fullPage.progress.retryFailed') }}</button>
-            <button type="button" class="fr-progress-action" :disabled="!canRecover" @click="runFailureAction('locate')">{{ t('fullPage.progress.locateFailed') }}</button>
           </span>
           <small v-if="isModalWaiting">
             {{ t('fullPage.progress.modalWaiting') }}
@@ -71,6 +66,11 @@
             {{ t('fullPage.progress.offscreenHint', {count: progress.offscreen}) }}
           </small>
         </span>
+
+        <div v-if="hasFailures" class="fr-progress-actions">
+          <button type="button" class="fr-progress-action" :disabled="!canRecover" @click="runFailureAction('retry')">{{ t('fullPage.progress.retryFailed') }}</button>
+          <button type="button" class="fr-progress-action" :disabled="!canRecover" @click="runFailureAction('locate')">{{ t('fullPage.progress.locateFailed') }}</button>
+        </div>
 
         <button type="button" class="fr-progress-dismiss" :aria-label="t('fullPage.progress.hide')" :title="t('fullPage.progress.hideTitle')" @click="dismiss">
           <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -94,6 +94,7 @@ import {config, subscribeConfig} from '@/src/services/config/store';
 import {isFloatingBallDisabledOnSite} from '@/src/core/site-rules/domain';
 import {useUiI18n} from '@/src/ui/i18n';
 import {createProgressPanelVisibility, type ProgressPanelDisplayMode} from './progressPanelVisibility';
+import {getSafeVisualViewportRect, observeVisualViewport} from '@/src/platform/dom/visualViewport';
 
 const progress = ref(getFullPageTranslationProgress());
 const dismissedSessionId = ref<number | null>(null);
@@ -110,6 +111,18 @@ const {t} = useUiI18n();
 
 let unsubscribeProgress: (() => void) | null = null;
 let unsubscribeConfig: (() => void) | null = null;
+let unsubscribeViewport: (() => void) | null = null;
+const viewport = ref(getSafeVisualViewportRect());
+const viewportStyle = computed(() => {
+  const bounds = viewport.value;
+  const gap = bounds.width <= 420 ? 10 : 16;
+  return {
+    right: `${Math.max(0, window.innerWidth - bounds.right) + gap}px`,
+    bottom: `${Math.max(0, window.innerHeight - bounds.bottom) + gap}px`,
+    maxWidth: `${Math.max(1, bounds.width - gap * 2)}px`,
+    maxHeight: `${Math.max(1, bounds.height - gap * 2)}px`,
+  };
+});
 
 const isDark = computed(() => configuredTheme.value === 'dark' || (
   configuredTheme.value === 'auto' && prefersDark.value
@@ -156,6 +169,7 @@ function dismiss(): void {
 }
 
 onMounted(() => {
+  unsubscribeViewport = observeVisualViewport(() => {viewport.value = getSafeVisualViewportRect();});
   updatePreferredTheme();
   darkModeMediaQuery.addEventListener('change', updatePreferredTheme);
   unsubscribeProgress = subscribeFullPageTranslationProgress((nextProgress) => {
@@ -169,6 +183,8 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  unsubscribeViewport?.();
+  unsubscribeViewport = null;
   visibility.dispose();
   darkModeMediaQuery.removeEventListener('change', updatePreferredTheme);
   unsubscribeProgress?.();
@@ -180,39 +196,39 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .fr-translation-progress {
+  box-sizing: border-box;
   position: fixed;
   right: max(16px, env(safe-area-inset-right));
   bottom: max(16px, env(safe-area-inset-bottom));
   z-index: 2147483645;
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) 28px;
-  gap: 10px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 6px;
   align-items: center;
-  width: min(286px, calc(100vw - 32px));
-  padding: 11px 10px 11px 12px;
+  width: min(240px, calc(100vw - 32px));
+  padding: 6px 6px 6px 9px;
   border: 1px solid rgba(229, 88, 139, 0.24);
-  border-radius: 14px;
-  background: rgba(255, 252, 253, 0.84);
-  box-shadow: 0 10px 28px rgba(68, 38, 52, 0.14), 0 2px 7px rgba(68, 38, 52, 0.06);
+  border-radius: 12px;
+  background: rgba(255, 252, 253, 0.88);
+  box-shadow: 0 4px 16px rgba(68, 38, 52, 0.12);
   color: #3f3540;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 12px;
   line-height: 1.35;
   pointer-events: auto;
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .fr-progress-indicator {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
-  gap: 3px;
-  width: 34px;
-  height: 34px;
-  padding: 8px 7px;
-  border-radius: 10px;
-  background: linear-gradient(145deg, #fff0f5, #ffe0eb);
+  gap: 2px;
+  width: 22px;
+  height: 22px;
   color: #e84f87;
 }
 
@@ -229,6 +245,8 @@ onBeforeUnmount(() => {
   background: rgba(240, 253, 244, 0.68);
   box-shadow: 0 4px 14px rgba(22, 101, 52, 0.1);
   pointer-events: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .fr-progress-compact-check,
@@ -274,6 +292,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   flex-direction: column;
   gap: 2px;
+  overflow-wrap: anywhere;
 }
 
 .fr-progress-copy strong {
@@ -285,10 +304,10 @@ onBeforeUnmount(() => {
 
 .fr-progress-counts {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 7px;
+  gap: 0 8px;
   color: #746875;
-  white-space: nowrap;
 }
 
 .fr-progress-counts b {
@@ -297,27 +316,20 @@ onBeforeUnmount(() => {
   font-weight: 750;
 }
 
-.fr-progress-divider {
-  width: 1px;
-  height: 10px;
-  background: #e7dce1;
-}
-
 .fr-progress-copy small {
-  overflow: hidden;
   color: #70636e;
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 11px;
 }
 
 .fr-progress-dismiss {
   display: grid;
+  grid-area: 1 / 3;
+  place-items: center;
+  align-self: start;
   width: 28px;
   height: 28px;
   margin: 0;
   padding: 0;
-  place-items: center;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -345,6 +357,14 @@ onBeforeUnmount(() => {
   stroke-width: 1.6;
 }
 
+.fr-progress-warning { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 6px; background: #fff1d6; color: #9a5800; font-size: 15px; font-weight: 700; }
+.fr-progress-actions { display: grid; grid-area: 2 / 1 / auto / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.fr-progress-action { min-height: 32px; border: 1px solid rgba(116, 104, 117, 0.32); border-radius: 6px; padding: 3px 6px; background: transparent; color: inherit; cursor: pointer; font: inherit; overflow-wrap: anywhere; }
+.fr-progress-action:first-child { border-color: transparent; background: #fae9ef; color: #a62751; font-weight: 650; }
+.fr-progress-action:disabled { opacity: .45; cursor: default; }
+.fr-progress-action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.fr-idle .fr-progress-indicator i { animation: none; }
+
 .fr-dark {
   border-color: rgba(242, 116, 162, 0.3);
   background: rgba(38, 31, 39, 0.84);
@@ -359,7 +379,6 @@ onBeforeUnmount(() => {
 }
 
 .fr-dark .fr-progress-indicator {
-  background: linear-gradient(145deg, #593043, #442635);
   color: #ff80ae;
 }
 
@@ -375,9 +394,8 @@ onBeforeUnmount(() => {
   color: #ff80ae;
 }
 
-.fr-dark .fr-progress-divider {
-  background: #5d4c55;
-}
+.fr-dark .fr-progress-warning { background: #493620; color: #ffd18c; }
+.fr-dark .fr-progress-action:first-child { background: #5b3044; color: #ffd0e1; }
 
 .fr-dark .fr-progress-copy small,
 .fr-dark .fr-progress-dismiss {
@@ -428,8 +446,13 @@ onBeforeUnmount(() => {
   .fr-translation-progress {
     right: max(10px, env(safe-area-inset-right));
     bottom: max(10px, env(safe-area-inset-bottom));
-    width: min(270px, calc(100vw - 20px));
+    width: min(240px, calc(100vw - 20px));
   }
+}
+
+@media (any-pointer: coarse), (max-width: 420px) {
+  .fr-progress-dismiss { width: 44px; height: 44px; touch-action: manipulation; }
+  .fr-progress-action { min-width: 44px; min-height: 44px; touch-action: manipulation; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -439,13 +462,4 @@ onBeforeUnmount(() => {
     transition: none;
   }
 }
-
-
-.fr-progress-warning { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: #fff1d6; color: #9a5800; font-size: 22px; font-weight: 700; }
-.fr-progress-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
-.fr-progress-action { border: 1px solid currentColor; border-radius: 5px; padding: 3px 6px; background: transparent; color: inherit; cursor: pointer; font: inherit; }
-.fr-progress-action:disabled { opacity: .45; cursor: default; }
-.fr-progress-action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
-.fr-idle .fr-progress-indicator i { animation: none; }
-.fr-dark .fr-progress-warning { background: #493620; color: #ffd18c; }
 </style>

@@ -1,4 +1,5 @@
 import {afterAll, afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import './helpers/vueDomFixture';
 await vi.hoisted(async () => {
     const {parseHTML} = await import('linkedom');
     const {window, document} = parseHTML('<html><body></body></html>');
@@ -8,6 +9,13 @@ await vi.hoisted(async () => {
     }
     // Complete linkedom's missing browser select setter; Vue still executes its real DOM patch.
     Object.defineProperty(window.HTMLSelectElement.prototype, 'value', {configurable: true, get() {return [...this.querySelectorAll('option')].find(o => o.selected)?.value || '';}, set(value) {for (const option of this.querySelectorAll('option')) option.selected = option.value === String(value);}});
+    // linkedom creates details as HTMLElement without the native boolean open property.
+    const createElement = document.createElement.bind(document);
+    document.createElement = ((name: string, options?: unknown) => {
+        const element = createElement(name, options as never);
+        if (name === 'details') Object.defineProperty(element, 'open', {configurable: true, get() {return element.hasAttribute('open');}, set(value: boolean) {element.toggleAttribute('open', Boolean(value));}});
+        return element;
+    }) as typeof document.createElement;
     Object.defineProperty(document, 'visibilityState', {configurable: true, writable: true, value: 'visible'});
     return {window, document};
 });
@@ -33,19 +41,21 @@ import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {createRequire} from 'node:module';
 const {buildSync} = createRequire(createRequire(resolve(process.cwd(), 'package.json')).resolve('vite'))('esbuild');
-import {createDocumentSegmentTranslator, createDocumentFileLoadGuard, type DocumentTranslationGateway} from '@/src/features/document-translation/services/translation';
+import {createDocumentSegmentTranslator, type DocumentTranslationGateway} from '@/src/features/document-translation/services/translation';
 import type {DocumentSegment} from '@/src/features/document-translation/core/document';
 import {splitLocalTranslationText, assertLocalTranslationOutput, hunyuanTranslationPrompt} from '@/src/core/translation/localInference';
 import {isLikelyPageContextLeak, isDefinitePageContextLeak} from '@/src/core/translation/prompts';
 import {createLocalTranslationBackgroundRuntime} from '@/src/features/local-translation/background/runtime';
 import {createLocalTranslationDownloadManager} from '@/src/features/local-translation/offscreen/downloads';
-import {artifactUrl, getTranslationArtifacts, downloadTranslationArtifact, artifactComplete, translationArtifactBlob, type TranslationArtifact} from '@/src/features/local-translation/offscreen/artifactStore';
+import {artifactUrl, getTranslationArtifacts, downloadTranslationArtifact, artifactComplete, translationArtifactBlob, MODEL_CHUNK_SIZE, type TranslationArtifact} from '@/src/features/local-translation/offscreen/artifactStore';
 import {LOCAL_TRANSLATION_MODEL_IDS as ids} from '@/src/core/config/localTranslation';
 import {createImageOcrLanguageRepository} from '@/src/features/image-translation/background/ocrLanguageRepository';
 import {IMAGE_OCR_LANGUAGE_STATE_KEY} from '@/src/features/image-translation/ocrLanguages';
 import ImageOcrSettings from '@/src/features/image-translation/ui/ImageOcrSettings.vue';
-import MangaModelSettings from '@/src/features/image-translation/ui/MangaModelSettings.vue';
 import MangaSettings from '@/src/features/image-translation/ui/MangaSettings.vue';
+import MangaModelSettings from '@/src/features/image-translation/ui/MangaModelSettings.vue';
+import {MANGA_OCR_CACHE,MANGA_TEXT_SEGMENTATION_ASSET} from '@/src/features/image-translation/services/mangaOcrAssets';
+import {createVirtualModelResponsePort,virtualModelBuffer} from './helpers/virtualModelResponse';
 import {Config} from '@/src/core/config/model';
 
 const explicitEvidence = process.env.AUDIT_E_EVIDENCE;
@@ -68,6 +78,10 @@ let onMatch: ((key: string) => void | Promise<void>) | undefined;
 const keyOf = (key: RequestInfo | URL) => typeof key === 'string' ? key : key instanceof URL ? key.href : key.url;
 const cachePort = {
     async match(input: RequestInfo | URL) {const key = keyOf(input); await onMatch?.(key); return entries.get(key)?.clone();},
+    async keys(input: RequestInfo | URL, options?: {ignoreSearch?: boolean}) {
+        const key = keyOf(input);
+        return [...entries.keys()].filter(value => options?.ignoreSearch ? value.split('?')[0] === key.split('?')[0] : value === key).map(value => new Request(value));
+    },
     async put(input: RequestInfo | URL, value: Response) {
         const key = keyOf(input);
         if (failStateWrite && key.endsWith('/local-translation-downloads-v2')) {failStateWrite = false; throw new Error('controlled state disk failure');}
@@ -80,12 +94,14 @@ async function settle() {for (let i = 0; i < 20; i++) {await Promise.resolve(); 
 async function mount(component: Component, props: Record<string, unknown> = {}) {
     const container = document.createElement('div'); document.body.append(container);
     const input = reactive(props); const app = createApp({render: () => h(component, input)});
-    app.component('el-option', {props: ['value', 'label', 'disabled'], setup(p: {value?: unknown; label?: string; disabled?: boolean}) {
+    app.component('el-option', {props: {value: null, label: String, disabled: Boolean}, setup(p: {value?: unknown; label?: string; disabled?: boolean}) {
         const select = inject<{value: () => unknown; disabled: () => boolean; select: (value: unknown) => void}>('audit-select-port')!;
         return () => h('button', {type: 'button', 'data-option-value': String(p.value), 'aria-pressed': select.value() === p.value,
             disabled: p.disabled || select.disabled(), onClick: () => select.select(p.value)}, String(p.label));
     }});
-    app.component('el-switch', {props: ['modelValue', 'disabled'], render() {return h('button', {'aria-disabled': (this as any).disabled});}});
+    app.component('el-switch', {props: ['modelValue', 'disabled'], emits: ['update:modelValue'], setup(p: {modelValue?: boolean; disabled?: boolean}, {emit}: {emit: (name: 'update:modelValue', value: boolean) => void}) {
+        return () => h('button', {role: 'switch', disabled: p.disabled, 'aria-checked': p.modelValue, onClick: () => emit('update:modelValue', !p.modelValue)});
+    }});
     apps.add(app); app.mount(container); await settle(); return {container, app, props: input};
 }
 function segments(): DocumentSegment[] {return [{id: 0, source: 'one', role: 'paragraph'}, {id: 1, source: 'two', role: 'paragraph'}, {id: 2, source: 'three', role: 'paragraph'}] as DocumentSegment[];}
@@ -123,14 +139,12 @@ describe('audit 49 E actual translation and cache entries', () => {
         await expect(createDocumentSegmentTranslator(gateway())(segments(), {fileName: 'fixture', signal: controller.signal, onSegment: commit})).rejects.toMatchObject({name: 'AbortError'});
         expect(commit).toHaveBeenCalledOnce(); expect(commit).toHaveBeenCalledWith({id: 0, translation: 'translated one'});
     });
-    it('preserves resume, glossary exclusion, frozen language pair and file request ownership', async () => {
+    it('preserves resume, glossary exclusion and the frozen language pair', async () => {
         const port = gateway(false), request = vi.fn(port.translateText); port.translateText = request;
         port.getGlossaryOptions = () => ({glossaryIds: ['default']});
         const result = await createDocumentSegmentTranslator(port)(segments(), {fileName: 'fixture', initialTranslations: ['edited'], glossaryIds: [], sourceLanguage: 'en', targetLanguage: 'zh'});
         expect(result).toEqual(['edited', 'translated two', 'translated three']);
         expect(request.mock.calls.map(c => c[2])).toEqual([expect.objectContaining({glossaryIds: [], sourceLanguage: 'en', targetLanguage: 'zh'}), expect.objectContaining({glossaryIds: [], sourceLanguage: 'en', targetLanguage: 'zh'})]);
-        const guard = createDocumentFileLoadGuard(), first = guard.begin(), second = guard.begin();
-        expect(first.isCurrent()).toBe(false); expect(second.isCurrent()).toBe(true); guard.invalidate(); expect(second.isCurrent()).toBe(false);
     });
     it('accepts only extension-owned offscreen progress through the real background runtime composition', async () => {
         const values: Record<string, unknown> = {}, writes = vi.fn(async (value: Record<string, unknown>) => {Object.assign(values, value);});
@@ -157,7 +171,10 @@ describe('audit 49 E actual translation and cache entries', () => {
             if (phase === 'paused' || phase === 'ready') {if (++terminalWrites === 2) terminal.resolve();}
         }});
         await manager.status(); const files = getTranslationArtifacts(ids.opusZhEn);
-        for (const file of files) entries.set(artifactUrl(file) + '?fluent-read-verified=' + file.sha256, new Response('verified fixture receipt'));
+        for (const file of files) {
+            entries.set(artifactUrl(file) + '?fluent-read-verified=' + file.sha256, new Response('verified fixture receipt'));
+            for (let index = 0; index < Math.ceil(file.size / MODEL_CHUNK_SIZE); index++) entries.set(`${artifactUrl(file)}?fluent-read-part=${index}`, new Response());
+        }
         const last = files[files.length - 1]!; let paused = false;
         onMatch = async key => {if (!paused && key === artifactUrl(last) + '?fluent-read-verified=' + last.sha256) {paused = true; await manager.pause(ids.opusZhEn);}};
         await manager.start(ids.opusZhEn); await terminal.promise;
@@ -219,10 +236,6 @@ describe('audit 49 E actual translation and cache entries', () => {
         expect(result.loaded, 'module load must succeed before runtime classification').toBe(true);
         expect(result.timeout, result.output).toBe(false); expect(result.exit, result.output).toBe(0); expect(invalidBudgetError).toBeInstanceOf(RangeError);
     });
-    it('allows source-owned CJK fragments even when the result expands by repeating them', () => {
-        const source = '甲乙丙丁戊己庚辛';
-        expect(isLikelyPageContextLeak(source, source.repeat(4), source)).toBe(false);
-    });
     it('bounds repeated CJK whole-string searches for normal paragraphs', () => {
         // 长源文继续验证词法检测的线性预算；短标题的极端扩写现会触发一次跨语言复验。
         const origin = 'Translate the paragraph about the original problem and preserve its meaning.';
@@ -258,6 +271,124 @@ describe('audit 49 E actual translation and cache entries', () => {
 });
 
 describe('audit 49 E real Vue client model settings', () => {
+    it('运行信息按模型状态显示阶段、会话后端和自动回退，旧状态不出现空面板', async () => {
+        vi.useFakeTimers();
+        let inference: Record<string, unknown> | undefined;
+        ports.message.mockImplementation(async () => ({success: true, ready: true, inpaintingReady: true, bytes: 30, ...(inference ? {inference} : {})}));
+        const {container} = await mount(MangaModelSettings);
+        expect(container.querySelector('.manga-inference-diagnostics')).toBeNull();
+        const labels = {idle: '等待中', preparing: '正在准备…', initializing: '正在初始化本地模型…', recognizing: '正在处理图片', completed: '已完成', canceled: '已取消', error: '失败'};
+        for (const [stage, label] of Object.entries(labels)) {
+            inference = {preference: 'auto', stage, executionProviders: stage === 'idle' ? [] : ['wasm'], cpuFallback: stage === 'error'};
+            await vi.advanceTimersByTimeAsync(1500); await settle();
+            const details = container.querySelector<HTMLDetailsElement>('.manga-inference-diagnostics')!;
+            expect(details.open).toBe(false); expect(details.textContent).toContain(label);
+            expect(details.textContent).toContain(stage === 'idle' ? '—' : 'wasm');
+            expect(details.textContent!.includes('已自动回退 CPU（WASM）')).toBe(stage === 'error');
+        }
+    });
+    it('keeps optional segmentation within management and independent from the main OCR readiness', async () => {
+        vi.useFakeTimers();const first=deferred<unknown>();ports.message.mockReturnValueOnce(first.promise);
+        const {container,props}=await mount(MangaModelSettings,{imageRecognition:true,showInpainting:false});
+        const optional=()=>container.querySelector<HTMLElement>('[data-testid="manga-optional-segmentation"]')!;
+        expect(optional().closest('details')?.open).toBe(false);
+        expect(optional().textContent).toContain('正在检查');
+        expect(optional().textContent).toContain('约 90 MB · 仅离线导入');
+        expect(optional().querySelector('code')!.textContent).toBe('comictextdetector.pt.onnx');
+        first.resolve({success:true,ready:true,inpaintingReady:false,bytes:30});await settle();
+        expect(optional().textContent).toContain('未导入');
+        expect(container.querySelector('.manga-resource-list')!.textContent).toContain('已就绪');
+        expect(container.querySelector('.manga-resource-list')!.textContent).not.toContain('精确文字分割');
+        ports.message.mockResolvedValue({success:true,ready:false,inpaintingReady:false,segmentationReady:true,bytes:94});
+        await vi.advanceTimersByTimeAsync(1500);await settle();
+        expect(optional().querySelector('.ready')!.textContent).toBe('已就绪');
+        expect(container.querySelector('.manga-resource-list')!.textContent).toContain('未下载');
+        props.imageRecognition=false;props.showInpainting=true;await settle();expect(optional()).toBeNull();
+        expect(container.querySelector('header small')!.textContent).toContain('用于漫画翻译');
+    });
+    it('persists the optional offline import through the real file control and restores its status after remount',async()=>{
+        vi.useFakeTimers();
+        const asset=MANGA_TEXT_SEGMENTATION_ASSET,buffer=virtualModelBuffer(asset.bytes),cache=new Map<string,Response>();
+        // File bytes, hash and Response are explicit capacity ports; the production importer,
+        // cache URL/write and real component state run. This does not validate model contents.
+        vi.stubGlobal('Response',createVirtualModelResponsePort(Response));
+        vi.stubGlobal('crypto',{subtle:{digest:vi.fn(async()=>Uint8Array.from(asset.sha256.match(/../gu)!,part=>parseInt(part,16)).buffer)}});
+        vi.stubGlobal('caches',{open:async(name:string)=>{expect(name).toBe(MANGA_OCR_CACHE);return{put:async(key:string,response:Response)=>{cache.set(key,response);}};}});
+        ports.message.mockImplementation(async()=>({success:true,ready:true,inpaintingReady:false,segmentationReady:cache.has(asset.url),bytes:cache.has(asset.url)?asset.bytes:0}));
+        const first=await mount(MangaModelSettings);
+        const input=first.container.querySelector<HTMLInputElement>('input[type="file"]')!;
+        expect(input.getAttribute('accept')).toBe('.onnx,.txt');
+        Object.defineProperty(input,'files',{configurable:true,value:[{name:asset.file,size:asset.bytes,arrayBuffer:async()=>buffer}]});
+        input.dispatchEvent(new Event('change'));await settle();
+        expect(await cache.get(asset.url)!.arrayBuffer()).toBe(buffer);
+        expect(first.container.querySelector('[data-testid="manga-optional-segmentation"] .ready')!.textContent).toBe('已就绪');
+        expect(input.value).toBe('');expect(fetch).not.toHaveBeenCalled();
+        first.app.unmount();apps.delete(first.app);await settle();expect(vi.getTimerCount()).toBe(0);
+        const second=await mount(MangaModelSettings);
+        expect(second.container.querySelector('[data-testid="manga-optional-segmentation"] .ready')!.textContent).toBe('已就绪');
+        second.app.unmount();apps.delete(second.app);await settle();expect(vi.getTimerCount()).toBe(0);
+    });
+    it.each(['resolve','reject'] as const)('does not restart model polling when the pending status %s after unmount',async outcome=>{
+        vi.useFakeTimers();const pending=deferred<unknown>();ports.message.mockReturnValueOnce(pending.promise);
+        const {app}=await mount(MangaModelSettings);app.unmount();apps.delete(app);
+        if(outcome==='resolve')pending.resolve({success:true,ready:true,inpaintingReady:true,segmentationReady:true,bytes:100});
+        else pending.reject(new Error('status failed after unmount'));
+        await settle();
+        expect(vi.getTimerCount()).toBe(0);expect(ports.message).toHaveBeenCalledOnce();
+    });
+    it('finishes a failed file import and status refresh after unmount without keeping a picker or poller alive',async()=>{
+        vi.useFakeTimers();const pending=deferred<void>();
+        const {container,app}=await mount(MangaModelSettings);
+        const input=container.querySelector<HTMLInputElement>('input[type="file"]')!;
+        Object.defineProperty(input,'files',{configurable:true,value:[{name:MANGA_TEXT_SEGMENTATION_ASSET.file,size:MANGA_TEXT_SEGMENTATION_ASSET.bytes,
+            arrayBuffer:async()=>{await pending.promise;throw new Error('file became unavailable');}}]});
+        input.dispatchEvent(new Event('change'));await settle();
+        app.unmount();apps.delete(app);
+        ports.message.mockRejectedValueOnce(new Error('status failed after import'));
+        pending.resolve();await settle();
+        expect(ports.message).toHaveBeenCalledTimes(2);expect(vi.getTimerCount()).toBe(0);
+        expect(container.childNodes).toHaveLength(0);
+    });
+    it('pauses hidden model polling and renders verifying, paused and failed download snapshots',async()=>{
+        vi.useFakeTimers();(document as any).visibilityState='hidden';
+        const {container}=await mount(MangaModelSettings);
+        expect(ports.message).not.toHaveBeenCalled();await vi.advanceTimersByTimeAsync(1500);expect(ports.message).not.toHaveBeenCalled();
+        (document as any).visibilityState='visible';
+        for(const [phase,label,delay]of [['verifying','正在校验漫画模型',1500],['paused','漫画模型下载已暂停',500],['error','漫画模型下载未完成',1500],[undefined,'正在下载漫画模型',1500]]as const){
+            ports.message.mockResolvedValue({success:true,ready:false,inpaintingReady:false,bytes:0,download:{phase,file:'model.onnx',loaded:1,total:2}});
+            await vi.advanceTimersByTimeAsync(delay);await settle();
+            expect(container.querySelector('.manga-model-progress strong')!.textContent).toBe(label);
+            expect(!!container.querySelector('progress')).toBe(phase==='verifying');
+        }
+    });
+    it('recovers empty and failed model responses without exposing their underlying diagnostics',async()=>{
+        vi.useFakeTimers();ports.message.mockResolvedValueOnce(undefined);
+        const {container}=await mount(MangaModelSettings);
+        expect(container.querySelector('[role="alert"]')!.textContent).toBe('漫画识别模型状态读取失败');
+        for(const response of [{success:false},{success:false,error:'https://model.invalid/private'}]){
+            ports.message.mockResolvedValueOnce(response);await vi.advanceTimersByTimeAsync(1500);await settle();
+            expect(container.querySelector('[role="alert"]')!.textContent).toBe('漫画识别模型状态读取失败');
+        }
+        ports.message.mockResolvedValue({success:true,ready:true,inpaintingReady:true,bytes:1});await vi.advanceTimersByTimeAsync(1500);await settle();
+        expect(container.querySelector('[role="alert"]')).toBeNull();
+        const remove=[...container.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent==='清除已下载资源')!;
+        for(const response of [undefined,{success:false}]){
+            ports.message.mockResolvedValueOnce(response);remove.click();await settle();
+            expect(container.querySelector('[role="alert"]')!.textContent).toBe('漫画识别模型清除失败');
+        }
+    });
+    it('handles a cancelled file picker and sanitizes non-validation import failures',async()=>{
+        vi.useFakeTimers();const {container}=await mount(MangaModelSettings);
+        const input=container.querySelector<HTMLInputElement>('input[type="file"]')!;
+        Object.defineProperty(input,'files',{configurable:true,value:null});input.dispatchEvent(new Event('change'));await settle();
+        expect(container.querySelector('[role="alert"]')).toBeNull();
+        for(const failure of ['https://model.invalid/private',new Error('private storage error')]){
+            Object.defineProperty(input,'files',{configurable:true,value:[{name:MANGA_TEXT_SEGMENTATION_ASSET.file,size:MANGA_TEXT_SEGMENTATION_ASSET.bytes,arrayBuffer:async()=>{throw failure;}}]});
+            input.dispatchEvent(new Event('change'));await settle();
+            expect(container.querySelector('[role="alert"]')!.textContent).toBe('漫画识别模型导入失败，请重试');
+            expect(container.querySelector('details')!.open).toBe(true);
+        }
+    });
     it('shows real download progress while keeping source controls and resource links out of the menu', async () => {
         vi.useFakeTimers(); entries.set('https://fluent-read.invalid/manga-model-source',new Response('mirror'));
         ports.message.mockResolvedValue({success:true,ready:false,bytes:0,source:'mirror',download:{phase:'downloading',file:'model.onnx',loaded:1048576,total:2097152,source:'hf-mirror.com'}});
@@ -321,6 +452,183 @@ describe('audit 49 E real Vue client model settings', () => {
         vi.useFakeTimers(); const pending = deferred<unknown>(); ports.message.mockReturnValueOnce(pending.promise);
         const {app} = await mount(ImageOcrSettings); app.unmount(); apps.delete(app);
         pending.resolve({success: true, languages: ['eng'], states: {}}); await settle(); expect(vi.getTimerCount()).toBe(0); expect(ports.stopWatch).toHaveBeenCalledOnce(); expect(progressEvents.removeListener).toHaveBeenCalledOnce(); expect(progressListeners.size).toBe(0);
+    });
+    it('pauses OCR polling while hidden, coalesces visible refreshes and retries a failed status through the UI', async () => {
+        vi.useFakeTimers(); ports.message.mockResolvedValueOnce({success: false});
+        const {container} = await mount(ImageOcrSettings, {sourceLanguage: 'en', embedded: true, active: false});
+        expect(container.querySelector('.image-ocr-engine-details')!.hasAttribute('open')).toBe(true);
+        expect(container.querySelector('.image-ocr-language-details')!.hasAttribute('open')).toBe(true);
+        expect(container.querySelector('[role="alert"]')!.textContent).toContain('ocr.packs.statusError');
+        const pending = deferred<unknown>(); ports.message.mockReturnValueOnce(pending.promise);
+        container.querySelector<HTMLButtonElement>('.image-ocr-notice button')!.click(); await settle();
+        document.dispatchEvent(new Event('visibilitychange')); ports.watch.mock.calls[0][1](); await settle();
+        expect(ports.message).toHaveBeenCalledTimes(2);
+        pending.resolve({success: true, languages: ['eng']}); await settle();
+        expect(container.querySelector('[role="alert"]')).toBeNull();
+        expect(container.querySelector('.image-ocr-ready')!.textContent).toContain('ocr.packs.readyAction');
+        (document as any).visibilityState = 'hidden'; document.dispatchEvent(new Event('visibilitychange'));
+        await vi.advanceTimersByTimeAsync(6000); expect(ports.message).toHaveBeenCalledTimes(2);
+        (document as any).visibilityState = 'visible'; document.dispatchEvent(new Event('visibilitychange')); await settle();
+        expect(ports.message).toHaveBeenCalledTimes(3);
+        await vi.advanceTimersByTimeAsync(1500); expect(ports.message).toHaveBeenCalledTimes(4);
+    });
+    it('changes OCR source, manages optional packs and preserves explicit resource disclosure state', async () => {
+        vi.useFakeTimers(); const sourceChanged = vi.fn();
+        const {container, props} = await mount(ImageOcrSettings, {sourceLanguage: 'legacy-language', 'onUpdate:sourceLanguage': sourceChanged});
+        expect(container.querySelector<HTMLButtonElement>('[data-option-value="legacy-language"]')!.disabled).toBe(true);
+        container.querySelector<HTMLButtonElement>('[data-option-value="ja"]')!.click(); await settle(); expect(sourceChanged).toHaveBeenCalledWith('ja');
+        props.sourceLanguage = 'ja'; await settle(); expect(container.querySelector('[data-language="jpn"]')).not.toBeNull();
+        const count = container.querySelectorAll('[data-language]').length;
+        container.querySelector<HTMLButtonElement>('.image-ocr-more')!.click(); await settle();
+        expect(container.querySelectorAll('[data-language]').length).toBeGreaterThan(count);
+        container.querySelector<HTMLButtonElement>('[data-language="eng"] .image-ocr-download-button')!.click(); await settle();
+        expect(ports.message).toHaveBeenCalledWith({type: 'fluentReadImageOcrDownload', languages: ['eng']});
+        container.querySelector<HTMLButtonElement>('.image-ocr-more')!.click(); await settle(); expect(container.querySelector('.image-ocr-more')!.getAttribute('aria-expanded')).toBe('false');
+        props.embedded = true; props.active = false; await settle();
+        const engine = container.querySelector<HTMLDetailsElement>('.image-ocr-engine-details')!, languages = container.querySelector<HTMLDetailsElement>('.image-ocr-language-details')!;
+        expect(engine.hasAttribute('open')).toBe(false); expect(container.textContent).toContain('备用识别');
+        for (const detail of [engine, languages]) {detail.open = true; detail.dispatchEvent(new Event('toggle'));} await settle();
+        expect(engine.open).toBe(true); expect(languages.open).toBe(true);
+        props.active = true; await settle(); expect(container.textContent).toContain('当前使用');
+    });
+    it('reports partial OCR download success without labeling installed packs as failures, then retries the failed pack', async () => {
+        vi.useFakeTimers(); const languages: string[] = [], states: Record<string, {phase: string; error?: string}> = {};
+        let attempt = 0;
+        ports.message.mockImplementation(async message => {
+            if (message.type === 'fluentReadImageOcrDownload') {
+                if (attempt++ === 0) {languages.push('eng'); states.chi_sim = {phase: 'error', error: 'fixture missing Chinese pack'}; return {success: false, error: 'partial download'};}
+                languages.push('chi_sim'); delete states.chi_sim;
+            }
+            return {success: true, languages: [...languages], states: {...states}};
+        });
+        const {container} = await mount(ImageOcrSettings, {sourceLanguage: 'zh-CN'});
+        container.querySelector<HTMLButtonElement>('.image-ocr-primary-action')!.click(); await settle();
+        expect(container.querySelector('[data-language="eng"] [role="alert"]')).toBeNull();
+        expect(container.querySelector('[data-language="chi_sim"] [role="alert"]')!.textContent).toBe('fixture missing Chinese pack');
+        container.querySelector<HTMLButtonElement>('[data-language="chi_sim"] .image-ocr-download-button')!.click(); await settle();
+        expect(ports.message).toHaveBeenLastCalledWith({type: 'fluentReadImageOcrStatus'});
+        expect(container.querySelector('[data-language="chi_sim"]')!.getAttribute('data-state')).toBe('ready');
+        expect(container.querySelector('[role="alert"]')).toBeNull();
+    });
+    it('shows live OCR byte progress, removal failures and ignores late action failures after closing', async () => {
+        vi.useFakeTimers(); let languages = ['eng']; const remove = deferred<unknown>();
+        ports.message.mockImplementation(async message => message.type === 'fluentReadImageOcrRemove' ? remove.promise : {success: true, languages, states: {}});
+        const {container, app} = await mount(ImageOcrSettings, {sourceLanguage: 'en'});
+        const progressKey = 'fluentReadDownloadProgress:ocr-language:eng';
+        for (const listener of progressListeners) listener({[progressKey]: {newValue: {loaded: 40, total: 100}}}, 'local'); await settle();
+        expect(container.querySelector('progress')!.getAttribute('value')).toBe('40');
+        expect(container.querySelector('.download-progress-detail')!.textContent).toBe('40%');
+        container.querySelector<HTMLButtonElement>('.image-ocr-remove')!.click(); await settle();
+        expect(container.querySelector('[data-language="eng"]')!.getAttribute('data-state')).toBe('removing');
+        remove.resolve({success: false, error: 'fixture protected cache'}); await settle();
+        expect(container.querySelector('[role="alert"]')!.textContent).toBe('fixture protected cache');
+        for (const listener of progressListeners) listener({[progressKey]: {}}, 'local'); await settle();
+        expect(container.querySelector('progress')).toBeNull();
+        languages = []; ports.watch.mock.calls[0][1](); await settle();
+        const pending = deferred<unknown>(); ports.message.mockImplementation(async message => message.type === 'fluentReadImageOcrDownload' ? pending.promise : {success: true, languages, states: {}});
+        container.querySelector<HTMLButtonElement>('.image-ocr-primary-action')!.click(); await settle();
+        app.unmount(); apps.delete(app); const count = ports.message.mock.calls.length;
+        pending.reject(new Error('download failed after page close')); await settle();
+        expect(ports.message).toHaveBeenCalledTimes(count); expect(vi.getTimerCount()).toBe(0);
+    });
+    it('updates actual image and manga controls in the parent configuration and filters the site catalog', async () => {
+        vi.useFakeTimers(); const settings = new Config(); settings.imageTranslationMangaEnabled = false; settings.useCache = true;
+        const initialHover = settings.imageTranslationHoverEnabled, initialContextMenu = settings.imageTranslationContextMenuEnabled;
+        const imageChanged = vi.fn();
+        const {container, props} = await mount(MangaSettings, {settings, imageEnabled: false, available: true, serviceOptions: [{value: 'fixture', label: 'Fixture service'}], 'onUpdate:imageEnabled': imageChanged});
+        for (const preview of container.querySelectorAll<HTMLElement>('.image-example')) {
+            const buttons = preview.querySelectorAll<HTMLButtonElement>('.image-example-tabs button');
+            buttons[0].click(); await settle(); expect(buttons[0].getAttribute('aria-pressed')).toBe('true');
+            expect(preview.textContent).toContain(preview.querySelector('.image-example-comic') ? 'Let’s explore a bigger world!' : 'Read. Discover a new perspective.');
+            buttons[1].click(); await settle(); expect(buttons[1].getAttribute('aria-pressed')).toBe('true');
+            expect(preview.textContent).toContain(preview.querySelector('.image-example-comic') ? '一起去看看更大的世界吧！' : '阅读，发现新的视角');
+        }
+        const select = async (label: string, value: string) => {container.querySelector<HTMLButtonElement>(`[aria-label="${label}"] [data-option-value="${value}"]`)!.click(); await settle();};
+        await select('area.settings.sourceLanguage', 'en'); await select('漫画目标语言', 'ja'); await select('漫画翻译服务', 'fixture'); await select('图片识别方式', 'tesseract');
+        await select('本地处理后端', 'cpu');
+        expect(props.settings).toMatchObject({from: 'en', to: 'ja', imageTranslationService: 'fixture', imageTranslationOcrEngine: 'tesseract', imageTranslationInferenceBackend: 'cpu'});
+        container.querySelector<HTMLButtonElement>('[role="switch"][aria-label="网页图片翻译"]')!.click(); await settle(); expect(imageChanged).toHaveBeenCalledWith(true);
+        props.imageEnabled = true; await settle();
+        for (const label of ['image.hover', 'image.context', '漫画连续翻译', '独立漫画按钮']) {container.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${label}"]`)!.click(); await settle();}
+        await select('提前翻译后续页面', '5'); await select('快速缓存图片数量', '24');
+        expect(props.settings).toMatchObject({imageTranslationHoverEnabled: !initialHover, imageTranslationContextMenuEnabled: !initialContextMenu, imageTranslationMangaEnabled: true, imageTranslationMangaPrefetchPages: 5, imageTranslationMangaCachePages: 24});
+        const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+        search.value = '  PiXiV  '; search.dispatchEvent(new Event('input', {bubbles: true})); await settle();
+        expect(container.querySelectorAll('.manga-site')).toHaveLength(3);
+        expect([...container.querySelectorAll('.manga-site')].every(site => site.textContent!.toLowerCase().includes('pixiv'))).toBe(true);
+        search.value = 'no such fixture catalog site'; search.dispatchEvent(new Event('input', {bubbles: true})); await settle(); expect(container.textContent).toContain('没有匹配的网站');
+        props.available = false; (props.settings as Config).useCache = false; await settle(); expect(container.querySelector('[data-settings-anchor="resources"]')).toBeNull();
+    });
+    it('shows the recognition model used by the selected image and manga language', async () => {
+        vi.useFakeTimers();
+        const settings = reactive(new Config());
+        settings.from = 'en';
+        settings.imageTranslationOcrEngine = 'paddle';
+        settings.imageTranslationMangaEnabled = true;
+        const {container} = await mount(MangaSettings, {settings, imageEnabled: true, available: true, serviceOptions: []});
+        const manager = () => container.querySelector('[data-testid="manga-model-manager"]')!;
+        expect(manager().querySelector('header')!.textContent).toContain('PaddleOCR · 用于图片与漫画');
+        for (const source of ['ru', 'ko', 'ar', 'he']) {
+            settings.from = source;
+            await settle();
+            expect(manager().querySelector('h2')!.textContent).toBe('背景文字清除');
+            expect(manager().textContent).toContain('需要时下载');
+            expect(manager().textContent).toContain('下载与管理');
+            expect(manager().textContent).not.toMatch(/PaddleOCR|图片文字识别|首次翻译时自动准备资源/u);
+        }
+        expect(settings.imageTranslationOcrEngine).toBe('paddle');
+        settings.from = 'en';
+        settings.imageTranslationOcrEngine = 'tesseract';
+        await settle();
+        expect(manager().querySelector('header')!.textContent).toContain('PaddleOCR · 用于漫画翻译');
+        settings.imageTranslationMangaEnabled = false;
+        await settle();
+        expect(manager()).toBeNull();
+        settings.imageTranslationOcrEngine = 'paddle';
+        await settle();
+        expect(manager().querySelector('header')!.textContent).toContain('PaddleOCR · 用于图片翻译');
+        expect(manager().textContent).not.toContain('背景文字清除');
+    });
+    it('places active image language packs first without remounting the resource controls', async () => {
+        vi.useFakeTimers();
+        const settings = reactive(new Config());
+        settings.from = 'en';
+        settings.imageTranslationOcrEngine = 'paddle';
+        settings.imageTranslationMangaEnabled = true;
+        const {container} = await mount({
+            render: () => h(MangaSettings, {settings, imageEnabled: true, available: true, serviceOptions: []}, {
+                resources: () => h('section', {'data-testid': 'fixture-language-packs'}, [h('input')]),
+            }),
+        });
+        const resources = container.querySelector('.manga-resource-body')!;
+        const manager = resources.querySelector('[data-testid="manga-model-manager"]')!;
+        const packs = resources.querySelector('[data-testid="fixture-language-packs"]')!;
+        expect(resources.firstElementChild).toBe(manager);
+        expect(resources.lastElementChild).toBe(packs);
+        packs.querySelector('input')!.value = 'fixture';
+        settings.from = 'ar';
+        await settle();
+        expect(resources.firstElementChild).toBe(packs);
+        expect(resources.lastElementChild).toBe(manager);
+        expect(resources.querySelector<HTMLInputElement>('[data-testid="fixture-language-packs"] input')!.value).toBe('fixture');
+        settings.from = 'en';
+        await settle();
+        expect(resources.firstElementChild).toBe(manager);
+        expect(resources.lastElementChild).toBe(packs);
+    });
+    it('rejects invalid manga URLs, selectors and a full rule list through the actual form', async () => {
+        vi.useFakeTimers(); const settings = new Config(); settings.imageTranslationMangaSites = [];
+        const {container, props} = await mount(MangaSettings, {settings, imageEnabled: false, available: true, serviceOptions: []});
+        const submit = async (url: string, css: string) => {
+            const address = container.querySelector<HTMLInputElement>('form input[type="url"]')!, selector = container.querySelector<HTMLInputElement>('form input[aria-label="漫画图片选择器"]')!;
+            address.value = url; address.dispatchEvent(new Event('input', {bubbles: true})); selector.value = css; selector.dispatchEvent(new Event('input', {bubbles: true}));
+            container.querySelector('form')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})); await settle();
+        };
+        await submit('https://fixture.example/', ''); expect(container.querySelector('[role="alert"]')!.textContent).toContain('有效的阅读页地址');
+        await submit('https://fixture.example/chapter/', 'img['); expect(container.querySelector('[role="alert"]')!.textContent).toContain('图片选择器无效');
+        (props.settings as Config).imageTranslationMangaSites = Array.from({length: 20}, (_, i) => ({hostname: `fixture${i}.example`, pathPrefix: '/chapter/', selector: 'img'}));
+        await submit('https://fixture.example/chapter/', 'main img'); expect(container.querySelector('[role="alert"]')!.textContent).toContain('最多添加 20');
+        expect((props.settings as Config).imageTranslationMangaSites).toHaveLength(20);
     });
     it('adds and deletes validated manga rules via the actual rendered form and parent configuration', async () => {
         const settings = new Config(); settings.imageTranslationMangaSites = [];

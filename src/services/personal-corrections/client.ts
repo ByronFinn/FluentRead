@@ -1,7 +1,7 @@
 /**
  * @file src/services/personal-corrections/client.ts
  * 文件职责：为网页编辑和翻译入口提供个人校订的类型化后台客户端。
- * 主要内容：发送独立消息、验证统一响应，订阅无正文变更广播并随页面生命周期释放。
+ * 主要内容：发送独立消息、验证统一响应，订阅无正文变更广播并随页面生命周期释放；隔离失效运行时的注销错误，拒绝清理后的迟到广播。
  * 模块边界：客户端不写浏览器存储、不缓存个人译文、不接触 provider；不可用时由调用者保留普通翻译。
  */
 import type {CorrectionQuery, PersonalCorrectionInput, PersonalCorrectionLookup, PersonalCorrectionProject, PersonalCorrectionSaveResult, PersonalCorrectionState} from '@/src/core/personal-corrections/public';
@@ -33,14 +33,20 @@ export function createPersonalCorrectionsClient(getRuntime: () => PersonalCorrec
         selectProject: (materialId: string, projectId: string | null) => send<void>('selectProject', {materialId, projectId}),
         subscribe(listener: () => void, signal?: AbortSignal): () => void {
             if (signal?.aborted) return () => undefined;
-            let runtime: PersonalCorrectionClientRuntime;
-            try {runtime = getRuntime();} catch {return () => undefined;}
-            const receive = (message: unknown) => {
-                if (message && typeof message === 'object' && (message as {type?: unknown}).type === PERSONAL_CORRECTIONS_CHANGED) listener();
-            };
             let active = true;
-            const cleanup = () => {if (!active) return; active = false; runtime.onMessage.removeListener(receive); signal?.removeEventListener('abort', cleanup);};
-            runtime.onMessage.addListener(receive); signal?.addEventListener('abort', cleanup, {once: true});
+            const receive = (message: unknown) => {
+                if (active && message && typeof message === 'object' && (message as {type?: unknown}).type === PERSONAL_CORRECTIONS_CHANGED) listener();
+            };
+            let event: PersonalCorrectionClientRuntime['onMessage'];
+            try {event = getRuntime().onMessage; event.addListener(receive);} catch {active = false; return () => undefined;}
+            const cleanup = () => {
+                if (!active) return;
+                active = false;
+                // 使用注册时的事件对象；运行时撤销不能阻断本地 AbortSignal 监听的释放。
+                try {event.removeListener(receive);} catch { /* 旧扩展上下文已不可用，仍继续本地清理。 */ }
+                signal?.removeEventListener('abort', cleanup);
+            };
+            if (signal?.aborted) cleanup(); else signal?.addEventListener('abort', cleanup, {once: true});
             return cleanup;
         },
     };

@@ -76,14 +76,14 @@ const fixture = http.createServer((request, response) => {
     for (const service of ['google', 'microsoft', 'custom:fixtureSuccess']) await add(dialog, service);
     assert.equal(await dialog.getByTestId('composite-member-add').count(), 0);
     assert.equal(await dialog.locator('.segmented-control[role="radiogroup"]').count(), 1);
-    await dialog.locator('[data-composite-advanced] summary').click();
+    await dialog.getByTestId('composite-member-timeout').waitFor({state: 'visible'});
+    assert.equal(await dialog.getByTestId('composite-member-timeout').evaluate(node => node.closest('details')), null);
     await dialog.getByTestId('composite-member-timeout').fill('0');
-    await dialog.locator('[data-composite-advanced] summary').click();
     await dialog.getByTestId('custom-service-save').click();
     await dialog.getByTestId('composite-member-timeout').waitFor({state: 'visible'});
     assert.equal(await dialog.getByRole('alert').count(), 1);
+    await dialog.getByRole('alert').waitFor({state: 'visible'});
     await dialog.getByTestId('composite-member-timeout').fill('12');
-    await dialog.locator('[data-composite-advanced] summary').click();
     await shot('custom-service-create-combination');
     await page.setViewportSize({width: 390, height: 1000});
     const createMetrics = await dialog.evaluate(node => {const box = node.getBoundingClientRect();return {left: box.left, right: box.right, width: innerWidth, overflow: document.documentElement.scrollWidth > innerWidth};});
@@ -103,7 +103,7 @@ const fixture = http.createServer((request, response) => {
     report.cases.push('configured-combination-deep-link-after-hydration');
     const settings = () => page.locator('[data-composite-service-settings]:visible');
     assert.equal(await page.locator('.model-section:visible, [data-api-key-list]:visible, [data-service-settings-tabs]:visible').count(), 0);
-    await settings().locator('[data-composite-advanced] summary').click();
+    await settings().getByTestId('composite-member-timeout').waitFor({state: 'visible'});
     assert.equal(await settings().getByTestId('composite-member-timeout').inputValue(), '12');
     assert.equal(await settings().getByTestId('composite-member-select').locator('option[value^="composite:"]').count(), 0);
     report.cases.push('create-mixed-members-without-credentials-or-nesting');

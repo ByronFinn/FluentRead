@@ -1,0 +1,2281 @@
+{
+  "version": 1,
+  "scope": "First actual five-scene baseline on stock c302 production OCR/rendering from the frozen v5 refined build, with the new exact paragraphGroups testing helper. Observational SDK probe adds no inference and selects no output. Historical baseline, not a v6 candidate quality/performance pass.",
+  "sourceFrozenAt": "2026-10-25T09:02:18.799111+00:00",
+  "sourceBeforeAnyOcr": true,
+  "sourceDesignSha256": "04801c1cc084412785d426ba635d6bda286988c3d3fd4f6ca3272dae53393530",
+  "originalSourceManifestSha256": "fdb861632dc91ff8175ef8f5d1f7e8eb34c0c6ae67e239812bf5841367f35dd7",
+  "sourceAuthoredBeforeResultSelection": true,
+  "productionBaselineCommit": "c302a6f5bdb269fcf8f1eaefe75ebdff10dcdf19",
+  "productionTypography": "Unchanged v5 production font/ink-fit behavior; no later v6 candidate typography or OCR policy adopted for this baseline.",
+  "commitBinding": "Root-controlled stock c302 artifact association. Both source/probe compiled file maps rehashed and pinned below; this archival step did not rebuild production source.",
+  "qualityHelperSha256": "698fc68ce83ff2f0eb8e2b74cbb2c9db7c9b76887a31239f4114c391c0aab7ce",
+  "artifacts": {
+    "report": {
+      "evidencePath": "iteration-v6/structure-corpus/browser-baseline/report.json",
+      "sha256": "86ad606701cdc98d8715003f19f74d95dc10d16f1d1295b4c3f6e513bfba7fac"
+    },
+    "runtimeDiagnostics": {
+      "evidencePath": "iteration-v6/structure-corpus/browser-baseline/runtime-diagnostics.json",
+      "sha256": "0a7ed459545ddd7e43e56903857b8efcb88ae25739d58a2b851e70250f6084c6"
+    },
+    "preparation": {
+      "evidencePath": "iteration-v6/structure-corpus/baseline-probe-preparation/preparation.json",
+      "sha256": "7ec001fd3bfbf79219dd9ed1991aee80cebc6e802aede01c388fab8c789cceff"
+    },
+    "sourceFileMapSha256": "f9c8b6123d596538825eb57b27ee154348e00391765a6569045f823c4f1b44b0",
+    "probeFileMapSha256": "559d9662fc16d820745340dc4ae4ba30af418c2c53bbf4a5c08fec5c51bb7eff",
+    "fileMapDigestAlgorithm": "SHA256 of UTF8 JSON object {relativePath:fileSHA256}, keys sorted, ensure_ascii=false, separators comma/colon, no final newline. Every actual artifact file rehashed against its map.",
+    "sourceFiles": 515,
+    "probeFiles": 515,
+    "changedProbeFiles": [
+      "chunks/index-De1C9VIx.js"
+    ],
+    "sdkSourceSha256": "8f8b1f06614d060f20600af08ce2a945e3f750f7ead1b5a56c9feca76c2b64e4",
+    "sdkObserverSha256": "f50d6374ddc3157c94320f0f5a508ae26e41a3003f5ba6e1f57ed8dbabfc5a76",
+    "observerTemplateSha256": "1f192f833875982bca1b7fb87e0b5dab07fd42eb2e3acf1b77a78b3c501ef41d",
+    "probeInvariant": true,
+    "productionSourceArtifactUnchanged": true,
+    "productionFilesModified": false
+  },
+  "strictExit": 1,
+  "strictPass": false,
+  "qualitySummary": {
+    "completedScenes": 5,
+    "expectedScenes": 5,
+    "anchors": {
+      "total": 29,
+      "matched": 26,
+      "failed": 3
+    },
+    "negativeRegions": {
+      "declared": 8,
+      "falsePositives": 0
+    },
+    "wordlessPages": [],
+    "failures": [
+      {
+        "scene": "bound-spread-gutter-caption",
+        "round": 0,
+        "type": "ocr-anchor",
+        "anchor": "VOL 08",
+        "occurrences": 0,
+        "expectedOccurrences": 1,
+        "reason": "Actual production OCR does not contain the normalized expected anchor"
+      },
+      {
+        "scene": "bound-spread-gutter-caption",
+        "round": 0,
+        "type": "paragraph-order",
+        "anchors": [
+          "KEEP THE LEFT PAGE",
+          "OPEN BESIDE THE MAP"
+        ],
+        "paragraphIndex": -1,
+        "found": false,
+        "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+      },
+      {
+        "scene": "bound-spread-gutter-caption",
+        "round": 0,
+        "type": "paragraph-order",
+        "anchors": [
+          "THE STORY CONTINUES",
+          "ON THE OTHER SIDE"
+        ],
+        "paragraphIndex": -1,
+        "found": false,
+        "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+      },
+      {
+        "scene": "bound-spread-gutter-caption",
+        "round": 0,
+        "type": "paragraph-order",
+        "anchors": [
+          "VOL 08"
+        ],
+        "paragraphIndex": -1,
+        "found": false,
+        "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+      },
+      {
+        "scene": "photographed-perspective-note",
+        "round": 0,
+        "type": "ocr-anchor",
+        "anchor": "CHECK THE SOUTH GATE",
+        "occurrences": 0,
+        "expectedOccurrences": 1,
+        "reason": "Actual production OCR does not contain the normalized expected anchor"
+      },
+      {
+        "scene": "photographed-perspective-note",
+        "round": 0,
+        "type": "ocr-anchor",
+        "anchor": "FIELD SKETCH 09",
+        "occurrences": 0,
+        "expectedOccurrences": 1,
+        "reason": "Actual production OCR does not contain the normalized expected anchor"
+      },
+      {
+        "scene": "photographed-perspective-note",
+        "round": 0,
+        "type": "unexpected-ocr-characters",
+        "excess": [
+          {
+            "character": "N",
+            "expected": 4,
+            "actual": 5,
+            "excess": 1
+          }
+        ],
+        "reason": "Actual offscreen source text contains more normalized characters than declared source truth"
+      },
+      {
+        "scene": "photographed-perspective-note",
+        "round": 0,
+        "type": "paragraph-order",
+        "anchors": [
+          "CHECK THE SOUTH GATE"
+        ],
+        "paragraphIndex": -1,
+        "found": false,
+        "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+      },
+      {
+        "scene": "photographed-perspective-note",
+        "round": 0,
+        "type": "paragraph-order",
+        "anchors": [
+          "FIELD SKETCH 09"
+        ],
+        "paragraphIndex": -1,
+        "found": false,
+        "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+      }
+    ],
+    "normalization": "NFKC, uppercase, retain Unicode letters/numbers; count overlapping substring anchors in actual OCR text; exact occurrence counts follow manifest metadata or source-proven unique anchors",
+    "scope": "Exact OCR anchors, source occurrence counts, declared reading order, excess source-character counts and wordless artwork false positives are aggregated independently. Character inventories do not prove absence of omissions or preserve order. Protected pixels, source restoration, cached bitmap and request counts remain immediate structural assertions. No CER or translation-provider quality claim."
+  },
+  "passingScenes": [
+    "narrow-inset-card-dialogue",
+    "midband-crossing-detached-cards",
+    "multisize-margin-callouts"
+  ],
+  "failingScenes": [
+    "bound-spread-gutter-caption",
+    "photographed-perspective-note"
+  ],
+  "failuresRetained": true,
+  "scenes": [
+    {
+      "scene": "narrow-inset-card-dialogue",
+      "sourceLanguage": "ja",
+      "texts": [
+        "明日は出発地図を持とう",
+        "別 の案内",
+        "THE GLASS GARDEN"
+      ],
+      "expectedSource": [
+        "明日は出発",
+        "地図を持とう",
+        "別の案内",
+        "THE GLASS GARDEN"
+      ],
+      "ocrLines": [
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "明日は出発地図を持とう",
+          "bbox": {
+            "x0": 496,
+            "y0": 268,
+            "x1": 692,
+            "y1": 569
+          },
+          "fontSize": 48,
+          "sourceBoxes": [
+            {
+              "x0": 649,
+              "y0": 268,
+              "x1": 692,
+              "y1": 518
+            },
+            {
+              "x0": 496,
+              "y0": 269,
+              "x1": 544,
+              "y1": 569
+            }
+          ],
+          "vertical": true
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "別 の案内",
+          "bbox": {
+            "x0": 331,
+            "y0": 318,
+            "x1": 360,
+            "y1": 424
+          },
+          "fontSize": 29,
+          "sourceBoxes": [
+            {
+              "x0": 331,
+              "y0": 318,
+              "x1": 360,
+              "y1": 424
+            }
+          ],
+          "vertical": true
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "THE GLASS GARDEN",
+          "bbox": {
+            "x0": 230,
+            "y0": 918,
+            "x1": 604,
+            "y1": 945
+          },
+          "fontSize": 27,
+          "sourceBoxes": [
+            {
+              "x0": 230,
+              "y0": 918,
+              "x1": 604,
+              "y1": 945
+            }
+          ]
+        }
+      ],
+      "anchors": [
+        {
+          "anchor": "明日は出発",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "地図を持とう",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "別の案内",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "THE GLASS GARDEN",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        }
+      ],
+      "paragraphGroups": [
+        {
+          "anchors": [
+            "明日は出発",
+            "地図を持とう"
+          ],
+          "paragraphIndex": 0,
+          "found": true
+        },
+        {
+          "anchors": [
+            "別の案内"
+          ],
+          "paragraphIndex": 1,
+          "found": true
+        },
+        {
+          "anchors": [
+            "THE GLASS GARDEN"
+          ],
+          "paragraphIndex": 2,
+          "found": true
+        }
+      ],
+      "sourceCharacterInventory": {
+        "expected": {
+          "明": 1,
+          "日": 1,
+          "は": 1,
+          "出": 1,
+          "発": 1,
+          "地": 1,
+          "図": 1,
+          "を": 1,
+          "持": 1,
+          "と": 1,
+          "う": 1,
+          "別": 1,
+          "の": 1,
+          "案": 1,
+          "内": 1,
+          "T": 1,
+          "H": 1,
+          "E": 2,
+          "G": 2,
+          "L": 1,
+          "A": 2,
+          "S": 2,
+          "R": 1,
+          "D": 1,
+          "N": 1
+        },
+        "actual": {
+          "明": 1,
+          "日": 1,
+          "は": 1,
+          "出": 1,
+          "発": 1,
+          "地": 1,
+          "図": 1,
+          "を": 1,
+          "持": 1,
+          "と": 1,
+          "う": 1,
+          "別": 1,
+          "の": 1,
+          "案": 1,
+          "内": 1,
+          "T": 1,
+          "H": 1,
+          "E": 2,
+          "G": 2,
+          "L": 1,
+          "A": 2,
+          "S": 2,
+          "R": 1,
+          "D": 1,
+          "N": 1
+        },
+        "excess": [],
+        "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+      },
+      "qualityFailures": [],
+      "negativeDetections": [],
+      "protectedPixels": {
+        "source": {
+          "width": 1000,
+          "height": 1200,
+          "pixels": [
+            [
+              79,
+              130,
+              112,
+              255
+            ],
+            [
+              229,
+              236,
+              229,
+              255
+            ]
+          ]
+        },
+        "translated": {
+          "width": 1000,
+          "height": 1200,
+          "pixels": [
+            [
+              79,
+              130,
+              112,
+              255
+            ],
+            [
+              229,
+              236,
+              229,
+              255
+            ]
+          ]
+        }
+      },
+      "restoreAndRedisplay": {
+        "sourcePreserved": true,
+        "bitmapPreserved": true,
+        "additionalOcrOperations": 0,
+        "additionalTextRequests": 0
+      }
+    },
+    {
+      "scene": "midband-crossing-detached-cards",
+      "sourceLanguage": "ja",
+      "texts": [
+        "上の注記",
+        "安全を確認門へ向かう",
+        "下の補記",
+        "TWO NOTES STAY SEPARATE"
+      ],
+      "expectedSource": [
+        "安全を確認",
+        "門へ向かう",
+        "上の注記",
+        "下の補記",
+        "TWO NOTES STAY SEPARATE"
+      ],
+      "ocrLines": [
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "上の注記",
+          "bbox": {
+            "x0": 702,
+            "y0": 222,
+            "x1": 731,
+            "y1": 334
+          },
+          "fontSize": 29,
+          "sourceBoxes": [
+            {
+              "x0": 702,
+              "y0": 222,
+              "x1": 731,
+              "y1": 334
+            }
+          ],
+          "vertical": true
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "安全を確認門へ向かう",
+          "bbox": {
+            "x0": 374,
+            "y0": 329,
+            "x1": 582,
+            "y1": 584
+          },
+          "fontSize": 51,
+          "sourceBoxes": [
+            {
+              "x0": 541,
+              "y0": 331,
+              "x1": 582,
+              "y1": 577
+            },
+            {
+              "x0": 374,
+              "y0": 329,
+              "x1": 425,
+              "y1": 584
+            }
+          ],
+          "vertical": true
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "下の補記",
+          "bbox": {
+            "x0": 803,
+            "y0": 574,
+            "x1": 831,
+            "y1": 684
+          },
+          "fontSize": 28,
+          "sourceBoxes": [
+            {
+              "x0": 803,
+              "y0": 574,
+              "x1": 831,
+              "y1": 684
+            }
+          ],
+          "vertical": true
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "TWO NOTES STAY SEPARATE",
+          "bbox": {
+            "x0": 160,
+            "y0": 1008,
+            "x1": 664,
+            "y1": 1035
+          },
+          "fontSize": 27,
+          "sourceBoxes": [
+            {
+              "x0": 160,
+              "y0": 1008,
+              "x1": 664,
+              "y1": 1035
+            }
+          ]
+        }
+      ],
+      "anchors": [
+        {
+          "anchor": "安全を確認",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "門へ向かう",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "上の注記",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "下の補記",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "TWO NOTES STAY SEPARATE",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        }
+      ],
+      "paragraphGroups": [
+        {
+          "anchors": [
+            "安全を確認",
+            "門へ向かう"
+          ],
+          "paragraphIndex": 1,
+          "found": true
+        },
+        {
+          "anchors": [
+            "上の注記"
+          ],
+          "paragraphIndex": 0,
+          "found": true
+        },
+        {
+          "anchors": [
+            "下の補記"
+          ],
+          "paragraphIndex": 2,
+          "found": true
+        },
+        {
+          "anchors": [
+            "TWO NOTES STAY SEPARATE"
+          ],
+          "paragraphIndex": 3,
+          "found": true
+        }
+      ],
+      "sourceCharacterInventory": {
+        "expected": {
+          "安": 1,
+          "全": 1,
+          "を": 1,
+          "確": 1,
+          "認": 1,
+          "門": 1,
+          "へ": 1,
+          "向": 1,
+          "か": 1,
+          "う": 1,
+          "上": 1,
+          "の": 2,
+          "注": 1,
+          "記": 2,
+          "下": 1,
+          "補": 1,
+          "T": 4,
+          "W": 1,
+          "O": 2,
+          "N": 1,
+          "E": 3,
+          "S": 3,
+          "A": 3,
+          "Y": 1,
+          "P": 1,
+          "R": 1
+        },
+        "actual": {
+          "上": 1,
+          "の": 2,
+          "注": 1,
+          "記": 2,
+          "安": 1,
+          "全": 1,
+          "を": 1,
+          "確": 1,
+          "認": 1,
+          "門": 1,
+          "へ": 1,
+          "向": 1,
+          "か": 1,
+          "う": 1,
+          "下": 1,
+          "補": 1,
+          "T": 4,
+          "W": 1,
+          "O": 2,
+          "N": 1,
+          "E": 3,
+          "S": 3,
+          "A": 3,
+          "Y": 1,
+          "P": 1,
+          "R": 1
+        },
+        "excess": [],
+        "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+      },
+      "qualityFailures": [],
+      "negativeDetections": [],
+      "protectedPixels": {
+        "source": {
+          "width": 1200,
+          "height": 1200,
+          "pixels": [
+            [
+              224,
+              231,
+              240,
+              255
+            ],
+            [
+              224,
+              231,
+              240,
+              255
+            ]
+          ]
+        },
+        "translated": {
+          "width": 1200,
+          "height": 1200,
+          "pixels": [
+            [
+              224,
+              231,
+              240,
+              255
+            ],
+            [
+              224,
+              231,
+              240,
+              255
+            ]
+          ]
+        }
+      },
+      "restoreAndRedisplay": {
+        "sourcePreserved": true,
+        "bitmapPreserved": true,
+        "additionalOcrOperations": 0,
+        "additionalTextRequests": 0
+      }
+    },
+    {
+      "scene": "bound-spread-gutter-caption",
+      "sourceLanguage": "en",
+      "texts": [
+        "READ ACROSS THE FOLD",
+        "KEEP THE LEFT PAGE",
+        "THE STORY CONTINUES",
+        "ON THE OTHER SIDE",
+        "OPEN BESIDE THE MAP"
+      ],
+      "expectedSource": [
+        "READ ACROSS THE FOLD",
+        "KEEP THE LEFT PAGE",
+        "OPEN BESIDE THE MAP",
+        "THE STORY CONTINUES",
+        "ON THE OTHER SIDE",
+        "VOL 08"
+      ],
+      "ocrLines": [
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "READ ACROSS THE FOLD",
+          "bbox": {
+            "x0": 449,
+            "y0": 142,
+            "x1": 1125,
+            "y1": 178
+          },
+          "fontSize": 36,
+          "sourceBoxes": [
+            {
+              "x0": 449,
+              "y0": 142,
+              "x1": 1125,
+              "y1": 178
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "KEEP THE LEFT PAGE",
+          "bbox": {
+            "x0": 143,
+            "y0": 350,
+            "x1": 549,
+            "y1": 375
+          },
+          "fontSize": 25,
+          "sourceBoxes": [
+            {
+              "x0": 143,
+              "y0": 350,
+              "x1": 549,
+              "y1": 375
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "THE STORY CONTINUES",
+          "bbox": {
+            "x0": 905,
+            "y0": 351,
+            "x1": 1347,
+            "y1": 376
+          },
+          "fontSize": 25,
+          "sourceBoxes": [
+            {
+              "x0": 905,
+              "y0": 351,
+              "x1": 1347,
+              "y1": 376
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "ON THE OTHER SIDE",
+          "bbox": {
+            "x0": 903,
+            "y0": 416,
+            "x1": 1283,
+            "y1": 440
+          },
+          "fontSize": 24,
+          "sourceBoxes": [
+            {
+              "x0": 903,
+              "y0": 416,
+              "x1": 1283,
+              "y1": 440
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "OPEN BESIDE THE MAP",
+          "bbox": {
+            "x0": 143,
+            "y0": 416,
+            "x1": 577,
+            "y1": 440
+          },
+          "fontSize": 24,
+          "sourceBoxes": [
+            {
+              "x0": 143,
+              "y0": 416,
+              "x1": 577,
+              "y1": 440
+            }
+          ]
+        }
+      ],
+      "anchors": [
+        {
+          "anchor": "READ ACROSS THE FOLD",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "KEEP THE LEFT PAGE",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "OPEN BESIDE THE MAP",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "THE STORY CONTINUES",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "ON THE OTHER SIDE",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "VOL 08",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "found": false
+        }
+      ],
+      "paragraphGroups": [
+        {
+          "anchors": [
+            "READ ACROSS THE FOLD"
+          ],
+          "paragraphIndex": 0,
+          "found": true
+        },
+        {
+          "anchors": [
+            "KEEP THE LEFT PAGE",
+            "OPEN BESIDE THE MAP"
+          ],
+          "paragraphIndex": -1,
+          "found": false
+        },
+        {
+          "anchors": [
+            "THE STORY CONTINUES",
+            "ON THE OTHER SIDE"
+          ],
+          "paragraphIndex": -1,
+          "found": false
+        },
+        {
+          "anchors": [
+            "VOL 08"
+          ],
+          "paragraphIndex": -1,
+          "found": false
+        }
+      ],
+      "sourceCharacterInventory": {
+        "expected": {
+          "0": 1,
+          "8": 1,
+          "R": 4,
+          "E": 16,
+          "A": 4,
+          "D": 4,
+          "C": 2,
+          "O": 8,
+          "S": 6,
+          "T": 9,
+          "H": 6,
+          "F": 2,
+          "L": 3,
+          "K": 1,
+          "P": 4,
+          "G": 1,
+          "N": 4,
+          "B": 1,
+          "I": 3,
+          "M": 1,
+          "Y": 1,
+          "U": 1,
+          "V": 1
+        },
+        "actual": {
+          "R": 4,
+          "E": 16,
+          "A": 4,
+          "D": 4,
+          "C": 2,
+          "O": 7,
+          "S": 6,
+          "T": 9,
+          "H": 6,
+          "F": 2,
+          "L": 2,
+          "K": 1,
+          "P": 4,
+          "G": 1,
+          "Y": 1,
+          "N": 4,
+          "I": 3,
+          "U": 1,
+          "B": 1,
+          "M": 1
+        },
+        "excess": [],
+        "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+      },
+      "qualityFailures": [
+        {
+          "type": "ocr-anchor",
+          "anchor": "VOL 08",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "reason": "Actual production OCR does not contain the normalized expected anchor"
+        },
+        {
+          "type": "paragraph-order",
+          "anchors": [
+            "KEEP THE LEFT PAGE",
+            "OPEN BESIDE THE MAP"
+          ],
+          "paragraphIndex": -1,
+          "found": false,
+          "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+        },
+        {
+          "type": "paragraph-order",
+          "anchors": [
+            "THE STORY CONTINUES",
+            "ON THE OTHER SIDE"
+          ],
+          "paragraphIndex": -1,
+          "found": false,
+          "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+        },
+        {
+          "type": "paragraph-order",
+          "anchors": [
+            "VOL 08"
+          ],
+          "paragraphIndex": -1,
+          "found": false,
+          "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+        }
+      ],
+      "negativeDetections": [],
+      "protectedPixels": {
+        "source": {
+          "width": 1600,
+          "height": 1050,
+          "pixels": [
+            [
+              64,
+              89,
+              91,
+              255
+            ],
+            [
+              74,
+              123,
+              94,
+              255
+            ],
+            [
+              69,
+              60,
+              52,
+              255
+            ]
+          ]
+        },
+        "translated": {
+          "width": 1600,
+          "height": 1050,
+          "pixels": [
+            [
+              64,
+              89,
+              91,
+              255
+            ],
+            [
+              74,
+              123,
+              94,
+              255
+            ],
+            [
+              69,
+              60,
+              52,
+              255
+            ]
+          ]
+        }
+      },
+      "restoreAndRedisplay": {
+        "sourcePreserved": true,
+        "bitmapPreserved": true,
+        "additionalOcrOperations": 0,
+        "additionalTextRequests": 0
+      }
+    },
+    {
+      "scene": "multisize-margin-callouts",
+      "sourceLanguage": "ja",
+      "texts": [
+        "GLASSHOUSE OBSERVATION",
+        "ひかり",
+        "小さな芽を見よう光を向けて育てる",
+        "め",
+        "FIELDNOTE 12",
+        "new leaf",
+        "root tip"
+      ],
+      "expectedSource": [
+        "GLASSHOUSE OBSERVATION",
+        "小さな芽を見よう",
+        "光を向けて育てる",
+        "め",
+        "ひかり",
+        "FIELD NOTE 12",
+        "new leaf",
+        "root tip"
+      ],
+      "ocrLines": [
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "GLASSHOUSE OBSERVATION",
+          "bbox": {
+            "x0": 82,
+            "y0": 65,
+            "x1": 605,
+            "y1": 90
+          },
+          "fontSize": 25,
+          "sourceBoxes": [
+            {
+              "x0": 82,
+              "y0": 65,
+              "x1": 605,
+              "y1": 90
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "ひかり",
+          "bbox": {
+            "x0": 542,
+            "y0": 186,
+            "x1": 565,
+            "y1": 246
+          },
+          "fontSize": 23,
+          "sourceBoxes": [
+            {
+              "x0": 542,
+              "y0": 186,
+              "x1": 565,
+              "y1": 246
+            }
+          ],
+          "vertical": true
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "小さな芽を見よう光を向けて育てる",
+          "bbox": {
+            "x0": 499,
+            "y0": 191,
+            "x1": 699,
+            "y1": 559
+          },
+          "fontSize": 43,
+          "sourceBoxes": [
+            {
+              "x0": 659,
+              "y0": 191,
+              "x1": 699,
+              "y1": 557
+            },
+            {
+              "x0": 499,
+              "y0": 192,
+              "x1": 542,
+              "y1": 559
+            }
+          ],
+          "vertical": true
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "め",
+          "bbox": {
+            "x0": 703,
+            "y0": 322,
+            "x1": 726,
+            "y1": 349
+          },
+          "fontSize": 27,
+          "sourceBoxes": [
+            {
+              "x0": 703,
+              "y0": 322,
+              "x1": 726,
+              "y1": 349
+            }
+          ]
+        },
+        {
+          "text": "FIELDNOTE 12",
+          "sourceText": "FIELDNOTE 12",
+          "bbox": {
+            "x0": 99,
+            "y0": 780,
+            "x1": 262,
+            "y1": 796
+          },
+          "fontSize": 16,
+          "sourceBoxes": [
+            {
+              "x0": 99,
+              "y0": 780,
+              "x1": 262,
+              "y1": 796
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "new leaf",
+          "bbox": {
+            "x0": 848,
+            "y0": 898,
+            "x1": 920,
+            "y1": 914
+          },
+          "fontSize": 16,
+          "sourceBoxes": [
+            {
+              "x0": 848,
+              "y0": 898,
+              "x1": 920,
+              "y1": 914
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "root tip",
+          "bbox": {
+            "x0": 818,
+            "y0": 1128,
+            "x1": 876,
+            "y1": 1149
+          },
+          "fontSize": 21,
+          "sourceBoxes": [
+            {
+              "x0": 818,
+              "y0": 1128,
+              "x1": 876,
+              "y1": 1149
+            }
+          ]
+        }
+      ],
+      "anchors": [
+        {
+          "anchor": "GLASSHOUSE OBSERVATION",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "小さな芽を見よう",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "光を向けて育てる",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "め",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "ひかり",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "FIELD NOTE 12",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "new leaf",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "root tip",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        }
+      ],
+      "paragraphGroups": [
+        {
+          "anchors": [
+            "GLASSHOUSE OBSERVATION"
+          ],
+          "paragraphIndex": 0,
+          "found": true
+        },
+        {
+          "anchors": [
+            "小さな芽を見よう",
+            "光を向けて育てる"
+          ],
+          "paragraphIndex": 2,
+          "found": true
+        },
+        {
+          "anchors": [
+            "め"
+          ],
+          "paragraphIndex": 3,
+          "found": true
+        },
+        {
+          "anchors": [
+            "ひかり"
+          ],
+          "paragraphIndex": 1,
+          "found": true
+        },
+        {
+          "anchors": [
+            "FIELD NOTE 12"
+          ],
+          "paragraphIndex": 4,
+          "found": true
+        },
+        {
+          "anchors": [
+            "new leaf"
+          ],
+          "paragraphIndex": 5,
+          "found": true
+        },
+        {
+          "anchors": [
+            "root tip"
+          ],
+          "paragraphIndex": 6,
+          "found": true
+        }
+      ],
+      "sourceCharacterInventory": {
+        "expected": {
+          "1": 1,
+          "2": 1,
+          "G": 1,
+          "L": 3,
+          "A": 3,
+          "S": 4,
+          "H": 1,
+          "O": 6,
+          "U": 1,
+          "E": 6,
+          "B": 1,
+          "R": 2,
+          "V": 1,
+          "T": 4,
+          "I": 3,
+          "N": 3,
+          "小": 1,
+          "さ": 1,
+          "な": 1,
+          "芽": 1,
+          "を": 2,
+          "見": 1,
+          "よ": 1,
+          "う": 1,
+          "光": 1,
+          "向": 1,
+          "け": 1,
+          "て": 2,
+          "育": 1,
+          "る": 1,
+          "め": 1,
+          "ひ": 1,
+          "か": 1,
+          "り": 1,
+          "F": 2,
+          "D": 1,
+          "W": 1,
+          "P": 1
+        },
+        "actual": {
+          "1": 1,
+          "2": 1,
+          "G": 1,
+          "L": 3,
+          "A": 3,
+          "S": 4,
+          "H": 1,
+          "O": 6,
+          "U": 1,
+          "E": 6,
+          "B": 1,
+          "R": 2,
+          "V": 1,
+          "T": 4,
+          "I": 3,
+          "N": 3,
+          "ひ": 1,
+          "か": 1,
+          "り": 1,
+          "小": 1,
+          "さ": 1,
+          "な": 1,
+          "芽": 1,
+          "を": 2,
+          "見": 1,
+          "よ": 1,
+          "う": 1,
+          "光": 1,
+          "向": 1,
+          "け": 1,
+          "て": 2,
+          "育": 1,
+          "る": 1,
+          "め": 1,
+          "F": 2,
+          "D": 1,
+          "W": 1,
+          "P": 1
+        },
+        "excess": [],
+        "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+      },
+      "qualityFailures": [],
+      "negativeDetections": [],
+      "protectedPixels": {
+        "source": {
+          "width": 1200,
+          "height": 1400,
+          "pixels": [
+            [
+              53,
+              105,
+              70,
+              255
+            ],
+            [
+              238,
+              234,
+              213,
+              255
+            ]
+          ]
+        },
+        "translated": {
+          "width": 1200,
+          "height": 1400,
+          "pixels": [
+            [
+              53,
+              105,
+              70,
+              255
+            ],
+            [
+              238,
+              234,
+              213,
+              255
+            ]
+          ]
+        }
+      },
+      "restoreAndRedisplay": {
+        "sourcePreserved": true,
+        "bitmapPreserved": true,
+        "additionalOcrOperations": 0,
+        "additionalTextRequests": 0
+      }
+    },
+    {
+      "scene": "photographed-perspective-note",
+      "sourceLanguage": "en",
+      "texts": [
+        "SIDE NOTE",
+        "O HE C N T",
+        "DRY TOOLS",
+        "THE KEY IS UNDER THE BLUE CUP PLEASE RETURN BEFORE SUNSET"
+      ],
+      "expectedSource": [
+        "CHECK THE SOUTH GATE",
+        "THE KEY IS UNDER THE BLUE CUP",
+        "PLEASE RETURN BEFORE SUNSET",
+        "FIELD SKETCH 09",
+        "SIDE NOTE",
+        "DRY TOOLS"
+      ],
+      "ocrLines": [
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "SIDE NOTE",
+          "bbox": {
+            "x0": 1374,
+            "y0": 128,
+            "x1": 1495,
+            "y1": 154
+          },
+          "fontSize": 26,
+          "sourceBoxes": [
+            {
+              "x0": 1374,
+              "y0": 128,
+              "x1": 1495,
+              "y1": 154
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "O HE C N T",
+          "bbox": {
+            "x0": 164,
+            "y0": 156,
+            "x1": 937,
+            "y1": 442
+          },
+          "fontSize": 286,
+          "sourceBoxes": [
+            {
+              "x0": 164,
+              "y0": 156,
+              "x1": 937,
+              "y1": 442
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "DRY TOOLS",
+          "bbox": {
+            "x0": 1368,
+            "y0": 188,
+            "x1": 1499,
+            "y1": 214
+          },
+          "fontSize": 26,
+          "sourceBoxes": [
+            {
+              "x0": 1368,
+              "y0": 188,
+              "x1": 1499,
+              "y1": 214
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "THE KEY IS UNDER THE BLUE CUP PLEASE RETURN BEFORE SUNSET",
+          "bbox": {
+            "x0": 223,
+            "y0": 402,
+            "x1": 889,
+            "y1": 555
+          },
+          "fontSize": 82,
+          "sourceBoxes": [
+            {
+              "x0": 223,
+              "y0": 402,
+              "x1": 872,
+              "y1": 469
+            },
+            {
+              "x0": 235,
+              "y0": 473,
+              "x1": 889,
+              "y1": 555
+            }
+          ]
+        }
+      ],
+      "anchors": [
+        {
+          "anchor": "CHECK THE SOUTH GATE",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "found": false
+        },
+        {
+          "anchor": "THE KEY IS UNDER THE BLUE CUP",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "PLEASE RETURN BEFORE SUNSET",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "FIELD SKETCH 09",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "found": false
+        },
+        {
+          "anchor": "SIDE NOTE",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "DRY TOOLS",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        }
+      ],
+      "paragraphGroups": [
+        {
+          "anchors": [
+            "CHECK THE SOUTH GATE"
+          ],
+          "paragraphIndex": -1,
+          "found": false
+        },
+        {
+          "anchors": [
+            "THE KEY IS UNDER THE BLUE CUP",
+            "PLEASE RETURN BEFORE SUNSET"
+          ],
+          "paragraphIndex": 3,
+          "found": true
+        },
+        {
+          "anchors": [
+            "FIELD SKETCH 09"
+          ],
+          "paragraphIndex": -1,
+          "found": false
+        },
+        {
+          "anchors": [
+            "SIDE NOTE"
+          ],
+          "paragraphIndex": 0,
+          "found": true
+        },
+        {
+          "anchors": [
+            "DRY TOOLS"
+          ],
+          "paragraphIndex": 2,
+          "found": true
+        }
+      ],
+      "sourceCharacterInventory": {
+        "expected": {
+          "0": 1,
+          "9": 1,
+          "C": 4,
+          "H": 6,
+          "E": 18,
+          "K": 3,
+          "T": 10,
+          "S": 8,
+          "O": 5,
+          "U": 6,
+          "G": 1,
+          "A": 2,
+          "Y": 2,
+          "I": 3,
+          "N": 4,
+          "D": 4,
+          "R": 5,
+          "B": 2,
+          "L": 4,
+          "P": 2,
+          "F": 2
+        },
+        "actual": {
+          "S": 6,
+          "I": 2,
+          "D": 3,
+          "E": 14,
+          "N": 5,
+          "O": 5,
+          "T": 7,
+          "H": 3,
+          "C": 2,
+          "R": 5,
+          "Y": 2,
+          "L": 3,
+          "K": 1,
+          "U": 5,
+          "B": 2,
+          "P": 2,
+          "A": 1,
+          "F": 1
+        },
+        "excess": [
+          {
+            "character": "N",
+            "expected": 4,
+            "actual": 5,
+            "excess": 1
+          }
+        ],
+        "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+      },
+      "qualityFailures": [
+        {
+          "type": "ocr-anchor",
+          "anchor": "CHECK THE SOUTH GATE",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "reason": "Actual production OCR does not contain the normalized expected anchor"
+        },
+        {
+          "type": "ocr-anchor",
+          "anchor": "FIELD SKETCH 09",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "reason": "Actual production OCR does not contain the normalized expected anchor"
+        },
+        {
+          "type": "unexpected-ocr-characters",
+          "excess": [
+            {
+              "character": "N",
+              "expected": 4,
+              "actual": 5,
+              "excess": 1
+            }
+          ],
+          "reason": "Actual offscreen source text contains more normalized characters than declared source truth"
+        },
+        {
+          "type": "paragraph-order",
+          "anchors": [
+            "CHECK THE SOUTH GATE"
+          ],
+          "paragraphIndex": -1,
+          "found": false,
+          "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+        },
+        {
+          "type": "paragraph-order",
+          "anchors": [
+            "FIELD SKETCH 09"
+          ],
+          "paragraphIndex": -1,
+          "found": false,
+          "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+        }
+      ],
+      "negativeDetections": [],
+      "protectedPixels": {
+        "source": {
+          "width": 1600,
+          "height": 1100,
+          "pixels": [
+            [
+              159,
+              121,
+              87,
+              255
+            ],
+            [
+              128,
+              100,
+              70,
+              255
+            ]
+          ]
+        },
+        "translated": {
+          "width": 1600,
+          "height": 1100,
+          "pixels": [
+            [
+              159,
+              121,
+              87,
+              255
+            ],
+            [
+              128,
+              100,
+              70,
+              255
+            ]
+          ]
+        }
+      },
+      "restoreAndRedisplay": {
+        "sourcePreserved": true,
+        "bitmapPreserved": true,
+        "additionalOcrOperations": 0,
+        "additionalTextRequests": 0
+      }
+    }
+  ],
+  "modelReuse": {
+    "files": [
+      {
+        "key": "detection",
+        "filename": "PP-OCRv6_small_det.onnx",
+        "bytes": 9880512,
+        "sha256": "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e",
+        "cache": "hit"
+      },
+      {
+        "key": "recognition",
+        "filename": "PP-OCRv6_small_rec.onnx",
+        "bytes": 21159378,
+        "sha256": "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634",
+        "cache": "hit"
+      },
+      {
+        "key": "charactersDictionary",
+        "filename": "ppocrv6_dict.txt",
+        "bytes": 74948,
+        "sha256": "41557512862dfe31970cf22407742b629725461dd84c0d8771bde9c87c2202c8",
+        "cache": "hit"
+      },
+      {
+        "key": "inpainting",
+        "filename": "lama-manga-dynamic.onnx",
+        "bytes": 206291843,
+        "sha256": "de31ffa5ba26916b8ea35319f6c12151ff9654d4261bccf0583a69bb095315f9",
+        "cache": "hit"
+      }
+    ],
+    "cacheHitCount": 4,
+    "networkDownloads": 0,
+    "modelRequests": 0,
+    "modelRequestsAfterPreload": 0
+  },
+  "runtime": {
+    "functionalSuccess": false,
+    "passed": false,
+    "standardCounts": {
+      "errors": 0,
+      "warnings": 0,
+      "expected": 0,
+      "site": 0
+    },
+    "workerCounts": {
+      "errors": 0,
+      "warnings": 1,
+      "rawErrors": 0,
+      "rawWarnings": 2,
+      "advisories": 0
+    },
+    "workerEntries": [
+      {
+        "id": 1,
+        "timestamp": "2026-10-25T09:22:16.672Z",
+        "phase": "test-actions",
+        "surface": "worker",
+        "targetId": "18FFB2D8581A6E1706DB7899F555A6D3",
+        "targetType": "worker",
+        "targetUrl": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/mangaInferenceWorker.js",
+        "diagnosticSessionId": "38647F78AB22BAD85EECBA5DBA3D2B5F",
+        "parentDiagnosticSessionId": "7DF54E6998BC514FC6AE1A507317E60B",
+        "ownership": "fluentread",
+        "type": "console",
+        "level": "warning",
+        "message": "2026-10-25 17:22:16.621299 [W:onnxruntime:, session_state.cc:1367 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.",
+        "sourceUrl": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+        "stack": [
+          {
+            "functionName": "fluentReadWasmStderr",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+            "line": 31,
+            "column": 23
+          },
+          {
+            "functionName": "Qc",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+            "line": 129,
+            "column": 232
+          },
+          {
+            "functionName": "$func11927",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+            "line": 1,
+            "column": 17528994
+          },
+          {
+            "functionName": "$func2183",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+            "line": 1,
+            "column": 3086998
+          },
+          {
+            "functionName": "$func949",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+            "line": 1,
+            "column": 1014392
+          },
+          {
+            "functionName": "$func11794",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+            "line": 1,
+            "column": 17469533
+          },
+          {
+            "functionName": "$func826",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+            "line": 1,
+            "column": 833436
+          },
+          {
+            "functionName": "$Hd",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+            "line": 1,
+            "column": 17180381
+          },
+          {
+            "functionName": "b",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+            "line": 90,
+            "column": 53
+          },
+          {
+            "functionName": "bd",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+            "line": 144,
+            "column": 49
+          },
+          {
+            "functionName": "$func165",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+            "line": 1,
+            "column": 60990
+          },
+          {
+            "functionName": "$func12990",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+            "line": 1,
+            "column": 18591914
+          },
+          {
+            "functionName": "$func197",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+            "line": 1,
+            "column": 93996
+          },
+          {
+            "functionName": "$func2027",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+            "line": 1,
+            "column": 2774045
+          },
+          {
+            "functionName": "$Ld",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+            "line": 1,
+            "column": 17179496
+          },
+          {
+            "functionName": "b",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+            "line": 90,
+            "column": 53
+          },
+          {
+            "functionName": "Yc",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+            "line": 142,
+            "column": 425
+          },
+          {
+            "functionName": "$func5125",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+            "line": 1,
+            "column": 8463616
+          },
+          {
+            "functionName": "$ic",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+            "line": 1,
+            "column": 21245879
+          },
+          {
+            "functionName": "b",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+            "line": 90,
+            "column": 53
+          },
+          {
+            "functionName": "",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+            "line": 49,
+            "column": 45
+          },
+          {
+            "functionName": "Ut",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/chunks/wasmBinary-mW6U3Axi.js",
+            "line": 6,
+            "column": 22915
+          }
+        ],
+        "contextOrigin": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/mangaInferenceWorker.js",
+        "contextName": "",
+        "protocolTimestamp": 1792920136622.635,
+        "observations": [
+          {
+            "id": 1,
+            "timestamp": "2026-10-25T09:22:16.672Z",
+            "phase": "test-actions",
+            "surface": "worker",
+            "targetId": "18FFB2D8581A6E1706DB7899F555A6D3",
+            "targetType": "worker",
+            "targetUrl": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/mangaInferenceWorker.js",
+            "diagnosticSessionId": "38647F78AB22BAD85EECBA5DBA3D2B5F",
+            "parentDiagnosticSessionId": "7DF54E6998BC514FC6AE1A507317E60B",
+            "ownership": "fluentread",
+            "type": "console",
+            "level": "warning",
+            "message": "2026-10-25 17:22:16.621299 [W:onnxruntime:, session_state.cc:1367 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.",
+            "sourceUrl": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+            "stack": [
+              {
+                "functionName": "fluentReadWasmStderr",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 31,
+                "column": 23
+              },
+              {
+                "functionName": "Qc",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 129,
+                "column": 232
+              },
+              {
+                "functionName": "$func11927",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 17528994
+              },
+              {
+                "functionName": "$func2183",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 3086998
+              },
+              {
+                "functionName": "$func949",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 1014392
+              },
+              {
+                "functionName": "$func11794",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 17469533
+              },
+              {
+                "functionName": "$func826",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 833436
+              },
+              {
+                "functionName": "$Hd",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 17180381
+              },
+              {
+                "functionName": "b",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 90,
+                "column": 53
+              },
+              {
+                "functionName": "bd",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 144,
+                "column": 49
+              },
+              {
+                "functionName": "$func165",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 60990
+              },
+              {
+                "functionName": "$func12990",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 18591914
+              },
+              {
+                "functionName": "$func197",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 93996
+              },
+              {
+                "functionName": "$func2027",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 2774045
+              },
+              {
+                "functionName": "$Ld",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 17179496
+              },
+              {
+                "functionName": "b",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 90,
+                "column": 53
+              },
+              {
+                "functionName": "Yc",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 142,
+                "column": 425
+              },
+              {
+                "functionName": "$func5125",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 8463616
+              },
+              {
+                "functionName": "$ic",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 21245879
+              },
+              {
+                "functionName": "b",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 90,
+                "column": 53
+              },
+              {
+                "functionName": "",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 49,
+                "column": 45
+              },
+              {
+                "functionName": "Ut",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/chunks/wasmBinary-mW6U3Axi.js",
+                "line": 6,
+                "column": 22915
+              }
+            ],
+            "contextOrigin": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/mangaInferenceWorker.js",
+            "contextName": "",
+            "protocolTimestamp": 1792920136622.635
+          },
+          {
+            "id": 2,
+            "timestamp": "2026-10-25T09:22:16.673Z",
+            "phase": "test-actions",
+            "surface": "offscreen",
+            "targetId": "D308BACAD4B89E562FA99F9534F9B979",
+            "targetType": "page",
+            "targetUrl": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/offscreen.html",
+            "diagnosticSessionId": "7DF54E6998BC514FC6AE1A507317E60B",
+            "parentDiagnosticSessionId": null,
+            "ownership": "fluentread",
+            "type": "browser-log",
+            "level": "warning",
+            "message": "2026-10-25 17:22:16.621299 [W:onnxruntime:, session_state.cc:1367 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.",
+            "sourceUrl": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+            "stack": [
+              {
+                "functionName": "fluentReadWasmStderr",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 31,
+                "column": 23
+              },
+              {
+                "functionName": "Qc",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 129,
+                "column": 232
+              },
+              {
+                "functionName": "$func11927",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 17528994
+              },
+              {
+                "functionName": "$func2183",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 3086998
+              },
+              {
+                "functionName": "$func949",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 1014392
+              },
+              {
+                "functionName": "$func11794",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 17469533
+              },
+              {
+                "functionName": "$func826",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 833436
+              },
+              {
+                "functionName": "$Hd",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 17180381
+              },
+              {
+                "functionName": "b",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 90,
+                "column": 53
+              },
+              {
+                "functionName": "bd",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 144,
+                "column": 49
+              },
+              {
+                "functionName": "$func165",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 60990
+              },
+              {
+                "functionName": "$func12990",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 18591914
+              },
+              {
+                "functionName": "$func197",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 93996
+              },
+              {
+                "functionName": "$func2027",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 2774045
+              },
+              {
+                "functionName": "$Ld",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 17179496
+              },
+              {
+                "functionName": "b",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 90,
+                "column": 53
+              },
+              {
+                "functionName": "Yc",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 142,
+                "column": 425
+              },
+              {
+                "functionName": "$func5125",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 8463616
+              },
+              {
+                "functionName": "$ic",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                "line": 1,
+                "column": 21245879
+              },
+              {
+                "functionName": "b",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 90,
+                "column": 53
+              },
+              {
+                "functionName": "",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                "line": 49,
+                "column": 45
+              },
+              {
+                "functionName": "Ut",
+                "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/chunks/wasmBinary-mW6U3Axi.js",
+                "line": 6,
+                "column": 22915
+              }
+            ],
+            "browserSource": "worker",
+            "protocolTimestamp": 1792920136622.686
+          }
+        ]
+      }
+    ],
+    "workerBlockerIds": [
+      1
+    ],
+    "workerPassed": false,
+    "finalizationErrors": [],
+    "standardCoverageLimitations": [
+      "采集从连接隔离浏览器后开始；连接前的首次后台启动异常和扩展管理页历史记录无法追溯。",
+      "浏览器 API 自动打开的页面在 page 事件后立即附加；其附加前日志不能保证完整。",
+      "未启用跨进程 iframe 子 target 的自动附加；相关测试需要另行检查其控制台。",
+      "后台启动或重启后，从发现 target 到 Runtime.enable 生效之间存在附加空窗；未输出到 Runtime/Log 的 API 失败不会自动变成日志。"
+    ],
+    "workerCoverageLimitations": [
+      "Discovery attaches Offscreen after its creation; events emitted before Runtime.enable cannot be guaranteed.",
+      "Existing dedicated workers are attached when discovered; new children are paused only after their Offscreen owner has enabled auto-attach.",
+      "This observer covers this isolated extension Offscreen and dedicated/shared worker targets; it does not prove every iframe or browser API failure was emitted as Runtime/Log.",
+      "Worker Log domain can be unavailable; Runtime warning/error/exception collection remains mandatory.",
+      "Duplicate forwarded known-placement logs are associated only when one worker console event has the identical full timestamp-bearing message and complete stack; raw observations remain in rawEntries.",
+      "Third-party placement advisories are non-blocking only after the independent functional script reports success; this does not measure GPU coverage or claim every operation used the preferred backend."
+    ],
+    "note": "0 standard errors/warnings and0 worker errors do not make a clean pass:1 unique ORT warning (2 raw) remains blocking because functional quality failed."
+  },
+  "cleanup": {
+    "browserClosed": true,
+    "profileRemoved": true,
+    "cleanupErrors": []
+  },
+  "limitations": [
+    "26/29 source anchors is not CER or whole-suite accuracy.3 scenes strictly pass;2 remain failures.",
+    "Spread loses VOL08 and splits both intended left/right dialogue paragraphs; photo-like perspective loses title/footer and has1 excess N. No PNG, expected text, paragraph group or box was changed after OCR.",
+    "8 declared wordless regions have0 detections; protected-pixel, original restore and cached redisplay checks passed for all5. This does not establish all artwork free of false positives.",
+    "Text translation transport is deterministic Google fixture data; no provider/linguistic-quality claim.",
+    "Probe observes at most128 detailed geometry records per original page and2000 events; complete native summaries depend on no independent CPU fallback. No whole-pipeline speedup, GPU coverage or runtime-clean claim.",
+    "Source/probe full maps and raw runtime events stay in the hash-pinned evidence archive; repository summary keeps all five final recognized source/transport values and strict quality failures."
+  ]
+}

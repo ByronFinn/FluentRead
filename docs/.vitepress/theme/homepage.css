@@ -1,3 +1,25 @@
+/* 赞助区位于功能介绍之后，窄屏将介绍和赞助图标网格纵向排列。 */
+.bv-sponsors {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  align-items: center;
+  gap: 56px;
+}
+.bv-sponsors h2 {
+  max-width: 540px;
+  font-size: clamp(26px, 2.5vw, 32px);
+}
+.bv-sponsors p {
+  max-width: 490px;
+  color: var(--fr-muted);
+  font-size: 14px;
+}
+@media (max-width: 760px) {
+  .bv-sponsors {
+    grid-template-columns: 1fr;
+    gap: 28px;
+  }
+}
 /* 首屏以居中图标和两行口号为主，两侧悬浮卡片只用变换动画，不占据文档流。 */
 .bv-home-brand img {
   width: 38px;

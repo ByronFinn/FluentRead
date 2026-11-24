@@ -40,6 +40,60 @@ afterEach(() => {
 });
 
 describe('Offscreen 远程图片读取', () => {
+    it.each([false, true])('响应无效时保留原始错误，即使响应体缺失或取消失败（有响应体：%s）', async hasBody => {
+        const cancel = vi.fn().mockRejectedValue(new Error('already closed'));
+        await expect(fetchRemoteImageForOcr('https://cdn.example.com/image.png', async () => response({ok: false, status: 403, body: hasBody ? {cancel} as never : null})))
+            .rejects.toThrow('图片服务器返回 403');
+        await Promise.resolve();
+        expect(cancel).toHaveBeenCalledTimes(hasBody ? 1 : 0);
+    });
+    it('图片流读取与取消同时失败时仍释放 reader 并保留读取错误', async () => {
+        const reader = {read: vi.fn().mockRejectedValue(new Error('stream disconnected')), cancel: vi.fn().mockRejectedValue(new Error('already closed')), releaseLock: vi.fn()};
+        await expect(fetchRemoteImageForOcr('https://cdn.example.com/image.png', async () => response({body: {getReader: () => reader} as never})))
+            .rejects.toThrow('stream disconnected');
+        await Promise.resolve();
+        expect(reader.cancel).toHaveBeenCalledOnce(); expect(reader.releaseLock).toHaveBeenCalledOnce();
+    });
+    it('多分块读取时及时释放取消监听并保留图片字节', async () => {
+        let remaining = 2048;
+        const body = new ReadableStream<Uint8Array>({
+            pull(stream) {
+                if (remaining-- > 0) stream.enqueue(new Uint8Array([7]));
+                else stream.close();
+            },
+        });
+        const nativeRace = Promise.race.bind(Promise), registrations = new WeakMap<object, number>();
+        let mostRegistrations = 0;
+        const race = vi.spyOn(Promise, 'race').mockImplementation(values => {
+            const inputs = Array.from(values);
+            if (inputs.length === 2 && inputs[1] instanceof Promise) {
+                const count = (registrations.get(inputs[1]) ?? 0) + 1;
+                registrations.set(inputs[1], count); mostRegistrations = Math.max(mostRegistrations, count);
+            }
+            return nativeRace(inputs);
+        });
+        try {
+            const result = await fetchRemoteImageForOcr('https://pbs.twimg.com/media/demo.png', async () => response({body}));
+            expect(result).toBe(`data:image/png;base64,${btoa(String.fromCharCode(...new Uint8Array(2048).fill(7)))}`);
+            expect(mostRegistrations).toBe(1);
+        } finally {
+            race.mockRestore();
+        }
+    });
+    it('收到响应后取消时不会开始读取图片流', async () => {
+        const caller = new AbortController();
+        const read = vi.fn();
+        const item = response({body: {getReader: () => ({read, cancel: vi.fn(async () => {}), releaseLock: vi.fn()})} as never});
+        const get = item.headers.get;
+        item.headers.get = name => {
+            const value = get(name);
+            if (name === 'content-type') caller.abort();
+            return value;
+        };
+        await expect(fetchRemoteImageForOcr('https://pbs.twimg.com/media/demo.png', async () => item, caller.signal))
+            .rejects.toMatchObject({name: 'AbortError'});
+        expect(read).not.toHaveBeenCalled();
+    });
     it('网页 CORS 端口保留网页重定向策略、拒绝网络失败且取消后不再读取', async () => {
         const fetchMock = vi.fn().mockResolvedValueOnce(response({bytes: [1]})).mockRejectedValueOnce(new TypeError('CORS denied'));
         vi.stubGlobal('fetch', fetchMock);

@@ -1,7 +1,7 @@
 /**
  * @file tests/pdfBlockFit.test.ts
  * 文件职责：验证“原版排版”阅读把译文放回原文段落矩形时的取舍、可用空白和字号收缩。
- * 主要内容：受保护内容与图表区域内的文字不被替换；段落下方与右侧的空白按相邻内容和旋转页尺寸计算；译文放得下时保持原字号，放不下时逐步收缩到下限并如实标记溢出。
+ * 主要内容：受保护内容与图表区域内的文字不被替换；段落下方与右侧的空白按相邻内容和旋转页尺寸计算；全文能适配时逐步收缩，仍放不下时保留可读预览字号并如实标记溢出。
  * 模块边界：只测试纯几何与分行，字宽由测试注入；不创建 DOM、Canvas 或 PDF。
  */
 import {describe, expect, it} from 'vitest';
@@ -14,6 +14,29 @@ const page = (blocks: PdfDocumentBlock[], extra: Partial<PdfDocumentPage> = {}):
 const monospace = (text: string, fontSize: number) => Array.from(text).length * fontSize;
 
 describe('PDF layout overlay block selection', () => {
+    it('keeps neighbouring long captions inside their own figure widths even when their baselines differ',()=>{
+        const left=block(0,48,559,96,7,{kind:'caption',lineCount:1,fontSize:6.12}),right=block(1,312,552,83,6,{kind:'caption',lineCount:1,fontSize:6.12});
+        const regions=[{id:'figure',kind:'figure' as const,x:47.5,y:449,width:198,height:97},{id:'table',kind:'table' as const,x:311.5,y:449,width:232,height:90}];
+        const [a,b]=pdfOverlayBlocks(page([left,right],{preservedRegions:regions}));
+        expect(a.block.x+a.block.width+a.spaceRight).toBeLessThanOrEqual(245.5);expect(b.block.x+b.block.width+b.spaceRight).toBeLessThanOrEqual(543.5);
+        expect(b.spaceRight).toBeGreaterThan(130);expect(a.block.width).toBe(96);expect(b.block.width).toBe(83);
+        expect(a.block.x+a.block.width+a.spaceRight).toBeLessThan(b.block.x);
+    });
+    it('chooses the nearest matching graphic above or below a caption without shrinking its original width',()=>{
+        const caption=block(0,40,105,100,10,{kind:'caption',lineCount:1});
+        const above={id:'above',kind:'figure' as const,x:40,y:40,width:200,height:60};
+        const below={id:'below',kind:'figure' as const,x:40,y:128,width:300,height:60};
+        const [near]=pdfOverlayBlocks(page([caption],{preservedRegions:[below,above]}));
+        expect(near.block.x+near.block.width+near.spaceRight).toBeGreaterThan(230);expect(near.block.x+near.block.width+near.spaceRight).toBeLessThanOrEqual(240);
+        const [top]=pdfOverlayBlocks(page([caption],{preservedRegions:[below]}));
+        expect(top.block.x+top.block.width+top.spaceRight).toBeGreaterThan(330);expect(top.block.x+top.block.width+top.spaceRight).toBeLessThanOrEqual(340);
+        const wide={...caption,width:250};const [kept]=pdfOverlayBlocks(page([wide],{preservedRegions:[above]}));
+        expect(kept.block.width).toBe(250);expect(kept.spaceRight).toBe(0);
+        const ordinary=pdfOverlayBlocks(page([caption]))[0];
+        for(const graphic of [{...above,y:400},{...above,x:300},{...above,x:0,width:20},{...above,y:100,height:50}]) {
+            expect(pdfOverlayBlocks(page([caption],{preservedRegions:[graphic]}))[0].spaceRight).toBe(ordinary.spaceRight);
+        }
+    });
     it('replaces ordinary prose only and keeps protected kinds, preserved regions and empty geometry as source pixels', () => {
         const blocks = [
             block(0, 40, 40, 200, 24),
@@ -71,18 +94,33 @@ describe('PDF layout overlay block selection', () => {
         expect(first.block.y + first.block.height + first.spaceBelow).toBeLessThan(65);
         expect(pdfOverlayBlocks(page([block(0, 40, 40, 100, 12, {lineCount: 1, textAlign: 'right'})]))[0].spaceRight).toBe(0);
     });
-    it('keeps table translation inside its physical cell even when the neighbouring text leaves large blank space', () => {
-        const source = block(0, 40, 100, 60, 10, {kind: 'table', lineCount: 1, cellBounds: {x: 30, y: 95, width: 100, height: 20}});
+    it.each(['cellBounds', 'panelBounds'] as const)('keeps translations inside %s even when neighbouring text leaves blank space', boundary => {
+        const source = block(0, 40, 100, 60, 10, {kind: boundary === 'cellBounds' ? 'table' : 'text',
+            lineCount: 1, [boundary]: {x: 30, y: 95, width: 100, height: 20}});
         const original = structuredClone(source);
         const fitted = pdfOverlayBlocks(page([source, block(-1, 200, 100, 20, 10, {kind: 'table', preserveSource: true})]))[0];
         expect(fitted.block.y + fitted.block.height + fitted.spaceBelow).toBeLessThan(115);
         expect(fitted.block.x + fitted.block.width + fitted.spaceRight).toBeLessThan(130);
         expect(fitted.spaceBelow).toBeCloseTo(3);
-        expect(fitted.spaceRight).toBeCloseTo(23.5);
+        expect(fitted.spaceRight).toBeCloseTo(27.5);
         const tight = pdfOverlayBlocks(page([{...source, height: 30, width: 110}]))[0];
         expect(tight.block).toMatchObject({width: 89.5, height: 14.5});
         expect(tight.spaceBelow).toBe(0); expect(tight.spaceRight).toBe(0);
         expect(source).toEqual(original);
+    });
+    it('fits a narrow translated table header without using space reserved for a neighbour', () => {
+        const header = block(0, 414.477, 160, 46.495, 9.846, {kind: 'table', lineCount: 1,
+            cellBounds: {x: 408.499, y: 159, width: 58.451, height: 12}});
+        const fit = ({block, spaceRight}: ReturnType<typeof pdfOverlayBlocks>[number]) => fitPdfBlockText({
+            text: '华尔街日报 23 F1', width: (block.width + spaceRight) * 0.985, height: block.height,
+            fontSize: 9, lineHeight: 9, minFontSize: 6, weight: 400,
+        }, (text, size) => text.length * size * 0.72);
+        const [open] = pdfOverlayBlocks(page([header]));
+        expect(fit(open)).toMatchObject({lines: ['华尔街日报 23 F1'], overflow: false});
+        expect(open.block.x + open.block.width + open.spaceRight).toBeCloseTo(464.45);
+        const [bounded] = pdfOverlayBlocks(page([header, block(1, 465, 160, 60, 12)]));
+        expect(bounded.spaceRight).toBe(0);
+        expect(fit(bounded).overflow).toBe(true);
     });
     it('keeps a paragraph beside its preserved QED mark without changing source line erasure geometry', () => {
         const source = block(0, 70.86614, 686.88898, 455.55796, 26.87523, {lines: [{text: 'Source line', x: 70.86614, y: 686.88898, width: 455.55796, height: 11}]});
@@ -99,6 +137,13 @@ describe('PDF layout overlay text fitting', () => {
         const fit = fitPdfBlockText({text: '一二三四五六七八九十', width: 100, height: 24, fontSize: 10, lineHeight: 13, minFontSize: 6, weight: 400}, monospace);
         expect(fit).toEqual({fontSize: 10, lineHeight: 13, lines: ['一二三四五六七八九十'], overflow: false});
     });
+    it.each(['短译文\n', '\n短译文', '\r\n \t\r\n短译文\r\n \t\r\n'])
+    ('does not mark a short translation as overflowing because of boundary blank paragraphs: %j', text => {
+        const input = {text, width: 100, height: 10, fontSize: 10, lineHeight: 10, minFontSize: 6, weight: 400 as const};
+        const before = {...input};
+        expect(fitPdfBlockText(input, monospace)).toEqual({fontSize: 10, lineHeight: 12.5, lines: ['短译文'], overflow: false});
+        expect(input).toEqual(before);
+    });
     it('clamps the leading ratio for single-line and very loose sources', () => {
         expect(fitPdfBlockText({text: '标题', width: 100, height: 10, fontSize: 10, lineHeight: 10, minFontSize: 6, weight: 700}, monospace).lineHeight).toBe(12.5);
         expect(fitPdfBlockText({text: '正文', width: 100, height: 40, fontSize: 10, lineHeight: 30, minFontSize: 6, weight: 400}, monospace).lineHeight).toBe(16);
@@ -111,9 +156,16 @@ describe('PDF layout overlay text fitting', () => {
         expect(fit.lines.length * fit.lineHeight).toBeLessThanOrEqual(28 + fit.lineHeight * 0.25);
         expect(fit.lines.every(line => monospace(line, fit.fontSize) <= 100)).toBe(true);
     });
-    it('stops at the readable floor and reports overflow without dropping text', () => {
+    it('keeps a readable source-size preview when shrinking still cannot fit the full translation', () => {
         const fit = fitPdfBlockText({text: '字'.repeat(200), width: 100, height: 20, fontSize: 10, lineHeight: 13, minFontSize: 8, weight: 400}, monospace);
-        expect(fit.fontSize).toBe(8); expect(fit.overflow).toBe(true); expect(fit.lines.join('')).toBe('字'.repeat(200));
+        expect(fit.fontSize).toBe(10); expect(fit.overflow).toBe(true); expect(fit.lines.join('')).toBe('字'.repeat(200));
+        expect(fit.lineHeight).toBeLessThanOrEqual(20 + fit.lineHeight * 0.25);
+    });
+    it('reduces the preview only as far as needed for one line without crossing a short source box', () => {
+        const fit = fitPdfBlockText({text: '字'.repeat(200), width: 100, height: 9, fontSize: 12, lineHeight: 15, minFontSize: 6, weight: 400}, monospace);
+        expect(fit.fontSize).toBeLessThan(12); expect(fit.fontSize).toBeGreaterThan(6);
+        expect(fit.lineHeight).toBeLessThanOrEqual(9 + fit.lineHeight * 0.25);
+        expect(fit.overflow).toBe(true); expect(fit.lines.join('')).toBe('字'.repeat(200));
     });
     it('tolerates degenerate geometry and a floor above the source size', () => {
         const zero = fitPdfBlockText({text: '译文', width: 0, height: 0, fontSize: 0, lineHeight: 0, minFontSize: 0, weight: 400}, monospace);

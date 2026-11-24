@@ -527,6 +527,9 @@ describe('translation truncation layout', () => {
         source.textContent = 'Same   source';
         const clone = document.createElement('p');
         clone.textContent = 'Same source';
+        const sourceImage = document.createElement('img'); sourceImage.setAttribute('src', '../source-icon.png');
+        const replacementImage = sourceImage.cloneNode(true) as HTMLImageElement;
+        source.appendChild(sourceImage); clone.appendChild(replacementImage);
         const record = (type: MutationRecordType, added: Node[], removed: Node[]) => ({
             type,
             addedNodes: added as unknown as NodeList,
@@ -538,7 +541,11 @@ describe('translation truncation layout', () => {
         artifact.setAttribute('data-fr-translation-owned', 'true');
         source.appendChild(artifact);
         clone.appendChild(artifact.cloneNode(true));
+        const sourceBefore = source.outerHTML, replacementBefore = clone.outerHTML;
         expect(isTextEquivalentHostReplacement(record('childList', [clone], [source]))).toBe(true);
+        expect(source.outerHTML).toBe(sourceBefore); expect(clone.outerHTML).toBe(replacementBefore);
+        expect(source.querySelector('img')).toBe(sourceImage); expect(clone.querySelector('img')).toBe(replacementImage);
+        expect(replacementImage.getAttribute('src')).toBe('../source-icon.png');
         expect(isTextEquivalentHostReplacement(record(
             'childList',
             [clone, document.createComment('new framework marker')],
@@ -739,6 +746,44 @@ describe('translation truncation layout', () => {
             } finally {
                 Object.assign(config, previousConfig);
                 options.styles = previousStyles;
+            }
+        });
+    });
+
+    it('renders raw snapshot links and relative formula images against the current live page base', async () => {
+        const {document} = parseHTML('<html><head><base href="https://host.example/articles/"></head><body><p id="owner">Read <a href="../reference?q=1#part">the reference</a> and <span class="mwe-math-element"><img src="equation.svg" alt="x"></span>.</p></body></html>');
+        const owner = document.querySelector<HTMLElement>('#owner')!;
+        const original = owner.outerHTML;
+        const link = owner.querySelector('a')!;
+        const formulaImage = owner.querySelector('img')!;
+        const previousConfig = {...config};
+
+        await withDocumentRealm(document, async () => {
+            try {
+                Object.assign(config, {to: 'zh'});
+                for (const base of ['https://host.example/articles/', 'https://host.example/updates/']) {
+                    document.querySelector('base')!.setAttribute('href', base);
+                    const snapshot = createTranslationSourceSnapshot(owner);
+                    // A read-only snapshot need not resolve addresses like the live document.
+                    Object.defineProperty(snapshot.clone.ownerDocument, 'baseURI', {
+                        configurable: true, value: 'https://snapshot.invalid/stale/',
+                    });
+                    const html = applyTranslationsToSnapshot(snapshot, snapshot.slots.map(() => '译文'));
+                    const attempt = beginTranslation(owner, 'bilingual')!;
+                    attempt.state.phase = 'translated';
+                    const wrapper = appendBilingualTranslation(owner, html, {sourceSkeleton: snapshot.clone});
+
+                    expect(wrapper.querySelector('a')!.getAttribute('href')).toBe('../reference?q=1#part');
+                    expect(wrapper.querySelector('.mwe-math-element img')!.getAttribute('src'))
+                        .toBe(new URL('equation.svg', base).href);
+                    expect(snapshot.clone.ownerDocument.childNodes).toHaveLength(0);
+                    expect(restoreTranslation(owner)).toBe(true);
+                    expect(owner.outerHTML).toBe(original);
+                    expect(owner.querySelector('a')).toBe(link);
+                    expect(owner.querySelector('img')).toBe(formulaImage);
+                }
+            } finally {
+                Object.assign(config, previousConfig);
             }
         });
     });

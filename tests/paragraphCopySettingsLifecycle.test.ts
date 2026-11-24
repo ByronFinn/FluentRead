@@ -1,46 +1,41 @@
-import {createRequire} from 'node:module';
-import {resolve} from 'node:path';
-import vue from '@vitejs/plugin-vue';
-import {createServer, type Plugin, type ViteDevServer} from 'vite';
+import * as runtime from 'vue';
+import {Config} from '@/src/core/config/model';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import ParagraphCopySettings from '@/src/features/settings/ui/ParagraphCopySettings.vue';
+import SectionTranslationSettings from '@/src/features/settings/ui/SectionTranslationSettings.vue';
+import AreaTranslationSettings from '@/src/features/settings/ui/AreaTranslationSettings.vue';
 
-// 执行实际 SFC setup/watch；原生录制模板与设置交互另由生产浏览器验证。
-const key = '__fluentReadParagraphCopySettingsLifecycle';
-const runtime = createRequire(import.meta.url)('vue') as typeof import('vue');
-let server: ViteDevServer, app: import('vue').App, state: Record<string, any>, props: {config: Record<string, any>; active: boolean};
+// 执行实际 SFC setup/watch；关闭展示模板，浏览器录制与视觉不属于这个端口测试。
+const feedback = vi.hoisted(() => Object.assign(vi.fn(), {warning: vi.fn()}));
+vi.mock('element-plus', () => ({ElMessage: feedback}));
+vi.mock('@element-plus/icons-vue', () => ({Edit: {render: () => null}}));
+vi.mock('@/src/ui/i18n', () => ({useUiI18n: () => ({t: (key: string) => key, translateLegacy: (text: string) => text})}));
+vi.mock('@/src/platform/browser/capabilities', () => ({browserCapabilities: {areaTranslation: true}}));
+vi.mock('@/src/features/settings/ui/services/useVisionProbeStatus', () => ({useVisionProbeStatus: () => ({result: runtime.ref({capability: 'unknown'})})}));
+vi.mock('@/src/features/image-translation/ui/public', () => ({ImageOcrSettings: {render: () => null}}));
+vi.mock('@/src/features/settings/ui/components/SettingsGroup.vue', () => ({default: {render: () => null}}));
+vi.mock('@/src/features/settings/ui/components/SettingsItem.vue', () => ({default: {render: () => null}}));
+let app: import('vue').App, state: Record<string, any>, props: {config: Record<string, any>; active: boolean};
 let visible: import('vue').Ref<boolean>;
-const feedback = vi.fn();
-function mocks(): Plugin {
-    return {name: 'paragraph-copy-settings-mocks', enforce: 'pre', resolveId(id) {
-        if (id === 'element-plus') return '\0paragraph-element';
-        if (id === '@element-plus/icons-vue') return '\0paragraph-icons';
-        if (id.endsWith('.vue') && !id.endsWith('ParagraphCopySettings.vue')) return '\0paragraph-child';
-        if (/\/src\/ui\/i18n(?:\.ts)?$/u.test(id)) return '\0paragraph-i18n';
-        return null;
-    }, load(id) {
-        if (id === '\0paragraph-element') return `export const ElMessage = globalThis.${key}.feedback;`;
-        if (id === '\0paragraph-icons') return 'export const Edit = {};';
-        if (id === '\0paragraph-child') return 'export default {}';
-        if (id === '\0paragraph-i18n') return 'export const useUiI18n = () => ({t: key => key, translateLegacy: text => text});';
-        return null;
-    }};
-}
+type EditorName = 'ParagraphCopySettings' | 'SectionTranslationSettings' | 'AreaTranslationSettings';
 async function settle() {await runtime.nextTick(); await runtime.nextTick();}
 beforeEach(async () => {
-    feedback.mockClear(); Object.assign(feedback, {warning: feedback});
-    Object.assign(globalThis, {[key]: {feedback}});
-    server = await createServer({appType: 'custom', configFile: false, logLevel: 'silent', plugins: [mocks(), vue()],
-        root: process.cwd(), resolve: {alias: {'@': resolve(process.cwd(), '.')}}, server: {hmr: false, middlewareMode: true}});
-    const component = (await server.ssrLoadModule('/src/features/settings/ui/ParagraphCopySettings.vue')).default;
-    component.ssrRender = undefined; component.render = () => null;
+    vi.clearAllMocks();feedback.warning.mockImplementation(feedback);
+    props = runtime.reactive({active: true, config: Object.assign(new Config(), {paragraphCopyEnabled: true, paragraphCopyHotkey: 'Shift+D', customParagraphCopyHotkey: '',
+        hotkey: 'Control', floatingBallHotkey: 'Alt+T', selectionTranslatorMode: 'disabled', inputBoxTranslationTrigger: 'none',
+        selectionAreaEnabled: false, sectionTranslationHotkeyEnabled: false, quickTranslationProfiles: []})});
+    visible = runtime.ref(true);
+    await mountEditor('ParagraphCopySettings');
+});
+async function mountEditor(name: EditorName) {
+    app?.unmount();
+    const source = name === 'ParagraphCopySettings' ? ParagraphCopySettings
+        : name === 'SectionTranslationSettings' ? SectionTranslationSettings : AreaTranslationSettings;
+    const component = {...source, render: () => null} as runtime.Component;
     const renderer = runtime.createRenderer<Record<string, never>, Record<string, unknown>>({patchProp: () => {}, insert: () => {},
         remove: () => {}, createElement: () => ({}), createText: () => ({}), createComment: () => ({}), setText: () => {},
         setElementText: () => {}, parentNode: () => null, nextSibling: () => null, querySelector: () => null,
         setScopeId: () => {}, cloneNode: () => ({}), insertStaticContent: () => [{}, {}]});
-    props = runtime.reactive({active: true, config: {paragraphCopyEnabled: true, paragraphCopyHotkey: 'Shift+D', customParagraphCopyHotkey: '',
-        hotkey: 'Control', floatingBallHotkey: 'Alt+T', selectionTranslatorMode: 'disabled', inputBoxTranslationTrigger: 'none',
-        selectionAreaEnabled: false, sectionTranslationHotkeyEnabled: false, quickTranslationProfiles: []}});
-    visible = runtime.ref(true);
     app = renderer.createApp({setup: () => () => runtime.h(runtime.KeepAlive, null, {default: () => visible.value
         ? runtime.h(component, {...props, ref: (vm: any) => {if (vm) state = vm.$.setupState;}})
         : runtime.h({render: () => null}, {key: 'other'})})});
@@ -48,8 +43,8 @@ beforeEach(async () => {
     app.config.warnHandler = () => {};
     app.mount({});
     await settle();
-});
-afterEach(async () => {app?.unmount(); await server?.close(); delete (globalThis as any)[key]; vi.unstubAllGlobals();});
+}
+afterEach(async () => {app?.unmount(); vi.unstubAllGlobals();});
 
 describe('段落复制设置实际组件草稿归属', () => {
     it('KeepAlive 离开后关闭录制，迟到动作不能修改配置，返回后可重新录制', async () => {
@@ -116,5 +111,77 @@ describe('段落复制设置实际组件草稿归属', () => {
         expect(state.findHotkeyConflict('none')).toBe('quickTranslation.conflictProfile');
         state.handleCustomHotkeyConfirm('none');
         expect(props.config.paragraphCopyHotkey).toBe('Shift+D'); expect(state.showCustomHotkeyDialog).toBe(true);
+    });
+});
+
+// 同一生产草稿协议下的圈选/局部/复制入口，保留真实 SFC setup 与 core 冲突规则。
+describe('其他设置入口不能抢占两点选取', () => {
+    const editors = [
+        {component:'ParagraphCopySettings', mode:'paragraphCopyHotkey', custom:'customParagraphCopyHotkey', enabled:'paragraphCopyEnabled'},
+        {component:'SectionTranslationSettings', mode:'sectionTranslationHotkey', custom:'customSectionTranslationHotkey', enabled:'sectionTranslationHotkeyEnabled'},
+        {component:'AreaTranslationSettings', mode:'selectionAreaHotkey', custom:'customSelectionAreaHotkey', enabled:'enabled'},
+    ] as const;
+    it.each(editors)('$component 预设、旧自定义和录制确认均拒绝正在使用的点选键', async editor => {
+        Object.assign(props.config,{on:false,selectionTranslatorMode:'bilingual',disableSelectionTranslator:false,selectionClickSelectEnabled:true,selectionClickSelectHotkey:'Alt+Shift+S',
+            sectionTranslationHotkeyEnabled:true,selectionAreaEnabled:true,[editor.mode]:'Alt+J',[editor.custom]:''});
+        // Area 的开关由父级传入，其他两个入口直接读取 Config。
+        Object.assign(props,{enabled:true});await mountEditor(editor.component);
+        state.handleHotkeyChange('Alt+Shift+S');expect(props.config[editor.mode]).toBe('Alt+J');expect(feedback).toHaveBeenCalled();
+        props.config[editor.custom]='Alt+Shift+S';state.handleHotkeyChange('custom');expect(props.config[editor.mode]).toBe('Alt+J');
+        props.config[editor.custom]='';state.openCustomHotkeyDialog();expect(state.findHotkeyConflict('alt+shift+s')).toBeTruthy();
+        state.handleCustomHotkeyConfirm('Alt+Shift+S');expect(props.config[editor.custom]).toBe('');expect(state.showCustomHotkeyDialog).toBe(true);
+        props.config.selectionClickSelectEnabled=false;state.handleCustomHotkeyConfirm('Alt+Shift+S');expect(props.config[editor.custom]).toBe('Alt+Shift+S');
+    });
+});
+
+describe('圈选与局部翻译的真实草稿恢复链', () => {
+    const editors = [
+        {component:'SectionTranslationSettings',mode:'sectionTranslationHotkey',custom:'customSectionTranslationHotkey',fallback:'Alt+R'},
+        {component:'AreaTranslationSettings',mode:'selectionAreaHotkey',custom:'customSelectionAreaHotkey',fallback:'Shift+Z'},
+    ] as const;
+    it.each(editors)('$component 有效确认、取消、清除与迟到事件保持草稿所有权', async editor => {
+        Object.assign(props.config,{sectionTranslationHotkeyEnabled:true,selectionAreaEnabled:true,[editor.mode]:'Alt+J',[editor.custom]:''});
+        Object.assign(props,{enabled:true,serviceOptions:[]});await mountEditor(editor.component);
+        state.handleHotkeyChange('custom');expect(state.showCustomHotkeyDialog).toBe(true);state.handleCustomHotkeyCancel();
+        expect(props.config[editor.mode]).toBe('Alt+J');state.handleHotkeyChange('custom');state.handleCustomHotkeyConfirm('Alt+K');
+        expect(props.config[editor.mode]).toBe('custom');expect(props.config[editor.custom]).toBe('Alt+K');
+        state.openCustomHotkeyDialog();state.handleCustomHotkeyConfirm('none');expect(props.config[editor.mode]).toBe(editor.fallback);
+        state.openCustomHotkeyDialog();props.active=false;await settle();state.handleHotkeyChange('Alt+L');state.handleCustomHotkeyConfirm('Alt+L');
+        expect(props.config[editor.mode]).toBe(editor.fallback);expect(state.showCustomHotkeyDialog).toBe(false);
+        props.active=true;await settle();state.handleHotkeyChange('Alt+M');expect(props.config[editor.mode]).toBe('Alt+M');
+    });
+    it.each(editors)('$component 实时复查所有旧入口与快捷方案占用，停用旧入口后可释放', async editor => {
+        Object.assign(props.config,{sectionTranslationHotkeyEnabled:false,selectionAreaEnabled:false,paragraphCopyEnabled:false});
+        Object.assign(props,{enabled:true,serviceOptions:[]});await mountEditor(editor.component);
+        expect(state.findHotkeyConflict('F9')).toBe('');
+        for(const patch of [
+            {hotkey:'custom',customHotkey:'F9'}, {floatingBallHotkey:'custom',customFloatingBallHotkey:'F9'},
+            {selectionTranslatorMode:'bilingual',selectionTranslatorTrigger:'custom',customSelectionTranslatorHotkey:'F9'},
+            {paragraphCopyEnabled:true,paragraphCopyHotkey:'custom',customParagraphCopyHotkey:'F9'},
+            ...(editor.component==='SectionTranslationSettings'?[{selectionAreaEnabled:true,selectionAreaHotkey:'custom',customSelectionAreaHotkey:'F9'}]
+                :[{sectionTranslationHotkeyEnabled:true,sectionTranslationHotkey:'custom',customSectionTranslationHotkey:'F9'}]),
+        ]) {const before={...props.config};Object.assign(props.config,patch);expect(state.findHotkeyConflict('F9')).toBeTruthy();Object.assign(props.config,before);}
+        props.config.quickTranslationProfiles=[{id:'reserved',action:'hover',enabled:true,hotkey:editor.fallback,service:'',model:'',targetLanguage:'',displayMode:'inherit',fullPageMode:'inherit'}];
+        expect(state.findHotkeyConflict('none')).toBe('quickTranslation.conflictProfile');
+    });
+    it('局部翻译开关在开启时复验点选占用，无冲突才能保持开启', async () => {
+        Object.assign(props.config,{selectionTranslatorMode:'bilingual',disableSelectionTranslator:false,selectionClickSelectEnabled:true,
+            sectionTranslationHotkeyEnabled:true,sectionTranslationHotkey:'custom',customSectionTranslationHotkey:'Alt+Shift+S'});
+        await mountEditor('SectionTranslationSettings');state.handleEnabledChange(false);expect(props.config.sectionTranslationHotkeyEnabled).toBe(true);
+        state.handleEnabledChange(true);expect(props.config.sectionTranslationHotkeyEnabled).toBe(false);expect(feedback.warning).toHaveBeenCalled();
+        props.config.customSectionTranslationHotkey='Alt+J';props.config.sectionTranslationHotkeyEnabled=true;state.handleEnabledChange(true);
+        expect(props.config.sectionTranslationHotkeyEnabled).toBe(true);
+    });
+    it('圈选提示词只接纳当前可见且属于同一配置和开关的草稿，空值也可保存', async () => {
+        Object.assign(props,{enabled:true,serviceOptions:[]});await mountEditor('AreaTranslationSettings');
+        const original=props.config.areaVisionPrompt;state.updateVisionPrompt('closed');expect(props.config.areaVisionPrompt).toBe(original);
+        props.active=false;await settle();state.openVisionPromptEditor();expect(state.promptEditorOpen).toBe(false);props.active=true;await settle();
+        state.openVisionPromptEditor();state.updateVisionPrompt('');expect(props.config.areaVisionPrompt).toBe('');
+        state.promptEditorOpen=false;await settle();state.updateVisionPrompt('late');expect(props.config.areaVisionPrompt).toBe('');
+        state.openVisionPromptEditor();Object.assign(props,{enabled:false});await settle();state.updateVisionPrompt('disabled');await settle();
+        expect(props.config.areaVisionPrompt).toBe('');expect(state.promptEditorOpen).toBe(false);
+        Object.assign(props,{enabled:true});await settle();state.openVisionPromptEditor();const old=props.config;props.config={...old,areaVisionPrompt:'replacement'};await settle();
+        state.updateVisionPrompt('stale');expect(props.config.areaVisionPrompt).toBe('replacement');expect(old.areaVisionPrompt).toBe('');
+        state.openVisionPromptEditor();props.active=false;await settle();state.updateVisionPrompt('hidden');expect(props.config.areaVisionPrompt).toBe('replacement');
     });
 });

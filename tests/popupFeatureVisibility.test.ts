@@ -7,7 +7,10 @@ import {popupQuickFeatureOptions} from '@/src/core/config/interfaceAppearance';
 
 const mountPreparedPopupApp = vi.hoisted(() => vi.fn());
 vi.mock('@/src/app/popup/mount', () => ({mountPreparedPopupApp}));
+// 本文件只验证入口唤醒与路由；DOM 启动反馈由 popupStartupFeedback.test.ts 执行真实实现。
+vi.mock('@/src/app/popup/startupFeedback', () => ({createPopupStartupFeedback: () => ({dispose() {}, fail() {}})}));
 vi.mock('element-plus/es/components/base/style/css', () => ({}));
+vi.mock('element-plus/es/components/tooltip/style/css', () => ({}));
 vi.mock('@/src/app/popup/PopupApp.vue', () => ({default: {}}));
 vi.mock('@/src/app/popup/PopupOnboarding.vue', () => ({default: {}}));
 import {mountPopupApp} from '@/src/app/popup';
@@ -43,18 +46,20 @@ describe('popup feature visibility', () => {
         const entry = elements.find(node => node.tag === 'button'
             && node.props.some(prop => prop.type === 6 && prop.name === 'data-testid' && prop.value?.content === 'section-translation'))!;
         expect(entry).toBeDefined();
-        const visible = directive(entry, 'if')!;
+        const hint = elements.find(node => node.tag === 'ElTooltip' && node.children.includes(entry))!;
+        const visible = directive(hint, 'if')!;
         expect(visible).toBe('!isThunderbird && !currentPdfSource');
         expect(runInNewContext(visible, {isThunderbird: false, currentPdfSource: undefined})).toBe(true);
         expect(runInNewContext(visible, {isThunderbird: true, currentPdfSource: undefined})).toBe(false);
         expect(runInNewContext(visible, {isThunderbird: false, currentPdfSource: {}})).toBe(false);
         const disabled = directive(entry, 'bind', 'disabled')!;
-        expect(disabled).toBe('!config.on || currentSiteExtensionDisabled || translating || pageState.savingRule');
-        const ready = {config: {on: true}, currentSiteExtensionDisabled: false, translating: false, pageState: {savingRule: false}};
+        expect(disabled).toBe('!config.on || currentSiteExtensionDisabled || translating || pageState.savingRule || (safariFreePool && (freePoolLoading || freePoolBusy))');
+        const ready = {config: {on: true}, currentSiteExtensionDisabled: false, translating: false, pageState: {savingRule: false}, safariFreePool: false, freePoolLoading: false, freePoolBusy: false};
         expect(runInNewContext(disabled, ready)).toBe(false);
         for (const blocked of [
             {...ready, config: {on: false}}, {...ready, currentSiteExtensionDisabled: true},
             {...ready, translating: true}, {...ready, pageState: {savingRule: true}},
+            {...ready, safariFreePool: true, freePoolLoading: true}, {...ready, safariFreePool: true, freePoolBusy: true},
         ]) expect(runInNewContext(disabled, blocked)).toBe(true);
         expect(directive(entry, 'bind', 'onClick')).toBe('pageButtons.section');
         expect(directive(entry, 'bind', 'aria-label')).toBe('sectionTranslationLabel');
@@ -137,6 +142,7 @@ describe('popup feature visibility', () => {
         const onboarding = source('src/ui/components/UiLanguageOnboarding.vue');
         const styles = source('src/app/popup/popup.css');
         const i18n = source('src/ui/i18n.ts');
+        const legacyDom = source('src/ui/i18n/legacyDom.ts');
 
         expect(popup).toContain('uiLanguageSetupCompleted');
         expect(popup).toContain('<UiLanguageOnboarding');
@@ -144,49 +150,47 @@ describe('popup feature visibility', () => {
         expect(popup).toContain('@confirmed="handleLanguageOnboardingConfirmed"');
         expect(popup).toContain('if (!showLanguageOnboarding.value) await hydrateCurrentSite();');
         expect(popup).toContain('void hydrateCurrentSite();');
-        expect(onboarding).toContain('class="language-onboarding-backdrop"');
-        expect(onboarding).toContain('data-testid="onboarding-welcome"');
         expect(onboarding).toContain('data-testid="onboarding-language-step"');
-        expect(onboarding).toContain('WELCOME_GREETING_WORDS');
-        expect(onboarding).toContain('getUiLanguageBilingualLabel(option.value)');
+        expect(onboarding).toContain('nativeLanguageNames[option.value]');
+        expect(onboarding).toContain(':lang="option.value"');
         expect(onboarding).toContain("messageZh('language.onboardingTitle')");
         expect(onboarding).toContain("messageEn('language.onboardingTitle')");
         expect(onboarding).toContain("messageZh('language.onboardingConfirm')");
         expect(onboarding).toContain("messageEn('language.onboardingConfirm')");
-        expect(onboarding).not.toContain("messageZh('language.onboardingWelcomeDescription')");
-        expect(onboarding).not.toContain("messageEn('language.onboardingWelcomeDescription')");
-        expect(onboarding).not.toContain("messageZh('language.onboardingDescription')");
-        expect(onboarding).not.toContain("messageEn('language.onboardingDescription')");
-        expect(onboarding).not.toContain("language.onboardingBrowserHint");
-        expect(onboarding).not.toContain("language.onboardingConfirmHint");
-        expect(onboarding).not.toContain('class="onboarding-language-code"');
-        expect(onboarding).toContain('class="onboarding-confirm-guide"');
-        expect(onboarding).toContain('animation: onboarding-point 1.05s ease-in-out infinite');
-        expect(onboarding).toContain('M8 1v15M3 12l5 5 5-5');
-        expect(onboarding).not.toContain('>↘</span>');
-        expect(onboarding).not.toContain('transform: rotate(8deg);\n  animation: onboarding-point');
-        expect(onboarding).toContain('data-testid="onboarding-language-next"');
-        expect(onboarding).not.toContain('<select');
-        expect(onboarding).toContain('.onboarding-success::before');
-        expect(onboarding).not.toContain('.language-onboarding-card::before');
-        expect(onboarding).toContain('class="onboarding-success"');
-        expect(onboarding).toContain('setTimeout(() =>');
+        expect(onboarding).not.toContain('onboarding-welcome');
+        expect(onboarding).not.toContain('onboarding-back');
+        expect(onboarding).not.toContain('onboarding-success');
+        expect(onboarding).not.toContain('setTimeout');
+        expect(onboarding).not.toContain('min-height: 460px');
+        expect(onboarding).toContain('committed.value = true');
         expect(styles).toContain('.popup-shell.language-onboarding-shell { overflow-x: hidden; }');
         expect(styles).toContain('.popup-shell { max-height: 560px; overflow-y: auto;');
         expect(onboarding).toContain('.language-onboarding {\n  position: relative;');
-        expect(i18n).toContain('function isRelevantUiMutation');
-        expect(i18n).toContain('setTimeout(() => {');
-        expect(i18n).toContain('state.observer.disconnect();');
+        expect(i18n).toContain("import {createUiI18nDirective, observeUiDocument} from './i18n/legacyDom';");
+        expect(i18n).toContain('const directive = createUiI18nDirective(context);');
+        expect(i18n).toContain('observeUiDocument(uiRoot, context)');
+        expect(legacyDom).toContain('function isRelevantUiMutation');
+        expect(legacyDom).toContain('setTimeout(() => {');
+        expect(legacyDom).toContain('state.observer.disconnect();');
     });
 
     it('places app language after extension status and target language first in translation display', () => {
         const settings = source('src/features/settings/ui/SettingsSections.vue');
         const options = source('src/app/options/OptionsApp.vue');
 
-        expect(settings.indexOf('data-testid="plugin-master-setting"')).toBeLessThan(settings.indexOf("t('settings.general.language')"));
-        expect(settings.indexOf("t('settings.general.language')")).toBeLessThan(settings.indexOf('label="界面主题"'));
-        expect(settings.indexOf("t('settings.general.defaultTargetLanguage')")).toBeGreaterThan(settings.indexOf('data-testid="default-translation-service-card"'));
-        expect(settings.indexOf("t('settings.general.defaultTargetLanguage')")).toBeLessThan(settings.indexOf('label="翻译模式"'));
+        const positions = {
+            status: settings.indexOf('data-testid="plugin-master-setting"'),
+            language: settings.indexOf("t('settings.general.language')"),
+            theme: settings.indexOf("t('settings.general.theme')"),
+            service: settings.indexOf('data-testid="default-translation-service-card"'),
+            target: settings.indexOf("t('settings.general.defaultTargetLanguage')"),
+            display: settings.indexOf('label="翻译模式"'),
+        };
+        for (const position of Object.values(positions)) expect(position).toBeGreaterThanOrEqual(0);
+        expect(positions.status).toBeLessThan(positions.language);
+        expect(positions.language).toBeLessThan(positions.theme);
+        expect(positions.target).toBeGreaterThan(positions.service);
+        expect(positions.target).toBeLessThan(positions.display);
         expect(options).not.toContain('<UiLanguageSelector />');
         expect(options).not.toContain('<p>{{ activeItem.detail }}</p>');
     });
@@ -249,7 +253,7 @@ describe('popup feature visibility', () => {
         expect(selector).toContain('<ElSelect');
         expect(selector).toContain('popper-class="ui-language-select-popper"');
         expect(selector).not.toContain('<select');
-        expect(onboarding).toContain('getUiLanguageBilingualLabel(option.value)');
+        expect(onboarding).toContain('nativeLanguageNames[option.value]');
     });
 
     it('blocks early interaction until the stored configuration is hydrated', () => {
@@ -285,12 +289,17 @@ describe('popup feature visibility', () => {
     });
 
     it('keeps full-page floating-ball and hotkey controls in the options page', () => {
-        const options = source('src/features/settings/ui/SettingsSections.vue');
+        const elements = templateElements(source('src/features/settings/ui/SettingsSections.vue'));
 
-        expect(options).toContain('v-model="floatingBallEnabled"');
-        expect(options).toContain('aria-label="全文翻译悬浮球"');
-        expect(options).toContain(':model-value="config.floatingBallHotkey"');
-        expect(options).toContain('aria-label="全文翻译快捷键"');
+        const toggles = elements.filter(node => node.tag === 'el-switch'
+            && directive(node, 'model') === 'floatingBallEnabled');
+        expect(toggles).toHaveLength(1);
+        expect(directive(toggles[0], 'bind', 'aria-label')).toBe("t('settings.general.floatingBall')");
+        const hotkeys = elements.filter(node => node.tag === 'el-select'
+            && directive(node, 'bind', 'model-value') === 'config.floatingBallHotkey');
+        expect(hotkeys).toHaveLength(1);
+        expect(hotkeys[0].props.some(prop => prop.type === 6 && prop.name === 'aria-label'
+            && prop.value?.content === '全文翻译快捷键')).toBe(true);
     });
 
     it('keeps beta labels out of every user-facing feature surface', () => {
@@ -333,7 +342,7 @@ describe('popup feature visibility', () => {
         expect(popup).not.toContain('class="eyebrow features-eyebrow"');
         expect(popup).toContain('data-testid="popup-version"');
         expect(popup).toContain("browser.runtime.getManifest().version");
-        expect(popup).toContain("t('popup.donationButton')");
+        expect(popup).toContain(":aria-label=\"t('popup.donationTitle')\"");
         expect(source('src/app/popup/popup.css')).not.toContain('.opensource-link span { display: none; }');
         expect(popup).not.toContain("activeDrawer === 'video'");
         expect(popup).not.toContain("activeDrawer === 'area'");
@@ -450,7 +459,6 @@ describe('popup feature visibility', () => {
         expect(popup).toContain('findEnabledQuickTranslationHotkeyConflict');
         expect(popup).not.toContain('CustomHotkeyInput');
         expect(styles).toContain('.quick-profile-preview-row');
-        expect(styles).toContain('.setting-row small.independent-profile-note');
     });
 
     it('filters Chrome Translator but renders old synchronized selections as unavailable', () => {

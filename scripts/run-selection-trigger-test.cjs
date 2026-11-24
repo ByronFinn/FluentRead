@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 
-// 使用临时 Edge profile 验证划词翻译的触发矩阵；--context-menu-only 只运行右键入口专项。
+// 使用临时 Edge profile 验证划词翻译的触发矩阵；--context-menu-only 只运行完整右键入口专项，
+// --editable-selection-only 只运行编辑区划词入口与右键选区专项，
+// --lifecycle-only 检查宿主节点恢复、启停、路由、失败重试与键盘/窄屏界面，要求 --runtime-diagnostics。
+// --document-shell-only 只验证 DeepSeek 类文档根禁译外壳下的划词入口与局部保护。
+// --decoration-only 只验证跨条目选区中的空装饰图标与受保护文字边界，要求 --runtime-diagnostics。
+// --click-selection-only 只验证按需两点选取；通过 --runtime-diagnostics 传入 CDP 诊断收集器。
+// --geometry-only / --zoom-only 检查自动避让及手动几何，要求 --runtime-diagnostics。
+// --click-selection-stress-only 只诊断滚动后立即确认终点的重复手势与事件时序。
 // Popup 快捷抽屉提供独立启用开关与双语/仅译文选择；触发方式、显示延迟和自定义快捷键在完整设置页修改，
 // 两个真实扩展页面同时打开，断言设置页写入、Popup 模式同步与网页中的真实划词手势结果一致。
 // 该脚本只操作本次创建的隔离 profile，不连接用户正在使用的浏览器。
@@ -37,12 +44,23 @@ function parseArgs(argv) {
     headed: argv.includes('--headed'),
     chineseOnly: argv.includes('--chinese-only'),
     contextMenuOnly: argv.includes('--context-menu-only'),
+    editableSelectionOnly: argv.includes('--editable-selection-only'),
+    lifecycleOnly: argv.includes('--lifecycle-only'),
+    documentShellOnly: argv.includes('--document-shell-only'),
+    decorationOnly: argv.includes('--decoration-only'),
     directionOnly: argv.includes('--direction-only'),
     geometryOnly: argv.includes('--geometry-only'),
     zoomOnly: argv.includes('--zoom-only'),
     scrollOnly: argv.includes('--scroll-only'),
     inlineCodeOnly: argv.includes('--inline-code-only'),
+    clickSelectionOnly: argv.includes('--click-selection-only') || argv.includes('--click-selection-stress-only'),
+    clickSelectionStressOnly: argv.includes('--click-selection-stress-only'),
+    runtimeDiagnostics: readArg(argv, 'runtime-diagnostics', ''),
   };
+  if ((args.decorationOnly || args.clickSelectionOnly || args.documentShellOnly || args.lifecycleOnly || args.contextMenuOnly || args.editableSelectionOnly || args.geometryOnly || args.zoomOnly)
+    && (!args.runtimeDiagnostics || !fs.existsSync(args.runtimeDiagnostics))) {
+    throw new Error('划词专项需要 --runtime-diagnostics <runtime-diagnostics.cjs> 以采集扩展隔离世界及后台诊断');
+  }
   if (!args.playwrightRoot) throw new Error('必须传入 --playwright-root，或设置 PLAYWRIGHT_ROOT');
   args.extensionDir = path.resolve(args.extensionDir);
   args.artifactsDir = path.resolve(args.artifactsDir);
@@ -145,6 +163,24 @@ async function readStoredConfig(extensionPage) {
   const credentialFields = { ...credentials };
   delete credentialFields.schemaVersion;
   return { ...publicConfig, ...credentialFields };
+}
+
+function summarizeSelectionTestConfig(config) {
+  return {
+    on: config.on,
+    disableSelectionTranslator: config.disableSelectionTranslator,
+    selectionTranslatorMode: config.selectionTranslatorMode,
+    selectionTranslatorTrigger: config.selectionTranslatorTrigger,
+    selectionTranslatorDelay: config.selectionTranslatorDelay,
+    contextMenuEnabled: config.contextMenuEnabled,
+    contextMenuEntries: {
+      translateSelection: config.contextMenuEntries?.translateSelection,
+      translatePage: config.contextMenuEntries?.translatePage,
+    },
+    service: config.service,
+    from: config.from,
+    to: config.to,
+  };
 }
 
 function configPatchMatches(config, patch) {
@@ -816,7 +852,8 @@ async function waitForSelectionUi(page, expected, description) {
     state = await readSelectionUi(page);
     const matches = Object.entries(expected).every(([key, value]) => key === 'resultPrefix'
       ? state.resultText.startsWith(String(value))
-      : key === 'resultSuffix' ? state.resultText.endsWith(String(value)) : state[key] === value);
+      : key === 'resultSuffix' ? state.resultText.endsWith(String(value))
+      : key === 'tooltipIncludes' ? state.tooltipText.includes(String(value)) : state[key] === value);
     if (matches) return;
     await page.waitForTimeout(50);
   }
@@ -1186,6 +1223,904 @@ async function triggerShortcut(page, label, settleMs = 450) {
   await page.waitForTimeout(settleMs);
 }
 
+// 两点选取使用真实 CDP 鼠标/键盘创建原生选区；只用 DOM Range 读取字形坐标，不代替被测手势。
+// 性能探针只装在本次扩展的 isolated world，保留原 API 行为和产品诊断。
+async function createClickSelectionPerformanceProbe(context, page, extensionId) {
+  const session = await context.newCDPSession(page), worlds = new Map();
+  session.on('Runtime.executionContextCreated', ({context: world}) => worlds.set(world.id, world));
+  session.on('Runtime.executionContextDestroyed', ({executionContextId}) => worlds.delete(executionContextId));
+  await session.send('Runtime.enable');
+  let world;
+  const deadline = Date.now() + 5000;
+  while (!world && Date.now() < deadline) {
+    for (const candidate of worlds.values()) {
+      if (candidate.auxData?.type !== 'isolated') continue;
+      const identity = await session.send('Runtime.evaluate', {contextId: candidate.id,
+        expression: 'globalThis.chrome?.runtime?.id || null', returnByValue: true});
+      if (identity.result.value === extensionId) {world = candidate; break;}
+    }
+    if (!world) await page.waitForTimeout(35);
+  }
+  if (!world) {await session.detach(); throw new Error('性能探针没有找到本次扩展的 isolated world');}
+  const evaluate = async expression => {
+    const response = await session.send('Runtime.evaluate', {contextId: world.id, expression, returnByValue: true});
+    assert(!response.exceptionDetails, `性能探针执行失败：${JSON.stringify(response.exceptionDetails)}`);
+    return response.result.value;
+  };
+  await evaluate(`(${function installProbe() {
+    const restorers = [];
+    let active = false, sample, observer;
+    const isSelectionSelector = selectors => typeof selectors === 'string' && selectors.includes('.fluent-read-bilingual-content')
+      && selectors.includes('.fluent-read-retry-wrapper') && selectors.includes('[data-fluent-read-ui]');
+    const isSemanticSelector = selectors => typeof selectors === 'string'
+      && (selectors.includes('MathJax') || /(^|,)\s*code(?:\s|,|$)/u.test(selectors));
+    const isBroadQuery = root => ['before', 'after'].some(suffix => {
+      const unrelated = document.getElementById(`click-selection-unrelated-${suffix}`);
+      return Boolean(unrelated && (root === document || root === unrelated || root.contains?.(unrelated)));
+    });
+    const newSample = () => ({querySelectorAllCalls: 0, broadQueryCalls: 0, unrelatedMatches: 0, elementChecks: 0, unrelatedElementChecks: 0,
+      semanticQuerySelectorCalls: 0, semanticQuerySelectorAllCalls: 0, semanticBroadQueryCalls: 0,
+      semanticUnrelatedMatches: 0, semanticElementChecks: 0, unrelatedSemanticElementChecks: 0, rangeCloneContentsCalls: 0, semanticQueries: [],
+      queryRoots: [], eventTrace: [], pointerupAt: null, nativeSelectionMs: null, nativeOperationMs: null,
+      nextFrameMs: null, longTasks: []});
+    sample = newSample();
+    for (const prototype of [Document.prototype, DocumentFragment.prototype, Element.prototype]) {
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, 'querySelectorAll');
+      if (!descriptor?.value) continue;
+      const nativeQuery = descriptor.value;
+      Object.defineProperty(prototype, 'querySelectorAll', {...descriptor, value: function(selectors) {
+        const found = Reflect.apply(nativeQuery, this, [selectors]);
+        if (active && isSelectionSelector(selectors)) {
+          sample.querySelectorAllCalls += 1;
+          const broad = isBroadQuery(this);
+          if (broad) sample.broadQueryCalls += 1;
+          sample.queryRoots.push({tag: this.nodeName, id: this.id || '', matches: found.length, broad});
+          for (const element of found) if (element.closest('[data-click-selection-unrelated]')) sample.unrelatedMatches += 1;
+        }
+        if (active && isSemanticSelector(selectors)) {
+          sample.semanticQuerySelectorAllCalls += 1;
+          const broad = isBroadQuery(this);
+          if (broad) sample.semanticBroadQueryCalls += 1;
+          sample.semanticQueries.push({method: 'querySelectorAll', tag: this.nodeName, id: this.id || '', matches: found.length, broad});
+          for (const element of found) if (element.closest('[data-click-selection-unrelated]')) sample.semanticUnrelatedMatches += 1;
+        }
+        return found;
+      }});
+      restorers.push(() => Object.defineProperty(prototype, 'querySelectorAll', descriptor));
+      const queryDescriptor = Object.getOwnPropertyDescriptor(prototype, 'querySelector');
+      const nativeSingleQuery = queryDescriptor.value;
+      Object.defineProperty(prototype, 'querySelector', {...queryDescriptor, value: function(selectors) {
+        const found = Reflect.apply(nativeSingleQuery, this, [selectors]);
+        if (active && isSemanticSelector(selectors)) {
+          sample.semanticQuerySelectorCalls += 1;
+          const broad = isBroadQuery(this);
+          if (broad) sample.semanticBroadQueryCalls += 1;
+          sample.semanticQueries.push({method: 'querySelector', tag: this.nodeName, id: this.id || '', matches: found ? 1 : 0, broad});
+          if (found?.closest('[data-click-selection-unrelated]')) sample.semanticUnrelatedMatches += 1;
+        }
+        return found;
+      }});
+      restorers.push(() => Object.defineProperty(prototype, 'querySelector', queryDescriptor));
+    }
+    const matchesDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'matches');
+    Object.defineProperty(Element.prototype, 'matches', {...matchesDescriptor, value: function(selectors) {
+      if (active && isSelectionSelector(selectors)) {
+        sample.elementChecks += 1;
+        if (this.closest('[data-click-selection-unrelated]')) sample.unrelatedElementChecks += 1;
+      }
+      if (active && isSemanticSelector(selectors)) {
+        sample.semanticElementChecks += 1;
+        if (this.closest('[data-click-selection-unrelated]')) sample.unrelatedSemanticElementChecks += 1;
+      }
+      return Reflect.apply(matchesDescriptor.value, this, [selectors]);
+    }});
+    restorers.push(() => Object.defineProperty(Element.prototype, 'matches', matchesDescriptor));
+    const cloneDescriptor = Object.getOwnPropertyDescriptor(Range.prototype, 'cloneContents');
+    Object.defineProperty(Range.prototype, 'cloneContents', {...cloneDescriptor, value: function(...args) {
+      if (active) sample.rangeCloneContentsCalls += 1;
+      return Reflect.apply(cloneDescriptor.value, this, args);
+    }});
+    restorers.push(() => Object.defineProperty(Range.prototype, 'cloneContents', cloneDescriptor));
+    const selectionDescriptor = Object.getOwnPropertyDescriptor(Selection.prototype, 'setBaseAndExtent');
+    if (!selectionDescriptor?.value) throw new Error('当前浏览器缺少原生 Selection.setBaseAndExtent');
+    Object.defineProperty(Selection.prototype, 'setBaseAndExtent', {...selectionDescriptor, value: function(...args) {
+      const before = performance.now();
+      const value = Reflect.apply(selectionDescriptor.value, this, args);
+      if (active && sample.pointerupAt !== null) {
+        const observed = sample;
+        observed.eventTrace.push({type: 'native-selection-completed', at: performance.now(), scrollY});
+        observed.nativeOperationMs = performance.now() - before;
+        observed.nativeSelectionMs = performance.now() - observed.pointerupAt;
+        requestAnimationFrame(() => {observed.nextFrameMs = performance.now() - observed.pointerupAt;});
+      }
+      return value;
+    }});
+    restorers.push(() => Object.defineProperty(Selection.prototype, 'setBaseAndExtent', selectionDescriptor));
+    const pointerdown = event => {if (active && event.isTrusted) sample.eventTrace.push({type: 'pointerdown', at: performance.now(), scrollY});};
+    const pointerup = event => {
+      if (active && event.isTrusted) {
+        sample.pointerupAt = performance.now();
+        sample.eventTrace.push({type: 'pointerup', at: sample.pointerupAt, scrollY});
+      }
+    };
+    const scrolled = event => {if (active) sample.eventTrace.push({type: 'scroll', at: performance.now(), scrollY, trusted: event.isTrusted});};
+    window.addEventListener('pointerdown', pointerdown, true);
+    window.addEventListener('pointerup', pointerup, true);
+    window.addEventListener('scroll', scrolled, true);
+    if (PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+      observer = new PerformanceObserver(list => {
+        if (active) sample.longTasks.push(...list.getEntries().map(entry => ({durationMs: entry.duration, startTime: entry.startTime})));
+      });
+      observer.observe({type: 'longtask'});
+    }
+    globalThis.__fluentReadClickSelectionProbe = {
+      reset() {sample = newSample(); active = true;},
+      read() {active = false; return sample;},
+      calibrate() {
+        sample = newSample(); active = true;
+        const selectors = '.fluent-read-bilingual-content,.fluent-read-retry-wrapper,[data-fluent-read-ui],button,input,[role]';
+        document.getElementById('selection-test-fixture').querySelectorAll(selectors);
+        document.getElementById('click-selection-unrelated-before').firstElementChild.matches(selectors);
+        const semanticSelector = 'math, mjx-container, .MathJax, .katex, code';
+        document.getElementById('selection-test-fixture').querySelector(semanticSelector);
+        document.getElementById('click-selection-unrelated-before').firstElementChild.matches(semanticSelector);
+        const selectedOnly = document.createRange(); selectedOnly.selectNodeContents(document.getElementById('target')); selectedOnly.cloneContents();
+        active = false; return sample;
+      },
+      stop() {
+        active = false;
+        observer?.disconnect(); window.removeEventListener('pointerdown', pointerdown, true); window.removeEventListener('pointerup', pointerup, true);
+        window.removeEventListener('scroll', scrolled, true);
+        for (const restore of restorers.reverse()) restore();
+        delete globalThis.__fluentReadClickSelectionProbe;
+      },
+    };
+    return true;
+  }.toString()})()`);
+  return {
+    world: {id: world.id, origin: world.origin, name: world.name},
+    reset: () => evaluate('globalThis.__fluentReadClickSelectionProbe.reset(); true'),
+    read: () => evaluate('globalThis.__fluentReadClickSelectionProbe.read()'),
+    calibrate: () => evaluate('globalThis.__fluentReadClickSelectionProbe.calibrate()'),
+    stop: async () => {try {await evaluate('globalThis.__fluentReadClickSelectionProbe.stop(); true');} finally {await session.detach();}},
+  };
+}
+
+function summarizeClickSelectionTiming(samples) {
+  const values = samples.map(sample => sample.nativeSelectionMs).sort((left, right) => left - right);
+  const percentile = fraction => values[Math.max(0, Math.ceil(values.length * fraction) - 1)];
+  return {samples: values.length, p50Ms: percentile(.5), p95Ms: percentile(.95),
+    minMs: values[0], maxMs: values.at(-1),
+    querySelectorAllCalls: samples.reduce((sum, sample) => sum + sample.querySelectorAllCalls, 0),
+    broadQueryCalls: samples.reduce((sum, sample) => sum + sample.broadQueryCalls, 0),
+    unrelatedMatches: samples.reduce((sum, sample) => sum + sample.unrelatedMatches, 0),
+    elementChecks: samples.reduce((sum, sample) => sum + sample.elementChecks, 0),
+    unrelatedElementChecks: samples.reduce((sum, sample) => sum + sample.unrelatedElementChecks, 0),
+    semanticQuerySelectorCalls: samples.reduce((sum, sample) => sum + sample.semanticQuerySelectorCalls, 0),
+    semanticQuerySelectorAllCalls: samples.reduce((sum, sample) => sum + sample.semanticQuerySelectorAllCalls, 0),
+    semanticBroadQueryCalls: samples.reduce((sum, sample) => sum + sample.semanticBroadQueryCalls, 0),
+    semanticUnrelatedMatches: samples.reduce((sum, sample) => sum + sample.semanticUnrelatedMatches, 0),
+    semanticElementChecks: samples.reduce((sum, sample) => sum + sample.semanticElementChecks, 0),
+    unrelatedSemanticElementChecks: samples.reduce((sum, sample) => sum + sample.unrelatedSemanticElementChecks, 0),
+    rangeCloneContentsCalls: samples.reduce((sum, sample) => sum + sample.rangeCloneContentsCalls, 0),
+    longTaskCount: samples.reduce((sum, sample) => sum + sample.longTasks.length, 0)};
+}
+
+async function runClickSelectionCases({page, popup, context, extensionId, result, args, runtimeDiagnostics}) {
+  const hotkey = 'Alt+Shift+S';
+  const initial = await readStoredConfig(popup);
+  assert(initial.selectionClickSelectEnabled === false && initial.selectionClickSelectHotkey === hotkey,
+    '新临时配置没有保留两点选取默认关闭及推荐快捷键');
+  await patchStoredConfig(popup, {
+    on: true, disableSelectionTranslator: false, selectionTranslatorMode: 'bilingual',
+    selectionTranslatorTrigger: 'icon', selectionTranslatorDelay: 0, selectionTranslatorAutoDismiss: false,
+    selectionClickSelectEnabled: false, selectionClickSelectHotkey: hotkey,
+    from: 'auto', to: 'zh-Hans', hotkey: 'none', floatingBallHotkey: 'none',
+    harness: {...initial.harness, enabled: false},
+  });
+  await resetFixture(page);
+  await page.evaluate(() => {
+    const main = document.querySelector('#selection-test-fixture');
+    main.style.maxWidth = '960px';
+    main.insertAdjacentHTML('beforeend', `
+      <p id="second">Another paragraph keeps its own words and punctuation for reading.</p>
+      <p><a id="click-link" href="#click-result">Follow this link</a>
+      <button id="click-button" type="button">Count click</button>
+      <input id="click-input" aria-label="Host editor" value="Host input" /></p>
+      <p id="click-editable" contenteditable="true">An editable paragraph stays editable.</p>
+      <p id="click-long" style="max-width:720px;word-break:break-all;font-size:14px;line-height:1.2"></p>
+      <p id="click-protected"><span id="click-protected-before">Words before a control</span><button type="button">Protected action</button><span id="click-protected-after">Words after a control</span></p>
+      <div id="click-shadow-editor"></div>
+      <p id="click-result">Link target</p>`);
+    document.querySelector('#click-long').textContent = 'abcdefghijklmnopqrst'.repeat(260);
+    document.querySelector('#click-shadow-editor').attachShadow({mode: 'open'}).innerHTML = '<input aria-label="Shadow host editor" value="Shadow input" />';
+    document.querySelector('#click-button').addEventListener('click', () => {
+      document.querySelector('#click-button').dataset.clicks = String(Number(document.querySelector('#click-button').dataset.clicks || 0) + 1);
+    });
+  });
+  const text = await page.locator('#target').textContent();
+  const secondText = await page.locator('#second').textContent();
+  const check = (id, evidence = {}) => result.cases.push({id: `click-selection.${id}`, status: 'passed', ...evidence});
+  const state = async () => {
+    const {root} = await getSelectionUiTree(page);
+    const node = findCdpNode(root, candidate => ['start', 'end'].includes(cdpAttribute(candidate, 'data-click-selection-state')));
+    return {state: cdpAttribute(node, 'data-click-selection-state') || 'idle', text: cdpText(node)};
+  };
+  const waitState = async expected => {
+    const deadline = Date.now() + 5000;
+    let current;
+    do {
+      current = await state();
+      if (current.state === expected) return current;
+      await page.waitForTimeout(35);
+    } while (Date.now() < deadline);
+    throw new Error(`两点选取应为 ${expected}，实际为 ${JSON.stringify(current)}`);
+  };
+  const waitAreaSelecting = async expected => {
+    const deadline = Date.now() + 10000;
+    do {
+      const {root} = await getSelectionUiTree(page);
+      const selecting = Boolean(findCdpNode(root, node => hasCdpClass(node, 'fr-area-selecting')));
+      if (selecting === expected) return;
+      await page.waitForTimeout(35);
+    } while (Date.now() < deadline);
+    throw new Error(`圈选选择阶段没有变为 ${expected}`);
+  };
+  const selection = () => page.evaluate(() => {
+    const current = window.getSelection();
+    return {text: current?.toString() || '', collapsed: current?.isCollapsed, anchor: current?.anchorOffset, focus: current?.focusOffset,
+      anchorId: current?.anchorNode?.parentElement?.id, focusId: current?.focusNode?.parentElement?.id};
+  });
+  const point = async (selector, offset, end = false, reveal = false) => {
+    const locate = () => page.locator(selector).evaluate((element, {offset, end}) => {
+      const node = element.firstChild;
+      if (!node || node.nodeType !== Node.TEXT_NODE || offset < 0 || offset >= node.textContent.length) throw new Error('缺少字形坐标');
+      const range = document.createRange(); range.setStart(node, offset); range.setEnd(node, offset + 1);
+      const rect = range.getClientRects()[0];
+      return {x: rect.left + rect.width * (end ? .9 : .1), y: rect.top + rect.height / 2};
+    }, {offset, end});
+    let position = await locate();
+    if (reveal) {
+      await page.evaluate(({y}) => window.scrollBy(0, y - innerHeight / 2), position);
+      position = await locate();
+    }
+    return position;
+  };
+  const clickText = async (selector, offset, end = false, reveal = false) => {
+    const position = await point(selector, offset, end, reveal);
+    await page.mouse.click(position.x, position.y);
+  };
+  const begin = async () => {
+    await activateInputPage(page);
+    await page.evaluate(() => {
+      let active = document.activeElement;
+      while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+      if (active instanceof HTMLElement) active.blur();
+    });
+    await page.keyboard.press(hotkey);
+    return waitState('start');
+  };
+  const screenshot = async label => {
+    const screenshotPath = path.join(args.artifactsDir, `${label}.png`);
+    await page.screenshot({path: screenshotPath}); result.screenshots.push(screenshotPath);
+  };
+
+  if (args.clickSelectionStressOnly) {
+    runtimeDiagnostics.setPhase('scroll-immediately-before-endpoint-stress-only');
+    await patchStoredConfig(popup, {selectionClickSelectEnabled: true}); await page.waitForTimeout(150);
+    await page.evaluate(() => {
+      const main = document.getElementById('selection-test-fixture');
+      for (const suffix of ['before', 'after']) {
+        const section = document.createElement('section'); section.id = `click-selection-unrelated-${suffix}`;
+        section.dataset.clickSelectionUnrelated = ''; section.style.cssText = 'font:12px/1.2 Arial,sans-serif';
+        section.innerHTML = Array.from({length: 2000}, (_, index) => `<div><button>Unrelated ${index}</button><input/><span role="checkbox">Choice</span></div>`).join('');
+        if (suffix === 'before') main.insertBefore(section, document.getElementById('target'));
+        else document.getElementById('neighbor').after(section);
+      }
+    });
+    const probe = await createClickSelectionPerformanceProbe(context, page, extensionId), samples = [];
+    result.scrollRaceDiagnostic = {samples, probeWorld: probe.world};
+    try {
+      for (let index = 0; index < 20; index++) {
+        await begin(); await clickText('#target', 8, false, true); await waitState('end');
+        await probe.reset();
+        const endpoint = await point('#neighbor', 20, true, true);
+        await page.mouse.click(endpoint.x, endpoint.y); await waitState('idle');
+        try {await waitForSelectionUi(page, {indicator: true, tooltip: false}, `快速滚动第${index + 1}轮入口`);}
+        catch (error) {
+          result.scrollRaceDiagnostic.failedSample = {iteration: index + 1, probe: await probe.read(), selected: await selection()};
+          await screenshot('click-selection-scroll-race-failure'); throw error;
+        }
+        samples.push({...await probe.read(), selected: await selection()});
+      }
+      check('scroll-immediately-before-endpoint-stress-only', {iterations: samples.length});
+    } finally {await probe.stop();}
+    await assertBackgroundFocus('click selection stress final'); await runtimeDiagnostics.flush(); runtimeDiagnostics.assertClean();
+    result.runtimeDiagnostics = runtimeDiagnostics.snapshot(); result.ok = result.consoleErrors.length === 0;
+    fs.writeFileSync(path.join(args.artifactsDir, 'report.json'), `${JSON.stringify(result, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`); return;
+  }
+
+  runtimeDiagnostics.setPhase('default-disabled');
+  await activateInputPage(page);
+  await page.keyboard.press(hotkey);
+  await clickText('#target', 0);
+  assert((await state()).state === 'idle', '默认关闭时快捷键不应开始选取');
+  check('disabled-by-default');
+
+  runtimeDiagnostics.setPhase('settings-persistence');
+  let options = await openSelectionOptions(context, extensionId, result);
+  await activateInputPage(options);
+  await options.getByRole('switch', {name: '两点选取', exact: true}).locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " el-switch " )][1]').click();
+  // 开关刚反馈就关闭页面，验证已有配置保存管线能处理短生命周期页面。
+  await options.close();
+  const persistDeadline = Date.now() + 10000;
+  while (!(await readStoredConfig(popup)).selectionClickSelectEnabled) {
+    assert(Date.now() < persistDeadline, '两点选取开关关闭设置页后没有持久化');
+    await page.waitForTimeout(50);
+  }
+  options = await openSelectionOptions(context, extensionId, result);
+  const reopened = await options.getByRole('switch', {name: '两点选取', exact: true}).getAttribute('aria-checked');
+  assert(reopened === 'true', '重新打开设置页后两点选取丢失');
+  const optionsShot = path.join(args.artifactsDir, 'click-selection-settings-reopened.png');
+  await options.screenshot({path: optionsShot}); result.screenshots.push(optionsShot);
+  result.persistenceCases = [{field: 'selectionClickSelectEnabled', before: false, after: true, reopened: true, quickClose: true}];
+  result.quickClose = true;
+  result.crossPageSync = {optionsToStoredConfig: true, pageShortcut: 'verified below'};
+  result.latestWriteWins = 'existing persistence pipeline; this suite checks the new boolean only';
+  await options.close();
+  await page.waitForTimeout(300);
+  check('settings-enable-quick-close-reopen');
+
+  runtimeDiagnostics.setPhase('native-selection-forward-reverse');
+  await begin();
+  await screenshot('click-selection-start');
+  await clickText('#target', 5);
+  await waitState('end');
+  await screenshot('click-selection-end');
+  await clickText('#target', 35, true);
+  await waitState('idle');
+  let selected = await selection();
+  assert(selected.text === text.slice(5, 36) && selected.anchor === 5 && selected.focus === 36,
+    `正向选区错误：${JSON.stringify(selected)}`);
+  await waitForSelectionUi(page, {indicator: true, tooltip: false}, '两点选取复用原划词图标');
+  await screenshot('click-selection-completed');
+  check('forward-native-selection-and-existing-entry', {selected});
+  result.crossPageSync.pageShortcut = true;
+  await begin(); await clickText('#target', 35, true);
+  await waitState('end'); selected = await selection();
+  assert(selected.collapsed === true && selected.anchor === 36 && selected.focus === 36,
+    `重启后第一点未清除旧高亮：${JSON.stringify(selected)}`);
+  check('new-anchor-collapses-previous-native-selection', {selected});
+  await clickText('#target', 5);
+  await waitState('idle'); selected = await selection();
+  assert(selected.text === text.slice(5, 36) && selected.anchor === 36 && selected.focus === 5,
+    `反向选区错误：${JSON.stringify(selected)}`);
+  check('reverse-native-selection', {selected});
+
+  await begin(); await clickText('#target', 8); await clickText('#second', 20, true);
+  await waitState('idle'); selected = await selection();
+  assert(selected.anchorId === 'target' && selected.focusId === 'second'
+    && selected.text.startsWith(text.slice(8)) && selected.text.endsWith(secondText.slice(0, 21)),
+    `跨段选区错误：${JSON.stringify(selected)}`);
+  check('cross-paragraph', {selected});
+
+  runtimeDiagnostics.setPhase('cancel-and-safe-host-interactions');
+  await begin(); await clickText('#target', 4); await page.keyboard.press('Escape');
+  await waitState('idle'); check('escape-cancel');
+  await begin(); await page.keyboard.press(hotkey); await waitState('idle'); check('shortcut-toggle-cancel');
+  await begin(); await page.keyboard.press('PageDown');
+  // 浏览器的可信翻页有动画尾段，先等其完成再测试下一轮字形坐标。
+  await page.waitForTimeout(500); await waitState('start');
+  await page.keyboard.press('a'); await waitState('idle');
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await page.waitForFunction(() => window.scrollY === 0);
+  check('paging-preserves-mode-and-main-key-cancels');
+  await begin(); await clickText('#target', 9); await clickText('#target', 9);
+  const samePointHint = await waitState('end');
+  assert(samePointHint.text.includes('起点与终点相同，请换一个位置'), `同点点击缺少反馈：${JSON.stringify(samePointHint)}`);
+  await clickText('#target', 25, true); await waitState('idle');
+  selected = await selection(); assert(selected.text === text.slice(9, 26), '同点点击后没有保留有效起点');
+  check('same-point-retry', {hint: samePointHint.text, selected});
+  await begin(); await page.mouse.click(8, 30);
+  const blankStartHint = await waitState('start');
+  assert(blankStartHint.text.includes('未点中文字，请点击起点'), `空白起点缺少反馈：${JSON.stringify(blankStartHint)}`);
+  await clickText('#target', 0); await waitState('end'); await page.mouse.click(8, 30);
+  const blankEndHint = await waitState('end');
+  assert(blankEndHint.text.includes('未点中文字，请点击终点'), `空白终点缺少反馈：${JSON.stringify(blankEndHint)}`);
+  await clickText('#target', 15, true); await waitState('idle'); selected = await selection();
+  assert(selected.text === text.slice(0, 16), '空白点击提示后没有保留有效起点');
+  check('blank-space-keeps-stage', {hints: [blankStartHint.text, blankEndHint.text], selected});
+  await begin(); await clickText('#target', 2); await page.keyboard.press('Tab'); await waitState('idle');
+  const tabFocus = await page.evaluate(() => ({id: document.activeElement?.id, tag: document.activeElement?.tagName,
+    hostControl: document.activeElement?.matches('a[href],button,input,textarea,select,[contenteditable]')}));
+  assert(tabFocus.hostControl, `Tab退出后未把焦点交给宿主控件：${JSON.stringify(tabFocus)}`);
+  check('tab-cancels-without-trapping-focus', {activeElement: tabFocus});
+  for (const selector of ['#click-button', '#click-input', '#click-editable']) {
+    await begin(); await page.locator(selector).click(); await waitState('idle');
+    if (selector === '#click-button') assert(await page.locator(selector).getAttribute('data-clicks') === '1', '按钮原点击被吞');
+    else assert(await page.locator(selector).evaluate(element => document.activeElement === element), '编辑区原焦点被吞');
+    check(`host-${selector.slice(1)}-passes-through`);
+  }
+  await begin(); await page.locator('#click-link').click(); await waitState('idle');
+  assert(page.url().endsWith('#click-result'), '两点模式吞掉了链接导航');
+  check('host-link-navigation');
+  await page.evaluate(() => {window.scrollTo(0, 0); history.replaceState(null, '', '/');});
+  await page.locator('#click-shadow-editor input').click(); await page.keyboard.press(hotkey);
+  await waitState('idle');
+  assert(await page.locator('#click-shadow-editor input').evaluate(element => element.getRootNode().activeElement === element), '两点快捷键抢走 Shadow DOM 输入框焦点');
+  check('shadow-editor-shortcut-passes-through');
+  await page.evaluate(() => window.scrollTo(0, 0));
+
+  runtimeDiagnostics.setPhase('dynamic-source-scroll-and-limits');
+  await begin(); await clickText('#target', 4);
+  await page.locator('#target').evaluate(element => {element.firstChild.replaceWith(document.createTextNode(element.textContent));});
+  await clickText('#second', 15); await waitState('idle');
+  assert((await selection()).text === '', '已移除的起点被复用');
+  check('replaced-anchor-cancels');
+  await begin(); await clickText('#target', 3);
+  await page.evaluate(() => window.scrollBy(0, 160));
+  await clickText('#second', 30, true); await waitState('idle'); selected = await selection();
+  assert(selected.anchorId === 'target' && selected.focusId === 'second', '滚动使有效起点丢失');
+  check('scroll-between-clicks', {selected});
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await begin(); await clickText('#click-long', 0, false, true); await clickText('#click-long', 4500, true, true);
+  assert((await selection()).text.length <= 4096, '超过4096字符的选区没有被拒绝');
+  const longHint = await waitState('end');
+  assert(longHint.text.includes('选区过长，请点击较近的终点'), `长选区缺少反馈：${JSON.stringify(longHint)}`);
+  await clickText('#click-long', 30, true, true); await waitState('idle'); selected = await selection();
+  assert(selected.text.length === 31 && selected.anchor === 0 && selected.focus === 31, '过长拒绝后未保留起点供重试');
+  check('long-range-rejected', {hint: longHint.text, retriedSelection: selected});
+  await begin(); await clickText('#click-protected-before', 1, false, true); await clickText('#click-protected-after', 8, true);
+  const protectedHint = await waitState('end');
+  assert(protectedHint.text.includes('此范围不支持，请换一个终点'), `保护内容缺少反馈：${JSON.stringify(protectedHint)}`);
+  await clickText('#click-protected-before', 14, true); await waitState('idle'); selected = await selection();
+  assert(selected.anchorId === 'click-protected-before' && selected.focusId === 'click-protected-before' && selected.anchor === 1 && selected.focus === 15,
+    `保护内容拒绝后未保留起点：${JSON.stringify(selected)}`);
+  check('protected-range-rejected-with-retry', {hint: protectedHint.text, selected});
+  await page.evaluate(() => window.scrollTo(0, 0));
+
+  runtimeDiagnostics.setPhase('bounded-selection-performance');
+  const probe = await createClickSelectionPerformanceProbe(context, page, extensionId);
+  const performanceGroups = [];
+  result.clickSelectionPerformance = {probeWorld: probe.world, groups: performanceGroups,
+    metric: 'Trusted pointerup capture to native Selection.setBaseAndExtent completion in the extension isolated world; CDP/DOM polling time excluded. Next-frame and long-task observations are diagnostic.',
+    acceptance: 'Native range boundaries, zero unrelated-control queries/checks, zero broad formula/code queries and zero plain-range cloneContents are asserted. Test-owned canaries prove the probes see the old broad queries, outside matches and cloneContents. p50/p95 are recorded without a brittle wall-clock gate; small sample counts and fixture-only results do not establish all-site latency.'};
+  try {
+    const measure = async (id, startSelector, endSelector, repetitions = 9, settleReveal = true) => {
+      const samples = [], group = {id, samples, settleReveal};
+      performanceGroups.push(group);
+      for (let index = 0; index < repetitions; index++) {
+        try {
+          await begin(); await clickText(startSelector, 8, false, true); await waitState('end');
+          if (!settleReveal) await probe.reset();
+          const endpoint = await point(endSelector, 20, true, true);
+          if (settleReveal) {
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            await probe.reset();
+          }
+          await page.mouse.click(endpoint.x, endpoint.y);
+          await waitState('idle');
+          await waitForSelectionUi(page, {indicator: true, tooltip: false}, `${id} 第${index + 1}轮原生选区入口`);
+          await page.waitForTimeout(35);
+          const sample = await probe.read(), selected = await selection();
+          assert(Number.isFinite(sample.nativeSelectionMs), `${id} 缺少真实 pointerup 到原生选区测量：${JSON.stringify(sample)}`);
+          const expected = await page.evaluate(({startSelector, endSelector}) => ({
+            start: document.querySelector(startSelector).firstChild.data.slice(8),
+            end: document.querySelector(endSelector).firstChild.data.slice(0, 21),
+            same: document.querySelector(startSelector).firstChild.data.slice(8, 21),
+          }), {startSelector, endSelector});
+          assert(selected.anchorId === startSelector.slice(1) && selected.focusId === endSelector.slice(1)
+            && selected.anchor === 8 && selected.focus === 21 && selected.text.length > 0,
+            `${id} 第${index + 1}轮原生选区错误：${JSON.stringify(selected)}`);
+          assert(startSelector === endSelector ? selected.text === expected.same : selected.text.startsWith(expected.start) && selected.text.endsWith(expected.end),
+            `${id} 第${index + 1}轮原生文本错误：${JSON.stringify(selected)}`);
+          samples.push({...sample, selected});
+        } catch (error) {
+          group.failedSample = {iteration: index + 1, probe: await probe.read(), selected: await selection(), error: String(error.stack || error)};
+          fs.writeFileSync(path.join(args.artifactsDir, 'click-selection-performance-failure.json'), `${JSON.stringify(result.clickSelectionPerformance, null, 2)}\n`);
+          await screenshot('click-selection-performance-failure');
+          throw error;
+        }
+      }
+      group.summary = summarizeClickSelectionTiming(samples);
+      return group;
+    };
+    await measure('short-adjacent-paragraphs', '#target', '#neighbor');
+    const unrelatedFixture = await page.evaluate(() => {
+      const main = document.getElementById('selection-test-fixture');
+      const build = suffix => {
+        const container = document.createElement('section');
+        container.id = `click-selection-unrelated-${suffix}`; container.dataset.clickSelectionUnrelated = '';
+        container.style.cssText = 'font:12px/1.2 Arial,sans-serif';
+        container.innerHTML = Array.from({length: 2000}, (_, index) => `<div><button type="button">Unrelated ${suffix} ${index}</button><input aria-label="Unrelated field ${suffix} ${index}"/><span role="checkbox" aria-checked="false">Choice</span></div>`).join('');
+        return container;
+      };
+      main.insertBefore(build('before'), document.getElementById('target'));
+      document.getElementById('neighbor').after(build('after'));
+      const range = document.createRange(); range.setStart(document.getElementById('target').firstChild, 8); range.setEnd(document.getElementById('neighbor').firstChild, 21);
+      return {commonAncestorId: range.commonAncestorContainer.id, unrelatedElements: main.querySelectorAll('[data-click-selection-unrelated] *').length,
+        unrelatedControls: main.querySelectorAll('[data-click-selection-unrelated] button,[data-click-selection-unrelated] input,[data-click-selection-unrelated] [role]').length};
+    });
+    assert(unrelatedFixture.commonAncestorId === 'selection-test-fixture' && unrelatedFixture.unrelatedControls === 12000,
+      `大页面未建立 main 共同祖先和前后无关控件：${JSON.stringify(unrelatedFixture)}`);
+    const calibration = await probe.calibrate();
+    assert(calibration.broadQueryCalls === 1 && calibration.unrelatedMatches === unrelatedFixture.unrelatedControls
+      && calibration.unrelatedElementChecks === 1 && calibration.semanticQuerySelectorCalls === 1
+      && calibration.semanticBroadQueryCalls === 1 && calibration.unrelatedSemanticElementChecks === 1
+      && calibration.rangeCloneContentsCalls === 1, `isolated-world探针未捕获测试自检扫描：${JSON.stringify(calibration)}`);
+    const large = await measure('adjacent-paragraphs-with-unrelated-controls', '#target', '#neighbor');
+    assert(large.summary.broadQueryCalls === 0 && large.summary.unrelatedMatches === 0 && large.summary.unrelatedElementChecks === 0,
+      `短跨段选区仍扫描无关控件：${JSON.stringify(large.summary)}`);
+    check('large-page-selection-does-not-scan-unrelated-controls', {fixture: unrelatedFixture, testOwnedProbeCalibration: calibration, timing: large.summary});
+    await screenshot('click-selection-large-page');
+    const outsideSemantics = await page.evaluate(() => {
+      for (const suffix of ['before', 'after']) {
+        const container = document.getElementById(`click-selection-unrelated-${suffix}`);
+        for (let index = 0; index < container.children.length; index += 10) {
+          container.children[index].insertAdjacentHTML('beforeend', '<code data-click-selection-outside-semantic>outside = 1 + 2;</code><span class="MathJax" data-click-selection-outside-semantic>x + y = z</span>');
+        }
+      }
+      return {outsideSemanticNodes: document.querySelectorAll('[data-click-selection-outside-semantic]').length,
+        beforeNodes: document.getElementById('click-selection-unrelated-before').querySelectorAll('[data-click-selection-outside-semantic]').length,
+        afterNodes: document.getElementById('click-selection-unrelated-after').querySelectorAll('[data-click-selection-outside-semantic]').length};
+    });
+    assert(outsideSemantics.outsideSemanticNodes === 800 && outsideSemantics.beforeNodes === 400 && outsideSemantics.afterNodes === 400,
+      `未在选区前后建立公式与代码节点：${JSON.stringify(outsideSemantics)}`);
+    const semanticCalibration = await probe.calibrate();
+    assert(semanticCalibration.semanticQuerySelectorCalls === 1 && semanticCalibration.semanticBroadQueryCalls === 1
+      && semanticCalibration.semanticUnrelatedMatches === 1 && semanticCalibration.unrelatedSemanticElementChecks === 1
+      && semanticCalibration.rangeCloneContentsCalls === 1,
+      `公式/代码查询与cloneContents探针自检失败：${JSON.stringify(semanticCalibration)}`);
+    const semanticGroup = await measure('adjacent-paragraphs-with-outside-formulas-and-code', '#target', '#neighbor');
+    assert(semanticGroup.summary.semanticBroadQueryCalls === 0 && semanticGroup.summary.semanticUnrelatedMatches === 0
+      && semanticGroup.summary.unrelatedSemanticElementChecks === 0 && semanticGroup.summary.rangeCloneContentsCalls === 0,
+      `选区外公式/代码触发整页查询、遍历或选区克隆：${JSON.stringify(semanticGroup.summary)}`);
+    assert(semanticGroup.summary.semanticElementChecks > 0, '没有观测到选区内公式/代码局部检查，无法证明链路已完成');
+    check('outside-formulas-and-code-do-not-trigger-scan-or-clone', {fixture: outsideSemantics,
+      testOwnedProbeCalibration: semanticCalibration, timing: semanticGroup.summary});
+    runtimeDiagnostics.setPhase('scroll-immediately-before-endpoint');
+    const quickScroll = await measure('scroll-immediately-before-endpoint', '#target', '#neighbor', 20, false);
+    check('scroll-immediately-before-endpoint-keeps-completed-entry', {iterations: quickScroll.samples.length, timing: quickScroll.summary});
+    await page.evaluate(() => {
+      document.getElementById('click-selection-unrelated-before').remove(); document.getElementById('click-selection-unrelated-after').remove();
+      const paragraph = document.createElement('p'); paragraph.id = 'click-single-long';
+      paragraph.style.cssText = 'max-width:720px;word-break:break-all;font:14px/1.2 Arial,sans-serif';
+      paragraph.textContent = 'abcdefghijklmnopqrst'.repeat(10000);
+      document.getElementById('selection-test-fixture').append(paragraph);
+    });
+    const single = await measure('short-range-in-200000-character-text-node', '#click-single-long', '#click-single-long', 5);
+    check('long-single-text-node-short-range', {textNodeLength: 200000, timing: single.summary});
+  } finally {
+    await probe.stop();
+    await page.evaluate(() => {
+      for (const id of ['click-selection-unrelated-before', 'click-selection-unrelated-after', 'click-single-long']) document.getElementById(id)?.remove();
+      window.scrollTo(0, 0);
+    });
+  }
+
+  runtimeDiagnostics.setPhase('pointer-session-mutual-exclusion');
+  const sectionHost = page.locator('[data-fluent-read-ui="section-picker"]');
+  const sectionProfile = {id: 'click-selection-section', enabled: true, action: 'section', hotkey: 'Alt+Shift+R',
+    service: 'microsoft', model: '', targetLanguage: 'zh-Hans', displayMode: 'bilingual', fullPageMode: 'inherit'};
+  const hoverProfile = {...sectionProfile, id: 'click-selection-hover', action: 'hover', hotkey: 'Alt+Shift+H'};
+  await begin();
+  await patchStoredConfig(popup, {sectionTranslationHotkeyEnabled: false, quickTranslationProfiles: [sectionProfile, hoverProfile]});
+  await page.waitForTimeout(200); await waitState('start');
+  await page.keyboard.press(sectionProfile.hotkey);
+  await sectionHost.waitFor({state: 'attached'}); await waitState('idle');
+  check('section-profile-replaces-click-selection', {sectionHosts: await sectionHost.count()});
+  await page.keyboard.press(hotkey);
+  await sectionHost.waitFor({state: 'detached'}); await waitState('start');
+  await clickText('#target', 3); await waitState('end'); await clickText('#target', 22, true);
+  await waitState('idle'); selected = await selection();
+  assert(selected.text === text.slice(3, 23) && await sectionHost.count() === 0,
+    `两点选取接管局部选择器后未独占手势：${JSON.stringify(selected)}`);
+  await page.keyboard.press('Escape'); await waitState('idle');
+  assert(await sectionHost.count() === 0, '退出两点选择后仍残留局部选择器');
+  check('click-selection-replaces-section-picker', {selected});
+  await begin();
+  const hoverPoint = await point('#neighbor', 8);
+  await page.mouse.move(hoverPoint.x, hoverPoint.y);
+  await page.keyboard.press(hoverProfile.hotkey); await waitState('idle');
+  await page.locator('#neighbor .fluent-read-bilingual-content').waitFor({state: 'attached', timeout: 15000});
+  assert(await sectionHost.count() === 0, '悬停方案执行后仍残留局部选择器');
+  check('hover-profile-cancels-click-selection', {fixtureTranslation: await page.locator('#neighbor .fluent-read-bilingual-content').innerText()});
+  await patchStoredConfig(popup, {quickTranslationProfiles: []});
+  await page.waitForTimeout(150);
+  await patchStoredConfig(popup, {selectionAreaEnabled: true, selectionAreaHotkey: 'Shift+Z'});
+  await page.waitForTimeout(150); await begin();
+  await page.keyboard.press('Shift+Z'); await waitState('idle'); await waitAreaSelecting(true);
+  check('area-selection-replaces-click-selection');
+  await page.keyboard.press(hotkey); await waitAreaSelecting(false); await waitState('start');
+  await page.keyboard.press('Escape'); await waitState('idle'); await waitAreaSelecting(false);
+  assert(await sectionHost.count() === 0, '圈选与两点选取切换后仍残留局部选择器');
+  check('click-selection-replaces-area-selection');
+  await patchStoredConfig(popup, {selectionAreaEnabled: false});
+  await page.waitForTimeout(150);
+
+  runtimeDiagnostics.setPhase('disable-unmount-and-native-drag');
+  await begin(); await clickText('#target', 2);
+  await patchStoredConfig(popup, {selectionClickSelectEnabled: false});
+  await waitState('idle'); await page.keyboard.press(hotkey); await waitState('idle');
+  check('config-disable-cancels');
+  const start = await point('#target', 0), end = await point('#target', 20, true);
+  await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, {steps: 8}); await page.mouse.up();
+  selected = await selection(); assert(selected.text === text.slice(0, 21), `普通拖选回归：${JSON.stringify(selected)}`);
+  check('ordinary-drag-selection', {selected});
+  await patchStoredConfig(popup, {selectionClickSelectEnabled: true});
+  await page.waitForTimeout(150); await begin(); await clickText('#target', 2);
+  await patchStoredConfig(popup, {disableSelectionTranslator: true, selectionTranslatorMode: 'disabled'});
+  await page.locator('#fluent-read-selection-translator-container').waitFor({state: 'detached'});
+  await page.keyboard.press(hotkey); check('feature-unmount');
+  await assertBackgroundFocus('click selection final');
+  await runtimeDiagnostics.flush(); runtimeDiagnostics.assertClean();
+  result.runtimeDiagnostics = runtimeDiagnostics.snapshot();
+  result.providerEvidence = 'Production extension in temporary isolated Edge, trusted CDP input and native Selection. Pointer-session takeover uses a local Microsoft HTTP response fixture for the hover profile; no live-provider, system shortcut, Firefox, Safari, mobile hardware or cross-frame selection claim.';
+  result.ok = result.consoleErrors.length === 0;
+  assert(result.ok, `两点选取控制台异常：${JSON.stringify(result.consoleErrors)}`);
+  fs.writeFileSync(path.join(args.artifactsDir, 'report.json'), `${JSON.stringify(result, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
+
+async function runDecorationCases({page, popup, result, args, runtimeDiagnostics, requestCount}) {
+  const saved = await readStoredConfig(popup);
+  await patchStoredConfig(popup, {
+    on: true, disableSelectionTranslator: false, selectionTranslatorMode: 'bilingual',
+    selectionTranslatorTrigger: 'icon', selectionTranslatorDelay: 0, selectionTranslatorAutoDismiss: false,
+    selectionClickSelectEnabled: true, selectionClickSelectHotkey: 'Alt+Shift+S',
+    contextMenuEnabled: true, contextMenuEntries: {...saved.contextMenuEntries, translateSelection: true},
+    to: 'zh-Hans', from: 'auto', service: 'microsoft', useCache: false,
+    hotkey: 'none', floatingBallHotkey: 'none', harness: {...saved.harness, enabled: false},
+  });
+  await page.evaluate(() => {
+    const icon = '<span aria-hidden="true"><svg width="16" height="16"><path d="M0 0h16v16H0z"/></svg></span>';
+    document.querySelector('main').innerHTML = `<section id="changelog" style="padding:48px;font:22px/1.5 Arial,sans-serif;max-width:900px">
+      <h2 id="title">Latest from our changelog</h2><ul>
+      <li>${icon}<div><time>Nov 11, 2026</time><br><a id="first">First changelog entry explains new features.</a></div></li>
+      <li>${icon}<div><time>Nov 10, 2026</time><br><span id="protected"></span><a id="last">Second changelog entry describes recent updates.</a></div></li>
+      </ul><a id="all">View changelog</a></section>`;
+    document.querySelectorAll('li').forEach(element => {element.style.marginBottom = '20px';});
+  });
+  await page.waitForTimeout(500);
+  const point = (selector, end) => page.locator(selector).evaluate((element, end) => {
+    const text = element.firstChild;
+    const offset = end ? text.length - 1 : 0;
+    const range = document.createRange(); range.setStart(text, offset); range.setEnd(text, offset + 1);
+    const rect = range.getClientRects()[0];
+    return {x: rect.left + rect.width * (end ? .9 : .1), y: rect.top + rect.height / 2};
+  }, end);
+  const select = async (start = '#first', end = '#last', reverse = false, precise = false) => {
+    await activateInputPage(page); await closeSelectionUi(page); await page.mouse.click(12, 12);
+    if (precise) {
+      await page.evaluate(({start, end}) => {
+        const range = document.createRange(); range.setStart(document.querySelector(start).firstChild, 0);
+        const last = document.querySelector(end).firstChild; range.setEnd(last, last.length);
+        window.getSelection().removeAllRanges(); window.getSelection().addRange(range);
+      }, {start, end});
+    } else {
+      const a = await point(start, false), b = await point(end, true);
+      const [from, to] = reverse ? [b, a] : [a, b];
+      await page.mouse.move(from.x, from.y); await page.mouse.down();
+      await page.mouse.move(to.x, to.y, {steps: 18}); await page.mouse.up();
+    }
+    await page.waitForTimeout(400);
+    const text = await page.evaluate(() => window.getSelection()?.toString().trim() || '');
+    assert(text.includes(await page.locator(start).textContent()) && text.includes(await page.locator(end).textContent()),
+      `未建立完整跨条目选区：${JSON.stringify({start, end, reverse, precise, text})}`);
+    return text;
+  };
+  const markup = () => page.locator('#changelog').evaluate(element => element.outerHTML);
+  const originalMarkup = await markup();
+  const check = (id, evidence = {}) => result.cases.push({id: `decoration.${id}`, status: 'passed', ...evidence});
+  for (const [id, start, end, reverse] of [
+    ['single-link', '#first', '#first', false],
+    ['cross-entry', '#first', '#last', false],
+    ['reverse-cross-entry', '#first', '#last', true],
+    ['whole-block', '#title', '#all', false],
+  ]) {
+    runtimeDiagnostics.setPhase(id);
+    const before = requestCount(), text = await select(start, end, reverse);
+    await waitForSelectionUi(page, {indicator: true, tooltip: false}, `${id} 显示图标`);
+    assert(requestCount() === before, '图标点击前提前请求翻译');
+    await clickSelectionIndicator(page);
+    await waitForSelectionUi(page, {tooltip: true, translation: true, resultPrefix: '测试译文：'}, `${id} 显示译文`);
+    assert(requestCount() > before && await markup() === originalMarkup, '划词翻译未请求或改写了宿主 DOM');
+    check(id, {text, requests: requestCount() - before});
+  }
+  const screenshot = path.join(args.artifactsDir, 'decoration-whole-block-translation.png');
+  await assertBackgroundFocus('decoration screenshot'); await page.screenshot({path: screenshot}); result.screenshots.push(screenshot);
+
+  runtimeDiagnostics.setPhase('context-menu-recovery');
+  const text = await select(), beforeMenu = requestCount();
+  const gesture = await captureRightClickAndDropSelection(page, '#first', text);
+  const response = await sendContextMenuTranslation(popup, 'selection', gesture.selectedText);
+  assert(response?.status === 'success', `跨条目右键消息失败：${JSON.stringify(response)}`);
+  await waitForSelectionUi(page, {tooltip: true, translation: true, resultPrefix: '测试译文：'}, '跨条目右键恢复后翻译');
+  assert(requestCount() > beforeMenu, '右键恢复未请求翻译');
+  check('context-menu-recovery', {gesture, response, requests: requestCount() - beforeMenu});
+
+  runtimeDiagnostics.setPhase('two-point-selection');
+  await closeSelectionUi(page); await page.mouse.click(12, 12); await page.keyboard.press('Alt+Shift+S');
+  const startPoint = await point('#first', false), endPoint = await point('#last', true);
+  await page.mouse.click(startPoint.x, startPoint.y); await page.mouse.click(endPoint.x, endPoint.y);
+  await waitForSelectionUi(page, {indicator: true, tooltip: false}, '跨条目两点选取显示图标');
+  const twoPointText = await page.evaluate(() => window.getSelection()?.toString().trim() || '');
+  assert(twoPointText.includes('First changelog') && twoPointText.includes('Second changelog'), '两点选取未跨条目');
+  check('two-point-selection', {text: twoPointText});
+
+  for (const [id, html, allowed] of [
+    ['hidden-control', '<button style="display:none">Hidden action</button>', true],
+    ['button-text', '<button>Protected action</button>', false],
+    ['display-contents-control', '<button style="display:contents">Protected action</button>', false],
+    ['no-translate-text', '<span translate="no">Protected text</span>', false],
+    ['hidden-text', '<span aria-hidden="true">Protected text</span>', false],
+    ['extension-text', '<span data-fluent-read-ui>Extension text</span>', false],
+  ]) {
+    runtimeDiagnostics.setPhase(id);
+    await closeSelectionUi(page);
+    await page.locator('#protected').evaluate((element, html) => {element.innerHTML = html;}, html);
+    const before = requestCount(); await select('#first', '#last', false, true);
+    await waitForSelectionUi(page, {indicator: allowed, tooltip: false}, `${id} 保护边界`);
+    assert(requestCount() === before, '保护边界检查提前请求了翻译');
+    check(id, {allowed, requests: 0});
+  }
+  await page.locator('#protected').evaluate(element => {element.innerHTML = '';});
+  await select(); await waitForSelectionUi(page, {indicator: true, tooltip: false}, '移除受保护文字后重新选区恢复图标');
+  assert(await markup() === originalMarkup, '重复触发后宿主 DOM 变化');
+  await clearPageSelection(page); await waitForSelectionUi(page, {indicator: false, tooltip: false}, '清除选区关闭入口');
+  check('dynamic-removal-and-selection-cleanup');
+  await page.goto('about:blank');
+  await assertBackgroundFocus('decoration final'); await runtimeDiagnostics.flush(); runtimeDiagnostics.assertClean();
+  result.runtimeDiagnostics = runtimeDiagnostics.snapshot(); result.ok = result.consoleErrors.length === 0;
+  assert(result.ok, `划词装饰图标专项出现控制台错误：${JSON.stringify(result.consoleErrors)}`);
+  result.providerEvidence = 'Local changelog DOM and Microsoft HTTP response fixtures. Native CDP drag and two-point input; context-menu recovery replays the production content-message route after a trusted right click. No live GitHub dashboard, native menu item click, external provider or Firefox runtime claim.';
+}
+
+function documentShellFixture() {
+  // 只保留问题需要的根标记与响应结构，不含用户提供的会话内容、资源或页面脚本。
+  return `<!doctype html><html lang="zh-CN" class="notranslate" translate="no"><head><meta charset="utf-8">
+    <title>DeepSeek document shell regression fixture</title></head><body>
+    <div id="root"><main id="selection-test-fixture" style="padding:48px;font:22px/1.5 Arial,sans-serif">
+      <div class="ds-markdown ds-assistant-message-main-content">
+        <p id="target">This readable answer needs a selection translation.</p>
+        <p id="neighbor">This neighboring answer must remain untouched.</p>
+        <p class="notranslate" id="protected-class">Protected local answer text.</p>
+        <p translate="no" id="protected-translate">Protected local translation marker.</p>
+        <p data-notranslate="true" id="protected-data">Protected local data marker.</p>
+        <p contenteditable="true" id="editor">Editable draft content remains private.</p>
+        <p role="button" id="control">Interactive action remains unchanged.</p>
+      </div>
+    </main></div></body></html>`;
+}
+
+async function runDocumentShellCases({page, popup, result, args, runtimeDiagnostics, requestCount}) {
+  const saved = await readStoredConfig(popup);
+  await patchStoredConfig(popup, {
+    on: true, disableSelectionTranslator: false, selectionTranslatorMode: 'bilingual',
+    selectionTranslatorTrigger: 'icon', selectionTranslatorDelay: 0, selectionTranslatorAutoDismiss: false,
+    to: 'zh-Hans', from: 'auto', service: 'microsoft', useCache: false,
+    hotkey: 'none', floatingBallHotkey: 'none', theme: 'light',
+    harness: {...saved.harness, enabled: false},
+  });
+  await page.waitForTimeout(500);
+  const hostMarkup = () => page.locator('#root').evaluate(element => element.outerHTML);
+  const initialMarkup = await hostMarkup();
+  fs.writeFileSync(path.join(args.artifactsDir, 'document-shell-initial.html'), initialMarkup);
+  const markerState = () => page.evaluate(() => [document.documentElement, document.body].map(element => ({
+    class: element.getAttribute('class'), translate: element.getAttribute('translate'), data: element.getAttribute('data-notranslate'),
+  })));
+  const selectNative = async () => {
+    await closeSelectionUi(page);
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
+    const selection = await tripleClickTarget(page);
+    assert(selection.mouseDown?.isTrusted && selection.text.includes('readable answer'),
+      `文档外壳测试没有建立可信原生选区：${JSON.stringify(selection)}`);
+    return selection;
+  };
+  const translateNative = async (id, trigger) => {
+    runtimeDiagnostics.setPhase(id);
+    await patchStoredConfig(popup, {selectionTranslatorTrigger: trigger});
+    await page.waitForTimeout(300);
+    const before = await hostMarkup();
+    const markers = await markerState();
+    const selection = await selectNative();
+    if (trigger === 'icon') {
+      await waitForSelectionUi(page, {indicator: true, tooltip: false}, `${id} 图标出现`);
+      await clickSelectionIndicator(page);
+    } else if (trigger === 'Control') {
+      const beforeKey = await readSelectionUi(page);
+      assert(!beforeKey.indicator && !beforeKey.tooltip, `${id} 在快捷键按下前已经出现划词 UI`);
+      await page.keyboard.down('Control'); await page.keyboard.up('Control');
+    }
+    await waitForSelectionUi(page, {tooltip: true, translation: true, resultPrefix: '测试译文：'}, `${id} 译文出现`);
+    const ui = await readSelectionUi(page);
+    assert(ui.resultText.includes(selection.text), `${id} 翻译请求没有保留选区正文`);
+    assert(await hostMarkup() === before && JSON.stringify(await markerState()) === JSON.stringify(markers), `${id} 改写了宿主 DOM 或禁译标记`);
+    const ownership = await page.evaluate(() => {
+      const hosts = document.querySelectorAll('#fluent-read-selection-translator-container');
+      return {count: hosts.length, closed: hosts[0]?.shadowRoot === null};
+    });
+    assert(ownership.count === 1 && ownership.closed, `${id} 划词 Shadow UI 所有权错误`);
+    result.cases.push({id, status: 'passed', selection, markers, ownership, ui});
+    return ui;
+  };
+
+  for (const surface of ['html', 'body', 'both']) {
+    runtimeDiagnostics.setPhase(`markers.${surface}`);
+    await closeSelectionUi(page);
+    await page.evaluate(surface => {
+      for (const element of [document.documentElement, document.body]) {
+        element.classList.remove('notranslate'); element.removeAttribute('translate'); element.removeAttribute('data-notranslate');
+      }
+      for (const element of surface === 'html' ? [document.documentElement] : surface === 'body' ? [document.body]
+        : [document.documentElement, document.body]) {
+        element.classList.add('notranslate'); element.setAttribute('translate', 'no');
+      }
+    }, surface);
+    for (const trigger of ['icon', 'direct', 'Control']) await translateNative(`${surface}.${trigger}`, trigger);
+  }
+  const screenshot = path.join(args.artifactsDir, 'deepseek-document-shell-selection.png');
+  await assertBackgroundFocus('document shell screenshot');
+  // Playwright 默认隐藏 caret 会给 contenteditable 留下空 style 属性；保持光标以免截图改变宿主。
+  await page.screenshot({path: screenshot, caret: 'initial'}); result.screenshots.push(screenshot);
+
+  // 负向用例使用精确 Range，避免控件自身不允许原生拖选令测试虚假通过。
+  await patchStoredConfig(popup, {selectionTranslatorTrigger: 'icon'});
+  await page.waitForTimeout(300);
+  for (const selector of ['#protected-class', '#protected-translate', '#protected-data', '#editor', '#control']) {
+    runtimeDiagnostics.setPhase(`protected.${selector.slice(1)}`);
+    await closeSelectionUi(page);
+    await page.mouse.click(10, 10);
+    const beforeRequests = requestCount();
+    const selection = await selectTextWithDomRange(page, selector);
+    await page.waitForTimeout(500);
+    const ui = await readSelectionUi(page);
+    assert(selection.text && !ui.indicator && !ui.tooltip && requestCount() === beforeRequests,
+      `${selector} 被文档根例外错误放行：${JSON.stringify({selection, ui})}`);
+    result.cases.push({id: `protected.${selector.slice(1)}`, status: 'passed', selection, requests: requestCount() - beforeRequests});
+  }
+  runtimeDiagnostics.setPhase('protected.document-role');
+  await closeSelectionUi(page);
+  await page.evaluate(() => document.documentElement.setAttribute('role', 'textbox'));
+  const beforeRoleRequests = requestCount();
+  await selectNative();
+  await page.waitForTimeout(500);
+  const roleUi = await readSelectionUi(page);
+  assert(!roleUi.indicator && !roleUi.tooltip && requestCount() === beforeRoleRequests, '根标记例外错误绕过根节点 textbox 角色');
+  result.cases.push({id: 'protected.document-role', status: 'passed', requests: requestCount() - beforeRoleRequests});
+  await page.evaluate(() => document.documentElement.removeAttribute('role'));
+  await translateNative('dismiss-reselect-after-protection', 'icon');
+  const finalMarkup = await hostMarkup();
+  fs.writeFileSync(path.join(args.artifactsDir, 'document-shell-final.html'), finalMarkup);
+  assert(finalMarkup === initialMarkup, '划词或保护区测试改写了 DeepSeek 正文结构；参见 document-shell-initial/final.html 差异');
+
+  runtimeDiagnostics.setPhase('dynamic-response-replacement');
+  await closeSelectionUi(page);
+  await page.locator('#target').evaluate(element => {
+    const replacement = element.cloneNode(true);
+    replacement.textContent = 'This new readable answer supports another selection translation.';
+    element.replaceWith(replacement);
+  });
+  await translateNative('dynamic-response-replacement', 'icon');
+  runtimeDiagnostics.setPhase('page-reload');
+  await page.reload({waitUntil: 'domcontentloaded'}); await waitForContentScript(page);
+  await translateNative('page-reload', 'icon');
+  runtimeDiagnostics.setPhase('page-unload');
+  await page.goto('about:blank', {waitUntil: 'load'});
+  await page.waitForTimeout(300);
+  result.cases.push({id: 'page-unload', status: 'passed'});
+  await assertBackgroundFocus('document shell final');
+  await runtimeDiagnostics.flush(); runtimeDiagnostics.assertClean();
+  result.runtimeDiagnostics = runtimeDiagnostics.snapshot();
+  result.providerEvidence = 'Production extension in temporary isolated Edge, native trusted triple-click selections and closed Shadow UI; sanitized DeepSeek-shaped DOM at chat.deepseek.com with local Microsoft HTTP translation responses. Protected-region probes use explicit DOM Ranges. This does not establish live DeepSeek login/streaming behavior, online-provider quality, Firefox or Safari runtime acceptance.';
+  result.ok = result.cases.every(item => item.status === 'passed') && result.consoleErrors.length === 0;
+  assert(result.ok, `文档根划词专项诊断未通过：${JSON.stringify(result.consoleErrors)}`);
+  fs.writeFileSync(path.join(args.artifactsDir, 'report.json'), `${JSON.stringify(result, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   fs.mkdirSync(args.artifactsDir, { recursive: true });
@@ -1196,12 +2131,14 @@ async function main() {
   let closeBrowser;
   let browserStartAttempted = false;
   let primaryError;
+  let runtimeDiagnostics;
   const result = {
     ok: false,
     extensionDir: args.extensionDir,
     artifactsDir: args.artifactsDir,
     browser: 'Microsoft Edge',
-    testScope: args.contextMenuOnly ? 'context-menu-only' : 'selection-trigger-filter-or-matrix',
+    testScope: args.decorationOnly ? 'decoration-only' : args.documentShellOnly ? 'document-shell-only' : args.clickSelectionStressOnly ? 'click-selection-scroll-race-only' : args.clickSelectionOnly ? 'click-selection-only' : args.lifecycleOnly ? 'selection-host-lifecycle-only'
+      : args.editableSelectionOnly ? 'editable-selection-only' : args.contextMenuOnly ? 'context-menu-only' : 'selection-trigger-filter-or-matrix',
     profileMode: 'temporary-isolated',
     windowMode: args.headed ? 'headed-dedicated-profile' : 'background-visible-no-focus',
     cases: [],
@@ -1233,6 +2170,8 @@ async function main() {
     for await (const chunk of request) chunks.push(chunk);
     translationRequestCount += 1;
     translationRequestEvents.push(Date.now());
+    let fixtureBody;try {fixtureBody = JSON.parse(Buffer.concat(chunks).toString('utf8'));} catch {}
+    (result.fixtureRequests ||= []).push({body: fixtureBody, controlledFailure: translationFailureResponses > 0});
     if (translationResponseDelayMs > 0) {
       await new Promise(resolve => setTimeout(resolve, translationResponseDelayMs));
     }
@@ -1258,7 +2197,12 @@ async function main() {
       'content-type': 'application/json; charset=utf-8',
     });
     const directionSuffix = args.directionOnly ? ` [to=${fixtureRequestUrl.searchParams.get('to') || ''}]` : '';
-    response.end(JSON.stringify((args.inlineCodeOnly || args.contextMenuOnly ? sources : [source]).map(text => ({ translations: [{ text: `测试译文：${text}${directionSuffix}` }] }))));
+    // 成功夹具必须包含目标语言正文；仅加中文前缀的英文回显会被真实的错语种校验拒绝。
+    const translatedFixture = text => args.decorationOnly || args.lifecycleOnly || args.contextMenuOnly || args.editableSelectionOnly || args.geometryOnly || args.zoomOnly
+      ? `测试译文：这是用于验证划词翻译和界面交互的中文内容，保留选区标识以核对请求归属。原文标识：「${text}」`
+      : `测试译文：${text}${directionSuffix}`;
+    response.end(JSON.stringify((args.decorationOnly || args.inlineCodeOnly || args.contextMenuOnly || args.editableSelectionOnly ? sources : [source])
+      .map(text => ({ translations: [{ text: translatedFixture(text) }] }))));
   });
   try {
     await new Promise((resolve, reject) => {
@@ -1290,17 +2234,17 @@ async function main() {
       context = browserSession.context;
       createIsolatedPage = () => focusSafe.newPageWithoutForeground(context);
       activateInputPage = page => focusSafe.activateExtensionTabWithoutForeground(context, page);
-      if (args.contextMenuOnly) {
+      if (args.decorationOnly || args.contextMenuOnly || args.editableSelectionOnly || args.lifecycleOnly || args.clickSelectionOnly || args.documentShellOnly || args.geometryOnly || args.zoomOnly) {
         const browserPid = await getGuardedBrowserPid(browserSession);
         result.ownedBrowserPid = browserPid;
         assertBackgroundFocus = async label => {
           const frontmost = await focusSafe.queryMacFrontmostApplication();
           assert(frontmost && Number.isSafeInteger(frontmost.pid) && frontmost.pid > 0
             && Number.isSafeInteger(browserPid) && browserPid > 0 && frontmost.pid !== browserPid,
-          `右键专项焦点检查失败：${JSON.stringify({label, frontmost, browserPid})}`);
+          `划词专项焦点检查失败：${JSON.stringify({label, frontmost, browserPid})}`);
           (result.focusChecks ||= []).push({label, frontmost, browserFrontmost: false});
         };
-        await assertBackgroundFocus('context-menu startup');
+        await assertBackgroundFocus('selection startup');
       }
       result.launchMode = browserSession.launchMode;
       result.focusPolicy = browserSession.focusPolicy;
@@ -1317,18 +2261,31 @@ async function main() {
       result.focusPolicy = 'foreground-authorized';
       result.windowPlacement = { mode: 'headed-explicit-foreground', windowState: 'normal', viewport: { width: 1280, height: 900 } };
     }
+    if (args.decorationOnly || args.clickSelectionOnly || args.documentShellOnly || args.lifecycleOnly || args.contextMenuOnly || args.editableSelectionOnly || args.geometryOnly || args.zoomOnly) {
+      runtimeDiagnostics = require(path.resolve(args.runtimeDiagnostics)).createRuntimeDiagnostics();
+      await runtimeDiagnostics.start(context);
+    }
     const {worker, extensionId} = await waitForWorker(context);
+    runtimeDiagnostics?.setExtensionId(extensionId);
     const attachWorkerDiagnostics = (target) => {
       target.on('console', (message) => {
-        recordConsoleIssue(`worker ${message.type()}: ${message.text()}`);
+        if (!(args.clickSelectionOnly || args.documentShellOnly) || ['error', 'warning', 'warn'].includes(message.type())) {
+          recordConsoleIssue(`worker ${message.type()}: ${message.text()}`);
+        }
       });
     };
     attachWorkerDiagnostics(worker);
-    const installTranslationFixture = (target) => target.evaluate(({fixtureUrl, directionOnly}) => {
+    const installTranslationFixture = (target) => target.evaluate(({fixtureUrl, directionOnly, geometryOnly}) => {
       if (globalThis.__fluentReadSelectionFixtureFetchInstalled) return;
       const nativeFetch = globalThis.fetch.bind(globalThis);
       globalThis.fetch = (input, init) => {
         const requestUrl = typeof input === 'string' || input instanceof URL ? String(input) : input.url;
+        if (geometryOnly && requestUrl.startsWith('https://api.dictionaryapi.dev/api/v2/entries/en/')) {
+          const word = decodeURIComponent(requestUrl.split('/').at(-1));
+          return new Promise(resolve => setTimeout(() => resolve(new Response(JSON.stringify([{word, phonetics: [],
+            meanings: [{partOfSpeech: 'noun', definitions: [{definition: 'A controlled dictionary definition for card layout verification. '.repeat(20)}]}]}]),
+          {headers: {'content-type': 'application/json; charset=utf-8'}})), 900));
+        }
         return requestUrl.startsWith('https://edge.microsoft.com/translate/translatetext')
           ? nativeFetch(directionOnly
             ? `${fixtureUrl}?to=${encodeURIComponent(new URL(requestUrl).searchParams.get('to') || '')}`
@@ -1336,7 +2293,7 @@ async function main() {
           : nativeFetch(input, init);
       };
       globalThis.__fluentReadSelectionFixtureFetchInstalled = true;
-    }, {fixtureUrl: translationFixtureUrl, directionOnly: args.directionOnly});
+    }, {fixtureUrl: translationFixtureUrl, directionOnly: args.directionOnly, geometryOnly: args.geometryOnly});
     await installTranslationFixture(worker);
     context.on('serviceworker', (target) => {
       attachWorkerDiagnostics(target);
@@ -1346,11 +2303,12 @@ async function main() {
     });
     result.extensionId = extensionId;
 
-    await context.route('https://example.com/**', async (route) => {
+    await context.route(args.documentShellOnly ? 'https://chat.deepseek.com/**' : 'https://example.com/**', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'text/html',
-        body: '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>FluentRead selection fixture</title></head><body><main></main></body></html>',
+        body: args.documentShellOnly ? documentShellFixture()
+          : '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>FluentRead selection fixture</title></head><body><main></main></body></html>',
       });
     });
     const popup = await createIsolatedPage(context);
@@ -1372,8 +2330,213 @@ async function main() {
     const page = await createIsolatedPage(context);
     page.on('pageerror', (error) => result.consoleErrors.push(`pageerror: ${error.message}`));
     page.on('console', (message) => { if (message.type() === 'error') recordConsoleIssue(`console: ${message.text()}`); });
-    await page.goto('https://example.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(args.documentShellOnly ? 'https://chat.deepseek.com/' : 'https://example.com/', { waitUntil: 'domcontentloaded', timeout: 60000 });
     await waitForContentScript(page);
+
+    if (args.decorationOnly) {
+      await runDecorationCases({page, popup, result, args, runtimeDiagnostics, requestCount: () => translationRequestCount});
+      return;
+    }
+
+    if (args.documentShellOnly) {
+      await runDocumentShellCases({page, popup, result, args, runtimeDiagnostics, requestCount: () => translationRequestCount});
+      return;
+    }
+
+    if (args.clickSelectionOnly) {
+      await runClickSelectionCases({page, popup, context, extensionId, result, args, runtimeDiagnostics});
+      return;
+    }
+
+    if (args.lifecycleOnly) {
+      const saved = await readStoredConfig(popup);
+      await patchStoredConfig(popup, {
+        on: true, disableSelectionTranslator: false, selectionTranslatorMode: 'bilingual',
+        selectionTranslatorTrigger: 'icon', selectionTranslatorDelay: 0, selectionTranslatorAutoDismiss: false,
+        to: 'zh-Hans', from: 'auto', service: 'microsoft', useCache: false,
+        hotkey: 'none', floatingBallHotkey: 'none', theme: 'light',
+        harness: {...saved.harness, enabled: false},
+      });
+      await page.waitForTimeout(600);
+      const hostSelector = '#fluent-read-selection-translator-container';
+      const rememberHost = () => page.evaluate(selector => {
+        const host = document.querySelector(selector);
+        if (!host) throw new Error('划词 host 尚未挂载');
+        globalThis.__fluentReadLifecycleHost = host;
+        return {closed: host.shadowRoot === null, hosts: document.querySelectorAll(selector).length};
+      }, hostSelector);
+      const removeHost = () => page.evaluate(() => globalThis.__fluentReadLifecycleHost.remove());
+      const waitForSameHost = () => page.waitForFunction(selector => {
+        const host = globalThis.__fluentReadLifecycleHost;
+        return host?.isConnected && document.querySelector(selector) === host
+          && document.querySelectorAll(selector).length === 1;
+      }, hostSelector, {timeout: 5000});
+      const selectFresh = async text => {
+        await activateInputPage(page);
+        await closeSelectionUi(page);
+        await resetFixture(page);
+        if (text) await page.locator('#target').evaluate((element, value) => {element.textContent = value;}, text);
+        if (page.viewportSize()?.width <= 480) await page.locator('#selection-test-fixture').evaluate(element => {
+          element.style.padding = '20px'; element.style.fontSize = '20px';
+        });
+        const selection = await tripleClickTarget(page);
+        assert(selection.mouseDown?.isTrusted, '生命周期选区没有来自可信鼠标手势');
+        await waitForSelectionUi(page, {indicator: true, tooltip: false}, '新选区显示划词图标');
+        return selection;
+      };
+      const keyboardActivate = async className => {
+        await activateInputPage(page);
+        const {session, root} = await getSelectionUiTree(page);
+        const container = findCdpNode(root, node => hasCdpClass(node, className));
+        const button = container?.nodeName === 'BUTTON' ? container
+          : findCdpNode(container, node => node.nodeName === 'BUTTON');
+        assert(button, `找不到键盘操作目标 ${className}`);
+        await session.send('DOM.focus', {nodeId: button.nodeId});
+        await page.keyboard.press('Enter');
+      };
+      const screenshot = async name => {
+        await assertBackgroundFocus(name);
+        const file = path.join(args.artifactsDir, `${name}.png`);
+        await page.screenshot({path: file});
+        result.screenshots.push(file);
+      };
+
+      const firstSelection = await selectFresh();
+      const hostState = await rememberHost();
+      assert(hostState.closed && hostState.hosts === 1, `初始 host 所有权不唯一：${JSON.stringify(hostState)}`);
+      await removeHost();
+      await waitForSameHost();
+      await waitForSelectionUi(page, {indicator: true}, '删除后同一划词图标恢复');
+      await screenshot('selection-lifecycle-icon-restored-light');
+      result.cases.push({id: 'lifecycle.icon-host-restored', status: 'passed', selection: firstSelection, hostState});
+
+      const requestsBeforeOpen = translationRequestCount;
+      translationResponseDelayMs = 900;
+      await clickSelectionIndicator(page);
+      await waitForSelectionUi(page, {tooltip: true, loading: true}, '点击恢复入口后显示加载');
+      await removeHost();
+      await waitForSameHost();
+      await waitForSelectionUi(page, {tooltip: true, translation: true, resultPrefix: '测试译文：'}, '在途卡片恢复后完成翻译');
+      translationResponseDelayMs = 0;
+      assert(translationRequestCount === requestsBeforeOpen + 1, '重新连接卡片重复发起翻译请求');
+      await screenshot('selection-lifecycle-card-restored-light');
+      result.cases.push({id: 'lifecycle.pending-card-keeps-request', status: 'passed', additionalRequests: 1, ui: await readSelectionUi(page)});
+
+      // 同一选区连续第三次删除停止自动修复；新的可信选区允许再次恢复。
+      await removeHost();
+      await page.waitForTimeout(300);
+      assert(await page.locator(hostSelector).count() === 0, '持续删除 host 时仍无限自动重挂');
+      const recoveredSelection = await selectFresh('A fresh selected sentence should restore the translation entry after repeated removal.');
+      await waitForSameHost();
+      assert(translationRequestCount === requestsBeforeOpen + 1, '新图标尚未点击时重复发起请求');
+      result.cases.push({id: 'lifecycle.repeated-removal-is-bounded-and-new-selection-recovers', status: 'passed', selection: recoveredSelection});
+      await clearPageSelection(page);
+      await waitForSelectionUi(page, {indicator: false, tooltip: false}, '空选区收起入口');
+      result.cases.push({id: 'lifecycle.empty-selection-cleans-entry', status: 'passed'});
+
+      await selectFresh('A replaced page must discard this pending selection translation.');
+      const requestsBeforeReplacement = translationRequestCount;
+      translationResponseDelayMs = 1200;
+      await clickSelectionIndicator(page);
+      await waitForSelectionUi(page, {tooltip: true, loading: true}, '替换正文前保留在途划词请求');
+      await page.evaluate(() => {
+        const nextBody = document.createElement('body');
+        nextBody.innerHTML = '<main><p>New route body</p></main>';
+        document.body.replaceWith(nextBody);
+      });
+      await waitForSameHost();
+      await waitForSelectionUi(page, {indicator: false, tooltip: false}, '恢复 host 时关闭来源已失效的卡片');
+      await page.waitForTimeout(1500);
+      await waitForSelectionUi(page, {indicator: false, tooltip: false}, '旧来源的迟到响应不能重新打开卡片');
+      assert(translationRequestCount === requestsBeforeReplacement + 1, '恢复失效来源的 host 重复发起翻译');
+      translationResponseDelayMs = 0;
+      await screenshot('selection-lifecycle-source-replaced-cleared');
+      result.cases.push({id: 'lifecycle.replaced-source-cancels-late-result', status: 'passed',
+        additionalRequests: 1, ui: await readSelectionUi(page),
+        scope: 'Actual production Chrome page/body mutation; Safari consumed-native-selection path is verified separately.'});
+      await page.evaluate(() => history.pushState({}, '', '/selection-next-route'));
+      await page.waitForTimeout(500);
+      const nextRouteSelection = await selectFresh('The newly rendered route still supports selection translation.');
+      await clickSelectionIndicator(page);
+      await waitForSelectionUi(page, {tooltip: true, translation: true, resultPrefix: '测试译文：'}, '替换 body 和路由后翻译新选区');
+      assert(await page.locator(hostSelector).count() === 1, '路由后出现重复划词 host');
+      result.cases.push({id: 'lifecycle.body-and-route-replacement', status: 'passed', selection: nextRouteSelection, ui: await readSelectionUi(page)});
+
+      await patchStoredConfig(popup, {disableSelectionTranslator: true, selectionTranslatorMode: 'disabled'});
+      await page.locator(hostSelector).waitFor({state: 'detached'});
+      const requestsBeforeDisabled = translationRequestCount;
+      await resetFixture(page);
+      await selectTarget(page);
+      await page.waitForTimeout(350);
+      assert(await page.locator(hostSelector).count() === 0 && translationRequestCount === requestsBeforeDisabled,
+        '禁用期间页面变化或新选区使划词入口复活');
+      await patchStoredConfig(popup, {disableSelectionTranslator: false, selectionTranslatorMode: 'bilingual'});
+      await page.locator(hostSelector).waitFor({state: 'attached'});
+      await selectFresh('Re-enabled selection translation should use one new owner.');
+      assert(await page.locator(hostSelector).count() === 1, '重新启用后存在重复实例');
+      result.cases.push({id: 'lifecycle.disable-cleanup-and-reenable', status: 'passed', disabledAdditionalRequests: 0});
+
+      translationResponseDelayMs = 900;
+      await clickSelectionIndicator(page);
+      await waitForSelectionUi(page, {loading: true}, '取消前请求正在加载');
+      await activateInputPage(page);
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(1100);
+      await waitForSelectionUi(page, {indicator: false, tooltip: false}, '取消后的迟到响应不能重开卡片');
+      translationResponseDelayMs = 0;
+      result.cases.push({id: 'lifecycle.escape-cancels-late-result', status: 'passed'});
+
+      await selectFresh('A failed selection translation can be retried with the keyboard.');
+      runtimeDiagnostics?.setPhase('controlled-provider-failure');
+      translationFailureResponses = 1;
+      expectingProviderFailure = true;
+      await clickSelectionIndicator(page);
+      await waitForSelectionUi(page, {tooltip: true, error: true, retryButton: true}, '失败后保留明确重试入口');
+      await screenshot('selection-lifecycle-error-retry');
+      await keyboardActivate('fr-error-state');
+      await waitForSelectionUi(page, {tooltip: true, translation: true, error: false, resultPrefix: '测试译文：'}, '键盘重试完成');
+      expectingProviderFailure = false;
+      runtimeDiagnostics?.setPhase('narrow-followup');
+      result.cases.push({id: 'lifecycle.error-and-keyboard-retry', status: 'passed'});
+
+      await patchStoredConfig(popup, {theme: 'dark'});
+      await page.setViewportSize({width: 390, height: 844});
+      await selectFresh('A narrow dark screen still leaves the translation readable and its actions reachable.');
+      await keyboardActivate('fr-selection-indicator');
+      await waitForSelectionUi(page, {tooltip: true, translation: true, resultPrefix: '测试译文：'}, '窄屏键盘打开卡片');
+      await page.waitForTimeout(250);
+      const {session, root} = await getSelectionUiTree(page);
+      const card = findCdpNode(root, node => hasCdpClass(node, 'fr-translation-tooltip'));
+      const {object} = await session.send('DOM.resolveNode', {nodeId: card.nodeId});
+      let layout;
+      try {
+        const response = await session.send('Runtime.callFunctionOn', {objectId: object.objectId, returnByValue: true,
+          functionDeclaration: `function() { const r = this.getBoundingClientRect(); return {x:r.x,y:r.y,right:r.right,bottom:r.bottom,width:r.width,viewportWidth:innerWidth,viewportHeight:innerHeight,dark:this.classList.contains('fr-dark-theme'),background:getComputedStyle(this).backgroundColor,scrollWidth:this.scrollWidth,clientWidth:this.clientWidth}; }`});
+        assert(!response.exceptionDetails, '读取窄屏卡片布局失败');
+        layout = response.result.value;
+      } finally { await session.send('Runtime.releaseObject', {objectId: object.objectId}); }
+      assert(layout.dark && layout.x >= 0 && layout.y >= 0 && layout.right <= layout.viewportWidth
+        && layout.bottom <= layout.viewportHeight && layout.scrollWidth <= layout.clientWidth + 1,
+      `窄屏划词卡片溢出：${JSON.stringify(layout)}`);
+      await screenshot('selection-lifecycle-390-dark');
+      await page.keyboard.press('Escape');
+      await waitForSelectionUi(page, {tooltip: false, indicator: false}, '键盘关闭窄屏卡片');
+      result.cases.push({id: 'lifecycle.narrow-dark-keyboard-open-close', status: 'passed', layout,
+        focusMethod: 'CDP DOM.focus on the actual closed-shadow button, followed by trusted Enter/Escape'});
+      await patchStoredConfig(popup, {disableSelectionTranslator: true, selectionTranslatorMode: 'disabled'});
+      await page.locator(hostSelector).waitFor({state: 'detached'});
+      await page.waitForTimeout(250);
+      await assertBackgroundFocus('selection lifecycle final cleanup');
+      result.cases.push({id: 'lifecycle.final-unmount', status: 'passed', hostCount: await page.locator(hostSelector).count()});
+      await runtimeDiagnostics?.flush();
+      if (runtimeDiagnostics) {result.runtimeDiagnostics = runtimeDiagnostics.snapshot();runtimeDiagnostics.assertClean();}
+      result.ok = result.consoleErrors.length === 0;
+      assert(result.ok, `划词生命周期控制台异常：${JSON.stringify(result.consoleErrors)}`);
+      result.providerEvidence = 'Production extension in isolated desktop Edge; local Microsoft HTTP fixture and controlled host/body mutations. Trusted CDP input (DOM range fallback recorded when needed), real closed Shadow DOM. 390px is desktop viewport emulation, not mobile hardware. No live-provider, Firefox or Safari claim.';
+      fs.writeFileSync(path.join(args.artifactsDir, 'report.json'), `${JSON.stringify(result, null, 2)}\n`);
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return;
+    }
 
     if (args.inlineCodeOnly) {
       const saved = await readStoredConfig(popup);
@@ -1604,7 +2767,7 @@ async function main() {
       return;
     }
 
-    if (args.contextMenuOnly) {
+    if (args.contextMenuOnly || args.editableSelectionOnly) {
       const saved = await readStoredConfig(popup);
       await patchStoredConfig(popup, {
         on: true,
@@ -1625,6 +2788,21 @@ async function main() {
       const drawer = await openSelectionDrawer(popup);
       const options = await openSelectionOptions(context, extensionId, result);
       const selectionUi = {popup, drawer, options, storagePage: popup};
+      await setSelectionTrigger(selectionUi, '显示图标');
+      await resetFixture(page);
+      await page.locator('#target').evaluate(target => target.setAttribute('contenteditable', 'true'));
+      const editableIndicatorSelection = await tripleClickTarget(page);
+      assert(editableIndicatorSelection.mouseDown?.isTrusted && editableIndicatorSelection.text === TARGET_TEXT,
+        `编辑器内原生三击选区错误：${JSON.stringify(editableIndicatorSelection)}`);
+      await waitForSelectionUi(page, {indicator: true, tooltip: false}, '编辑器内显示划词入口');
+      const editableIndicatorUi = await readSelectionUi(page);
+      assert(editableIndicatorUi.selectionText === TARGET_TEXT && translationRequestCount === 0,
+        `编辑器选区入口没有保留范围或提前请求翻译：${JSON.stringify({editableIndicatorUi, translationRequestCount})}`);
+      result.cases.push({id: 'context-menu.editable-selection-indicator', status: 'passed',
+        selection: editableIndicatorSelection, ui: editableIndicatorUi, requests: 0});
+      await closeSelectionUi(page);
+      await clearPageSelection(page);
+      await resetFixture(page);
       const triggerState = await setSelectionTrigger(selectionUi, '仅右键菜单');
       result.cases.push({id: 'context-menu.setting-and-popup-preview', status: 'passed', triggerState});
       const settingsScreenshot = path.join(args.artifactsDir, 'context-menu-setting.png');
@@ -1668,6 +2846,84 @@ async function main() {
       assert(!afterShortcut.indicator && !afterShortcut.tooltip && translationRequestCount === requestsBeforeShortcut,
         `仅右键菜单模式占用了 Ctrl 或发起了翻译：${JSON.stringify({afterShortcut, translationRequestCount, requestsBeforeShortcut})}`);
       result.cases.push({id: 'context-menu.selection-stays-quiet', status: 'passed', selected, requestsBeforeShortcut, ui: afterShortcut});
+
+      await closeSelectionUi(page);
+      await clearPageSelection(page);
+      await resetFixture(page);
+      await page.locator('#target').evaluate(target => target.setAttribute('contenteditable', 'true'));
+      const editableMenuSelection = await tripleClickTarget(page);
+      assert(editableMenuSelection.text === TARGET_TEXT, `编辑器内右键选区原文错误：${JSON.stringify(editableMenuSelection)}`);
+      const editableQuietUi = await readSelectionUi(page);
+      assert(editableQuietUi.selectionText === TARGET_TEXT && !editableQuietUi.indicator && !editableQuietUi.tooltip,
+        `仅右键模式在编辑器内自动显示划词入口：${JSON.stringify(editableQuietUi)}`);
+      const requestsBeforeEditableMenu = translationRequestCount;
+      await page.evaluate(() => {
+        const events = [];
+        const record = event => events.push({type: event.type, at: Date.now(), isTrusted: event.isTrusted,
+          key: event.key || '', button: Number.isInteger(event.button) ? event.button : null,
+          target: event.target instanceof Element ? `${event.target.tagName}#${event.target.id}` : String(event.target),
+          selectedText: window.getSelection()?.toString().trim() || ''});
+        globalThis.__fluentReadEditableMenuEvents = {events, record};
+        for (const type of ['contextmenu', 'keydown', 'keyup', 'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'selectionchange', 'click']) {
+          document.addEventListener(type, record, true);
+        }
+        window.addEventListener('blur', record, true);
+      });
+      const editableMenuGesture = await captureRightClickAndDropSelection(page, '#target', TARGET_TEXT);
+      await startSelectionUiTracking(page);
+      let editableMenuResponse;
+      let editableMenuTransitions = [];
+      let editableImmediateUi;
+      let editableMenuEvents = [];
+      try {
+        editableMenuResponse = await sendContextMenuTranslation(popup, 'selection', editableMenuGesture.selectedText);
+        await page.waitForTimeout(250);
+        editableImmediateUi = await readSelectionUi(page);
+        editableMenuEvents = await page.evaluate(() => {
+          const state = globalThis.__fluentReadEditableMenuEvents;
+          for (const type of ['contextmenu', 'keydown', 'keyup', 'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'selectionchange', 'click']) {
+            document.removeEventListener(type, state.record, true);
+          }
+          window.removeEventListener('blur', state.record, true);
+          delete globalThis.__fluentReadEditableMenuEvents;
+          return state.events;
+        });
+      } finally {
+        editableMenuTransitions = await stopSelectionUiTracking(page);
+      }
+      assert(editableMenuResponse?.status === 'success',
+        `编辑器内右键选区没有被内容脚本接受：${JSON.stringify(editableMenuResponse)}`);
+      await waitForSelectionUi(page, {tooltip: true, translation: true, resultPrefix: '测试译文：'}, '编辑器内右键翻译');
+      const editableTranslatedUi = await readSelectionUi(page);
+      assert(editableTranslatedUi.resultText.includes(TARGET_TEXT)
+        && translationRequestCount === requestsBeforeEditableMenu + 1,
+      `编辑器内右键没有翻译当前选区：${JSON.stringify({editableTranslatedUi, requestsBeforeEditableMenu, translationRequestCount})}`);
+      result.cases.push({id: 'context-menu.editable-selection-translation', status: 'passed',
+        selection: editableMenuSelection, gesture: editableMenuGesture, response: editableMenuResponse,
+        ui: editableTranslatedUi, immediateUi: editableImmediateUi,
+        requests: translationRequestCount - requestsBeforeEditableMenu,
+        transitions: editableMenuTransitions, events: editableMenuEvents});
+      if (args.editableSelectionOnly) {
+        await closeSelectionUi(page);
+        await clearPageSelection(page);
+        await runtimeDiagnostics?.flush();
+        if (runtimeDiagnostics) {
+          result.runtimeDiagnostics = runtimeDiagnostics.snapshot();
+          runtimeDiagnostics.assertClean();
+        }
+        result.finalConfig = summarizeSelectionTestConfig(await readStoredConfig(popup));
+        await assertBackgroundFocus('editable selection final state');
+        result.ok = result.cases.every(item => item.status === 'passed') && result.consoleErrors.length === 0;
+        assert(result.ok, `编辑器划词浏览器专项出现控制台错误：${JSON.stringify(result.consoleErrors)}`);
+        result.providerEvidence = 'Local Microsoft HTTP response fixture; trusted CDP triple-click/right-click in a contenteditable host, selection Range loss, and production context-menu message route. Isolated Edge background-visible run; no live-provider or Firefox-runtime claim.';
+        fs.writeFileSync(path.join(args.artifactsDir, 'report.json'), `${JSON.stringify(result, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+        return;
+      }
+      await closeSelectionUi(page);
+      await clearPageSelection(page);
+      await resetFixture(page);
+      await tripleClickTarget(page);
 
       translationResponseDelayMs = 2400;
       const gesture = await captureRightClickAndDropSelection(page, '#target', TARGET_TEXT);
@@ -1731,12 +2987,23 @@ async function main() {
       const failedGesture = await captureRightClickAndDropSelection(page, '#target', retryText);
       translationFailureResponses = 1;
       expectingProviderFailure = true;
+      const expectedFailureCheckpoint = runtimeDiagnostics?.checkpoint();
+      let expectedFailureDiagnostics = 0;
       const requestsBeforeFailure = translationRequestCount;
       const failedResponse = await sendContextMenuTranslation(popup, 'selection', failedGesture.selectedText);
       assert(failedResponse?.status === 'success', `失败夹具没有启动：${JSON.stringify(failedResponse)}`);
       await waitForSelectionUi(page, {tooltip: true, error: true, retryButton: true, loading: false}, '右键失败与可重试反馈');
       const failedUi = await readSelectionUi(page);
       assert(failedUi.errorText.includes('重试'), `失败反馈没有可执行的重试提示：${JSON.stringify(failedUi)}`);
+      if (runtimeDiagnostics) {
+        expectedFailureDiagnostics = runtimeDiagnostics.expectSince(expectedFailureCheckpoint, {
+          caseId: 'context-menu.failed-selection-retry',
+          surface: 'auto-page',
+          exactMessages: ['Selection translation error: Error: Controlled context-menu failure'],
+          level: 'error',
+          maxCount: 1,
+        });
+      }
       const failureScreenshot = path.join(args.artifactsDir, 'context-menu-selection-retry.png');
       await captureContextMenuScreenshot(page, failureScreenshot, 'context-menu retry screenshot');
       result.screenshots.push(failureScreenshot);
@@ -1748,7 +3015,7 @@ async function main() {
         `失败后未恰好重试一次：${JSON.stringify({retryUi, requestsBeforeFailure, translationRequestCount})}`);
       expectingProviderFailure = false;
       result.cases.push({id: 'context-menu.failed-selection-retry', status: 'passed', failedResponse, retryResponse,
-        failedUi, retryUi, requests: translationRequestCount - requestsBeforeFailure});
+        failedUi, retryUi, requests: translationRequestCount - requestsBeforeFailure, expectedFailureDiagnostics});
 
       // 仅有浏览器提供的 selectionText 不能翻译旧页面或可编辑区域中的文字。
       await closeSelectionUi(page);
@@ -1839,7 +3106,12 @@ async function main() {
         counts: [1, 0, 1, 0], staleNoticeResponse, rejectedSelectionResponse, disabledPageResponse,
         failureNoticeRetainedForRejectedActions: true, oldFailureNoticeClearedOnSuccess: true,
         translateResponse, restoreResponse, retranslateResponse, finalRestoreResponse});
-      result.finalConfig = await readStoredConfig(popup);
+      if (runtimeDiagnostics) {
+        await runtimeDiagnostics.flush();
+        result.runtimeDiagnostics = runtimeDiagnostics.snapshot();
+        runtimeDiagnostics.assertClean();
+      }
+      result.finalConfig = summarizeSelectionTestConfig(await readStoredConfig(popup));
       await assertBackgroundFocus('context-menu final state');
 
       result.ok = result.cases.every(item => item.status === 'passed') && result.consoleErrors.length === 0;
@@ -2023,7 +3295,7 @@ async function main() {
           const element = this.querySelector(selector), r = element.getBoundingClientRect();
           const x = r.left + 7 * (r.width / element.offsetWidth), y = r.top + r.height / 2;
           const hit = this.getRootNode().elementFromPoint(x, y);
-          if (!hit || !hit.closest('.fr-study-navigation') || hit.closest('button,a,input,textarea,select,[contenteditable]')) throw new Error('Navigation drag point is interactive or obscured');
+          if (!hit || !hit.closest('.fr-study-navigation') || hit.closest('button,a,input,textarea,select,[contenteditable]')) throw new Error('Navigation drag point is interactive or obscured: '+JSON.stringify({x,y,hit:hit?.className,visibility:getComputedStyle(this).visibility}));
           return {x,y};
         }`) : {x: r.x + r.width / 2, y: r.y + r.height / 2};
         const {x, y} = point;
@@ -2035,7 +3307,8 @@ async function main() {
         return box();
       };
       const near = (a, b) => Math.abs(a - b) < 2;
-      const open = async (text = TARGET_TEXT.repeat(6)) => {
+      // 拖动后的双轴缩放夹具保留真实的下方空间；超长内容的限高和滚动由上面的单词卡专项覆盖。
+      const open = async (text = TARGET_TEXT.repeat(3)) => {
         await activateInputPage(page);
         await page.keyboard.press('Escape');
         await resetFixture(page);
@@ -2043,6 +3316,16 @@ async function main() {
         await page.locator('#target').click();
         await selectTextWithDomRange(page, '#target', 4096);
         await waitForSelectionUi(page, {tooltip: true}, '打开几何测试卡片');
+        // DOM 已插入时首次锚定仍可能处于 visibility:hidden；真实指针只操作已显示且完成首帧布局的卡片。
+        let previous, stable = 0;
+        const deadline = Date.now() + 3000;
+        while (Date.now() < deadline) {
+          const current = await inspect('', `function(){const r=this.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,visible:getComputedStyle(this).visibility!=='hidden'};}`);
+          stable = current.visible && previous && ['x','y','width','height'].every(key => near(current[key],previous[key])) ? stable + 1 : 0;
+          if (stable >= 2) return;
+          previous = current; await page.waitForTimeout(40);
+        }
+        throw new Error('几何测试卡片未完成首次可见布局');
       };
       const ready = async () => {
         await waitForSelectionUi(page, {resultPrefix: '测试译文：'}, '等待夹具译文');
@@ -2054,6 +3337,63 @@ async function main() {
         assert(r.x >= 10 && r.y >= 10 && r.right <= viewport.width - 10 && r.bottom <= viewport.height - 10, `窗口超出视口 ${JSON.stringify({r,viewport})}`);
         return r;
       };
+      if (args.geometryOnly) {
+        await assertBackgroundFocus('automatic card geometry');
+        await patchStoredConfig(popup, {selectionDictionarySource: 'free-dictionary'});
+        await page.setViewportSize({width: 800, height: 270});
+        await activateInputPage(page);
+        await resetFixture(page);
+        await page.locator('#target').evaluate(el => {
+          el.textContent = 'geometry';
+          el.style.cssText = 'position:absolute;left:80px;top:100px;margin:0;font:16px/24px Arial';
+        });
+        translationResponseDelayMs = 1100;
+        const requestsBefore = translationRequestCount;
+        await page.locator('#target').click({clickCount: 2});
+        await waitForSelectionUi(page, {tooltip: true}, '双击单词显示自动卡片');
+        const anchor = await page.evaluate(() => {
+          const range = getSelection().getRangeAt(0), r = range.getBoundingClientRect();
+          return {top: r.top, bottom: r.bottom};
+        });
+        const clear = async label => {
+          const card = await box();
+          assert(card.bottom <= anchor.top - 8 || card.y >= anchor.bottom + 8,
+            `${label} 遮挡选中行：${JSON.stringify({anchor, card})}`);
+          assert(card.y >= 11 && card.bottom <= 259, `${label} 超出视口：${JSON.stringify(card)}`);
+          return card;
+        };
+        const loading = await clear('加载中');
+        await waitForSelectionUi(page, {tooltipIncludes: '原文标识：「geometry」'}, '单词译文到达');
+        await waitForSelectionUi(page, {tooltipIncludes: 'Free Dictionary API'}, '受控词典到达');
+        await page.waitForTimeout(300);
+        const completed = await clear('译文和词典到达后');
+        const samples = [];
+        for (let index = 0; index < 8; index++) {samples.push(await clear('限高稳定性')); await page.waitForTimeout(50);}
+        assert(samples.every(sample => near(sample.y, completed.y) && near(sample.height, completed.height)), '自动限高出现尺寸循环');
+        const scrolling = await inspect('', `function() {
+          const close = this.querySelector('.fr-close-btn').getBoundingClientRect();
+          this.scrollTop = this.scrollHeight;
+          const scrollTop = this.scrollTop; this.scrollTop = 0;
+          return {overflow:getComputedStyle(this).overflowY, scrollTop, close:{top:close.top,bottom:close.bottom}};
+        }`);
+        result.automaticGeometry = {anchor,loading,completed,samples,scrolling};
+        assert(scrolling.overflow === 'auto' && scrolling.scrollTop > 0, '限高卡片没有保留整卡滚动');
+        assert(scrolling.close.top >= completed.y && scrolling.close.bottom <= completed.bottom, '限高卡片关闭按钮被裁掉');
+        const sourceRequests = result.fixtureRequests.filter(({body}) => Array.isArray(body) && body[0] === 'geometry');
+        assert(sourceRequests.length === 1, '卡片重定位重复请求原选词翻译');
+        result.automaticGeometryRequests = {source:sourceRequests.length,total:translationRequestCount-requestsBefore,
+          note:'Dictionary definitions may request their own Chinese assistance translation.'};
+        result.cases.push({id:'geometry.automatic-double-click-and-async-content',status:'passed',anchor,loading,completed,samples,scrolling});
+        await page.screenshot({path:path.join(args.artifactsDir,'selection-automatic-constrained.png')});
+        await page.setViewportSize({width:800,height:800}); await page.waitForTimeout(350);
+        const expanded = await box();
+        assert(expanded.y >= anchor.bottom + 8 && expanded.height > completed.height + 20, '视口变大后没有释放自动限高');
+        result.cases.push({id:'geometry.automatic-viewport-expansion',status:'passed',expanded});
+        await page.screenshot({path:path.join(args.artifactsDir,'selection-automatic-expanded.png')});
+        translationResponseDelayMs = 0;
+        await page.keyboard.press('Escape');
+        await page.setViewportSize({width:1280,height:900});
+      }
       if (args.zoomOnly) {
         await open(TARGET_TEXT);
         await ready();
@@ -2062,15 +3402,35 @@ async function main() {
           return tabs.find(tab => tab.active)?.id ?? tabs[0]?.id;
         });
         assert(Number.isInteger(tabId), '找不到隔离测试页的 tabId');
+        // 原生 tabs.setZoom 后 Playwright 默认裁图沿用未换算的 CSS 尺寸；CDP Viewport 使用 DIP。
+        const zoomScreenshot = async (name, zoom) => {
+          const viewport = await page.evaluate(() => ({width:innerWidth,height:innerHeight,dpr:devicePixelRatio}));
+          const session = await context.newCDPSession(page);
+          try {
+            const captured = await session.send('Page.captureScreenshot', {format:'png',fromSurface:true,captureBeyondViewport:false,
+              clip:{x:0,y:0,width:viewport.width*zoom,height:viewport.height*zoom,scale:1}});
+            const bytes = Buffer.from(captured.data,'base64');
+            const dimensions = {width:bytes.readUInt32BE(16),height:bytes.readUInt32BE(20)};
+            (result.zoomScreenshots ||= []).push({name,zoom,viewport,dimensions});
+            fs.writeFileSync(path.join(args.artifactsDir,name),bytes);
+            assert(dimensions.width === Math.round(viewport.width*viewport.dpr)
+              && dimensions.height === Math.round(viewport.height*viewport.dpr), '原生缩放截图未覆盖完整可见视口');
+          } finally {await session.detach();}
+        };
         const samples = [];
         for (const factor of [1, 2, 0.5, 1]) {
           await popup.evaluate(({tabId, factor}) => chrome.tabs.setZoom(tabId, factor), {tabId, factor});
           await page.waitForTimeout(450);
           const zoom = await popup.evaluate(tabId => chrome.tabs.getZoom(tabId), tabId);
           const card = await box();
+          const selectedBounds = await page.evaluate(() => {
+            const r = getSelection().getRangeAt(0).getBoundingClientRect(); return {top:r.top,bottom:r.bottom};
+          });
+          assert(card.bottom <= selectedBounds.top - 8 || card.y >= selectedBounds.bottom + 8,
+            `缩放后卡片遮挡重新换行的选区：${JSON.stringify({zoom,card,selectedBounds})}`);
           const viewport = await page.evaluate(() => ({width: innerWidth, height: innerHeight, dpr: devicePixelRatio}));
-          samples.push({zoom, card, viewport, screenWidth: card.width * zoom, screenHeight: card.height * zoom});
-          await page.screenshot({path: path.join(args.artifactsDir, `selection-zoom-${String(factor).replace('.', '-')}.png`)});
+          samples.push({zoom, card, selectedBounds, viewport, screenWidth: card.width * zoom, screenHeight: card.height * zoom});
+          await zoomScreenshot(`selection-zoom-${String(factor).replace('.', '-')}.png`,zoom);
           assert(card.x >= 10 && card.y >= 10 && card.right <= viewport.width - 10 && card.bottom <= viewport.height - 10,
             `缩放后卡片超出视口：${JSON.stringify(samples.at(-1))}`);
         }
@@ -2090,7 +3450,7 @@ async function main() {
           const coldCard = await box();
           assert(coldZoom === 2 && Math.abs(coldCard.width * coldZoom - expected.screenWidth) < 3,
             `预设 200% 缩放后新页面的卡片尺寸不正确：${JSON.stringify({coldZoom, coldCard})}`);
-          await page.screenshot({path: path.join(args.artifactsDir, 'selection-zoom-cold-2.png')});
+          await zoomScreenshot('selection-zoom-cold-2.png',coldZoom);
           result.cases.push({id: 'geometry.zoom-before-load', status: 'passed', coldZoom, coldCard});
           const beforeDrag = await box();
           const afterDrag = await gesture('.fr-study-navigation', 60, 20);
@@ -2107,6 +3467,8 @@ async function main() {
           await inside();
           result.cases.push({id: 'geometry.zoom-drag-resize', status: 'passed', beforeDrag, afterDrag, afterResize, afterReset});
         }
+        await runtimeDiagnostics.flush(); runtimeDiagnostics.assertClean();
+        result.runtimeDiagnostics = runtimeDiagnostics.snapshot();
         result.ok = result.consoleErrors.length === 0;
         result.screenshots = ['selection-zoom-1.png', 'selection-zoom-2.png', 'selection-zoom-0-5.png', 'selection-zoom-cold-2.png']
           .map(file => path.join(args.artifactsDir, file));
@@ -2122,8 +3484,11 @@ async function main() {
       const requests = translationRequestCount;
       const moved = await gesture('.fr-study-navigation', 160, -60);
       assert(near(moved.x, initial.x + 160) && near(moved.y, initial.y - 60), `标题栏拖动失败 ${JSON.stringify({initial,moved})}`);
+      const resizeViewport = await page.evaluate(() => ({width:innerWidth,height:innerHeight}));
+      assert(moved.right + 200 <= resizeViewport.width - 12 && moved.bottom + 80 <= resizeViewport.height - 12,
+        `双轴缩放夹具缺少可用空间：${JSON.stringify({moved,resizeViewport})}`);
       const widened = await gesture('[data-resize-edge="se"]', 200, 80);
-      assert(near(widened.width, moved.width + 200) && widened.height > moved.height, '右下角缩放失败');
+      assert(near(widened.width, moved.width + 200) && near(widened.height, moved.height + 80), '右下角缩放失败');
       const wrapped = await inspect('pre', `function() {
         return [...this.querySelectorAll('pre')].map(el => ({client:el.clientWidth,scroll:el.scrollWidth,height:el.getBoundingClientRect().height}));
       }`);
@@ -2208,7 +3573,9 @@ async function main() {
       await patchStoredConfig(popup, {theme:'dark'});
       await page.waitForTimeout(300);
       await page.screenshot({path:path.join(args.artifactsDir,'selection-dark.png')});
-      result.screenshots = ['selection-resized.png','selection-narrow.png','selection-dark.png'].map(file => path.join(args.artifactsDir,file));
+      result.screenshots = ['selection-automatic-constrained.png','selection-automatic-expanded.png','selection-resized.png','selection-narrow.png','selection-dark.png'].map(file => path.join(args.artifactsDir,file));
+      await runtimeDiagnostics.flush(); runtimeDiagnostics.assertClean();
+      result.runtimeDiagnostics = runtimeDiagnostics.snapshot();
       result.ok = result.consoleErrors.length === 0;
       result.finishedAt = new Date().toISOString();
       fs.writeFileSync(path.join(args.artifactsDir,'report.json'), `${JSON.stringify(result,null,2)}\n`);
@@ -2962,7 +4329,7 @@ async function main() {
       result.cases.push({ id: `conflict.${conflictCase.label}.new-shortcut-after-release`, status: 'passed', ui: freshShortcutUi });
     }
 
-    result.finalConfig = await readStoredConfig(popup);
+    result.finalConfig = summarizeSelectionTestConfig(await readStoredConfig(popup));
     result.ok = result.cases.every(item => item.status === 'passed') && result.consoleErrors.length === 0;
     if (!result.ok) throw new Error(`划词浏览器回归未通过：${JSON.stringify({consoleErrors: result.consoleErrors})}`);
     fs.writeFileSync(path.join(args.artifactsDir, 'report.json'), `${JSON.stringify(result, null, 2)}\n`);
@@ -2971,6 +4338,17 @@ async function main() {
     primaryError = error;
     result.ok = false;
     result.error = error.stack || error.message || String(error);
+    if ((args.decorationOnly || args.clickSelectionOnly || args.documentShellOnly) && context) {
+      for (const [index, failedPage] of context.pages().entries()) {
+        try {
+          const screenshot = path.join(args.artifactsDir, `${args.documentShellOnly ? 'document-shell' : 'click-selection'}-failure-${index}.png`);
+          await failedPage.screenshot({path: screenshot, timeout: 5000, ...(args.documentShellOnly ? {caret: 'initial'} : {})});
+          result.screenshots.push(screenshot);
+        } catch (captureError) {
+          (result.captureGaps ||= []).push({surface: `page-${index}`, error: String(captureError.message || captureError)});
+        }
+      }
+    }
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
     process.exitCode = 1;
   } finally {
@@ -2985,6 +4363,13 @@ async function main() {
         if (resource === 'profile') result.retainedProfile = profileDir;
       }
     };
+    if (runtimeDiagnostics) {
+      await cleanup('runtime diagnostics', async () => {
+        await runtimeDiagnostics.flush();
+        runtimeDiagnostics.write(args.artifactsDir, result);
+        await runtimeDiagnostics.stop();
+      });
+    }
     let browserClosed = !browserStartAttempted;
     await cleanup('browser', async () => {
       if (closeBrowser) {await closeBrowser(); browserClosed = true;}

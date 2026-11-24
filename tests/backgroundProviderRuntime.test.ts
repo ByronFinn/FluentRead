@@ -50,10 +50,10 @@ vi.mock('@/src/core/config/catalog', async importOriginal => {
 });
 vi.mock('@/src/app/translation/visionProbeRuntime', () => ({modelVisionProbe: {resolve: mocks.resolveVisionProbe}}));
 vi.mock('@/src/platform/storage/modelUsageRepository', () => ({
-    modelUsageRepository: {
+    getModelUsageRepository: () => ({
         captureGeneration: mocks.captureGeneration,
         recordMany: mocks.recordMany,
-    },
+    }),
 }));
 
 import {createProviderTestRuntimeHandlers, getFreeTranslationWeightSnapshot, runTranslationServiceConnectionTestWithUsage} from '@/src/app/background/providerRuntime';
@@ -159,12 +159,15 @@ describe('background provider runtime', () => {
         expect(mocks.resolveVisionProbe).not.toHaveBeenCalled();
     });
 
-    it('uses the injected formatter for provider failures through the assembled connection route', async () => {
-        const failure = new Error('provider unavailable');
+    it('classifies legacy provider failures through the assembled route without exposing raw formatter output', async () => {
+        const failure = new Error('provider unavailable: fixture-private-endpoint');
         mocks.runConnectionTest.mockRejectedValueOnce(failure);
         const router = createBackgroundMessageRouter(createProviderTestRuntimeHandlers());
         await expect(router.dispatch({type: CONNECTION_TEST_MESSAGE_TYPE, service: 'moonshot'}, {}))
-            .resolves.toEqual({handled: true, response: {success: false, error: 'moonshot:provider unavailable'}});
+            .resolves.toEqual({handled: true, response: {success: false, error: '翻译未完成', diagnostic: {
+                code: 'unknown', titleKey: 'diagnostics.unknown.title', detailKey: 'diagnostics.unknown.detail',
+                actions: ['retry', 'services', 'dismiss'],
+            }}});
         expect(mocks.formatError).toHaveBeenCalledWith('moonshot', failure);
     });
 });

@@ -2,10 +2,11 @@
  * @file src/features/local-translation/offscreen/artifactStore.ts
  *
  * 文件职责：保存本地翻译模型的分块文件并执行可恢复的多源下载。
- * 主要内容：固定版本与 SHA-256 校验、流式写入、Range 续传、来源回退和离线读取，下载内存有明确上限。
+ * 主要内容：固定版本与 SHA-256 校验、流式写入、Range 续传、来源回退和离线读取，下载内存有明确上限；拒绝响应立即释放未读正文，清理不阻塞镜像回退。
  * 模块边界：只操作专属 Cache Storage，不保存页面状态、不初始化推理引擎，也不向下载源发送翻译文本。
  */
 import {huggingFaceDownloadOrigins} from '@/src/platform/http/modelDownloads';
+import {cancelUnreadResponseBody} from '@/src/platform/http/runtime';
 import {sha256} from '@noble/hashes/sha256';
 import frozenArtifacts from '@/src/core/config/localTranslationArtifacts.json';
 import {getLocalTranslationModel} from '@/src/core/config/localTranslation';
@@ -42,9 +43,18 @@ function abortIfNeeded(signal?: AbortSignal): void {
     if (signal?.aborted) throw new DOMException('Download paused', 'AbortError');
 }
 
+/** 收据只能证明写入时校验成功；分块后来被清理时必须重新下载。 */
 export async function artifactComplete(file: TranslationArtifact): Promise<boolean> {
     const cache = await caches.open(LOCAL_MODEL_CACHE);
-    return Boolean(await cache.match(receiptKey(file)));
+    const receipt = await cache.match(receiptKey(file));
+    if (!receipt) return false;
+    cancelUnreadResponseBody(receipt);
+    // 单次列举该文件的分块键，不读模型内容，也不遍历其他模型。
+    const keys = new Set((await cache.keys(artifactUrl(file), {ignoreSearch: true})).map(request => request.url));
+    for (let index = 0; index < Math.ceil(file.size / MODEL_CHUNK_SIZE); index++) {
+        if (!keys.has(chunkKey(file, index))) return false;
+    }
+    return true;
 }
 
 export async function artifactDownloadedBytes(file: TranslationArtifact): Promise<number> {
@@ -57,6 +67,12 @@ export async function artifactDownloadedBytes(file: TranslationArtifact): Promis
         bytes += size;
     }
     return bytes;
+}
+
+/** 撤销单文件收据但保留全部分块，供显式重试重新计算哈希。 */
+export async function invalidateTranslationArtifactReceipt(file: TranslationArtifact): Promise<void> {
+    const cache = await caches.open(LOCAL_MODEL_CACHE);
+    await cache.delete(receiptKey(file));
 }
 
 export async function removeTranslationArtifact(file: TranslationArtifact): Promise<void> {
@@ -89,7 +105,12 @@ export async function matchTranslationArtifact(request: string | Request): Promi
         const file = entry.files.find((file) => key === artifactUrl({...file, repo, revision: entry.revision}));
         if (file) {
             const artifact = {...file, repo, revision: entry.revision};
-            if (!await artifactComplete(artifact)) return undefined;
+            if (!await artifactComplete(artifact)) {
+                const cache = await caches.open(LOCAL_MODEL_CACHE);
+                const receipt = await cache.match(receiptKey(artifact));
+                if (receipt) { cancelUnreadResponseBody(receipt); throw new Error('LOCAL_TRANSLATION_NOT_DOWNLOADED'); }
+                return undefined;
+            }
             return new Response(await translationArtifactBlob(artifact), {headers: {'Content-Length': String(file.size)}});
         }
     }
@@ -137,10 +158,11 @@ async function receiveArtifact(
         timer = setTimeout(abort, ms);
     };
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let response: Response | undefined;
     try {
         abortIfNeeded(signal);
         armTimeout(15_000);
-        const response = await fetch(artifactUrl(file).replace(OFFICIAL_ORIGIN, origin), {
+        response = await fetch(artifactUrl(file).replace(OFFICIAL_ORIGIN, origin), {
             signal: controller.signal,
             credentials: 'omit',
             referrerPolicy: 'no-referrer',
@@ -194,7 +216,8 @@ async function receiveArtifact(
     } finally {
         clearTimeout(timer);
         controller.abort();
-        await reader?.cancel().catch(() => undefined);
+        if (reader) void reader.cancel().catch(() => undefined);
+        else if (response) cancelUnreadResponseBody(response);
         reader?.releaseLock();
         signal.removeEventListener('abort', abort);
     }
@@ -209,6 +232,9 @@ export async function downloadTranslationArtifact(
     const complete = await artifactComplete(file);
     abortIfNeeded(signal);
     if (complete) { progress(file.size, false); return; }
+    // 旧收据可能指向缺块；修复期间不能让其他读取者看到未经重新校验的文件。
+    await invalidateTranslationArtifactReceipt(file);
+    abortIfNeeded(signal);
     const sources = huggingFaceDownloadOrigins();
     let lastError: unknown;
     for (const origin of sources) {

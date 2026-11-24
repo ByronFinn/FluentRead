@@ -269,6 +269,15 @@ async function loadLocalTtsOwner(overrides: Partial<Pick<typeof import('@/src/fe
 }
 
 describe('local TTS offscreen worker owner', () => {
+    it.each(['live','cancelled'] as const)('consumes a rejected cache lookup for a %s request without constructing a worker', async state => {
+        let reject!:(error:Error)=>void;const cache=vi.fn(()=>new Promise<boolean>((_,no)=>{reject=no;}));
+        const owner=await loadLocalTtsOwner({isLocalTtsModelCached:cache}),controller=new AbortController();
+        const result=owner.synthesizeLocalTts('hello','en','auto',controller.signal);
+        const failed=expect(result).rejects.toMatchObject(state==='cancelled'?{name:'AbortError'}:{message:'cache service unavailable'});
+        await vi.waitFor(()=>expect(cache).toHaveBeenCalledOnce());
+        if(state==='cancelled')controller.abort();reject(new Error('cache service unavailable'));await failed;
+        expect(LocalTtsOwnerFakeWorker.instances).toHaveLength(0);
+    });
     afterEach(() => {
         for (const owner of ownedLocalTtsModules) owner.disposeLocalTtsWorker();
         ownedLocalTtsModules.clear();
@@ -278,6 +287,128 @@ describe('local TTS offscreen worker owner', () => {
         vi.doUnmock('@/src/features/local-tts/offscreen/modelCache');
         vi.doUnmock('@/src/shared/onnx/resources');
         LocalTtsOwnerFakeWorker.instances = [];
+    });
+
+    it('exposes cached model status and rejects unsupported, absent or pre-canceled synthesis', async () => {
+        const cache = vi.fn(async () => false);
+        const owner = await loadLocalTtsOwner({isLocalTtsModelCached: cache});
+        expect((await owner.getLocalTtsModelStatus()).models[0]).toMatchObject({downloaded:false});
+        const aborted = new AbortController();aborted.abort();
+        await expect(owner.synthesizeLocalTts('x','en','auto',aborted.signal)).rejects.toMatchObject({name:'AbortError'});
+        await expect(owner.synthesizeLocalTts('x','fr','auto')).rejects.toMatchObject({code:'local-tts-language-unsupported'});
+        await expect(owner.synthesizeLocalTts('x','en','auto')).rejects.toMatchObject({code:'local-tts-model-not-downloaded'});
+        await expect(owner.prepareLocalTtsModel()).rejects.toThrow('本地 TTS 模型缓存不完整');
+        expect(LocalTtsOwnerFakeWorker.instances).toHaveLength(0);
+    });
+
+    it('reports postMessage failures and recovers with a new worker on a later request', async () => {
+        const owner = await loadLocalTtsOwner();
+        const post = vi.spyOn(LocalTtsOwnerFakeWorker.prototype,'postMessage').mockImplementationOnce(() => {throw 'clone failed';});
+        await expect(owner.synthesizeLocalTts('first','en','auto')).rejects.toThrow('clone failed');
+        expect(LocalTtsOwnerFakeWorker.instances[0].terminated).toBe(true);post.mockRestore();
+        const next = owner.synthesizeLocalTts('next','en','auto');const worker = await ownerWorkerAt(1);
+        worker.reply({requestId:worker.lastMessage.requestId,success:true,audio:new ArrayBuffer(4)});
+        await expect(next).resolves.toMatchObject({contentType:'audio/wav'});
+    });
+
+    it.each([
+        [new Error('structured clone failed'), 'structured clone failed'],
+        [null, '无法启动本地 TTS Worker'],
+    ])('cleans up an active cancellation listener when Worker postMessage fails', async (failure, expected) => {
+        const owner = await loadLocalTtsOwner();const controller = new AbortController();
+        const post = vi.spyOn(LocalTtsOwnerFakeWorker.prototype,'postMessage').mockImplementationOnce(() => {throw failure;});
+        await expect(owner.synthesizeLocalTts('first','en','auto',controller.signal)).rejects.toThrow(expected);
+        expect(LocalTtsOwnerFakeWorker.instances[0].terminated).toBe(true);post.mockRestore();
+    });
+
+    it('keeps a live synthesis from being removed and rejects missing audio', async () => {
+        const owner = await loadLocalTtsOwner();const pending=owner.synthesizeLocalTts('x','en','auto');
+        const worker=await ownerWorkerAt(0);await expect(owner.removeLocalTtsModel()).rejects.toThrow('正在运行');
+        worker.reply({requestId:worker.lastMessage.requestId,success:true});
+        await expect(pending).rejects.toThrow('未返回音频');
+    });
+
+    it('reports default errors from empty Worker failures and recovers via CPU when requested', async () => {
+        const owner = await loadLocalTtsOwner();const pending=owner.synthesizeLocalTts('x','en','auto');
+        const first=await ownerWorkerAt(0);first.reply({requestId:first.lastMessage.requestId,success:false,retryWithCpu:true});
+        const replacement=await ownerWorkerAt(1);replacement.reply({requestId:replacement.lastMessage.requestId,success:false});
+        await expect(pending).rejects.toThrow('本地 TTS Worker 失败');
+    });
+
+    it('handles abort synchronously during cache lookup and consumes its later rejection', async () => {
+        const controller=new AbortController();let fail!: (reason:Error)=>void;
+        const status=new Promise<boolean>((_resolve,reject)=>{fail=reject;});
+        const owner=await loadLocalTtsOwner({isLocalTtsModelCached:()=>{controller.abort();return status;}});
+        await expect(owner.synthesizeLocalTts('x','en','auto',controller.signal)).rejects.toMatchObject({name:'AbortError'});
+        fail(new Error('late cache failure'));await Promise.resolve();
+        expect(LocalTtsOwnerFakeWorker.instances).toHaveLength(0);
+    });
+
+    it('resolves the extension Worker URL and handles cancellation reentered during URL lookup', async () => {
+        const controller=new AbortController();
+        vi.stubGlobal('chrome',{runtime:{getURL:()=>{controller.abort();return 'chrome-extension://test/localTtsWorker.js';}}});
+        const owner=await loadLocalTtsOwner();
+        await expect(owner.synthesizeLocalTts('x','en','auto',controller.signal)).rejects.toMatchObject({name:'AbortError'});
+        expect(LocalTtsOwnerFakeWorker.instances).toHaveLength(1);
+        expect(LocalTtsOwnerFakeWorker.instances[0].terminated).toBe(true);
+        expect(LocalTtsOwnerFakeWorker.instances[0].lastMessage).toBeUndefined();
+    });
+
+    it('uses the default worker failure message when the event contains no details', async () => {
+        const owner=await loadLocalTtsOwner();const pending=owner.synthesizeLocalTts('x','en','auto');
+        const first=await ownerWorkerAt(0);first.fail('');const cpu=await ownerWorkerAt(1);cpu.fail('');
+        await expect(pending).rejects.toThrow('本地 TTS Worker 已停止');
+    });
+
+    it.each([0,1,2,3,4,5,6,7,8,9,10])('keeps cancellation safe at response handoff microtask %i', async turns => {
+        const owner=await loadLocalTtsOwner();const controller=new AbortController();
+        const request=owner.synthesizeLocalTts('x','en','auto',controller.signal);
+        const settled=request.then(value=>({value}),error=>({error}));
+        const worker=await ownerWorkerAt(0);worker.reply({requestId:worker.lastMessage.requestId,success:true,audio:new ArrayBuffer(4)});
+        for(let i=0;i<turns;i++)await Promise.resolve();
+        controller.abort();const outcome=await settled;
+        if('error' in outcome)expect(outcome.error).toMatchObject({name:'AbortError'});
+        else expect(outcome.value).toMatchObject({contentType:'audio/wav'});
+    });
+
+    it.each([0,1,2,3,4,5,6])('keeps cancellation safe at cache handoff microtask %i', async turns => {
+        let complete!:(value:boolean)=>void;const status=new Promise<boolean>(resolve=>{complete=resolve;});
+        const owner=await loadLocalTtsOwner({isLocalTtsModelCached:()=>status});const controller=new AbortController();
+        const request=owner.synthesizeLocalTts('x','en','auto',controller.signal);
+        const rejected=expect(request).rejects.toMatchObject({name:'AbortError'});complete(true);
+        for(let i=0;i<turns;i++)await Promise.resolve();
+        controller.abort();await rejected;
+    });
+
+    it('rejects preparation, playback and repeated removal while model clearing owns the cache', async () => {
+        let release!: () => void;const clearing=new Promise<void>(resolve => {release=resolve;});
+        const owner = await loadLocalTtsOwner({removeLocalTtsModelFiles: () => clearing});
+        const pending=owner.removeLocalTtsModel();
+        await expect(owner.removeLocalTtsModel()).rejects.toThrow('正在清除');
+        await expect(owner.prepareLocalTtsModel()).rejects.toThrow('正在清除');
+        await expect(owner.synthesizeLocalTts('x','en','auto')).rejects.toThrow('正在清除');
+        release();await pending;expect(LocalTtsOwnerFakeWorker.instances).toHaveLength(0);
+    });
+
+    it('rejects malformed correlated audio, ignores unrelated identities and preserves valid audio with invalid optional timings', async () => {
+        vi.useFakeTimers();
+        const owner = await loadLocalTtsOwner();
+        const pending = owner.synthesizeLocalTts('first', 'en', 'auto');
+        const rejected = expect(pending).rejects.toThrow('消息格式无效');
+        const worker = await ownerWorkerAt(0), firstId = worker.lastMessage.requestId;
+        worker.reply({requestId: firstId, success: true, audio: new Uint8Array(4), retryWithCpu: true});
+        await rejected;
+        expect(LocalTtsOwnerFakeWorker.instances).toHaveLength(1); expect(worker.terminated).toBe(false);
+        const next = owner.synthesizeLocalTts('next', 'en', 'auto');
+        let settled = false; void next.then(() => {settled = true;});
+        await vi.waitFor(() => expect(worker.lastMessage.requestId).toBeGreaterThan(firstId));
+        for (const requestId of ['invalid', 0, firstId, worker.lastMessage.requestId + 1])
+            worker.reply({requestId, success: true, audio: new ArrayBuffer(4)});
+        await Promise.resolve(); expect(settled).toBe(false);
+        const audio = new ArrayBuffer(44);
+        worker.reply({requestId: worker.lastMessage.requestId, success: true, audio, timings: 'bad diagnostics'});
+        await expect(next).resolves.toMatchObject({audio, timings: [], contentType: 'audio/wav'});
+        owner.disposeLocalTtsWorker(); expect(vi.getTimerCount()).toBe(0);
     });
 
     it.each([
@@ -303,6 +434,27 @@ describe('local TTS offscreen worker owner', () => {
         await vi.advanceTimersByTimeAsync(1);
         expect(worker.terminated).toBe(true);
         expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it.each(['cache','worker'] as const)('ignores an already delivered idle callback while a new synthesis owns %s', async phase => {
+        vi.useFakeTimers();vi.stubGlobal('navigator',{});
+        let finishCheck!:(value:boolean)=>void;
+        const check=vi.fn(async()=>true);
+        const owner=await loadLocalTtsOwner({isLocalTtsModelCached:check});
+        const timers=vi.spyOn(window,'setTimeout');
+        const first=owner.synthesizeLocalTts('first','en-US','auto'),worker=await ownerWorkerAt(0);
+        worker.reply({requestId:worker.lastMessage.requestId,success:true,audio:new ArrayBuffer(4)});await first;
+        const idle=timers.mock.calls.at(-1)!;expect(idle[1]).toBe(120_000);
+        const firstId=worker.lastMessage.requestId;
+        if(phase==='cache')check.mockImplementationOnce(()=>new Promise<boolean>(resolve=>{finishCheck=resolve;}));
+        const next=owner.synthesizeLocalTts('next','en-US','auto');
+        if(phase==='worker')await vi.waitFor(()=>expect(worker.lastMessage.requestId).toBeGreaterThan(firstId));
+        (idle[0] as ()=>void)();expect(worker.terminated).toBe(false);
+        if(phase==='cache')finishCheck(true);
+        await vi.waitFor(()=>expect(worker.lastMessage.requestId).toBeGreaterThan(firstId));
+        worker.reply({requestId:worker.lastMessage.requestId,success:true,audio:new ArrayBuffer(4)});
+        await expect(next).resolves.toMatchObject({contentType:'audio/wav'});
+        owner.disposeLocalTtsWorker();timers.mockRestore();
     });
 
     it('新请求开始校验缓存时撤销旧回收计时，迟到的校验继续使用暖Worker', async () => {
@@ -358,6 +510,30 @@ describe('local TTS offscreen worker owner', () => {
         expect(worker.terminated).toBe(true);
     });
 
+    it('disposal removes a waiting request from the shared inference budget before it becomes available', async () => {
+        const budget=createLocalInferenceBudget(1);let release!:()=>void;
+        const busy=budget(()=>new Promise<void>(resolve=>{release=resolve;}));
+        let entered=false,settled=false;
+        const tracking:typeof budget=(operation,signal)=>{entered=true;return budget(operation,signal).finally(()=>{settled=true;});};
+        const owner=await loadLocalTtsOwner({},tracking);const old=owner.synthesizeLocalTts('old','en','auto');
+        const result=expect(old).rejects.toMatchObject({name:'AbortError'});
+        await vi.waitFor(()=>expect(entered).toBe(true));owner.disposeLocalTtsWorker();await result;
+        await vi.waitFor(()=>expect(settled).toBe(true));expect(LocalTtsOwnerFakeWorker.instances).toHaveLength(0);
+        release();await busy;
+        const fresh=owner.synthesizeLocalTts('fresh','en','auto');const worker=await ownerWorkerAt(0);
+        worker.reply({requestId:worker.lastMessage.requestId,success:true,audio:new ArrayBuffer(4)});
+        await expect(fresh).resolves.toMatchObject({contentType:'audio/wav'});
+    });
+
+    it('rejects an old generation even if a faulty inference budget grants it after disposal', async () => {
+        let release!:()=>void,entered=false;const gate=new Promise<void>(resolve=>{release=resolve;});
+        const budget:typeof import('@/src/shared/onnx/resources')['withLocalInferenceBudget']=async operation=>{entered=true;await gate;return operation();};
+        const owner=await loadLocalTtsOwner({},budget);const old=owner.synthesizeLocalTts('old','en','auto');
+        const canceled=expect(old).rejects.toMatchObject({name:'AbortError'});
+        await vi.waitFor(()=>expect(entered).toBe(true));owner.disposeLocalTtsWorker();release();await canceled;
+        expect(LocalTtsOwnerFakeWorker.instances).toHaveLength(0);
+    });
+
     it('rebuilds one fresh WASM worker after GPU failure and ignores an old worker error', async () => {
         const owner = await loadLocalTtsOwner();
         const pending = owner.synthesizeLocalTts('hello', 'en-US', 'auto');
@@ -383,6 +559,80 @@ describe('local TTS offscreen worker owner', () => {
         await expect(pending).rejects.toMatchObject({name: 'AbortError'});
         expect(LocalTtsOwnerFakeWorker.instances).toHaveLength(1);
         owner.disposeLocalTtsWorker();
+    });
+
+    it('returns cancellation while cache status is still pending and permits model removal', async () => {
+        let finish!: (value: boolean) => void;
+        const status = new Promise<boolean>(resolve => { finish = resolve; });
+        const remove = vi.fn(async () => undefined);
+        const owner = await loadLocalTtsOwner({isLocalTtsModelCached: () => status, removeLocalTtsModelFiles: remove});
+        const controller = new AbortController();
+        const request = owner.synthesizeLocalTts('hello', 'en-US', 'auto', controller.signal);
+        let outcome = 'pending'; void request.then(() => {outcome = 'resolved';}, error => {outcome = error.name;});
+        controller.abort();
+        try {
+            for(let i=0;i<20;i++)await Promise.resolve();
+            expect(outcome).toBe('AbortError');
+            await expect(owner.removeLocalTtsModel()).resolves.toBeUndefined();
+            expect(remove).toHaveBeenCalledOnce();expect(LocalTtsOwnerFakeWorker.instances).toHaveLength(0);
+        } finally {finish(true);await request.catch(() => undefined);}
+    });
+
+    it('cancels a queued synthesis without interrupting the active worker or waiting for it to finish', async () => {
+        const owner = await loadLocalTtsOwner();
+        const first = owner.synthesizeLocalTts('first', 'en-US', 'auto');
+        const worker = await ownerWorkerAt(0);const firstId = worker.lastMessage.requestId;
+        const controller = new AbortController();
+        const queued = owner.synthesizeLocalTts('second', 'en-US', 'auto', controller.signal);
+        let outcome = 'pending';void queued.then(() => {outcome = 'resolved';}, error => {outcome = error.name;});
+        for(let i=0;i<20;i++)await Promise.resolve();controller.abort();
+        try {
+            for(let i=0;i<20;i++)await Promise.resolve();
+            expect(outcome).toBe('AbortError');
+            expect(worker.terminated).toBe(false);expect(worker.lastMessage.requestId).toBe(firstId);
+        } finally {
+            worker.reply({requestId:firstId,success:true,audio:new ArrayBuffer(4)});
+            await first;await queued.catch(() => undefined);
+        }
+        expect(LocalTtsOwnerFakeWorker.instances).toHaveLength(1);
+    });
+
+    it('releases a burst of canceled queued calls while the active worker remains usable', async () => {
+        const owner=await loadLocalTtsOwner();const first=owner.synthesizeLocalTts('first','en','auto');
+        const worker=await ownerWorkerAt(0);const firstId=worker.lastMessage.requestId;
+        let gc: (()=>unknown) | undefined=(globalThis as unknown as {gc?:()=>unknown}).gc;
+        if(!gc && process.env.TTS_STRESS_METRICS) {
+            const v8=await import('node:v8'),vm=await import('node:vm');v8.setFlagsFromString('--expose_gc');gc=vm.runInNewContext('gc') as ()=>unknown;
+        }
+        gc?.();const before=process.memoryUsage().heapUsed;const started=performance.now();
+        const count=process.env.TTS_STRESS_METRICS ? 3000 : 8;
+        let controllers:AbortController[]=Array.from({length:count},()=>new AbortController());
+        let pending=controllers.map(controller=>owner.synthesizeLocalTts('queued','en','auto',controller.signal).catch(error=>error.name));
+        for(let i=0;i<12;i++)await Promise.resolve();
+        controllers.forEach(controller=>controller.abort());
+        expect((await Promise.all(pending)).every(value=>value==='AbortError')).toBe(true);
+        pending=[];controllers=[];await new Promise(resolve=>setTimeout(resolve,0));gc?.();
+        if(process.env.TTS_STRESS_METRICS)console.log(JSON.stringify({count,elapsedMs:performance.now()-started,heapDelta:process.memoryUsage().heapUsed-before,gcAvailable:Boolean(gc)}));
+        expect(worker.terminated).toBe(false);expect(worker.lastMessage.requestId).toBe(firstId);
+        worker.reply({requestId:firstId,success:true,audio:new ArrayBuffer(4)});await first;
+        const fresh=owner.synthesizeLocalTts('fresh','en','auto');await vi.waitFor(()=>expect(worker.lastMessage.requestId).toBeGreaterThan(firstId));
+        worker.reply({requestId:worker.lastMessage.requestId,success:true,audio:new ArrayBuffer(4)});await expect(fresh).resolves.toMatchObject({contentType:'audio/wav'});
+    }, 30_000);
+
+    it('invalidates a hanging cache read on disposal, ignores its late failure and permits a fresh request', async () => {
+        let fail!: (error: Error) => void;
+        const status = new Promise<boolean>((_resolve, reject) => {fail = reject;});
+        const cache = vi.fn(() => status).mockResolvedValueOnce(true).mockImplementationOnce(() => status).mockResolvedValue(true);
+        const owner = await loadLocalTtsOwner({isLocalTtsModelCached: cache});
+        const first = owner.synthesizeLocalTts('first', 'en-US', 'auto');
+        const worker = await ownerWorkerAt(0);worker.reply({requestId:worker.lastMessage.requestId,success:true,audio:new ArrayBuffer(4)});await first;
+        const old = owner.synthesizeLocalTts('old', 'en-US', 'auto');
+        const canceled = expect(old).rejects.toMatchObject({name:'AbortError'});
+        owner.disposeLocalTtsWorker();await canceled;
+        fail(new Error('late cache failure'));await Promise.resolve();
+        const fresh = owner.synthesizeLocalTts('fresh', 'en-US', 'auto');
+        const next = await ownerWorkerAt(1);next.reply({requestId:next.lastMessage.requestId,success:true,audio:new ArrayBuffer(4)});
+        await expect(fresh).resolves.toMatchObject({contentType:'audio/wav'});
     });
 
     it('共享预算交接时取消请求不会创建Worker或留下超时计时器', async () => {

@@ -2,8 +2,10 @@
  * @file src/features/video-subtitle/content/youtubeSubtitleData.ts
  * 文件职责：提供 YouTube 字幕轨道发现、timedtext 响应解析、增量词流合并、时间轴规范化和 SRT 导出的纯数据处理能力。
  * 主要内容：定义 caption track 与 cue 模型，从页面脚本提取平衡 JSON，选择目标轨道、构造 json3 URL，校验 XML/json3 时间字段，按事件边界及有限撇号/引用规则合并词流并收敛增量前缀，生成可重复导出的时间轴和安全文件名。
- * 模块边界：模块不监听网络、不修改播放器 DOM也不调用翻译；runtime 消费生成的 cues，youtubeTimedTextBridge 只负责捕获响应，函数可在离线 fixture 中独立验证。
+ * 模块边界：模块不监听网络、不修改播放器 DOM也不调用翻译；runtime 消费生成的 cues，youtubeTimedTextBridge 只负责捕获响应。内嵌视频ID绑定完整路径，原watch/shorts解析保持兼容，函数可在离线 fixture 中独立验证。
  */
+import {decodeTextareaHtml} from '@/src/shared/text/htmlEntities';
+
 export interface YoutubeCaptionTrack {
   baseUrl: string;
   languageCode: string;
@@ -95,6 +97,7 @@ export function extractYoutubeCaptionTracks(
       if (expectedVideoId && responseVideoId && responseVideoId !== expectedVideoId) continue;
 
       const parsedTracks = tracks.flatMap((track) => {
+        if (!track || typeof track !== 'object') return [];
         const baseUrl = typeof track.baseUrl === 'string' ? track.baseUrl : '';
         const languageCode = typeof track.languageCode === 'string' ? track.languageCode : '';
         if (!baseUrl || !languageCode) return [];
@@ -162,9 +165,7 @@ export function buildYoutubeTimedTextUrl(track: YoutubeCaptionTrack): string {
 
 function decodeHtmlEntities(value: string): string {
   if (typeof document !== 'undefined') {
-    const textarea = document.createElement('textarea');
-    textarea.innerHTML = value;
-    return textarea.value;
+    return decodeTextareaHtml(value);
   }
   return value
     .replace(/&amp;/g, '&')
@@ -418,10 +419,11 @@ function parseJson3Events(value: unknown): VideoSubtitleCue[] {
   if (!Array.isArray(events)) return [];
 
   return events.flatMap((event) => {
+    if (!event || typeof event !== 'object') return [];
     const startMs = numericValue(event.tStartMs);
     if (startMs === null || startMs < 0 || !Array.isArray(event.segs)) return [];
     const text = cleanCueText(event.segs
-      .map((segment) => typeof segment.utf8 === 'string' ? segment.utf8 : '')
+      .map((segment) => segment && typeof segment.utf8 === 'string' ? segment.utf8 : '')
       .join(''));
     if (!text) return [];
     const durationMs = event.dDurationMs === undefined ? 0 : numericValue(event.dDurationMs);
@@ -507,7 +509,12 @@ function formatSrtTimestamp(milliseconds: number): string {
 }
 
 export function cuesToSrt(cues: VideoSubtitleCue[]): string {
-  return finalizeVideoSubtitleCues(cues).map((cue, index) => {
+  return serializeSrtCues(finalizeVideoSubtitleCues(cues));
+}
+
+/** 写出已整理的时间轴，保留每条字幕的时间范围和行结构。 */
+export function serializeSrtCues(cues: readonly VideoSubtitleCue[]): string {
+  return cues.map((cue, index) => {
     const endMs = cue.startMs + cue.durationMs;
     return `${index + 1}\n${formatSrtTimestamp(cue.startMs)} --> ${formatSrtTimestamp(endMs)}\n${cue.text}\n`;
   }).join('\n');
@@ -516,6 +523,7 @@ export function cuesToSrt(cues: VideoSubtitleCue[]): string {
 export function getYoutubeVideoId(locationLike: Pick<Location, 'hostname' | 'pathname' | 'search'> = window.location): string {
   try {
     const url = new URL(locationLike.pathname + locationLike.search, `https://${locationLike.hostname}`);
+    if (url.pathname.startsWith('/embed/')) return url.pathname.match(/^\/embed\/([\w-]{11})\/?$/u)?.[1] || '';
     return url.searchParams.get('v') || url.pathname.split('/').filter(Boolean).pop() || '';
   } catch {
     return '';

@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
         disableSelectionTranslator: false,
         customSelectionTranslatorHotkey: '',
         selectionTranslatorBidirectional: false,
+        selectionClickSelectEnabled: false,
+        selectionClickSelectHotkey: 'Alt+Shift+S',
         from: 'auto',
         to: 'zh',
     },
@@ -26,6 +28,7 @@ const mocks = vi.hoisted(() => ({
         hasCandidate?: () => boolean,
     ) => hasCandidate?.() ?? false),
     getSelection: vi.fn<() => Selection | null>(() => null),
+    shouldIgnoreSelection: vi.fn(() => false),
 }));
 
 vi.mock('@/src/services/config/store', () => ({config: mocks.config}));
@@ -42,7 +45,7 @@ vi.mock('@/src/features/full-page-translation/public', () => ({
 vi.mock('@/src/features/selection-translation/core', async importOriginal => ({
     ...await importOriginal<typeof import('@/src/features/selection-translation/core')>(),
     readSelectionText: vi.fn((_range: Range, value: string) => value),
-    shouldIgnoreSelection: vi.fn(() => false),
+    shouldIgnoreSelection: mocks.shouldIgnoreSelection,
 }));
 
 type Listener = (event: Record<string, unknown>) => void;
@@ -91,6 +94,8 @@ beforeEach(() => {
         disableSelectionTranslator: false,
         customSelectionTranslatorHotkey: '',
         selectionTranslatorBidirectional: false,
+        selectionClickSelectEnabled: false,
+        selectionClickSelectHotkey: 'Alt+Shift+S',
         from: 'auto',
         to: 'zh',
     });
@@ -124,6 +129,69 @@ function visibleSelection(text: string): Selection {
 }
 
 describe('全文翻译快捷键状态联动', () => {
+    it.each([false,true])('an existing translation card is excluded only when it is contained by the selection (%s)', async contains => {
+        const host={} as HTMLElement,selection={...visibleSelection('Selected English text'),containsNode:vi.fn(()=>contains)};
+        vi.mocked(document.getElementById).mockReturnValue(host);mocks.getSelection.mockReturnValue(selection as unknown as Selection);
+        const {createContentHotkeyRuntime}=await import('@/src/app/content/hotkeyRuntime');
+        expect(createContentHotkeyRuntime(()=>false).selectionShortcutPorts.hasActiveSelectionTranslationCandidate()).toBe(!contains);
+        expect(selection.containsNode).toHaveBeenCalledWith(host,true);
+    });
+    it('rejects a protected selection and accepts a height-only line after an empty rectangle', async () => {
+        const range={getClientRects:()=>[{width:0,height:0},{width:0,height:24}],getBoundingClientRect:vi.fn()};
+        mocks.getSelection.mockReturnValue({rangeCount:1,isCollapsed:false,toString:()=>'Selected English text',getRangeAt:()=>range} as unknown as Selection);
+        const {createContentHotkeyRuntime}=await import('@/src/app/content/hotkeyRuntime'),ports=createContentHotkeyRuntime(()=>false).selectionShortcutPorts;
+        mocks.shouldIgnoreSelection.mockReturnValueOnce(true);expect(ports.hasActiveSelectionTranslationCandidate()).toBe(false);
+        expect(ports.hasActiveSelectionTranslationCandidate()).toBe(true);expect(range.getBoundingClientRect).not.toHaveBeenCalled();
+    });
+    it.each([[160, 0, true], [0, 24, true], [0, 0, false]])('逐行矩形为空时根据总边界 %i×%i 判断可见选区', async (width, height, visible) => {
+        const bounds = vi.fn(() => ({width, height}));
+        const range = {getClientRects: () => [], getBoundingClientRect: bounds};
+        mocks.getSelection.mockReturnValue({rangeCount: 1, isCollapsed: false, toString: () => 'Selected English text', getRangeAt: () => range} as unknown as Selection);
+        const {createContentHotkeyRuntime} = await import('@/src/app/content/hotkeyRuntime');
+        expect(createContentHotkeyRuntime(() => false).selectionShortcutPorts.hasActiveSelectionTranslationCandidate()).toBe(visible);
+        expect(bounds).toHaveBeenCalledOnce();
+    });
+    it('allows the selection shortcut candidate inside the same editable text range', async () => {
+        const range = {getClientRects: () => [{width: 160, height: 24}],
+            getBoundingClientRect: () => ({width: 160, height: 24})};
+        mocks.getSelection.mockReturnValue({rangeCount: 1, isCollapsed: false,
+            toString: () => 'Selected text inside the editor.', getRangeAt: () => range} as unknown as Selection);
+        const {createContentHotkeyRuntime} = await import('@/src/app/content/hotkeyRuntime');
+        const ports = createContentHotkeyRuntime(() => false).selectionShortcutPorts;
+        expect(ports.hasActiveSelectionTranslationCandidate()).toBe(true);
+        expect(mocks.shouldIgnoreSelection).toHaveBeenCalledWith(range, true);
+    });
+    it.each([['Alt+T', 'MacIntel', 'macOS'], ['custom', 'Win32', '其他']] as const)('开发模式记录实际配置的 %s 快捷键并执行全文动作', async (configured, platform, os) => {
+        vi.stubGlobal('process', {env: {NODE_ENV: 'development'}});
+        vi.stubGlobal('navigator', {platform});
+        mocks.config.floatingBallHotkey = configured;
+        mocks.config.customFloatingBallHotkey = configured === 'custom' ? 'Alt+T' : '';
+        const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+        try {
+            const {createContentHotkeyRuntime} = await import('@/src/app/content/hotkeyRuntime');
+            const toggle = vi.fn();
+            createContentHotkeyRuntime(() => false, {toggleFullPage: toggle}).installFloatingBallHotkey(new AbortController().signal);
+            const listeners = (document as typeof document & {__listeners: Map<string, Listener[]>}).__listeners;
+            listeners.get('keydown')![0](keyboardEvent({key: 'Alt', code: 'AltLeft'}));
+            listeners.get('keydown')![0](keyboardEvent());
+            expect(toggle).toHaveBeenCalledOnce();
+            expect(log).toHaveBeenCalledWith(expect.stringContaining(`系统: ${os}`));
+            expect(log).toHaveBeenCalledWith(expect.stringContaining('快捷键: Alt+T'));
+        } finally {log.mockRestore();}
+    });
+    it('两点选取在尚无选区时预留启动键，关闭或受限 frame 不检查选区几何', async () => {
+        mocks.config.selectionClickSelectEnabled = true;
+        const {createContentHotkeyRuntime} = await import('@/src/app/content/hotkeyRuntime');
+        const event = keyboardEvent({key: 'S', code: 'KeyS', shiftKey: true}) as unknown as KeyboardEvent;
+        expect(createContentHotkeyRuntime(() => false).selectionShortcutPorts.shouldReserveSelectionShortcut(event)).toBe(true);
+        expect(mocks.shouldClaimConfiguredHotkey).not.toHaveBeenCalled();
+        expect(mocks.getSelection).not.toHaveBeenCalled();
+        expect(createContentHotkeyRuntime(() => true).selectionShortcutPorts.shouldReserveSelectionShortcut(event)).toBe(false);
+        expect(createContentHotkeyRuntime(() => false, {selectionAvailable: false}).selectionShortcutPorts.shouldReserveSelectionShortcut(event)).toBe(false);
+        mocks.config.selectionClickSelectEnabled = false;
+        expect(createContentHotkeyRuntime(() => false).selectionShortcutPorts.shouldReserveSelectionShortcut(event)).toBe(false);
+    });
+
     it('仅右键触发不占用划词快捷键', async () => {
         mocks.config.selectionTranslatorTrigger = 'contextMenu';
         mocks.config.customSelectionTranslatorHotkey = 'Ctrl+Shift+Y';
@@ -566,7 +634,7 @@ describe('受支持的 F9 全文快捷键使用真实 core 仲裁', () => {
         windowTarget.emit('keyup', up);
         documentTarget.emit('keyup', up);
         expect(handleTranslation).toHaveBeenCalledOnce();
-        expect(handleTranslation).toHaveBeenCalledWith(32, 48);
+        expect(handleTranslation).toHaveBeenCalledWith(32, 48, {inputSource: 'mouse-shortcut'});
         expect(mocks.autoTranslateEnglishPage).not.toHaveBeenCalled();
         expect(mocks.restoreOriginalContent).not.toHaveBeenCalled();
 
@@ -748,6 +816,12 @@ describe('全文 pending 手势绑定主键、配置身份与页面生命周期'
         runtime.installFloatingBallHotkey(controller.signal);
         return {runtime, controller, documentTarget, windowTarget};
     }
+    it('keeps a shared F9 release valid when an unchanged hover draft is unparsable and an unrelated key releases with Shift held', async () => {
+        Object.assign(mocks.config,{hotkey:'custom',customHotkey:'Hyper+T'});
+        const f=await installPendingRuntime();f.documentTarget.emit('keydown',pendingKey());
+        f.documentTarget.emit('keyup',pendingKey({key:'x',code:'KeyX',shiftKey:true}));expectNoFullPageAction();
+        f.documentTarget.emit('keyup',pendingKey());expect(mocks.autoTranslateEnglishPage).toHaveBeenCalledOnce();f.controller.abort();
+    });
 
     function expectNoFullPageAction(): void {
         expect(mocks.autoTranslateEnglishPage).not.toHaveBeenCalled();
@@ -810,13 +884,15 @@ describe('全文 pending 手势绑定主键、配置身份与页面生命周期'
         ['config.on', 'keydown'], ['config.on', 'keyup'],
         ['siteDisabled', 'keydown'], ['siteDisabled', 'keyup'],
         ['macMeta', 'keydown'], ['macMeta', 'keyup'],
+        ['winMeta', 'keydown'], ['winMeta', 'keyup'],
     ])('pending 后 %s 在 %s 被观察到时清除旧状态，再可用也不复活旧 F9', async (unavailable, phase) => {
         let siteDisabled = false;
+        if (unavailable === 'winMeta') vi.stubGlobal('navigator', {platform: 'Win32'});
         const {documentTarget} = await installPendingRuntime(() => siteDisabled);
         documentTarget.emit('keydown', pendingKey());
         if (unavailable === 'config.on') mocks.config.on = false;
         if (unavailable === 'siteDisabled') siteDisabled = true;
-        const unavailableEvent = unavailable === 'macMeta'
+        const unavailableEvent = unavailable === 'macMeta' || unavailable === 'winMeta'
             ? pendingKey({key: 'Meta', code: 'MetaLeft', metaKey: phase === 'keydown'})
             : pendingKey({key: 'x', code: 'KeyX'});
         documentTarget.emit(phase, unavailableEvent);
@@ -971,4 +1047,50 @@ describe('全文 pending 手势绑定主键、配置身份与页面生命周期'
         documentTarget.emit('keyup', pendingKey());
         expect(mocks.autoTranslateEnglishPage).toHaveBeenCalledOnce();
     });
+});
+
+it.each(['Win32', 'Linux x86_64'])('%s 的 Meta+Shift+T 不应冒充 Ctrl+Shift+T，真正的 Ctrl 快捷键仍可使用', async (platform) => {
+    vi.stubGlobal('navigator', {platform});
+    mocks.config.floatingBallHotkey = 'Ctrl+Shift+T';
+    mocks.config.selectionTranslatorMode = 'disabled';
+    const {createContentHotkeyRuntime} = await import('@/src/app/content/hotkeyRuntime');
+    const toggleFullPage = vi.fn();
+    createContentHotkeyRuntime(() => false, {toggleFullPage}).installFloatingBallHotkey(new AbortController().signal);
+    const listeners = (document as typeof document & {__listeners: Map<string, Listener[]>}).__listeners;
+    const down = listeners.get('keydown')![0], up = listeners.get('keyup')![0];
+    down(keyboardEvent({key: 'Meta', code: 'MetaLeft', altKey: false, metaKey: true}));
+    down(keyboardEvent({key: 'Shift', code: 'ShiftLeft', altKey: false, metaKey: true, shiftKey: true}));
+    const wrong = keyboardEvent({key: 'T', altKey: false, metaKey: true, shiftKey: true});
+    down(wrong);
+    expect(toggleFullPage).not.toHaveBeenCalled();
+    expect(wrong.preventDefault).not.toHaveBeenCalled();
+    up(keyboardEvent({key: 'T', altKey: false, metaKey: true, shiftKey: true}));
+    up(keyboardEvent({key: 'Shift', code: 'ShiftLeft', altKey: false, metaKey: true}));
+    up(keyboardEvent({key: 'Meta', code: 'MetaLeft', altKey: false}));
+    down(keyboardEvent({key: 'Control', code: 'ControlLeft', altKey: false, ctrlKey: true}));
+    down(keyboardEvent({key: 'Shift', code: 'ShiftLeft', altKey: false, ctrlKey: true, shiftKey: true}));
+    down(keyboardEvent({key: 'T', altKey: false, ctrlKey: true, shiftKey: true}));
+    expect(toggleFullPage).toHaveBeenCalledOnce();
+});
+
+it('非 Mac 上 Ctrl 与 Meta 同时按下不触发快捷键，先释放 Meta 后按住 Ctrl 可重新触发', async () => {
+    vi.stubGlobal('navigator', {platform: 'Win32'});
+    mocks.config.floatingBallHotkey = 'Ctrl+Shift+T';
+    mocks.config.selectionTranslatorMode = 'disabled';
+    const {createContentHotkeyRuntime} = await import('@/src/app/content/hotkeyRuntime');
+    const toggleFullPage = vi.fn();
+    createContentHotkeyRuntime(() => false, {toggleFullPage}).installFloatingBallHotkey(new AbortController().signal);
+    const listeners = (document as typeof document & {__listeners: Map<string, Listener[]>}).__listeners;
+    const down = listeners.get('keydown')![0], up = listeners.get('keyup')![0];
+    down(keyboardEvent({key: 'Control', code: 'ControlLeft', altKey: false, ctrlKey: true}));
+    down(keyboardEvent({key: 'Meta', code: 'MetaLeft', altKey: false, ctrlKey: true, metaKey: true}));
+    const wrong = keyboardEvent({key: 'T', altKey: false, ctrlKey: true, metaKey: true, shiftKey: true});
+    down(wrong);
+    expect(toggleFullPage).not.toHaveBeenCalled();
+    expect(wrong.preventDefault).not.toHaveBeenCalled();
+    up(keyboardEvent({key: 'T', altKey: false, ctrlKey: true, metaKey: true, shiftKey: true}));
+    up(keyboardEvent({key: 'Meta', code: 'MetaLeft', altKey: false, ctrlKey: true}));
+    down(keyboardEvent({key: 'Shift', code: 'ShiftLeft', altKey: false, ctrlKey: true, shiftKey: true}));
+    down(keyboardEvent({key: 'T', altKey: false, ctrlKey: true, shiftKey: true}));
+    expect(toggleFullPage).toHaveBeenCalledOnce();
 });

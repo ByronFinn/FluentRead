@@ -8,11 +8,13 @@
 
 一款开源的浏览器双语翻译插件。
 
-[安装](#安装) · [官网](https://read.thinkstu.com/) · [使用指南](https://read.thinkstu.com/guide/) · [隐私政策](https://read.thinkstu.com/guide/privacy) · [English](../README.md) · [LINUX DO 社区](https://linux.do) · [GPL-3.0](../LICENSE)
+[安装](#安装) · [官网](https://read.thinkstu.com/) · [使用指南](https://read.thinkstu.com/guide/) · [赞助合作](#企业与项目赞助) · [隐私政策](https://read.thinkstu.com/guide/privacy) · [English](../README.md) · [LINUX DO 社区](https://linux.do) · [GPL-3.0](../LICENSE)
 
 </div>
 
-流畅阅读支持在原网页中对照阅读原文与译文，并提供划词翻译、AI 阅读辅助、图片翻译、文档翻译和视频双语字幕。翻译卡片接入了 **DeepSeek Harness 会话内核的浏览器适配**，支持结合上下文解释选中文字并连续追问。
+流畅阅读支持在原网页中对照阅读原文与译文，并提供划词翻译、AI 阅读辅助、图片翻译、文档翻译和视频双语字幕。翻译卡片支持结合上下文解释选中文字并连续追问。
+
+我们从 2024 年 1 月开始开发流畅阅读。从那时起，流畅阅读始终保持开源，并免费向用户提供。
 
 <div align="center">
 
@@ -24,7 +26,9 @@
 
 </div>
 
-[![流畅阅读网页双语对照效果](../docs/public/screenshots/translation.webp)](../docs/public/screenshots/translation.webp)
+<table align="center"><tr><td>
+<a href="../docs/public/screenshots/translation.webp"><img src="../docs/public/screenshots/translation.webp" alt="流畅阅读网页双语对照效果" width="600" /></a>
+</td></tr></table>
 
 ## 主要功能
 
@@ -35,18 +39,10 @@
 | 学习中心 | 收藏单词、短语和句子，保留原文语境，支持学习与复习。 |
 | 图片与圈选翻译 | 识别网页图片或选定区域中的文字，并显示可复制的译文。 |
 | 文档翻译 | 支持 PDF、ePub、DOCX 等格式，提供双语阅读、译文校订与文件导出。 |
-| 视频字幕 | 支持 YouTube 和 X 双语字幕；部分 X 视频可通过本地模型生成 AI 字幕。 |
+| 视频字幕 | 支持 YouTube 和 X 双语字幕，可切换仅原文或仅译文；部分 X 视频可通过本地模型生成 AI 字幕。 |
 | 翻译服务与设置 | 支持免费翻译服务、DeepL、AI 服务和本地 Ollama，可配置术语库、译文样式、快捷键及菜单栏布局。 |
 
 各功能的使用方法与支持范围见[使用指南](https://read.thinkstu.com/guide/)。AI 讲解需要配置可用的 AI 服务；第三方服务的费用与可用性由服务商决定。
-
-## DeepSeek Harness
-
-翻译卡片采用 DeepSeek Harness 会话内核中会话事件与消息组织部分的浏览器适配，由流畅阅读连接网页选区、允许参考的段落、模型服务和本地阅读记录。支持选择不同 AI 服务与模型，并提供可选的学习记忆。
-
-该适配用于选区阅读辅助。全文、悬浮和普通划词翻译使用各自的翻译流程。接入范围和上游来源见[内核集成说明](../docs/reports/harness-embedding-map-20260905.md)，MIT 许可见[第三方声明](../public/third-party-notices/deepseek-harness-MIT.txt)。
-
-[翻译卡片使用指南](https://read.thinkstu.com/guide/deepseek-harness)
 
 ## 安装
 
@@ -58,16 +54,24 @@
 
 各浏览器商店的版本更新可能存在时间差。油猴脚本提供核心网页翻译能力；完整支持范围见[安装指南](https://read.thinkstu.com/guide/getting-started)。
 
+## 企业与项目赞助
+
+项目目前主要由个人支持，每月投入数百美元用于项目维护。我们相信，流畅阅读能为世界带来更多美好。
+
+感谢 [**哔哩哔哩 Index-Translate**](https://index-translate.bilibili.com/) 成为流畅阅读的首位赞助伙伴。
+
+[成为赞助伙伴](https://read.thinkstu.com/guide/support#sponsorship) · [邮件联系](mailto:a1914493943@gmail.com?subject=FluentRead%20sponsorship) · [添加微信](https://read.thinkstu.com/support/wechat-contact.jpg)
+
 ## 本地开发
 
-环境要求：Node.js 20 或以上、pnpm 9。
+按 `.nvmrc` 和 `package.json` 的 `packageManager` 字段分别安装 Node.js 和 pnpm。首次运行 `pnpm install --frozen-lockfile` 安装依赖。
 
-```sh
-pnpm install --frozen-lockfile
-pnpm dev
-```
+- `pnpm dev` 启动本地开发。
+- `pnpm zip` 构建并打包 Chrome 扩展。
 
-`pnpm build` 构建 Chrome 扩展，`pnpm compile` 执行类型检查，`pnpm docs:build` 构建官网。架构与测试约定见[架构说明](../docs/architecture.md)和[测试说明](../docs/testing.md)。
+[扩展源码](../src/) · [第三方集成](../integrations/) · [文档源码](../docs/) · [组件预览](../docs/development/storybook/) · [测试](../tests/)
+
+[其他浏览器打包](../docs/maintainers/releases.md#本地打包)
 
 ## 贡献与反馈
 
@@ -119,3 +123,9 @@ pnpm dev
 流畅阅读按 [GPL-3.0](../LICENSE) 开源发布，第三方组件的来源与许可见[第三方声明](../public/third-party-notices/)。
 
 设置和学习记录默认保存在本机，云端翻译由所选服务处理。Google Drive 配置同步（Chrome 测试功能）可将完整配置（含服务凭据）备份到自己的云盘，不包含单词本、聊天记录和用量统计。权限、加密及删除方式见[隐私政策](https://read.thinkstu.com/guide/privacy)。
+
+## Star 历史
+
+<table align="center"><tr><td>
+<a href="https://star-history.com/#FluentRead/FluentRead&amp;Date"><img src="https://api.star-history.com/svg?repos=FluentRead/FluentRead&amp;type=Date" alt="FluentRead Star 历史图表" width="600" /></a>
+</td></tr></table>

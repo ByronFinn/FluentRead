@@ -1,7 +1,6 @@
 import {describe, expect, it} from 'vitest';
 
 import {buildConfigDiff,configDiffFieldLabel} from '@/src/core/config/diff';
-import {getMultilingualTargetLanguageLabel} from '@/src/core/config/catalog';
 import {createApiKeyRequirementKey} from '@/src/core/config/validation';
 
 function group(result: ReturnType<typeof buildConfigDiff>, id: string) {
@@ -9,6 +8,40 @@ function group(result: ReturnType<typeof buildConfigDiff>, id: string) {
 }
 
 describe('配置差异预览', () => {
+    it('工具栏点击行为在历史预览中显示可读选择', () => {
+        expect(group(buildConfigDiff({toolbarClickAction: 'popup'}, {toolbarClickAction: 'translate'}), 'general')?.changes).toEqual([
+            {key: 'toolbarClickAction', label: '工具栏图标点击行为', before: '打开快捷面板', after: '翻译/显示原文'},
+        ]);
+    });
+    it('用可读选项展示侧边栏范围', () => {
+        const result = buildConfigDiff({translationSidepanelScope: 'tab'}, {translationSidepanelScope: 'window'});
+        expect(group(result, 'general')?.changes).toEqual([
+            {key: 'translationSidepanelScope', label: '侧边栏显示范围', before: '仅当前标签页', after: '整个窗口'},
+        ]);
+    });
+    it('独立比较共享配置节点在另一份配置中的各个副本', () => {
+        const shared = {scope: 'tab'};
+        const before = {futurePreferences: {first: shared, second: shared}};
+        const after = {futurePreferences: {first: {scope: 'tab'}, second: {scope: 'tab'}}};
+        expect(buildConfigDiff(before, after).changeCount).toBe(0);
+        after.futurePreferences.first.scope = 'window';
+        expect(buildConfigDiff(before, after).changeCount).toBe(1);
+    });
+    it('词典来源在历史与同步预览中显示可读选项', () => {
+        expect(group(buildConfigDiff({selectionDictionarySource: 'auto'}, {selectionDictionarySource: 'free-dictionary'}), 'translation')?.changes).toEqual([
+            {key: 'selectionDictionarySource', label: '词典来源', before: '默认（自动选择）', after: 'Free Dictionary API'},
+        ]);
+    });
+    it('浏览器默认译文字体以可读设置名称展示启停，独立于原有译文外观', () => {
+        expect(configDiffFieldLabel('browserDefaultTranslationFont')).toBe('浏览器默认译文字体');
+        for (const enabled of [true, false]) {
+            const result = buildConfigDiff({browserDefaultTranslationFont: !enabled, translationAppearance: {fontFamily: 'mono'}},
+                {browserDefaultTranslationFont: enabled, translationAppearance: {fontFamily: 'mono'}});
+            expect(result.changeCount).toBe(1);
+            expect(group(result, 'general')?.changes).toEqual([{key: 'browserDefaultTranslationFont', label: '浏览器默认译文字体',
+                before: enabled ? '关闭' : '开启', after: enabled ? '开启' : '关闭'}]);
+        }
+    });
     it('组合配置以策略、成员和单成员超时展示，空及旧损坏条目仍可预览', () => {
         expect(configDiffFieldLabel('compositeTranslationProviders')).toBe('组合翻译服务');
         const preview = buildConfigDiff({compositeTranslationProviders: []}, {compositeTranslationProviders: [
@@ -47,6 +80,9 @@ describe('配置差异预览', () => {
         expect(group(buildConfigDiff({imageTranslationOcrEngine: 'tesseract'}, {imageTranslationOcrEngine: 'paddle'}), 'imageTranslation')?.changes).toEqual([
             {key: 'imageTranslationOcrEngine', label: '图片识别方式', before: 'Tesseract（轻量模型）', after: 'PaddleOCR（标准模型）'},
         ]);
+        expect(group(buildConfigDiff({imageTranslationInferenceBackend: 'auto'}, {imageTranslationInferenceBackend: 'cpu'}), 'imageTranslation')?.changes).toEqual([
+            {key: 'imageTranslationInferenceBackend', label: '本地处理后端', before: '自动', after: 'CPU（WASM）'},
+        ]);
     });
     it('云备份只能获得已知设置名称；词库选择和功能偏好保持可辨认摘要', () => {
         expect(configDiffFieldLabel('hotkey')).toBe('鼠标悬浮快捷键');
@@ -69,11 +105,25 @@ describe('配置差异预览', () => {
         ]);
     });
     it('双向划词开关使用对用户可见的启停状态', () => {
-        const changes = group(buildConfigDiff(
-            {selectionTranslatorBidirectional: false},
-            {selectionTranslatorBidirectional: true},
-        ), 'translation')?.changes;
-        expect(changes).toEqual([{key: 'selectionTranslatorBidirectional', label: '中英双向划词', before: '开启', after: '关闭'}]);
+        for (const enabled of [true, false]) {
+            const changes = group(buildConfigDiff(
+                {selectionTranslatorBidirectional: !enabled, disableSelectionTranslator: enabled},
+                {selectionTranslatorBidirectional: enabled, disableSelectionTranslator: !enabled},
+            ), 'translation')?.changes;
+            expect(changes).toEqual([
+                {key: 'disableSelectionTranslator', label: '划词翻译', before: enabled ? '关闭' : '开启', after: enabled ? '开启' : '关闭'},
+                {key: 'selectionTranslatorBidirectional', label: '中英双向划词', before: enabled ? '关闭' : '开启', after: enabled ? '开启' : '关闭'},
+            ]);
+        }
+    });
+    it('快捷方案区分局部、悬停与全文动作，局部不借用全文范围', () => {
+        for (const [action, label] of [['section', '局部'], ['hover', '悬停'], ['full-page', '全文']] as const) {
+            const result = buildConfigDiff({quickTranslationProfiles: []}, {quickTranslationProfiles: [
+                {id: 'quick-one', enabled: true, action, hotkey: 'Ctrl+J', fullPageMode: 'all'},
+            ]});
+            const preview = group(result, 'translation')?.changes[0].after;
+            expect(preview).toBe(`${label} Ctrl+J：默认服务，默认语言，默认显示${action === 'full-page' ? '，立即翻译到网页底部' : ''}`);
+        }
     });
     it('悬浮球拖动后的高度在配置历史中以比例显示', () => {
         expect(group(buildConfigDiff(
@@ -136,6 +186,8 @@ describe('配置差异预览', () => {
             floatingBallCompact: false,
             floatingBallSettingsEntryVisible: true,
             floatingBallCollapsedOpacity: 52,
+            floatingBallDefaultMargin: 0,
+            floatingBallPopoutMargin: 20,
         }, {
             floatingBallToolsDisplay: 'always',
             floatingBallHoverDelay: 500,
@@ -143,6 +195,8 @@ describe('配置差异预览', () => {
             floatingBallCompact: true,
             floatingBallSettingsEntryVisible: false,
             floatingBallCollapsedOpacity: 20,
+            floatingBallDefaultMargin: -18,
+            floatingBallPopoutMargin: -18,
         });
 
         expect(group(result, 'general')?.changes).toEqual([
@@ -152,6 +206,8 @@ describe('配置差异预览', () => {
             {key: 'floatingBallCompact', label: '缩小悬浮球', before: '关闭', after: '开启'},
             {key: 'floatingBallSettingsEntryVisible', label: '悬浮球设置入口', before: '开启', after: '关闭'},
             {key: 'floatingBallCollapsedOpacity', label: '悬浮球收起不透明度', before: '52%', after: '20%'},
+            {key: 'floatingBallDefaultMargin', label: '悬浮球默认边距', before: '0 px', after: '-18 px'},
+            {key: 'floatingBallPopoutMargin', label: '悬浮球弹出边距', before: '20 px', after: '-18 px'},
         ]);
 
         const domains = buildConfigDiff({floatingBallDisabledDomains: []}, {floatingBallDisabledDomains: ['example.com']});
@@ -200,16 +256,6 @@ describe('配置差异预览', () => {
         expect(group(result, 'translationServices')?.changes).toEqual([
             {key: 'deeplApiPlan', label: 'DeepL API 套餐', before: 'API Free（免费）', after: 'API Pro（付费）'},
         ]);
-    });
-
-    it('为新增目标语言选项提供跨语言可识别的标签，并保留未知值回退', () => {
-        expect(getMultilingualTargetLanguageLabel('de', 'Deutsch')).toBe('Deutsch / German / 德语');
-        expect(getMultilingualTargetLanguageLabel('pt', 'Português')).toBe('Português / Portuguese / 葡萄牙语');
-        expect(getMultilingualTargetLanguageLabel('it', 'Italiano')).toBe('Italiano / Italian / 意大利语');
-        expect(getMultilingualTargetLanguageLabel('ja', '日本語', 'en-US')).toBe('Japanese');
-        expect(getMultilingualTargetLanguageLabel('ja', '日本語', 'es-ES')).toBe('Japonés / Japanese / 日本語');
-        expect(getMultilingualTargetLanguageLabel('ja', '日本語', 'de-DE')).toBe('日本語 / Japanese / 日语');
-        expect(getMultilingualTargetLanguageLabel('unknown', '自定义语言')).toBe('自定义语言');
     });
 
     it('格式化界面语言选择，包括西班牙语', () => {
@@ -350,6 +396,29 @@ describe('配置差异预览', () => {
             {key: 'sectionTranslationHotkey', label: '局部翻译快捷键组合', before: 'Alt+R', after: '自定义快捷键'},
             {key: 'customSectionTranslationHotkey', label: '自定义局部翻译快捷键', before: '未设置', after: 'Alt+J'},
         ]));
+    });
+
+    it('记住的区域在历史中区分自动、提醒和停用状态，并允许预览损坏的旧快照', () => {
+        const reminder = {id: 'comments', site: 'example.com/comments/', mode: 'remind', enabled: true};
+        const automatic = {id: 'article', site: 'docs.example.com', mode: 'auto', enabled: false};
+        const changed = buildConfigDiff(
+            {sectionTranslationRules: [reminder, automatic]},
+            {sectionTranslationRules: [{...reminder, mode: 'auto'}, {...automatic, mode: 'remind', enabled: true}]},
+        );
+        expect(group(changed, 'translation')?.changes).toEqual([{
+            key: 'sectionTranslationRules', label: '记住的翻译区域',
+            before: 'example.com/comments/ · 提醒、docs.example.com · 自动 · 已停用',
+            after: 'example.com/comments/ · 自动、docs.example.com · 提醒',
+        }]);
+        const legacy = buildConfigDiff(
+            {sectionTranslationRules: '旧版区域记录'},
+            {sectionTranslationRules: [null, '旧版区域记录', automatic]},
+        );
+        expect(group(legacy, 'translation')?.changes).toEqual([{
+            key: 'sectionTranslationRules', label: '记住的翻译区域',
+            before: '旧版区域记录',
+            after: '未设置、旧版区域记录、docs.example.com · 自动 · 已停用',
+        }]);
     });
 
     it('显示界面皮肤和 Popup 栏目可见性，并安全处理异常栏目值', () => {
@@ -1199,5 +1268,22 @@ describe('逐句高亮自定义外观差异', () => {
             {key: 'bilingualSentenceHighlightAppearance.lineOpacity', label: '下划线不透明度', before: '跟随预设', after: '0%'},
             {key: 'bilingualSentenceHighlightAppearance.unknown', label: 'unknown', before: '跟随预设', after: '开启'},
         ]);
+    });
+});
+
+describe('native video ASR private diff rendering', () => {
+    it('names provider choices and hides every configured endpoint', () => {
+        const change = group(buildConfigDiff({videoTranscriptionProvider: 'browser'}, {videoTranscriptionProvider: 'native-qwen'}), 'videoSubtitles')!;
+        expect(change.changes[0]).toMatchObject({before: '浏览器内 Whisper', after: '本机 Qwen3 ASR'});
+        for (const value of [undefined, 'invalid']) {
+            expect(group(buildConfigDiff({videoTranscriptionProvider: value}, {videoTranscriptionProvider: 'native-qwen'}), 'videoSubtitles')!.changes[0].before).toBe('未设置');
+        }
+        for (const value of [undefined, null, '']) {
+            const result = buildConfigDiff({videoNativeAsrBaseUrl: value}, {videoNativeAsrBaseUrl: 'http://127.0.0.1:8000'});
+            expect(group(result, 'videoSubtitles')!.changes[0]).toMatchObject({before: '未设置', after: '已设置（内容隐藏）'});
+            expect(JSON.stringify(result)).not.toContain('127.0.0.1');
+        }
+        const changed = buildConfigDiff({videoNativeAsrBaseUrl: 'http://127.0.0.1:8000'}, {videoNativeAsrBaseUrl: 'http://127.0.0.1:9000'});
+        expect(JSON.stringify(changed)).not.toContain('127.0.0.1');
     });
 });

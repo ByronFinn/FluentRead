@@ -60,6 +60,41 @@
   },
   "rules": [
     {
+      "id": "inco-blog",
+      "category": "ai",
+      "verification": "site-fixture",
+      "fixture": "tests/siteAdaptationCore.test.ts",
+      "liveVerification": "tests/browser-translation-cases.json#inco-blog-splash"
+    },
+    {
+      "id": "llamaperf-mac",
+      "category": "community",
+      "verification": "site-fixture",
+      "fixture": "tests/siteAdaptationCore.test.ts",
+      "liveVerification": "tests/browser-translation-cases.json#llamaperf-mac-m5"
+    },
+    {
+      "id": "englio-article",
+      "category": "documentation",
+      "verification": "site-fixture",
+      "fixture": "tests/siteAdaptationCore.test.ts",
+      "liveVerification": "tests/browser-translation-cases.json#englio-article"
+    },
+    {
+      "id": "jetbrains-idea-whatsnew",
+      "category": "documentation",
+      "verification": "site-fixture",
+      "fixture": "tests/siteAdaptationCore.test.ts",
+      "liveVerification": "tests/browser-translation-cases.json#jetbrains-idea-whatsnew"
+    },
+    {
+      "id": "dart",
+      "category": "documentation",
+      "verification": "site-fixture",
+      "fixture": "tests/siteDartDescription.test.ts",
+      "liveVerification": "docs/reports/web-stability-20261015/verification.json"
+    },
+    {
       "id": "mdn",
       "category": "documentation",
       "verification": "semantic-fixture",
@@ -225,6 +260,13 @@
       "category": "documentation",
       "verification": "semantic-fixture",
       "fixture": "documentation",
+      "liveVerification": "not-performed"
+    },
+    {
+      "id": "microsoft-learn-translator-v3-parameters",
+      "category": "documentation",
+      "verification": "site-fixture",
+      "fixture": "tests/microsoftLearnParameterTokens.test.ts",
       "liveVerification": "not-performed"
     },
     {
@@ -670,8 +712,8 @@
     {
       "id": "cnn-news",
       "category": "news",
-      "verification": "semantic-fixture",
-      "fixture": "article",
+      "verification": "site-fixture",
+      "fixture": "cnn-news",
       "liveVerification": "not-performed"
     },
     {
@@ -1311,6 +1353,23 @@
       "verification": "site-fixture",
       "fixture": "firefox-addons",
       "liveVerification": "not-performed"
+    },
+    {
+      "id": "bluesky-profile-metadata",
+      "category": "community",
+      "verification": "site-fixture",
+      "fixture": "bluesky-profile-metadata",
+      "liveVerification": "not-performed"
+    },
+    {
+      "id": "facebook-public-post",
+      "category": "community",
+      "verification": "site-fixture",
+      "fixtures": [
+        "tests/fixtures/translation-pages/facebook-public-post-metadata.json"
+      ],
+      "notes": "公开 posts 原生作者组件与 dialog label 的独立夹具；标准浏览器契约保留完整帖文/已加载评论和元数据边界，未执行的契约不代表实站通过。登录信息流、移动版及无限新增回复待验证。",
+      "liveVerification": "pending-native-public-post-contract"
     }
   ],
   "remainingCapabilities": [
@@ -1446,14 +1505,14 @@
         "sites": [
           "Readwise Reader",
           "Google Chat",
-          "Google News",
+          "Google News 搜索/专题/文章落地页",
           "HoyoLab",
           "微博",
           "小红书"
         ],
         "status": "unconfigured-current-dom",
         "priority": "high",
-        "reason": "阅读器与社交页面的当前正文白名单、导航、流式更新仍需单独核验，不能用通用段落夹具代表这些站点。"
+        "reason": "阅读器与社交页面的当前正文白名单、导航、流式更新仍需单独核验。Google News 已有 /home 标题专站夹具，搜索、专题和文章落地页仍在该规则范围之外。"
       },
       {
         "sites": [
@@ -1468,15 +1527,14 @@
       },
       {
         "sites": [
-          "GitHub Gist",
           "GitHub Blog",
           "Figma Community",
           "Google Play",
-          "Steam Community"
+          "Steam Community 非讨论页（资料/指南等）"
         ],
         "status": "generic-path-unverified",
         "priority": "medium",
-        "reason": "部分页面可走通用正文或Markdown识别，代码表格、作者资料、商品元数据或社区控件尚未建立逐站验证；GitHub主站和Steam商店不代表这些独立页面。"
+        "reason": "部分页面可走通用正文或Markdown识别；GitHub Gist 已有独立专站夹具，Steam Community 已声明 app 讨论页。当前实站与其他页面类型仍需逐项验证，不能由 GitHub 主站、Steam 商店或讨论页推断。"
       },
       {
         "sites": [
@@ -1508,7 +1566,10 @@
         "reason": "当前只支持声明的公开正文或已知消息容器，不扩展到交互数据库、富文本编辑器和未知部署。"
       }
     ],
-    "completionBoundary": "已交付可扩展的正文规则架构、181组目录、12模板与47个域名夹具；没有声称全部提供数据中的网站或专项能力等价完成。未核验或未声明的范围需保留为明确后续工作。"
+    "completionBoundary": "当时已交付可扩展的正文规则架构、181组目录、12模板与47个域名夹具；本节数字保留为历史快照。当前目录数量由 currentCatalogAudit 命令读取实际 JSON 计算，不表示实站通过数量。未核验或未声明的范围仍需保留为明确后续工作。",
+    "recordKind": "historical-counts-with-reviewed-gaps",
+    "currentCatalogAudit": "node scripts/site-translation/audit-site-coverage.cjs --json",
+    "remainingTextGapsReviewedAt": "2026-10-25"
   },
   "publicHtmlProbe": {
     "checkedAt": "2026-09-05T08:46:21.038374+00:00",
@@ -2021,5 +2082,197 @@
       "Browser mocks and local provider responses do not prove all live layouts or network latency"
     ],
     "previousScopeAudit": "scopeAudit retains its historical numbers; this dated entry extends only the explicitly listed page shapes."
-  }
+  },
+  "prioritySites": [
+    {
+      "id": "google",
+      "name": "Google",
+      "host": "www.google.com",
+      "reviewSurfaces": [
+        "搜索结果标题与摘要",
+        "图片/视频/其他搜索分区"
+      ]
+    },
+    {
+      "id": "youtube",
+      "name": "YouTube",
+      "host": "www.youtube.com",
+      "reviewSurfaces": [
+        "首页与搜索结果",
+        "视频详情、简介与评论",
+        "动态加载与页面切换"
+      ],
+      "browserCases": [
+        "youtube-search-results"
+      ]
+    },
+    {
+      "id": "facebook",
+      "name": "Facebook",
+      "host": "www.facebook.com",
+      "reviewSurfaces": [
+        "公开帖子与回复",
+        "登录信息流与虚拟列表"
+      ],
+      "browserCases": [
+        "facebook-nasa-public-post"
+      ]
+    },
+    {
+      "id": "instagram",
+      "name": "Instagram",
+      "host": "www.instagram.com",
+      "reviewSurfaces": [
+        "帖子说明与评论",
+        "登录信息流与虚拟列表"
+      ]
+    },
+    {
+      "id": "chatgpt",
+      "name": "ChatGPT",
+      "host": "chatgpt.com",
+      "reviewSurfaces": [
+        "用户与助手消息",
+        "流式输出、代码与输入区"
+      ]
+    },
+    {
+      "id": "reddit",
+      "name": "Reddit",
+      "host": "www.reddit.com",
+      "reviewSurfaces": [
+        "帖子与评论",
+        "搜索结果、个人页和动态加载"
+      ]
+    },
+    {
+      "id": "x",
+      "name": "X",
+      "host": "x.com",
+      "reviewSurfaces": [
+        "帖子与回复",
+        "信息流、长文与动态加载"
+      ]
+    },
+    {
+      "id": "wikipedia",
+      "name": "Wikipedia",
+      "host": "en.wikipedia.org",
+      "reviewSurfaces": [
+        "文章标题、正文与嵌套章节",
+        "公式、引文与目录"
+      ]
+    },
+    {
+      "id": "amazon",
+      "name": "Amazon",
+      "host": "www.amazon.com",
+      "reviewSurfaces": [
+        "商品说明与评论",
+        "搜索列表、价格与购买控件"
+      ]
+    },
+    {
+      "id": "github",
+      "name": "GitHub",
+      "host": "github.com",
+      "reviewSurfaces": [
+        "README、Issue、PR 与列表",
+        "代码、作者与搜索控件"
+      ]
+    },
+    {
+      "id": "bing",
+      "name": "Bing",
+      "host": "www.bing.com",
+      "reviewSurfaces": [
+        "普通搜索结果",
+        "其他搜索分区与交互卡片"
+      ],
+      "browserCases": [
+        "bing-search-results"
+      ]
+    },
+    {
+      "id": "google-news",
+      "name": "Google News",
+      "host": "news.google.com",
+      "reviewSurfaces": [
+        "/home 标题",
+        "搜索、专题和文章落地页"
+      ]
+    },
+    {
+      "id": "medium",
+      "name": "Medium",
+      "host": "medium.com",
+      "reviewSurfaces": [
+        "公开文章",
+        "付费墙与作者元数据"
+      ]
+    },
+    {
+      "id": "stackoverflow",
+      "name": "Stack Overflow",
+      "host": "stackoverflow.com",
+      "reviewSurfaces": [
+        "问题、回答与评论",
+        "代码、投票和用户卡片"
+      ]
+    },
+    {
+      "id": "linkedin",
+      "name": "LinkedIn",
+      "host": "www.linkedin.com",
+      "reviewSurfaces": [
+        "公开长文",
+        "信息流与折叠回复"
+      ]
+    },
+    {
+      "id": "quora",
+      "name": "Quora",
+      "host": "www.quora.com",
+      "reviewSurfaces": [
+        "问题、回答与回复",
+        "登录墙与动态列表"
+      ]
+    },
+    {
+      "id": "bluesky",
+      "name": "Bluesky",
+      "host": "bsky.app",
+      "reviewSurfaces": [
+        "帖子与回复",
+        "动态列表与用户元数据"
+      ]
+    },
+    {
+      "id": "bbc",
+      "name": "BBC",
+      "host": "www.bbc.com",
+      "reviewSurfaces": [
+        "新闻、文化与专题文章",
+        "作者信息与媒体控件"
+      ]
+    },
+    {
+      "id": "cnn",
+      "name": "CNN",
+      "host": "www.cnn.com",
+      "reviewSurfaces": [
+        "新闻文章",
+        "实时更新与媒体控件"
+      ]
+    },
+    {
+      "id": "steam",
+      "name": "Steam Community",
+      "host": "steamcommunity.com",
+      "reviewSurfaces": [
+        "app 讨论页",
+        "资料、指南与其他社区页面"
+      ]
+    }
+  ]
 }

@@ -2,7 +2,7 @@
  * @file src/features/full-page-translation/content/syntheticRemount.ts
  * 文件职责：当宿主保留候选容器却以 source-only 子节点替换已物化的行内双语片段时，在同一 observer 检查点原子接回可信译文。
  * 主要内容：从当前宿主解析唯一等价 inline-run、复验文本与安全结构、迁移实时来源节点并延续原状态/熔断预算。
- * 模块边界：只处理 mutation.target 就是原候选宿主的 synthetic 换代；普通 block owner 与祖先 clone 继续由 bilingualRemount 处理。
+ * 模块边界：只处理 mutation.target 就是原候选宿主的 synthetic 换代；仅认证完整段落的自动外壳策略不能迁移为内联片段；普通 block owner 与祖先 clone 继续由 bilingualRemount 处理。
  */
 import {
     collectLiveTranslationTextSlots,
@@ -23,6 +23,7 @@ import {
     setRenderedStyleAttribute,
     type TranslationState,
 } from './state';
+import {nodeAtPath, nodePathWithin} from './bilingualRemountMatching';
 
 const SYNTHETIC_REMOUNT_MAX_HOST_CHILDREN = 512;
 type SyntheticTranslationCandidate = TranslationCandidate & {nodes: readonly ChildNode[]};
@@ -74,6 +75,8 @@ function candidateStructureSignature(
 }
 
 function equivalentInlineCandidate(host: HTMLElement, state: TranslationState): SyntheticTranslationCandidate | null {
+    // 自动应用外壳策略目前只认证完整段落，不能把它转成没有对应策略的内联片段。
+    if (state.applicationShellPolicyId) return null;
     if (host.childNodes.length > SYNTHETIC_REMOUNT_MAX_HOST_CHILDREN) return null;
     const core = getCurrentTranslationCore(state.scope);
     const candidates = new Map<Node, SyntheticTranslationCandidate>();
@@ -98,25 +101,6 @@ function equivalentInlineCandidate(host: HTMLElement, state: TranslationState): 
                 state.sourceStructureSignature;
     });
     return matches.length === 1 ? matches[0]! : null;
-}
-
-function nodePathWithin(root: Node, target: Node): number[] | null {
-    if (root === target) return [];
-    const path: number[] = [];
-    let current: Node | null = target;
-    while (current && current !== root) {
-        const parent: Node | null = current.parentNode;
-        if (!parent) return null;
-        path.unshift(Array.from(parent.childNodes).indexOf(current as ChildNode));
-        current = parent;
-    }
-    return path;
-}
-
-function nodeAtPath(root: Node, path: readonly number[]): Node | null {
-    let current: Node | null = root;
-    for (const index of path) current = current?.childNodes.item(index) ?? null;
-    return current;
 }
 
 function mappedReplacement(
@@ -203,7 +187,7 @@ export function transferEquivalentSyntheticBilingualSegments(
 
                 Array.from(owner.childNodes).filter((node) => node !== content).forEach((node) => node.remove());
                 host.insertBefore(owner, sourceNodes[0]!);
-                sourceNodes.forEach((node) => owner.insertBefore(node, content));
+                sourceNodes.forEach((node) => owner.insertBefore(node, state.bilingualBeforeSource ? null : content));
                 state.syntheticHost = host;
                 state.sourceTextNodes = collectLiveTranslationTextSlots(
                     owner,

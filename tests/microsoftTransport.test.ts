@@ -1,6 +1,12 @@
-import {describe, expect, it, vi} from 'vitest';
+import {afterEach, describe, expect, it, vi} from 'vitest';
 import {translateMicrosoftTextsWithTransport} from '@/src/providers/translation/microsoftTransport';
+import microsoft, {translateMicrosoftTexts} from '@/src/providers/translation/microsoft';
+import {setRuntimeFetch} from '@/src/platform/http/runtime';
+import {attachTranslationRequestScheduler} from '@/src/services/translation/requestSnapshot';
 import {createTranslationRequestScheduler} from '@/src/services/translation/requestScheduler';
+import {withProviderSnapshot} from './helpers/providerSnapshot';
+
+afterEach(() => setRuntimeFetch());
 
 function response(value: unknown, status = 200): Response {
     return new Response(JSON.stringify(value), {status});
@@ -18,43 +24,84 @@ async function flushMicrotasks() {
 }
 
 describe('shared Microsoft translation transport', () => {
-    it.each([200, 500])('cancelled late HTTP %s headers keep the lease until the response body finishes', async status => {
+    it('public batch helper uses the default batching policy and preserves the input slots', async () => {
+        const sent: string[][] = [];
+        setRuntimeFetch(async (_url, init) => {
+            const sources = JSON.parse(String(init?.body)) as string[];
+            sent.push(sources);
+            return response(sources.map(source => ({translations: [{text: `译:${source}`}]})));
+        });
+        await expect(translateMicrosoftTexts(['first', '', 'second'], 'en', 'zh-Hans'))
+            .resolves.toEqual(['译:first', '', '译:second']);
+        expect(sent).toEqual([['first', 'second']]);
+    });
+
+    it('adapter honors a frozen disabled preference and lets an explicit request enable batching', async () => {
+        const sent: string[][] = [];
+        setRuntimeFetch(async (_url, init) => {
+            const sources = JSON.parse(String(init?.body)) as string[];
+            sent.push(sources);
+            return response(sources.map(source => ({translations: [{text: `译:${source}`}]})));
+        });
+        const config = {service: 'microsoft', nativeBatchTranslationEnabled: {microsoft: false}};
+        const message = {origin: ['first', 'second'], sourceLanguage: 'en', targetLanguage: 'zh-Hans'};
+        await expect(microsoft(withProviderSnapshot(message, config))).resolves.toEqual(['译:first', '译:second']);
+        expect(sent).toEqual([['first'], ['second']]);
+        sent.length = 0;
+        await expect(microsoft(withProviderSnapshot({...message, enableNativeBatch: true}, config)))
+            .resolves.toEqual(['译:first', '译:second']);
+        expect(sent).toEqual([['first', 'second']]);
+    });
+
+    it.each([true, false])('actual adapter preserves blank array slots and frozen/explicit preferences with batching=%s', async batch => {
+        const scheduler = createTranslationRequestScheduler(() => ({maxConcurrentTranslations: 1}));
+        const sent: string[][] = [];
+        setRuntimeFetch(async (_url, init) => {
+            const sources = JSON.parse(String(init?.body)) as string[];sent.push(sources);
+            return response(sources.map(source => ({translations: [{text: `${source} translated`}]})));
+        });
+        const result = scheduler.schedule(lease => microsoft(withProviderSnapshot(attachTranslationRequestScheduler({
+            origin: ['First', ' \n', 'Second'], sourceLanguage: 'en', targetLanguage: 'zh-Hans',
+            ...(batch ? {} : {enableNativeBatch: false}),
+        }, scheduler, {service: 'microsoft'}, lease), {service: 'microsoft', nativeBatchTranslationEnabled: {microsoft: true}})));
+        await expect(result).resolves.toEqual(['First translated', ' \n', 'Second translated']);
+        expect(sent).toEqual(batch ? [['First', 'Second']] : [['First'], ['Second']]);
+    });
+    it.each([200, 500])('cancelled late HTTP %s headers cancel the unread body and release the lease without waiting for cancellation acknowledgement', async status => {
         const scheduler = createTranslationRequestScheduler(() => ({
             maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 0,
         }));
         const headers = deferred<Response>();
-        let body!: ReadableStreamDefaultController<Uint8Array>;
-        const late = new Response(new ReadableStream<Uint8Array>({start(controller) {body = controller;}}), {status});
+        const cancel = vi.fn(() => new Promise<void>(() => undefined));
+        const late = new Response(new ReadableStream<Uint8Array>({cancel}), {status});
         const transport = vi.fn().mockImplementationOnce(() => headers.promise)
             .mockResolvedValue(response([{translations: [{text: '后续译文'}]}]));
+        setRuntimeFetch(transport);
         const owner = new AbortController();
-        const first = scheduler.schedule(lease => translateMicrosoftTextsWithTransport(
-            transport, ['First readable paragraph'], 'en', 'zh-Hans', owner.signal, true, lease,
-        ), {signal: owner.signal}).catch(error => error);
+        const first = scheduler.schedule(lease => microsoft(withProviderSnapshot(attachTranslationRequestScheduler({
+            origin: ['First readable paragraph'], sourceLanguage: 'en', targetLanguage: 'zh-Hans', abortSignal: owner.signal,
+        }, scheduler, {service: 'microsoft'}, lease), {service: 'microsoft'})), {signal: owner.signal}).catch(error => error);
         expect(transport).toHaveBeenCalledOnce();
         owner.abort(); await expect(first).resolves.toMatchObject({name: 'AbortError'});
-        const next = scheduler.schedule(lease => translateMicrosoftTextsWithTransport(
-            transport, ['Next readable paragraph'], 'en', 'zh-Hans', undefined, true, lease,
-        ));
+        const next = scheduler.schedule(lease => microsoft(withProviderSnapshot(attachTranslationRequestScheduler({
+            origin: 'Next readable paragraph', sourceLanguage: 'en', targetLanguage: 'zh-Hans',
+        }, scheduler, {service: 'microsoft'}, lease), {service: 'microsoft'})));
+        await flushMicrotasks();expect(transport).toHaveBeenCalledOnce();
         headers.resolve(late);
-        try {
-            await flushMicrotasks();
-            expect(transport).toHaveBeenCalledOnce();
-        } finally {
-            body.enqueue(new TextEncoder().encode(JSON.stringify(status === 200
-                ? [{translations: [{text: '迟到译文'}]}] : {error: 'Late provider failure'})));
-            body.close();
-            await expect(next).resolves.toEqual(['后续译文']);
-        }
+        await expect(next).resolves.toEqual('后续译文');
+        expect(cancel).toHaveBeenCalledOnce();
         expect(transport).toHaveBeenCalledTimes(2);
     });
 
-    it('holds an ordinary HTTP error body and preserves its status when that body fails', async () => {
+    it.each(['pending', 'reject', 'throw'] as const)('cancels an HTTP error body without waiting for %s cleanup or replacing the HTTP status', async mode => {
         const scheduler = createTranslationRequestScheduler(() => ({
             maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 0,
         }));
-        let body!: ReadableStreamDefaultController<Uint8Array>;
-        const rejected = new Response(new ReadableStream<Uint8Array>({start(controller) {body = controller;}}), {status: 401});
+        const rejected = new Response(new ReadableStream<Uint8Array>({}), {status: 504, headers: {'Retry-After': '12'}});
+        const cancel = vi.spyOn(rejected.body!, 'cancel').mockImplementation(() => {
+            if (mode === 'throw') throw new Error('cancel failed');
+            return mode === 'pending' ? new Promise<void>(() => undefined) : Promise.reject(new Error('cancel failed'));
+        });
         const transport = vi.fn().mockResolvedValueOnce(rejected)
             .mockResolvedValue(response([{translations: [{text: '正常译文'}]}]));
         const first = scheduler.schedule(lease => translateMicrosoftTextsWithTransport(
@@ -63,27 +110,43 @@ describe('shared Microsoft translation transport', () => {
         const next = scheduler.schedule(lease => translateMicrosoftTextsWithTransport(
             transport, ['Allowed readable paragraph'], 'en', 'zh-Hans', undefined, true, lease,
         ));
-        try {
-            await flushMicrotasks();
-            expect(transport).toHaveBeenCalledOnce();
-        } finally {
-            body.error(new TypeError('Error body disconnected'));
-            await expect(first).resolves.toMatchObject({statusCode: 401});
-            await expect(next).resolves.toEqual(['正常译文']);
-        }
+        await expect(first).resolves.toMatchObject({statusCode: 504, retryAfterMs: 12000});
+        await expect(next).resolves.toEqual(['正常译文']);
+        expect(cancel).toHaveBeenCalledOnce();
         expect(transport).toHaveBeenCalledTimes(2);
     });
 
-    it('without a lease, an unread error body does not add a drain to the shared Obsidian transport path', async () => {
-        let body!: ReadableStreamDefaultController<Uint8Array>;
-        const denied = new Response(new ReadableStream<Uint8Array>({start(controller) {body = controller;}}), {status: 403});
+    it('without a lease, cancels the unread error body instead of draining it in the shared Obsidian transport path', async () => {
+        const cancel = vi.fn(() => new Promise<void>(() => undefined));
+        const denied = new Response(new ReadableStream<Uint8Array>({cancel}), {status: 403});
         const clone = vi.spyOn(denied, 'clone');
         const transport = vi.fn().mockResolvedValue(denied);
-        try {
-            await expect(translateMicrosoftTextsWithTransport(transport, ['Paragraph'], 'en', 'zh-Hans'))
-                .rejects.toMatchObject({statusCode: 403});
-            expect(clone).not.toHaveBeenCalled();
-        } finally {body.close();}
+        await expect(translateMicrosoftTextsWithTransport(transport, ['Paragraph'], 'en', 'zh-Hans'))
+            .rejects.toMatchObject({statusCode: 403});
+        expect(clone).not.toHaveBeenCalled();
+        expect(cancel).toHaveBeenCalledOnce();
+    });
+
+    it('keeps the shared lease until an ordinary successful response body is completely consumed', async () => {
+        const scheduler = createTranslationRequestScheduler(() => ({
+            maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 0,
+        }));
+        let body!: ReadableStreamDefaultController<Uint8Array>;
+        const cancel = vi.fn();
+        const pendingBody = new Response(new ReadableStream<Uint8Array>({start(controller) {body = controller;}, cancel}));
+        const transport = vi.fn().mockResolvedValue(pendingBody);
+        const first = scheduler.schedule(lease => translateMicrosoftTextsWithTransport(
+            transport, ['First paragraph'], 'en', 'zh-Hans', undefined, true, lease,
+        ));
+        const nextTask = vi.fn(async () => 'next');
+        const next = scheduler.schedule(nextTask);
+        await flushMicrotasks();
+        expect(nextTask).not.toHaveBeenCalled();
+        body.enqueue(new TextEncoder().encode(JSON.stringify([{translations: [{text: '完整译文'}]}])));
+        body.close();
+        await expect(first).resolves.toEqual(['完整译文']);
+        await expect(next).resolves.toBe('next');
+        expect(cancel).not.toHaveBeenCalled();
     });
 
     it('skips empty batches without a network request', async () => {

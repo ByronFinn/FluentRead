@@ -2,7 +2,7 @@
  * @file src/features/full-page-translation/content/bilingualRemount.ts
  * 文件职责：在 React/Vue 等宿主框架等价重挂双语 owner 时，于同一 MutationObserver 检查点原子接管已提交译文。
  * 主要内容：按 childList 路径与结构索引配对新旧 owner，一次建立兄弟节点位置索引以线性核对行内片段，按正文/全部节点范围隔离熔断身份并校验原文/译文快照与直属工件，在同步布局映射阶段共享旧父节点位置索引，先读取候选再按已提交的原文前后位置统一挂载，最后核对布局，避免逐段交错读写触发全页重排；重建 WeakMap 状态并安全转移布局租约。
- * 模块边界：本文件不发起翻译请求、不发现候选也不持有页面会话；同步准备批次复验 owner 和语义来源，runtime 提供会话索引收尾。
+ * 模块边界：本文件不发起翻译请求、不发现候选也不持有页面会话；同步准备批次复验 owner、自动应用外壳许可和语义来源，移交状态保留策略来源，runtime 提供会话索引收尾。
  */
 import {asHTMLElement, matchBilingualRemountOwners, nodeAtPath, nodePathWithin} from './bilingualRemountMatching';
 import {disableBilingualRenderingContainment} from './renderingContainment';
@@ -14,6 +14,8 @@ import {
     getTranslationOverflowGenerationIdentity,
     getTranslationOwnersForRemovedNode,
     getTranslationState,
+    inlineCodeReplaySourceIsCurrent,
+    isTranslationApplicationShellPolicyCurrent,
     hasBilingualArtifactHostWriteBudget,
     inheritBilingualArtifactRepairBudget,
     isBilingualArtifactHostWriteBudgetCapitulated,
@@ -57,6 +59,7 @@ export function createBilingualRemountPreparationBatch(): (
     const resolveRemountCandidate = createCurrentTranslationResolverBatch();
     const readRemountSource = createCurrentTranslationStateSourceSnapshotBatch();
     return (_previousOwner, replacementOwner, state) => {
+        if (!isTranslationApplicationShellPolicyCurrent(replacementOwner, state)) return null;
         const candidate = resolveRemountCandidate(replacementOwner, state.scope);
         if (!candidate || candidate.element !== replacementOwner || candidate.kind !== state.kind ||
             Boolean(candidate.allowTopLevelApplicationShell) !== Boolean(state.allowTopLevelApplicationShell)) return null;
@@ -402,12 +405,19 @@ function tryTransferBilingualOwner(
         previousState.allowTopLevelApplicationShell === true,
         previousState.translationInvocationIdentity,
         previousState.scope,
+        previousState.applicationShellPolicyId,
     );
     if (!attempt) return 'rejected';
     // 前置读取期间其他候选可能同步改写宿主；提交前以本次 begin 的新快照再次核对。
     if (isTranslationSourceStructureOverflow(previousState.sourceStructureSignature)
         ? attempt.state.sourceOverflowGenerationIdentity !== previousState.sourceOverflowGenerationIdentity
         : attempt.state.sourceStructureSignature !== previousState.sourceStructureSignature) {
+        discardTranslation(replacementOwner, attempt.state);
+        return 'rejected';
+    }
+    // 普通结构签名会折叠空白。整句代码协议还依赖本地捕获的精确文字；
+    // 旧代码与新代码仅空白不同也不能复用旧句译文。
+    if (!inlineCodeReplaySourceIsCurrent(replacementOwner, previousState)) {
         discardTranslation(replacementOwner, attempt.state);
         return 'rejected';
     }
@@ -439,6 +449,15 @@ function tryTransferBilingualOwner(
     }
     return {finish: () => {
         if (!preparation.reconcileLayout(replacementOwner)) {
+            content.remove();
+            discardTranslation(replacementOwner, attempt.state);
+            return 'rejected';
+        }
+        // 同批工件写入和布局协调之间宿主仍可能同步修改新来源；只忽略本次
+        // 实际将要登记的工件，再次核验后才能继承旧译文与 replay。
+        if (!inlineCodeReplaySourceIsCurrent(replacementOwner, {
+            ...previousState, bilingualContent: content, spinner: undefined,
+        })) {
             content.remove();
             discardTranslation(replacementOwner, attempt.state);
             return 'rejected';

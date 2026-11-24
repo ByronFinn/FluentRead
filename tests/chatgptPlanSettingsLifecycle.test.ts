@@ -244,6 +244,17 @@ describe('ChatGPT 套餐设置真实组件', () => {
         response.resolve(phase === 'status' ? connected('late@example.test') : phase === 'models' ? [{slug: 'late-model', display_name: 'Late model'}] : undefined);
         props.active = false;await job;await settle();expect(container.textContent).not.toContain('late@example.test');expect(container.textContent).not.toContain('Late model');
     });
+    it.each(['success','failure'])('取消授权的%s回执迟到时不会更新已隐藏的页面',async outcome=>{
+        helperStatus={...connected(),authPending:true};await mount();const response=pending<PlanStatus>();ports.cancel.mockReturnValueOnce(response.promise);
+        const job=state.cancelSignIn();props.active=false;await settle();
+        if(outcome==='success')response.resolve(connected('late-cancel@example.test'));else response.reject(Error('late private failure'));
+        await job;await settle();expect(container.textContent).not.toContain('late-cancel@example.test');expect(container.textContent).not.toContain('late private failure');expect(vi.getTimerCount()).toBe(0);
+    });
+    it('取消回执已解决但组件卸载先于其继续执行时保持旧状态',async()=>{
+        helperStatus={...connected(),authPending:true};await mount();const response=pending<PlanStatus>();ports.cancel.mockReturnValueOnce(response.promise);
+        const job=state.cancelSignIn();response.resolve(connected('late-cancel@example.test'));await Promise.resolve();await Promise.resolve();
+        app!.unmount();app=undefined;await job;expect(state.status.account?.email).not.toBe('late-cancel@example.test');expect(vi.getTimerCount()).toBe(0);
+    });
     it('隐藏页结束挂起action，取消端口的异步拒绝和同步抛错都不阻止清理', async () => {
         helperStatus = disconnected();await mount();const auth = pending<PlanStatus>();ports.signIn.mockReturnValueOnce(auth.promise);const job = state.signIn();await settle();
         ports.cancel.mockRejectedValueOnce(new Error('released'));props.active = false;await job;await settle();expect(vi.getTimerCount()).toBe(0);
@@ -278,6 +289,10 @@ describe('ChatGPT 套餐设置真实组件', () => {
             for (const value of Object.values(chatGPTPlanMessages[locale])) expect(value.trim()).not.toBe('');
         }
         expect(chatGPTPlanText('model', 'future-locale' as UiLanguage)).toBe(chatGPTPlanMessages['zh-CN'].model);
+        for (const code of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+            expect(chatGPTPlanErrorText({code}, 'en-US')).toBe(chatGPTPlanMessages['en-US'].operationFailed);
+            expect(chatGPTPlanText('model', code as UiLanguage)).toBe(chatGPTPlanMessages['zh-CN'].model);
+        }
         expect(chatGPTPlanErrorText({}, 'en-US')).toBe(chatGPTPlanMessages['en-US'].operationFailed);
         expect(chatGPTPlanErrorText(null, 'en-US')).toBe(chatGPTPlanMessages['en-US'].operationFailed);
         expect(chatGPTPlanErrorText({message: 'not_connected'}, 'en-US')).toBe(chatGPTPlanMessages['en-US'].notConnected);

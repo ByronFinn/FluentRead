@@ -7,9 +7,10 @@ import process from 'node:process';
 import {isDeepStrictEqual} from 'node:util';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {createHash, createPublicKey} from 'node:crypto';
+import {PDFJS_DECODER_FILES} from './pdfjs-assets.mjs';
 
 const PROJECT_ROOT = path.resolve(fileURLToPath(new URL('../..', import.meta.url)));
-// Node 20 CLI 不直接导入 TypeScript；与公开身份常量的对应关系由 manifest 合约测试校验。
+// 发布校验 CLI 不直接导入 TypeScript；与公开身份常量的对应关系由 manifest 合约测试校验。
 const GOOGLE_DRIVE_DEFAULT_CLIENT_ID = '474699705334-7fua4hnkq1nmfu92cof0kdnmqsk5kth8.apps.googleusercontent.com';
 const GOOGLE_DRIVE_EXTENSION_ID = 'djnlaiohfaaifbibleebjggkghlmcpcj';
 const GOOGLE_DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
@@ -86,6 +87,35 @@ function assert(condition, message) {
     if (!condition) throw new Error(message);
 }
 
+/** 校验真实产物中的七语安装说明和工具栏提示，检查 manifest 引用和文案。 */
+export async function verifyLocalizedExtensionMetadata(directory, manifest) {
+    assert(manifest.name === '__MSG_extensionName__' && manifest.description === '__MSG_extensionDescription__',
+        '扩展名称和说明必须通过浏览器本地化 metadata 解析');
+    assert(manifest.default_locale === 'en', '扩展安装 metadata 必须提供英文默认语言');
+    const action = manifest.manifest_version === 2 ? manifest.browser_action : manifest.action;
+    assert(action?.default_title === '__MSG_extensionToolbarTitle__', '工具栏提示必须通过浏览器本地化 metadata 解析');
+    const descriptions = JSON.parse(await readFile(path.join(PROJECT_ROOT, 'src/core/i18n/messages/product-descriptions.json'), 'utf8'));
+    const toolbarDescriptions = JSON.parse(await readFile(path.join(PROJECT_ROOT, 'src/core/i18n/messages/toolbar-descriptions.json'), 'utf8'));
+    const locales = Object.entries(descriptions).map(([language, description]) => ({
+        locale: language === 'zh-CN' ? 'zh_CN' : language.split('-')[0],
+        description,
+        toolbarDescription: toolbarDescriptions[language],
+    }));
+    const actualLocales = (await readdir(path.join(directory, '_locales'), {withFileTypes: true}))
+        .filter(entry => entry.isDirectory()).map(entry => entry.name).sort();
+    assert(isDeepStrictEqual(actualLocales, locales.map(({locale}) => locale).sort()), '扩展安装 metadata 的语言集合与源目录不一致');
+    for (const {locale, description, toolbarDescription} of locales) {
+        const messages = JSON.parse(await readFile(path.join(directory, '_locales', locale, 'messages.json'), 'utf8'));
+        const name = messages.extensionName?.message;
+        assert(typeof name === 'string' && name.trim().length > 0, `${locale} 缺少本地化扩展名称`);
+        assert(messages.extensionDescription?.message === description && description.trim().length > 0
+            && description.length <= 132 && !/[\r\n]/u.test(description), `${locale} 扩展说明缺失、漂移或超过 132 字符`);
+        assert(typeof toolbarDescription === 'string' && toolbarDescription.trim().length > 0 && !/[\r\n]/u.test(toolbarDescription)
+            && messages.extensionToolbarTitle?.message === `${name} · ${toolbarDescription}`, `${locale} 工具栏提示缺失、漂移或包含换行`);
+    }
+    return actualLocales;
+}
+
 export function verifyChromeOfflineManifest(offlineManifest, localManifest) {
     assert(isDeepStrictEqual(offlineManifest, localManifest), 'Chrome 离线清单必须与本地构建一致');
     assert(typeof offlineManifest.key === 'string' && offlineManifest.key.trim().length > 0,
@@ -138,6 +168,8 @@ function verifySharedFrameEntrypoint(manifest, files, browser) {
     const entries = manifest.content_scripts ?? [];
     const shared = entries.filter(entry => entry.js?.includes('content-scripts/supportedFrame.js'));
     const expectedMatches = [
+        'https://*.hf.space/*',
+        'https://courses.edx.org/*',
         'https://disqus.com/embed/comments/*',
         'https://mail.qq.com/cgi-bin/readmail*',
         'https://www.kaggleusercontent.com/kf/*/__results__.html*',
@@ -147,13 +179,97 @@ function verifySharedFrameEntrypoint(manifest, files, browser) {
         `${browser} 共用子 frame 入口的匹配范围变化`);
     assert(shared[0].all_frames === true && shared[0].match_about_blank !== true
         && shared[0].run_at === 'document_end', `${browser} 共用子 frame 注入条件变化`);
-    assert(files.includes('content-scripts/supportedFrame.js') && files.includes('content-scripts/supportedFrame.css'),
-        `${browser} 缺少共用子 frame 脚本或样式`);
+    assert(files.includes('content-scripts/supportedFrame.js'), `${browser} 缺少共用子 frame 脚本`);
     assert(!files.some(file => /^content-scripts\/(?:qqMailFrame|embeddedArticleFrame)\.(?:js|css)$/u.test(file)),
         `${browser} 保留了冗余的旧子 frame 产物`);
     const netease = entries.find(entry => entry.js?.includes('content-scripts/neteaseMailFrame.js'));
     assert(netease?.all_frames === true && netease.match_about_blank === true,
         `${browser} 网易邮箱必须继续匹配 about:blank 正文子 frame`);
+}
+
+const FRAME_SCRIPT_FILES = ['content', 'neteaseMailFrame', 'supportedFrame'].map(name => `content-scripts/${name}.js`);
+const NETEASE_FRAME_MATCHES = ['https://*.mail.126.com/*', 'https://*.mail.163.com/*', 'https://*.mail.yeah.net/*'];
+
+async function readFrameScripts(directory) {
+    return Object.fromEntries(await Promise.all(FRAME_SCRIPT_FILES.map(async file =>
+        [file, await readFile(path.join(directory, file), 'utf8')])));
+}
+
+function resourcePatternMatches(pattern, resource) {
+    if (typeof pattern !== 'string') return false;
+    const escaped = pattern.replace(/[.+?^${}()|[\]\\]/gu, '\\$&').replaceAll('*', '.*');
+    return new RegExp(`^${escaped}$`, 'u').test(resource);
+}
+
+/** 校验实际入口的 Shadow UI CSS 依赖；无 UI 的共用 frame 不应生成或公开多余样式。 */
+export function verifyFrameUiStyles(manifest, files, scripts, browser) {
+    verifySharedFrameEntrypoint(manifest, files, browser);
+    const entries = manifest.content_scripts ?? [];
+    const resources = manifest.web_accessible_resources;
+    assert(Array.isArray(resources), `${browser} 缺少 UI CSS 可访问资源声明`);
+    const cssRules = resource => resources.filter(rule => typeof rule === 'string'
+        ? resourcePatternMatches(rule, resource)
+        : rule?.resources?.some(pattern => resourcePatternMatches(pattern, resource)));
+    const expected = [
+        {name: 'content', matches: ['<all_urls>'], allFrames: false, aboutBlank: false, runAt: 'document_start'},
+        {name: 'neteaseMailFrame', matches: NETEASE_FRAME_MATCHES, allFrames: true, aboutBlank: true, runAt: 'document_end'},
+    ];
+    for (const {name, matches, allFrames, aboutBlank, runAt} of expected) {
+        const js = `content-scripts/${name}.js`;
+        const css = `content-scripts/${name}.css`;
+        const entry = entries.filter(candidate => candidate.js?.includes(js));
+        assert(entry.length === 1 && Array.isArray(entry[0].matches)
+            && isDeepStrictEqual([...entry[0].matches].sort(), matches)
+            && (entry[0].all_frames === true) === allFrames
+            && (entry[0].match_about_blank === true) === aboutBlank
+            && entry[0].match_origin_as_fallback !== true && entry[0].run_at === runAt,
+        `${browser} ${name} UI 入口注入范围或时机变化`);
+        assert(!entry[0].css?.length, `${browser} ${name} UI CSS 不应改为页面自动注入`);
+        assert(files.includes(js) && files.includes(css), `${browser} 缺少 ${name} UI 脚本或 CSS 文件`);
+        const source = scripts[js];
+        assert(typeof source === 'string' && source.includes('WXT Shadow Root Reset')
+            && source.includes('Failed to load styles @'), `${browser} ${name} 缺少 WXT UI CSS 加载器`);
+        // 只依赖 WXT 的稳定 API 名和资源字面量，不依赖压缩后的函数或变量名。
+        const urls = [...source.matchAll(/\.getURL\s*\(\s*(["'`])(\/?content-scripts\/[^"'`\s]+\.css)\1\s*\)/gu)]
+            .map(match => match[2].replace(/^\//u, ''));
+        const literals = [...source.matchAll(/(["'`])(\/?content-scripts\/[^"'`\s]+\.css)\1/gu)]
+            .map(match => match[2].replace(/^\//u, ''));
+        assert(urls.length > 0 && urls.every(url => url === css)
+            && literals.length > 0 && literals.every(url => url === css), `${browser} ${name} WXT CSS URL 错误或缺失`);
+        const rules = cssRules(css);
+        assert(rules.length === 1, `${browser} ${name} UI CSS 必须只公开一次`);
+        if (manifest.manifest_version === 3) {
+            const rule = rules[0];
+            assert(typeof rule === 'object' && rule.resources.includes(css)
+                && Array.isArray(rule.matches) && isDeepStrictEqual([...rule.matches].sort(), matches)
+                && !rule.extension_ids?.length, `${browser} ${name} UI CSS 可访问范围变化`);
+            assert(rule.use_dynamic_url === false, `${browser} ${name} UI CSS 必须保留稳定 URL`);
+        } else {
+            assert(manifest.manifest_version === 2 && rules[0] === css,
+                `${browser} ${name} MV2 UI CSS 必须保留精确资源路径`);
+        }
+    }
+    const supportedCss = 'content-scripts/supportedFrame.css';
+    const supported = entries.find(entry => entry.js?.includes('content-scripts/supportedFrame.js'));
+    assert(!supported.css?.length && supported.match_origin_as_fallback !== true,
+        `${browser} 共用子 frame 不应自动注入 CSS 或扩大来源匹配`);
+    const source = scripts['content-scripts/supportedFrame.js'];
+    assert(typeof source === 'string' && files.includes(supportedCss)
+        && /\.getURL\s*\(\s*(["'`])\/?content-scripts\/supportedFrame\.css\1\s*\)/u.test(source),
+        `${browser} 共用子 frame 缺少 edX 学习面板样式或实际加载地址`);
+    const cssLiterals = [...source.matchAll(/(["'`])(\/?content-scripts\/[^"'`\s]+\.css)\1/gu)]
+        .map(match => match[2].replace(/^\//u, ''));
+    assert(cssLiterals.every(url => url === supportedCss)
+        && !source.includes('WXT Shadow Root Reset') && !source.includes('wxt-shadow-root-document-styles')
+        && !source.includes('Failed to load styles @'), `${browser} 共用子 frame 保留了未消费的 UI CSS 加载路径`);
+    const [edxRule, ...duplicateRules] = cssRules(supportedCss);
+    if (manifest.manifest_version === 3) {
+        assert(edxRule && typeof edxRule === 'object' && !duplicateRules.length && edxRule.resources.includes(supportedCss)
+            && isDeepStrictEqual(edxRule.matches, ['https://courses.edx.org/*']) && !edxRule.extension_ids?.length
+            && edxRule.use_dynamic_url === false, `${browser} 共用子 frame 的 edX 样式资源范围变化`);
+    } else {
+        assert(edxRule === supportedCss && !duplicateRules.length, `${browser} 共用子 frame 的 edX 样式需要精确路径`);
+    }
 }
 
 export function findUnexpectedCurrentVersionArchives(outputFiles, version, expectedArchives) {
@@ -166,6 +282,22 @@ export function findUnexpectedCurrentVersionArchives(outputFiles, version, expec
     return outputFiles
         .filter((file) => currentVersionArchive.test(file) && !expected.has(file))
         .sort();
+}
+
+/** 原生面板由 WXT 生成；验证最终产物，防止丢失权限或混入另一浏览器的字段。 */
+export function verifyTranslationSidepanelManifest(manifest, files, browser) {
+    assert(files.includes('sidepanel.html'), `${browser} 缺少原生翻译面板页面`);
+    if (browser === 'Chrome') {
+        assert(!manifest.side_panel && !manifest.sidebar_action,
+            'Chrome 翻译面板清单不得注册全局默认面板');
+        assert(countPermission(manifest, 'sidePanel') === 1, 'Chrome 必须且只能声明一次 sidePanel 权限');
+    } else {
+        assert(manifest.sidebar_action?.default_panel === 'sidepanel.html' && manifest.sidebar_action.open_at_install === false && !manifest.side_panel,
+            'Firefox 翻译面板清单无效或安装时主动展开');
+        assert(countPermission(manifest, 'sidePanel') === 0, 'Firefox 不得声明 Chrome-only sidePanel 权限');
+    }
+    const publicFiles = (manifest.web_accessible_resources || []).flatMap(rule => typeof rule === 'string' ? [rule] : rule.resources);
+    assert(!publicFiles.includes('sidepanel.html'), `${browser} 不得向网页公开翻译面板`);
 }
 
 async function main() {
@@ -194,9 +326,15 @@ async function main() {
         readJavaScriptBundle(chromeDir),
         readJavaScriptBundle(firefoxDir),
     ]);
-    const [chromeBackground, firefoxBackground] = await Promise.all([
+    const [chromeBackground, firefoxBackground, chromeFrameScripts, firefoxFrameScripts] = await Promise.all([
         readBackgroundBundle(chromeDir, chromeManifest),
         readBackgroundBundle(firefoxDir, firefoxManifest),
+        readFrameScripts(chromeDir),
+        readFrameScripts(firefoxDir),
+    ]);
+    const [chromeMetadataLocales, firefoxMetadataLocales] = await Promise.all([
+        verifyLocalizedExtensionMetadata(chromeDir, chromeManifest),
+        verifyLocalizedExtensionMetadata(firefoxDir, firefoxManifest),
     ]);
 
     assert(chromeManifest.manifest_version === 3, 'Chrome 产物必须是 Manifest V3');
@@ -205,6 +343,8 @@ async function main() {
     assert(firefoxManifest.manifest_version === 2, 'Firefox 默认产物必须是 Manifest V2');
     assert(countPermission(firefoxManifest, 'offscreen') === 0, 'Firefox 不得声明 Chrome-only offscreen 权限');
     assert(firefoxArtifacts.includes('offscreen.html'), 'Firefox 缺少后台 iframe 使用的共享 DOM 页面');
+    verifyTranslationSidepanelManifest(chromeManifest, chromeFiles, 'Chrome');
+    verifyTranslationSidepanelManifest(firefoxManifest, firefoxFiles, 'Firefox');
     assert(!chromeManifest.browser_specific_settings?.gecko, 'Chrome manifest 不得包含 Firefox Gecko metadata');
     const firefoxGecko = firefoxManifest.browser_specific_settings?.gecko;
     assert(firefoxGecko?.id === '{3096bd53-3bda-4556-b076-ebf47442a5c1}', 'Firefox manifest 缺少稳定 AMO GUID');
@@ -215,6 +355,9 @@ async function main() {
         && requiredData.length === expectedData.length
         && expectedData.every((permission) => requiredData.includes(permission)),
     'Firefox manifest 的数据传输分类必须完整且不得声明 none');
+    for (const file of PDFJS_DECODER_FILES.map(name => `pdfjs/wasm/${name}`)) {
+        assert(chromeFiles.includes(file) && firefoxFiles.includes(file), `扩展缺少本地 PDF.js 解码资源：${file}`);
+    }
     const chromeOcrAssets = chromeFiles.filter((file) => file.startsWith('fluent-read-ocr/'));
     const firefoxOcrAssets = firefoxFiles.filter((file) => file.startsWith('fluent-read-ocr/'));
     assert(chromeOcrAssets.some((file) => file.includes('/core/'))
@@ -233,8 +376,8 @@ async function main() {
     assert(firefoxBackground.includes(firefoxBuildMarker), 'Firefox 后台脚本缺少 firefox/MV2 runtime capability 构建标记');
     assert(!chromeBackground.includes('import.meta'), 'Chrome classic MV3 background 不得残留 import.meta 语法');
     assert(!firefoxBackground.includes('import.meta'), 'Firefox classic MV2 background 不得残留 import.meta 语法');
-    verifySharedFrameEntrypoint(chromeManifest, chromeFiles, 'Chrome');
-    verifySharedFrameEntrypoint(firefoxManifest, firefoxFiles, 'Firefox');
+    verifyFrameUiStyles(chromeManifest, chromeFiles, chromeFrameScripts, 'Chrome');
+    verifyFrameUiStyles(firefoxManifest, firefoxFiles, firefoxFrameScripts, 'Firefox');
 
     let chromeArchive = null;
     if (requireChromeArchive) {
@@ -263,6 +406,15 @@ async function main() {
         const [extensionArchive, sourceArchive] = await Promise.all(
             firefoxArchives.map((archive) => listArchiveArtifacts(path.join(outputDir, archive))),
         );
+        for (const file of ['.nvmrc', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig.json', 'wxt.config.ts',
+            'src/app/background/runtime.ts', 'scripts/wasm/package-diagnostics.ts', 'scripts/patches/ppu-paddle-ocr@6.6.0.patch']) {
+            assert(sourceArchive.includes(file), `Firefox 审核源码包缺少 ${file}`);
+        }
+        assert(!sourceArchive.some(file => /(?:^|\/)\.env(?:$|\.)|^(?:node_modules|coverage)\//u.test(file)),
+            'Firefox 审核源码包包含本地环境文件或生成目录');
+        for (const file of PDFJS_DECODER_FILES) {
+            assert(extensionArchive.includes(`pdfjs/wasm/${file}`), `Firefox 扩展包缺少本地 PDF.js 解码资源：${file}`);
+        }
         firefoxArchiveOcrAssets = [
             ...extensionArchive.filter((file) => file.startsWith('fluent-read-ocr/')),
             ...sourceArchive.filter((file) => file.startsWith('public/fluent-read-ocr/')),
@@ -270,8 +422,9 @@ async function main() {
         assert(extensionArchive.includes('offscreen.html')
             && firefoxArchiveOcrAssets.some(file => file.startsWith('fluent-read-ocr/core/'))
             && firefoxArchiveOcrAssets.some(file => file.startsWith('fluent-read-ocr/worker/'))
-            && sourceArchive.some(file => file.startsWith('public/fluent-read-ocr/core/')),
-        'Firefox 扩展包与源码包必须保留共享 DOM 页面和 OCR 资源');
+            && ['package.json', 'pnpm-lock.yaml', 'scripts/wasm/package-diagnostics.ts',
+                'public/fluent-read-ocr/NOTICE.md'].every(file => sourceArchive.includes(file)),
+        'Firefox 扩展包与源码包必须保留共享 DOM 页面、OCR 资源及可复现构建输入');
     }
 
     console.log(JSON.stringify({
@@ -279,7 +432,9 @@ async function main() {
         chrome: {
             manifestVersion: 3,
             offscreenPermission: true,
+            sidepanel: 'sidepanel.html',
             runtimeCapabilityMarker: chromeBuildMarker,
+            metadataLocales: chromeMetadataLocales,
             artifacts: chromeArtifacts,
             ocrAssets: chromeOcrAssets.length,
             archive: chromeArchive,
@@ -287,7 +442,9 @@ async function main() {
         firefox: {
             manifestVersion: 2,
             offscreenPermission: false,
+            sidepanel: firefoxManifest.sidebar_action.default_panel,
             runtimeCapabilityMarker: firefoxBuildMarker,
+            metadataLocales: firefoxMetadataLocales,
             artifacts: firefoxArtifacts,
             ocrAssets: firefoxOcrAssets.length,
             geckoId: firefoxGecko.id,

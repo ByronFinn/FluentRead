@@ -20,6 +20,7 @@
           <div class="preview-states">
             <article><span>{{ tr('扩展功能') }}</span><strong>{{ tr(extensionLabels[preferences.extension]) }}</strong><small v-if="preferences.domain" data-i18n-ignore>{{ preferences.domain }}</small></article>
             <article><span>{{ tr('网页翻译') }}</span><strong>{{ tr(translationLabels[preferences.translation]) }}</strong></article>
+            <article><span>{{ tr('译文显示') }}</span><strong>{{ tr(preferences.display === 'single' ? '仅显示译文' : '双语对照') }}</strong></article>
             <article><span>{{ tr('悬浮球') }}</span><strong>{{ tr(ballLabels[preferences.floatingBall]) }}</strong></article>
           </div>
           <section class="preview-adaptation"><h4>{{ tr('正文识别结果') }}</h4><p v-if="scope === 'all'" class="rule-hint">{{ tr('当前为全部节点识别，仅显式声明 allScopes 的适配规则参与') }}</p><p class="rule-hint" :title="preferences.extension === 'enabled' && activeRules.length ? tr(focused ? '命中限定范围规则，只翻译规则声明的正文区域；所有命中规则的保护区域共同生效' : '命中补充规则，在通用正文识别上增加指定区域，并共同保护原文区域') : undefined">{{ tr(preferences.extension !== 'enabled' ? '扩展功能未运行，匹配的正文规则暂不生效' : !adaptation.enabled ? '正文适配已关闭，将使用通用正文识别' : !activeRules.length ? '未命中启用的专属规则，将使用通用正文识别' : focused ? '限定范围：只翻译指定的正文区域' : '补充识别：在通用正文上增加指定区域') }}</p>
@@ -35,18 +36,19 @@ import {computed, ref} from 'vue';
 import {useUiI18n} from '@/src/ui/i18n';
 import {builtinSiteRulePack} from '@/src/core/site-adaptation/catalog';
 import {resolveSiteRule} from '@/src/core/site-adaptation/compiler';
-import type {SiteAdaptationSettings} from '@/src/core/site-adaptation/types';
+import type {SiteAdaptationSettings, SiteRulePack} from '@/src/core/site-adaptation/types';
 import {previewSitePreferences, type SitePreferences} from '../model/sitePreferences';
 import {previewSiteRules} from '../model/siteAdaptationEditor';
-const props = defineProps<{settings: SitePreferences; adaptation: SiteAdaptationSettings; scope?: 'content' | 'all'}>();
+const props = defineProps<{settings: SitePreferences; adaptation: SiteAdaptationSettings; scope?: 'content' | 'all'; officialPack?: SiteRulePack}>();
 const emit = defineEmits<{'inspect-rule': [id: string]}>();
 const {translateLegacy: tr} = useUiI18n();
 const input = ref(''); const checkedUrl = ref(''); const checked = ref(false);
 function checkRules() { checkedUrl.value = input.value; checked.value = true; }
 const preferences = computed(() => checked.value ? previewSitePreferences(checkedUrl.value, props.settings) : null);
-const matches = computed(() => previewSiteRules(checkedUrl.value, builtinSiteRulePack, props.adaptation, props.scope));
+const baseRulePack = computed(() => import.meta.env.BROWSER === 'userscript' ? builtinSiteRulePack : props.officialPack ?? builtinSiteRulePack);
+const matches = computed(() => previewSiteRules(checkedUrl.value, baseRulePack.value, props.adaptation, props.scope));
 const activeRules = computed(() => matches.value.ok ? matches.value.rules.filter(item => item.enabled) : []);
-const focused = computed(() => activeRules.value.some(item => resolveSiteRule(item.source === 'custom' ? props.adaptation.custom : builtinSiteRulePack, item.rule).mode === 'focus'));
+const focused = computed(() => activeRules.value.some(item => resolveSiteRule(item.source === 'custom' ? props.adaptation.custom : baseRulePack.value, item.rule).mode === 'focus'));
 const extensionLabels = {paused: '插件已关闭', disabled: '此网站已禁用扩展', enabled: '扩展已启用'};
 const translationLabels = {paused: '插件已关闭', disabled: '此网站已禁用扩展', global: '自动翻译 · 全局开启', site: '自动翻译 · 网站偏好', manual: '按需手动翻译'};
 const ballLabels = {paused: '插件已关闭', disabled: '此网站已禁用扩展', 'hidden-global': '已隐藏 · 全局设置', 'hidden-site': '已隐藏 · 网站偏好', visible: '显示悬浮球'};
@@ -56,7 +58,7 @@ const ballLabels = {paused: '插件已关闭', disabled: '此网站已禁用扩�
 .preview-form { display: flex; align-items: end; gap: 12px; margin-top: 16px; }
 .preview-form .rule-field { flex: 1; margin: 0; }
 .preview-domain { padding: 15px 0; margin: 0; font-size: 12px; overflow-wrap: anywhere; }
-.preview-states { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.preview-states { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .preview-states article { display: grid; align-content: start; gap: 6px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
 .preview-states span, .preview-states small { color: var(--muted); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
 .preview-states strong { font-size: 13px; line-height: 1.6; }

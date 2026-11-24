@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {VideoAiFullCaptureController, type VideoAiFullCaptureProgress} from '@/src/features/video-subtitle/content/video-ai/fullCapture';
-import type {VideoAiAudioChunk} from '@/src/features/video-subtitle/content/video-ai/capture';
+import type {VideoAiAudioChunk} from '@/src/features/video-subtitle/content/video-ai/fullCapture';
 import type {VideoAiStabilizedCue} from '@/src/features/video-subtitle/content/video-ai/streamingTranscript';
 
 class FakeNode {
@@ -222,6 +222,70 @@ afterEach(() => {
 });
 
 describe('完整 AI 字幕失败与取消边界', () => {
+  it.each(['setup-failure', 'cancel'] as const)('releases both fallback media streams even when AudioContext close rejects (%s)', async outcome => {
+    vi.useFakeTimers();
+    const scan = new FakeVideo(), visible = new FakeVideo(), track = new FakeTrack();
+    visible.captureStream = () => new FakeMediaStream([track]) as unknown as MediaStream;
+    installScanDom(scan); vi.stubGlobal('MediaStream', FakeMediaStream); FakeAudioContext.throwMediaElement = true;
+    const stop = vi.spyOn(track, 'stop'), close = vi.spyOn(FakeAudioContext.prototype, 'close').mockRejectedValue(new Error('audio service already closed'));
+    if (outcome === 'setup-failure') vi.spyOn(FakeAudioContext.prototype, 'createScriptProcessor').mockImplementationOnce(() => {throw new Error('processor disconnected');});
+    const errors = vi.fn(), transcribe = vi.fn(async () => ({text: 'must not run'}));
+    const controller = new VideoAiFullCaptureController({getVideo: () => visible as unknown as HTMLVideoElement,
+      getIsolatedVideo: async () => scan as unknown as HTMLVideoElement, getModel: () => 'tiny', isSupported: () => true,
+      transcribe, onTranscriptionComplete: vi.fn(async () => undefined), onError: errors, onStateChange: vi.fn()});
+    controller.start(); await tick(80);
+    if (outcome === 'setup-failure') {expect(controller.getPhase()).toBe('error'); expect(errors.mock.calls[0]?.[0].message).toContain('processor disconnected');}
+    else {expect(controller.getPhase()).toBe('capturing'); controller.cancel();}
+    await tick(); expect(stop).toHaveBeenCalledTimes(2); expect(close).toHaveBeenCalledOnce(); expect(scan.removed).toBe(true);
+    expect(transcribe).not.toHaveBeenCalled(); controller.destroy(); expect(vi.getTimerCount()).toBe(0);
+  });
+  it.each(['injected', 'decoded'] as const)('enforces the complete-audio duration limit when %s media metadata is absent', async source => {
+    installScanDom(new FakeVideo());
+    const video = new FakeVideo(); video.duration = Number.NaN;
+    const overlong = new Float32Array(20 * 60 * 16_000 + 1);
+    const getChannelData = vi.fn(() => overlong);
+    FakeAudioContext.decodeResult = {numberOfChannels: 1, sampleRate: 16_000, getChannelData};
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array(4))));
+    const transcribe = vi.fn(async () => ({text: 'must not transcribe oversized audio'}));
+    const errors = vi.fn();
+    const controller = new VideoAiFullCaptureController({getVideo: () => video as unknown as HTMLVideoElement,
+      ...(source === 'injected' ? {getAudio: async () => overlong} : {}), getModel: () => 'tiny', isSupported: () => true,
+      transcribe, onTranscriptionComplete: vi.fn(async () => undefined), onError: errors, onStateChange: vi.fn()});
+    controller.start(); await tick(70);
+    expect(controller.getPhase()).toBe('error');
+    expect(errors.mock.calls[0]?.[0].message).toContain('20 分钟');
+    expect(transcribe).not.toHaveBeenCalled();
+    expect(video.playCalls).toBe(0);
+    controller.destroy();
+  });
+
+  it.each(['success', 'decode-failure', 'decode-timeout'] as const)('does not let pending AudioContext closure block %s recovery', async outcome => {
+    vi.useFakeTimers();
+    const scan = new FakeVideo();
+    installScanDom(scan);
+    const visible = new FakeVideo(); visible.duration = 1;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array(4))));
+    if (outcome === 'decode-failure') FakeAudioContext.throwDecode = true;
+    if (outcome === 'decode-timeout') FakeAudioContext.decodeResults = [new Promise<AudioBuffer>(() => undefined)];
+    let rejectClosure!: (reason: Error) => void;
+    const close = vi.spyOn(FakeAudioContext.prototype, 'close').mockImplementationOnce(() => new Promise<void>((_resolve, reject) => {rejectClosure = reject;}));
+    const completed = vi.fn(async () => undefined);
+    const controller = new VideoAiFullCaptureController({getVideo: () => visible as unknown as HTMLVideoElement,
+      getModel: () => 'tiny', isSupported: () => true,
+      transcribe: async () => ({text: 'A complete decoded sentence.', segments: [{startMs: 0, endMs: 900, text: 'A complete decoded sentence.'}]}),
+      onTranscriptionComplete: completed, onError: vi.fn(), onStateChange: vi.fn()});
+    controller.start(); await tick(50);
+    if (outcome === 'decode-timeout') await vi.advanceTimersByTimeAsync(8_000);
+    await tick(50);
+    expect(close).toHaveBeenCalled();
+    if (outcome === 'success') {expect(completed).toHaveBeenCalledOnce(); expect(controller.getPhase()).toBe('ready');}
+    else expect(scan.playCalls).toBe(1);
+    expect(visible.playCalls).toBe(0);
+    rejectClosure(new Error('late cleanup failure')); await tick();
+    controller.destroy();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('后续窗口仍识别时先发布稳定字幕，回调修改不污染最终结果', async () => {
     installCustomAudioWindow();
     let resolveNext!: (value: Record<string, unknown>) => void;
@@ -278,7 +342,7 @@ describe('完整 AI 字幕失败与取消边界', () => {
 
   it.each(['base', 'small'] as const)('%s 识别空结果提示检查人声和原语言，不推荐已经使用的 Base', async model => {
     installCustomAudioWindow();
-    const controller = makeInjectedController({model, transcribe: async () => ({text: '', segments: []})});
+    const preview=vi.fn();const controller = makeInjectedController({model, transcribe: async () => ({text: '', segments: []}),onCuesProgress:preview});
     expect(controller.start()).toBe(true);
     await tick(50);
     expect(controller.getPhase()).toBe('error');
@@ -286,6 +350,18 @@ describe('完整 AI 字幕失败与取消边界', () => {
     expect(controller.getError()).toContain('视频原语言');
     expect(controller.getError()).not.toContain('Base');
     expect(controller.getError()).not.toContain('翻译失败');
+    expect(preview).not.toHaveBeenCalled();
+  });
+  it('digital silence completes without dispatching model inference or publishing empty preview cues',async()=>{
+    installCustomAudioWindow();const transcribe=vi.fn(),preview=vi.fn(),completed=vi.fn(async()=>undefined);
+    const controller=makeInjectedController({audio:new Float32Array(16_000),transcribe,onCuesProgress:preview,onComplete:completed});controller.start();await tick(60);
+    expect(transcribe).not.toHaveBeenCalled();expect(preview).not.toHaveBeenCalled();expect(controller.getPhase()).toBe('error');expect(completed).not.toHaveBeenCalled();controller.destroy();
+  });
+  it('skips a fully silent leading window while preserving later speech windows and the final result',async()=>{
+    installCustomAudioWindow();const audio=speechAudio(20_000);audio.fill(0,0,160_000);
+    const transcribe=vi.fn(async(_chunk:VideoAiAudioChunk)=>({text:'Audible later sentence.',segments:[{startMs:1500,endMs:2500,text:'Audible later sentence.'}]})),completed=vi.fn(async()=>undefined),preview=vi.fn();
+    const controller=makeInjectedController({audio,transcribe,onComplete:completed,onCuesProgress:preview});controller.start();await tick(80);
+    await vi.waitFor(()=>expect(controller.getPhase()).toBe('ready'));expect(transcribe).toHaveBeenCalled();expect(transcribe.mock.calls.every(([chunk])=>chunk.startMs>0)).toBe(true);expect(completed).toHaveBeenCalledOnce();controller.destroy();
   });
 
   it('没有可复制音源时清理副本，并吞掉 pause/srcObject 清理异常', async () => {
@@ -882,6 +958,40 @@ describe('完整 AI 字幕失败与取消边界', () => {
     expect(sourceVideo.playCalls).toBe(0);
   });
 
+  it.each([
+    ['cancel', 'cancel-before-resolve'], ['cancel', 'resolve-then-cancel'],
+    ['destroy', 'cancel-before-resolve'], ['destroy', 'resolve-then-cancel'],
+  ] as const)('原生 decode %s / %s 后不再读取声道或复制 PCM', async (action, order) => {
+    vi.useFakeTimers();
+    installCustomAudioWindow();
+    let resolveDecode!: (value: AudioBuffer) => void;
+    const decoded = new Promise<AudioBuffer>(resolve => {resolveDecode = resolve;});
+    // 原生 API 直接返回 promise；避免 async 测试封装引入额外微任务、改变 race 的先后。
+    const decode = vi.spyOn(FakeAudioContext.prototype, 'decodeAudioData').mockImplementation(() => decoded);
+    const getChannelData = vi.fn(() => speechAudio(1_000));
+    const speech = {numberOfChannels: 1, sampleRate: 16_000, getChannelData} as unknown as AudioBuffer;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array(8))));
+    const video = new FakeVideo(); video.duration = 1;
+    const transcribe = vi.fn(async () => ({text: 'must not run'}));
+    const onComplete = vi.fn(async () => undefined), onError = vi.fn();
+    const controller = new VideoAiFullCaptureController({
+      getVideo: () => video as unknown as HTMLVideoElement, getModel: () => 'tiny', isSupported: () => true,
+      transcribe, onTranscriptionComplete: onComplete, onError, onStateChange: vi.fn(),
+    });
+    expect(controller.start()).toBe(true); await tick(30);
+    expect(decode).toHaveBeenCalledOnce();
+    if (order === 'resolve-then-cancel') resolveDecode(speech);
+    controller[action]();
+    if (order === 'cancel-before-resolve') resolveDecode(speech);
+    await tick(40);
+    expect(getChannelData).not.toHaveBeenCalled();
+    expect(transcribe).not.toHaveBeenCalled(); expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled(); expect(controller.isRequested()).toBe(false);
+    expect(FakeAudioContext.instances.every(context => context.state === 'closed')).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    controller.destroy();
+  });
+
   it('旧 session 的延迟快速解码返回不会覆盖 cancel + restart 后的新状态', async () => {
     vi.useFakeTimers();
     installCustomAudioWindow();
@@ -1439,7 +1549,7 @@ describe('完整 AI 字幕扫描窗口的暂停边界', () => {
     expect(transcribe).not.toHaveBeenCalled();
   });
 
-  it('多个音频块拼接时忽略窗口结束后的块，并继续完成尾窗', async () => {
+  it.each([{durations:[2500,2500,2500,2500,2500]},{durations:[8800,1200,2500]}])('多个音频块 $durations 拼接时保留精确边界与完整尾窗', async ({durations}) => {
     vi.useFakeTimers();
     const scanVideo = new FakeVideo();
     scanVideo.duration = 12.5;
@@ -1451,7 +1561,7 @@ describe('完整 AI 字幕扫描窗口的暂停边界', () => {
 
     scanVideo.currentTime = 12.5;
     const processor = FakeAudioContext.instances.at(-1)!.processor;
-    for (let index = 0; index < 5; index += 1) processor.emit(speechAudio(2_500));
+    for (const duration of durations) processor.emit(speechAudio(duration));
     scanVideo.ended = true;
     scanVideo.emit('ended');
     vi.advanceTimersByTime(420);

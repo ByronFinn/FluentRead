@@ -1,4 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import {getEventListeners} from 'node:events';
+import {localInferenceLimits,withLocalInferenceBudget} from '@/src/shared/onnx/resources';
 import {
     createOcrWorkerRuntime,
     type OcrWorkerPort,
@@ -23,6 +25,89 @@ function createWorker(name: string): OcrWorkerPort<RecognitionResult> {
         terminate: vi.fn(async () => undefined),
     };
 }
+
+describe('OCR 与本地模型共享计算预算', () => {
+    function occupyBudget() {
+        return Array.from({length: localInferenceLimits().jobs}, () => {
+            const gate = deferred<void>();
+            return {gate, done: withLocalInferenceBudget(() => gate.promise)};
+        });
+    }
+    const flushQueue = async () => {for (let index = 0; index < 10; index++) await Promise.resolve();};
+
+    it('其他本地任务满额时不创建 OCR，识别从启动到完成始终持有共享槽位', async () => {
+        const slots = occupyBudget(), recognition = deferred<RecognitionResult>();
+        const worker = createWorker('budget');
+        vi.mocked(worker.recognize).mockReturnValueOnce(recognition.promise);
+        const factory = vi.fn(async () => worker), runtime = createOcrWorkerRuntime({createWorker: factory, sparseTextMode: 11});
+        let next: Promise<number> | undefined;
+        try {
+            const result = runtime.recognize('image', 'eng');
+            await flushQueue(); expect(factory).not.toHaveBeenCalled();
+            slots[0].gate.resolve(); await slots[0].done;
+            await vi.waitFor(() => expect(worker.recognize).toHaveBeenCalledOnce());
+            const operation = vi.fn(async () => 7);
+            next = withLocalInferenceBudget(operation);
+            await flushQueue(); expect(operation).not.toHaveBeenCalled();
+            recognition.resolve({worker: 'budget', image: 'image'});
+            await expect(result).resolves.toEqual({worker: 'budget', image: 'image'});
+            await expect(next).resolves.toBe(7);
+        } finally {
+            runtime.dispose(); slots.forEach(slot => slot.gate.resolve());
+            await Promise.all(slots.map(slot => slot.done)); await next;
+        }
+    });
+
+    it.each(['cancel', 'dispose'] as const)('共享槽位等待期间 %s 立即退出，不终止其他模型且不启动 OCR', async action => {
+        const worker = createWorker('warm'), factory = vi.fn(async () => worker);
+        const runtime = createOcrWorkerRuntime({createWorker: factory, sparseTextMode: 11});
+        await runtime.ensureLanguages(['eng']);
+        const slots = occupyBudget(), controller = new AbortController();
+        try {
+            const pending = runtime.recognize('canceled', 'eng', controller.signal);
+            const stopped = expect(pending).rejects.toMatchObject({name: 'AbortError'});
+            await flushQueue();
+            if (action === 'cancel') controller.abort(); else runtime.dispose();
+            await stopped; expect(worker.recognize).not.toHaveBeenCalled();
+            slots.forEach(slot => slot.gate.resolve()); await Promise.all(slots.map(slot => slot.done));
+            await flushQueue(); expect(worker.recognize).not.toHaveBeenCalled();
+            if (action === 'cancel') {
+                expect(worker.terminate).not.toHaveBeenCalled();
+                await expect(runtime.recognize('next', 'eng')).resolves.toEqual({worker: 'warm', image: 'next'});
+                expect(factory).toHaveBeenCalledOnce();
+            }
+        } finally {runtime.dispose(); slots.forEach(slot => slot.gate.resolve()); await Promise.all(slots.map(slot => slot.done));}
+    });
+
+    it('识别失败归还共享槽位，后续模型与 OCR 都能继续', async () => {
+        const worker = createWorker('recovered');
+        vi.mocked(worker.recognize).mockRejectedValueOnce(new Error('OCR failed'));
+        const runtime = createOcrWorkerRuntime({createWorker: async () => worker, sparseTextMode: 11});
+        try {
+            await expect(runtime.recognize('bad', 'eng')).rejects.toThrow('OCR failed');
+            await expect(withLocalInferenceBudget(async () => 'model')).resolves.toBe('model');
+            await expect(runtime.recognize('good', 'eng')).resolves.toEqual({worker: 'recovered', image: 'good'});
+        } finally {runtime.dispose();}
+    });
+
+    it('取消中的旧 Worker 创建迟到失败，不清除已经接管的新 Worker 或泄漏共享槽位', async () => {
+        const creation = deferred<OcrWorkerPort<RecognitionResult>>(), next = createWorker('next');
+        const factory = vi.fn().mockReturnValueOnce(creation.promise).mockResolvedValue(next);
+        const runtime = createOcrWorkerRuntime<RecognitionResult>({createWorker: factory, sparseTextMode: 11});
+        const controller = new AbortController();
+        try {
+            const first = runtime.recognize('old', 'eng', controller.signal);
+            const stopped = expect(first).rejects.toMatchObject({name: 'AbortError'});
+            await vi.waitFor(() => expect(factory).toHaveBeenCalledOnce());
+            controller.abort(); await stopped;
+            await expect(runtime.recognize('new', 'jpn')).resolves.toEqual({worker: 'next', image: 'new'});
+            creation.reject(new Error('old creation failed'));
+            await flushQueue();
+            await expect(runtime.recognize('reuse', 'jpn')).resolves.toEqual({worker: 'next', image: 'reuse'});
+            expect(factory).toHaveBeenCalledTimes(2); expect(next.terminate).not.toHaveBeenCalled();
+        } finally {runtime.dispose();}
+    });
+});
 
 describe('OCR worker runtime', () => {
     it('逐包准备和自动语言切换复用一个 Worker，识别参数在重新初始化后重新设置', async () => {
@@ -303,6 +388,60 @@ describe('OCR worker runtime', () => {
         expect(factory).toHaveBeenCalledOnce();
     });
 
+    it('排队取消立即完成本地清理，且模型清除和后续识别仍按序执行', async () => {
+        const activeResult = deferred<RecognitionResult>();
+        const nextResult = deferred<RecognitionResult>();
+        const removal = deferred<void>();
+        const first = createWorker('first'); const next = createWorker('next');
+        vi.mocked(first.recognize).mockReturnValueOnce(activeResult.promise);
+        vi.mocked(next.recognize).mockReturnValueOnce(nextResult.promise);
+        let report!: (value: number, jobId: string) => void;
+        const factory = vi.fn().mockImplementationOnce(async (_language, notify) => {report = notify; return first;})
+            .mockImplementationOnce(async (_language, notify) => {report = notify; return next;});
+        const runtime = createOcrWorkerRuntime({createWorker: factory, sparseTextMode: 11});
+        const firstProgress = vi.fn(); const cancelledProgress = vi.fn(); const nextProgress = vi.fn();
+        const active = runtime.recognize('active', 'eng', undefined, undefined, firstProgress);
+        void active.catch(() => undefined);
+        try {
+        await vi.waitFor(() => expect(first.recognize).toHaveBeenCalledOnce());
+        const oldJob = vi.mocked(first.recognize).mock.calls[0][3]!;
+        report(0.25, oldJob);
+        const controller = new AbortController();
+        const removed = vi.spyOn(controller.signal, 'removeEventListener');
+        const stopped = runtime.recognize('discarded image', 'jpn', controller.signal, undefined, cancelledProgress);
+        const rejected = expect(stopped).rejects.toMatchObject({name: 'AbortError'});
+        const remove = vi.fn(() => removal.promise);
+        const clearing = runtime.clearModels(remove);
+        const fresh = runtime.recognize('fresh', 'eng', undefined, undefined, nextProgress);
+        void clearing.catch(() => undefined); void fresh.catch(() => undefined);
+        controller.abort(); await rejected;
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+        expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+        expect(removed).toHaveBeenCalledWith('abort', expect.any(Function));
+        expect(first.terminate).not.toHaveBeenCalled();
+        expect(remove).not.toHaveBeenCalled();
+        expect(factory).toHaveBeenCalledTimes(1);
+        activeResult.resolve({worker: 'first', image: 'active'}); await active;
+        await vi.waitFor(() => expect(remove).toHaveBeenCalledOnce());
+        expect(factory).toHaveBeenCalledTimes(1);
+        removal.resolve(); await clearing;
+        await vi.waitFor(() => expect(next.recognize).toHaveBeenCalledOnce());
+        const nextJob = vi.mocked(next.recognize).mock.calls[0][3]!;
+        report(0.9, oldJob); report(0.5, nextJob);
+        expect(firstProgress).toHaveBeenCalledTimes(1);
+        expect(cancelledProgress).not.toHaveBeenCalled();
+        expect(nextProgress).toHaveBeenCalledOnce(); expect(nextProgress).toHaveBeenCalledWith(50);
+        nextResult.resolve({worker: 'next', image: 'fresh'});
+        await expect(fresh).resolves.toEqual({worker: 'next', image: 'fresh'});
+        expect(first.terminate).toHaveBeenCalledOnce();
+        expect(factory).toHaveBeenCalledTimes(2);
+        } finally {
+            activeResult.resolve({worker: 'first', image: 'active'});
+            removal.resolve(); nextResult.resolve({worker: 'next', image: 'fresh'});
+            runtime.dispose();
+        }
+    });
+
     it('排队请求立即取消，不终止仍在识别的 Worker，也不让后续请求插队', async () => {
         const recognition = deferred<RecognitionResult>();
         const worker = createWorker('active');
@@ -401,6 +540,37 @@ describe('OCR worker runtime', () => {
         const second = runtime.recognize('second', 'eng');
         await expect(first).rejects.toThrow('recognize failed');
         await expect(second).resolves.toEqual({worker: 'eng', image: 'second'});
+    });
+
+    it('连续失败后队列仍依次执行，识别和参数不会交叉', async () => {
+        const worker = createWorker('eng');
+        vi.mocked(worker.recognize).mockRejectedValueOnce(new Error('first failure'))
+            .mockRejectedValueOnce(new Error('second failure'))
+            .mockResolvedValueOnce({worker: 'eng', image: 'third'});
+        const runtime = createOcrWorkerRuntime({createWorker: async () => worker, sparseTextMode: 11});
+        const first = runtime.recognize('first', 'eng');
+        const second = runtime.recognize('second', 'eng');
+        const third = runtime.recognize('third', 'eng');
+        const failure1 = expect(first).rejects.toThrow('first failure');
+        const failure2 = expect(second).rejects.toThrow('second failure');
+        await Promise.all([failure1, failure2]);
+        await expect(third).resolves.toEqual({worker: 'eng', image: 'third'});
+        expect(vi.mocked(worker.recognize).mock.calls.map(call => call[0])).toEqual(['first', 'second', 'third']);
+        expect(worker.setParameters).toHaveBeenCalledOnce();
+        runtime.dispose();
+    });
+
+    it('取得串行槽后、启动微任务前取消，后续任务仍可运行', async () => {
+        const worker = createWorker('eng');
+        const factory = vi.fn(async () => worker);
+        const runtime = createOcrWorkerRuntime({createWorker: factory, sparseTextMode: 11});
+        const controller = new AbortController();
+        const aborted = runtime.recognize('cancelled', 'eng', controller.signal);
+        controller.abort();
+        await expect(aborted).rejects.toMatchObject({name: 'AbortError'});
+        expect(factory).not.toHaveBeenCalled();
+        await expect(runtime.recognize('next', 'eng')).resolves.toEqual({worker: 'eng', image: 'next'});
+        runtime.dispose();
     });
 
     it('取消永不结束的识别会终止旧 Worker，并允许下一请求使用新 Worker', async () => {

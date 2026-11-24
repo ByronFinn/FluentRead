@@ -1,11 +1,11 @@
 <!--
  * @file src/features/writing-assistant/ui/WritingSurface.vue
  * 文件职责：在隔离层中为 Gmail 与 GitHub 回复编辑器定位写作入口，维护当前编辑器的写作会话。
- * 主要内容：在原生操作行内隔离写作按钮与三点设置入口，管理本次关闭、网站禁用和永久关闭；跟随编辑器与界面资源更新，失效时清理入口和写作会话。
+ * 主要内容：在原生操作行内隔离写作按钮与三点设置入口，点击面板外仅收起并保留当前会话，再次打开恢复草稿和结果；管理本次关闭、网站禁用和永久关闭，观察整页 body 替换、入口被网页移除和编辑器更新，卸载后拒绝迟到保存与观察回调重建入口。
  * 模块边界：只拥有网页 DOM、编辑器快照与入口交互；配置持久化交由共享服务，不执行模型和自动发送操作。
  -->
 <template>
-  <WritingPanel :active="opened" :anchor="anchor" :initial-draft="draft" :initial-context="context" :initial-intent="intent" :session-key="sessionKey" :plain-text-output="snapshot?.site === 'gmail'" :apply-draft="canInsert ? fillDraft : undefined" @close="close" />
+  <WritingPanel ref="panel" :active="opened" :anchor="anchor" :initial-draft="draft" :initial-context="context" :initial-intent="intent" :session-key="sessionKey" :plain-text-output="snapshot?.site === 'gmail'" :apply-draft="canInsert ? fillDraft : undefined" @close="close" />
   <WritingEntrySettings :active="menuOpened" :anchor="menuAnchor" :dark="dark" :saving="saving" :error="menuError" @close="closeMenu" @save="saveEntrySetting" @settings="openSettings" />
 </template>
 <script setup lang="ts">
@@ -26,6 +26,7 @@ const unsubscribeConfig = subscribeConfig(value => { config.value = value; });
 onBeforeUnmount(unsubscribeConfig);
 const iconUrl = browser.runtime.getURL('/icon/128.png');
 const opened = ref(false); const draft = ref(''); const context = ref(''); const intent = ref<WritingIntent>('reply'); const sessionKey = ref(0);
+const panel = shallowRef<InstanceType<typeof WritingPanel>>();
 const anchor = shallowRef<HTMLElement>(); const snapshot = shallowRef<EditorSnapshot>();
 const canInsert = computed(() => Boolean(snapshot.value && !snapshot.value.element.querySelector('a, img, video, audio, table, [contenteditable="false"]')));
 const menuOpened = ref(false); const menuAnchor = shallowRef<HTMLElement>(); const saving = ref(false); const menuError = ref('');
@@ -33,6 +34,7 @@ type Entry = {host: HTMLElement; button: HTMLButtonElement; menu: HTMLButtonElem
 const entries = new Map<HTMLElement, Entry>();
 const abort = new AbortController(); let observer: MutationObserver; let timer: ReturnType<typeof setTimeout> | undefined;
 let currentUrl = location.href;
+let disposed = false;
 const dark = computed(() => config.value.theme === 'dark' || (config.value.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches));
 const allowed = () => !isWritingDismissedForVisit() && config.value.on && config.value.writing.enabled && isWritingPage(location.href) && !isExtensionDisabledOnSite(location.href, [...config.value.disabledExtensionDomains, ...config.value.writing.disabledDomains]);
 function closeMenu(restoreFocus = true) { const wasOpened = menuOpened.value; menuOpened.value = false; if (wasOpened && restoreFocus) menuAnchor.value?.shadowRoot?.querySelector<HTMLButtonElement>('[data-writing-entry-menu]')?.focus({preventScroll: true}); }
@@ -66,10 +68,11 @@ function visible(element: HTMLElement): boolean {
 }
 function scan() {
   clearTimeout(timer); timer = undefined;
+  if (disposed) return;
   if (currentUrl !== location.href) { currentUrl = location.href; close(false); closeMenu(false); snapshot.value = undefined; sessionKey.value++; }
   if (!allowed()) { close(false); snapshot.value = undefined; if (!saving.value) { closeMenu(false); clearEntries(); } return; }
-  const site = writingSite(location.href);
-  if (!site) { clearEntries(); return; }
+  // allowed 已验证 HTTPS Gmail/GitHub 路由；同步扫描期间站点身份不会改变。
+  const site = writingSite(location.href)!;
   const editors = findReplyEditors(document, site, location.href).filter(element => {
     const rect = element.getBoundingClientRect();
     return visible(element) && rect.width >= 120 && rect.height >= 20 && Boolean(findReplyActionAnchor(element, site));
@@ -108,7 +111,7 @@ function scan() {
   }
   if (writingEntrySaveFailure.value && entries.size && !saving.value) { openMenu(entries.values().next().value!.host); menuError.value = t('writing.entry.saveError'); writingEntrySaveFailure.value = false; }
 }
-function schedule() { if (timer === undefined) timer = setTimeout(scan, 80); }
+function schedule() { if (!disposed && timer === undefined) timer = setTimeout(scan, 80); }
 function open(element: HTMLElement) {
   const entry = entries.get(element);
   if (!allowed() || !isWritingEditor(element, writingSite(location.href)) || !visible(element) || !entry?.host.isConnected || !visible(entry.action)) return;
@@ -135,10 +138,22 @@ watch(menuOpened, () => { for (const entry of entries.values()) entry.menu.setAt
 watch(writingEntrySaveFailure, scan);
 watch(opened, () => { for (const [editor, entry] of entries) entry.button.setAttribute('aria-expanded', String(opened.value && snapshot.value?.element === editor)); });
 onMounted(() => {
-  scan(); observer = new MutationObserver(records => { if (records.some(record => !ownUi(record.target) && (record.type !== 'childList' || [...record.addedNodes, ...record.removedNodes].some(node => !ownUi(node))))) schedule(); });
-  observer.observe(document.body, {subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open', 'aria-hidden', 'aria-disabled', 'disabled', 'readonly', 'contenteditable', 'inert']});
+  scan(); observer = new MutationObserver(records => {
+    // 网页框架可只移除扩展入口；跳过自身 UI 更新时仍须恢复已脱离文档的入口。
+    const entryRemoved = records.some(record => record.type === 'childList' && record.removedNodes.length > 0)
+      && [...entries.values()].some(entry => !entry.host.isConnected);
+    if (entryRemoved || records.some(record => !ownUi(record.target) && (record.type !== 'childList' || [...record.addedNodes, ...record.removedNodes].some(node => !ownUi(node))))) schedule();
+  });
+  observer.observe(document, {subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class', 'style', 'hidden', 'open', 'aria-hidden', 'aria-disabled', 'disabled', 'readonly', 'contenteditable', 'inert']});
   document.addEventListener('focusin', schedule, {signal: abort.signal});
-  document.addEventListener('pointerdown', event => { if (!menuOpened.value || saving.value) return; const path = event.composedPath(); if (!path.includes(menuAnchor.value!) && !path.some(node => node instanceof Element && node.classList.contains('writing-entry-settings'))) closeMenu(false); }, {signal: abort.signal});
+  document.addEventListener('pointerdown', event => {
+    const path = event.composedPath();
+    const panelRoot = panel.value?.$el;
+    // Shadow DOM 会重定向 event.target；沿真实事件路径保留卡片内部控件和当前入口的操作。
+    // 仅收起已有实例，不夺回焦点，也不重建会话，用户可继续点击宿主页面。
+    if (opened.value && !path.includes(anchor.value!) && (!panelRoot || !path.includes(panelRoot))) close(false);
+    if (menuOpened.value && !saving.value && !path.includes(menuAnchor.value!) && !path.some(node => node instanceof Element && node.classList.contains('writing-entry-settings'))) closeMenu(false);
+  }, {capture: true, signal: abort.signal});
   document.addEventListener('fluentread-route-change', scan, {signal: abort.signal});
   window.addEventListener('resize', schedule, {signal: abort.signal});
   window.visualViewport?.addEventListener('resize', schedule, {signal: abort.signal});
@@ -146,5 +161,5 @@ onMounted(() => {
   window.addEventListener('hashchange', scan, {signal: abort.signal});
   window.addEventListener('pagehide', () => { close(false); closeMenu(false); }, {signal: abort.signal});
 });
-onBeforeUnmount(() => { abort.abort(); observer?.disconnect(); clearTimeout(timer); clearEntries(); });
+onBeforeUnmount(() => { disposed = true; abort.abort(); observer?.disconnect(); clearTimeout(timer); clearEntries(); });
 </script>

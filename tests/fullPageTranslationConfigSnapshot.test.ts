@@ -4,15 +4,20 @@ import * as hashModule from '@/src/shared/function/sha256';
 import * as pageDiscourse from '@/src/services/translation/context/pageDiscourse';
 import {translateText, translateTextBatch} from '@/src/services/translation/client';
 import type {CompositeTranslationProvider} from '@/src/core/config/compositeTranslation';
+import {createQuickTranslationProfile} from '@/src/core/config/quickTranslation';
+import {resolveQuickTranslationInvocation} from '@/src/features/quick-translation/core';
 
 const fixture = vi.hoisted(() => ({config: {
     service: 'microsoft', model: {microsoft: 'default-model'}, customModel: {}, modelThinking: {},
     from: 'en', to: 'zh-Hans', glossaryEnabled: true, glossaryLibraries: [] as GlossaryLibrary[],
     excludedLanguages: ['de'], useCache: true, enableAIContext: false, enableAIMultiSegment: false,
     nativeBatchTranslationEnabled: {}, display: 1, style: 0,
+    translationOnlyDomains: [] as string[],
     longParagraphLineBreakEnabled: false, translationBeforeOriginal: false,
     compositeTranslationProviders: [] as CompositeTranslationProvider[], customBody: {} as Record<string, string>,
 }}));
+// 可选浏览器证据由预检边界套件验证；这里保留原有纯识别与请求/DOM契约。
+vi.mock('@/src/services/translation/languagePreflight', () => ({shouldSkipTranslationWithEvidence: async () => false}));
 vi.mock('@/src/services/config/store', () => ({config: fixture.config}));
 vi.mock('@/src/services/translation/client', () => ({translateText: vi.fn(), translateTextBatch: vi.fn()}));
 vi.mock('@/src/services/translation/queue', () => ({cancelTranslationQueueSession: vi.fn(), createTranslationQueueSession: vi.fn()}));
@@ -22,6 +27,7 @@ let generation = 0;
 beforeEach(() => {
     Object.assign(fixture.config, {service: 'microsoft', from: 'en', to: 'zh-Hans', glossaryEnabled: true,
         excludedLanguages: ['de'], useCache: true, display: 1, longParagraphLineBreakEnabled: false,
+        translationOnlyDomains: [],
         translationBeforeOriginal: false, enableAIMultiSegment: false, enableAIContext: false,
         compositeTranslationProviders: [], customBody: {},
         glossaryLibraries: [{id: `library-${generation++}`, name: '技术', enabled: true,
@@ -35,6 +41,37 @@ beforeEach(() => {
 afterEach(() => {vi.restoreAllMocks(); vi.unstubAllGlobals();});
 
 describe('网页翻译配置捕获与词库摘要复用', () => {
+    it('按当前网址冻结网站显示模式，其他网站继承全局且单次快捷方案覆盖仍有效', () => {
+        vi.stubGlobal('location', {href: 'https://docs.example.com/article'});
+        fixture.config.translationOnlyDomains = ['example.com'];
+        const saved = captureFullPageTranslationConfig();
+        expect(saved.displayMode).toBe('single'); expect(saved.displayModeOverridden).toBeUndefined();
+        expect(captureFullPageTranslationConfig({displayMode: 'bilingual'})).toMatchObject({displayMode: 'bilingual', displayModeOverridden: true});
+        location.href = 'https://another.test/article';
+        expect(captureFullPageTranslationConfig().displayMode).toBe('bilingual');
+        expect(saved.displayMode).toBe('single'); expect(fixture.config.display).toBe(1);
+    });
+    it('真实快捷方案的默认显示继承可随全局切换，只有显式方案产生显示冻结标记', () => {
+        const profile = createQuickTranslationProfile('full-page', []);
+        const settings = {...fixture.config, fullPageTranslationMode: 'viewport' as const, translationScope: 'content' as const};
+        const first = captureFullPageTranslationConfig(resolveQuickTranslationInvocation(profile, settings));
+        expect(first.displayMode).toBe('bilingual'); expect(first.displayModeOverridden).toBeUndefined();
+        fixture.config.display = 0; settings.display = 0;
+        const second = captureFullPageTranslationConfig(resolveQuickTranslationInvocation(profile, settings));
+        expect(second.displayMode).toBe('single'); expect(second.displayModeOverridden).toBeUndefined();
+        // 请求快照仍冻结请求当时的模式；已译内容是否跟随全局由独立覆盖标记决定。
+        expect(first.displayMode).toBe('bilingual');
+        for (const [mode, expected] of [['bilingual', 'bilingual'], ['translation-only', 'single']] as const) {
+            const explicit = captureFullPageTranslationConfig(resolveQuickTranslationInvocation({...profile, displayMode: mode}, settings));
+            expect(explicit).toMatchObject({displayMode: expected, displayModeOverridden: true});
+        }
+    });
+    it('只有显式显示覆盖冻结本次模式，服务或语言覆盖仍允许网页显示即时切换', () => {
+        expect(captureFullPageTranslationConfig().displayModeOverridden).toBeUndefined();
+        expect(captureFullPageTranslationConfig({service: 'microsoft', targetLanguage: 'ja'}).displayModeOverridden).toBeUndefined();
+        expect(captureFullPageTranslationConfig({displayMode: 'single'}).displayModeOverridden).toBe(true);
+        expect(captureFullPageTranslationConfig({displayMode: 'bilingual'}).displayModeOverridden).toBe(true);
+    });
     it('组合以原始数组进入 broker；成员连接修改隔离前端完成缓存与操作身份', async () => {
         fixture.config.service = 'composite:page';
         fixture.config.compositeTranslationProviders = [{id: 'composite:page', name: '网页组合', strategy: 'sequential', services: ['google', 'microsoft'], timeoutMs: 12_000}];

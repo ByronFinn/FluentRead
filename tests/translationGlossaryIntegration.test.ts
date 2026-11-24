@@ -1,20 +1,25 @@
 import type {TranslationProviderRequest} from '@/src/services/translation/types';
-import {getGlossaryProtectionEntries, isGlossaryOnlyResult} from '@/src/services/translation/glossaryProtection';
+import {getGlossaryProtectionEntries, isGlossaryOnlyResult, prepareGlossaryRequest} from '@/src/services/translation/glossaryProtection';
 import {describe, expect, it, vi} from 'vitest';
 import {Config} from '@/src/core/config/model';
 import {resolveConfiguredModel, servicesType} from '@/src/core/config/catalog';
 import {buildGlossaryRevision, type GlossaryLibrary} from '@/src/core/glossary';
+import {hasOnlyCommonWebTerms, matchCommonWebTerms} from '@/src/core/glossary/commonWebTerms';
 import {parseTranslationSlots, serializeTranslationSlots} from '@/src/core/translation/public';
 import {createTranslationBroker} from '@/src/services/translation/broker';
 import {supportsTranslationGlossary} from '@/src/services/translation/capabilities';
 import {
     attachTranslationGlossaryContext,
+    attachTranslationRequestControl,
     attachTranslationProviderConfig,
     createTranslationProviderConfigSnapshot,
     getTranslationGlossaryTerms,
     getTranslationProviderConfig,
+    markImageTextBatch,
+    isImageTextBatch,
 } from '@/src/services/translation/requestSnapshot';
 import type {TranslationRequestMessage, TranslationProviderConfigSnapshot} from '@/src/services/translation/types';
+import bilibiliSponsor from './fixtures/translation-quality/bilibili-sponsor-emoji.json';
 
 type GlossaryResolutionEvent = {
     api: 'resolveGlossary' | 'resolveGlossaryEntries';
@@ -60,12 +65,12 @@ function deferred<T>() {
     return {promise, resolve};
 }
 
-function harness() {
+function harness(service = 'openai', model = 'model-fixture', now?: () => number) {
     const config = Object.assign(new Config(), {
-        service: 'openai', from: 'en', to: 'zh-Hans', useCache: true,
+        service, from: 'en', to: 'zh-Hans', useCache: true,
         glossaryEnabled: true, glossaryLibraries: [library()],
     });
-    config.model.openai = 'model-fixture';
+    config.model[service] = model;
     const cache = new Map<string, string>();
     const identities: Record<string, unknown>[] = [];
     const resolutionCaptures: Array<{identity: Record<string, unknown>; eventEnd: number; providerCalls: number}> = [];
@@ -73,7 +78,7 @@ function harness() {
     const provider = vi.fn(async (message: TranslationProviderRequest): Promise<unknown> => {
         const snapshot = getTranslationProviderConfig(message, createTranslationProviderConfigSnapshot(config));
         const translate = (origin: string) => {
-            const body = JSON.parse(commonMsgTemplate({origin: origin, context: message.pageContext as string | undefined, prompt: message.summaryPrompt as string | undefined, systemPrompt: message.summarySystemPrompt as string | undefined, serviceOverride: 'openai', targetLanguage: 'zh-Hans', modelOverride: 'model-fixture', current: snapshot}));
+            const body = JSON.parse(commonMsgTemplate({origin, context: message.pageContext as string | undefined, prompt: message.summaryPrompt as string | undefined, systemPrompt: message.summarySystemPrompt as string | undefined, serviceOverride: service, targetLanguage: 'zh-Hans', modelOverride: message.modelOverride ?? model, current: snapshot}));
             calls.push({message, snapshot, body});
             if (message.summaryPrompt) return 'This page explains translation systems.';
             return snapshot.glossaryProtectedTokens?.some(token => origin.includes(token)) ? origin : `译文:${origin}`;
@@ -82,8 +87,8 @@ function harness() {
     });
     const get = vi.fn(async (key: string) => cache.get(key) ?? null);
     const broker = createTranslationBroker({
-        ready: Promise.resolve(), getConfig: () => config,
-        providers: {openai: provider, microsoft: provider, tongyi: provider, custom: provider},
+        ready: Promise.resolve(), getConfig: () => config, now,
+        providers: {openai: provider, microsoft: provider, google: provider, tongyi: provider, custom: provider, siliconCloud: provider, bilibili: provider},
         cache: {get, set: async (key, value) => {cache.set(key, value); return true;}, clear: async () => {cache.clear();}, cleanup: async () => {}},
         serviceTypes: servicesType,
         endpointResolver: {resolveOpenAICompatibleEndpoint: () => ({endpoint: 'https://fixture.invalid/v1'}),
@@ -124,6 +129,340 @@ function keyResolutionRows(h: ReturnType<typeof harness>, start: ReturnType<type
 }
 
 describe('术语库与真实翻译编排协作', () => {
+    const hunyuanModel = 'tencent/Hunyuan-MT-7B';
+    const avengers = 'Avengers Tower has shown up in Shanghai.';
+    const avengersTranslation = '复仇者大厦出现在上海。';
+
+    it('默认词表仅匹配完整技术词及原有大小写，用户短语先占用匹配位置', () => {
+        expect(hasOnlyCommonWebTerms(' API / SDK · JSON ')).toBe(true);
+        for (const text of ['—', 'api', 'Use the API', 'API_v2', 'PHP API', 'API 2026']) {
+            expect(hasOnlyCommonWebTerms(text), text).toBe(false);
+        }
+        expect(matchCommonWebTerms('API JSON OpenAI API_v2 mySDK github')).toEqual([
+            {source: 'API', target: '', caseSensitive: true},
+            {source: 'JSON', target: '', caseSensitive: true},
+            {source: 'OpenAI', target: '', caseSensitive: true},
+        ]);
+        expect(matchCommonWebTerms('SDK-based and API-ready.', [
+            {source: 'API-ready', target: '接口已就绪', caseSensitive: true},
+        ]).map(term => term.source)).toEqual(['SDK']);
+        expect(matchCommonWebTerms(['ordinary words', 'myAPI and api_v2'])).toEqual([]);
+        expect(matchCommonWebTerms('用API访问，再读取JSON。').map(term => term.source)).toEqual(['API', 'JSON']);
+    });
+
+    it.each(['microsoft', 'openai'])('%s 按原位置保留独立词槽，正文中的术语经保护后回填', async service => {
+        const h = harness(service);
+        h.config.glossaryEnabled = false;
+        const record = h.provider.getMockImplementation()!;
+        h.provider.mockImplementation(async message => {
+            await record(message);
+            const translate = (source: string) => source.replace('Use the ', '使用 ').replace(' to read ', ' 读取 ').replace(/\.$/u, '。');
+            return Array.isArray(message.origin) ? message.origin.map(translate) : translate(message.origin);
+        });
+        await expect(h.request({origin: ' API / SDK · JSON '})).resolves.toBe(' API / SDK · JSON ');
+        await expect(h.request({origin: ['SDK', 'API', 'JSON']})).resolves.toEqual(['SDK', 'API', 'JSON']);
+        expect(h.provider).not.toHaveBeenCalled();
+        expect(h.get).not.toHaveBeenCalled();
+
+        const prose = 'Use the API to read JSON.';
+        // 历史调用可能含缺失槽；缓存按单槽读取时也必须保留其空位。
+        const origin = ['API', prose, undefined as unknown as string, ' SDK ', prose];
+        for (const pageUrl of ['https://docs.example.net/guide', 'https://forum.example.org/discussion']) {
+            await expect(h.broker.translateWithCache(attachTranslationGlossaryContext({origin}, {pageUrl, context: 'page'})))
+                .resolves.toEqual(['API', '使用 API 读取 JSON。', '', ' SDK ', '使用 API 读取 JSON。']);
+        }
+        expect(h.provider).toHaveBeenCalledTimes(1);
+        expect(h.calls[0].message.origin).toEqual([expect.stringMatching(/^Use the __FRTERM_.* to read __FRTERM_/u)]);
+        expect(h.calls[0].snapshot.glossaryProtectedTokens).toHaveLength(2);
+        expect(h.identities).toEqual(expect.arrayContaining([expect.objectContaining({
+            glossaryTerms: [{source: 'API', target: 'API'}, {source: 'JSON', target: 'JSON'}],
+        })]));
+    });
+
+    it('站点范围内的用户译法覆盖默认词表，其他站点保留原写法', async () => {
+        const h = harness();
+        const custom = library('overrides', '智能体', ['docs.example.com']);
+        custom.entries = [{id: 'api', source: 'api', target: '接口', caseSensitive: false}];
+        h.config.glossaryLibraries = [custom];
+        await expect(h.request({origin: 'API'})).resolves.toBe('接口');
+        await expect(h.broker.translateWithCache(attachTranslationGlossaryContext({origin: 'API'},
+            {pageUrl: 'https://forum.example.org/discussion', context: 'page'}))).resolves.toBe('API');
+        expect(h.provider).toHaveBeenCalledTimes(1);
+        expect(h.calls[0].snapshot.glossaryProtectedTokens).toHaveLength(1);
+    });
+
+    it('纯术语富文本直接原样返回，混合槽中的独立术语忽略供应商扩写', async () => {
+        const h = harness();
+        h.config.glossaryEnabled = false;
+        const label = serializeTranslationSlots(['API', ' / ', 'SDK']);
+        await expect(h.request({origin: label.payload, validateTranslationSlots: true})).resolves.toBe(label.payload);
+        expect(h.provider).not.toHaveBeenCalled();
+        const source = 'Select a date to read the latest records.';
+        const mixed = serializeTranslationSlots(['API', source]);
+        h.provider.mockImplementationOnce(async message => String(message.origin)
+            .replace(/__FRTERM_[a-z0-9_]+?__/u, '$&（应用程序编程接口）')
+            .replace(source, '选择日期以查看最新记录。'));
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const translated = await h.request({origin: mixed.payload, validateTranslationSlots: true});
+            expect(parseTranslationSlots(mixed, translated as string)).toEqual(['API', '选择日期以查看最新记录。']);
+        }
+        expect(h.provider).toHaveBeenCalledTimes(1);
+    });
+
+    it('保护正文的词条参与缓存身份，字幕结果与已保存的无保护结果隔离', async () => {
+        const h = harness();
+        h.config.glossaryEnabled = false;
+        const origin = 'Call the API to fetch the latest records.';
+        h.provider.mockResolvedValueOnce('调用应用程序编程接口读取最新记录。');
+        h.provider.mockImplementationOnce(async message =>
+            `调用 ${String(message.origin).match(/__FRTERM_[a-z0-9_]+?__/u)![0]} 读取最新记录。`);
+        await expect(h.broker.translateWithCache({origin, glossaryContext: 'video'})).resolves.toContain('应用程序编程接口');
+        await expect(h.request({origin})).resolves.toBe('调用 API 读取最新记录。');
+        await expect(h.request({origin})).resolves.toBe('调用 API 读取最新记录。');
+        expect(h.provider).toHaveBeenCalledTimes(2);
+        expect(h.identities[0]).not.toHaveProperty('glossaryTerms');
+        expect(h.identities[1]).toMatchObject({glossaryTerms: [{source: 'API', target: 'API'}]});
+    });
+
+    it('B站 GitHub 赞助提示的段首表情本地保留，接受原真实译文并只请求一次', async () => {
+        const h = harness('bilibili');
+        h.config.glossaryEnabled = false;
+        const record = h.provider.getMockImplementation()!;
+        h.provider.mockImplementation(async message => {
+            await record(message);
+            return bilibiliSponsor.rawTranslation;
+        });
+        const expected = '💡 ' + bilibiliSponsor.rawTranslation.replace('__FRTERM_c2c7691809fd_0__', 'API');
+        await expect(h.request({origin: bilibiliSponsor.source})).resolves.toBe(expected);
+        expect(h.calls[0].message.origin).toBe(bilibiliSponsor.preparedText.replace('__FRTERM_7c9e1e9b4267_0__ ', ''));
+        expect(h.calls[0].snapshot.glossaryProtectedTokens).toHaveLength(1);
+        await expect(h.request({origin: bilibiliSponsor.source})).resolves.toBe(expected);
+        expect(h.provider).toHaveBeenCalledTimes(1);
+    });
+
+    it('B站正文内部表情仍可在剩余预算内严格字面重试一次', async () => {
+        const h = harness('bilibili');
+        h.config.glossaryEnabled = false;
+        h.provider.mockResolvedValueOnce('已翻译。').mockResolvedValueOnce('请阅读 💡 API 文档。');
+        await expect(h.request({origin: 'Read 💡 the API documentation.'})).resolves.toBe('请阅读 💡 API 文档。');
+        expect(h.provider).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['💡 Read this label.', 'Read this label. 👩🏽‍🔬', '💡 Read this label. 👩🏽‍🔬'])('不同服务的段首段尾表情本地回填不掩盖空正文 %s', origin => {
+        const current = createTranslationProviderConfigSnapshot({...new Config(), glossaryEnabled: false});
+        const packet = prepareGlossaryRequest({origin}, current);
+        expect(packet.message.origin).toBe('Read this label.');
+        expect(packet.restore('')).toBe('');
+        expect(packet.restore(' \u200b ')).toBe(' \u200b ');
+        expect(packet.restore('请阅读这个标签。')).toBe(origin.replace('Read this label.', '请阅读这个标签。'));
+    });
+
+    it('本地表情保留不改变用户词条优先级或文档保护协议', () => {
+        const h = harness();
+        h.config.glossaryLibraries[0]!.entries.push({id: 'hint', source: '💡', target: '提示', caseSensitive: true});
+        const current = createTranslationProviderConfigSnapshot({...h.config,
+            glossaryTerms: [{source: '💡', target: '提示'}],
+            glossaryMatchContext: {context: 'page', sourceLanguage: 'en', targetLanguage: 'zh-Hans', pageUrl: 'https://docs.example.com', preserveCommonWebTerms: true},
+        });
+        const packet = prepareGlossaryRequest({origin: '💡 Read the label.'}, current);
+        expect(packet.message.origin).toContain('__FRTERM_');
+        expect(packet.restore(String(packet.message.origin).replace('Read the label.', '请阅读标签。'))).toBe('提示 请阅读标签。');
+        const document = prepareGlossaryRequest({origin: '💡 Read the label.'}, {...current,
+            glossaryTerms: [], glossaryMatchContext: {...current.glossaryMatchContext!, context: 'document'}});
+        expect(document.message.origin).toContain('__FRTERM_');
+        expect(() => document.restore('请阅读标签。')).toThrow();
+    });
+
+    it.each([
+        '没有表情的译文 API。', '错误的表情 🧪 API。', '重复的表情 💡 💡 API。',
+        '缺少术语的译文 💡。', '重复的术语 API API 💡。',
+        '未知标记 __FRTERM_foreign_0__ 💡 API。', null,
+    ])('B站字面重试拒绝不完整或损坏的结果且不缓存 %s', async result => {
+        const h = harness('bilibili');
+        h.config.glossaryEnabled = false;
+        h.provider.mockResolvedValueOnce('已翻译。').mockResolvedValueOnce(result);
+        await expect(h.request({origin: 'Read 💡 the API documentation.'})).rejects.toMatchObject({code: 'GLOSSARY_PLACEHOLDER_INVALID'});
+        expect(h.provider).toHaveBeenCalledTimes(2);
+        expect(h.cache.size).toBe(0);
+    });
+
+    it.each([
+        'agent 💡', 'Read 💡.\nContinue here.',
+        serializeTranslationSlots(['Read 💡.', 'Continue here.'], 'bilibili-emoji').payload,
+        ['Read 💡.', 'Continue here.'],
+    ])('B站的用户术语、结构、多行或数组不会降级到字面重试 %s', async origin => {
+        const h = harness('bilibili');
+        h.provider.mockResolvedValue('损坏的译文。');
+        const pending = typeof origin === 'string' ? h.request({origin}) : h.request({origin});
+        await expect(pending).rejects.toMatchObject({code: 'GLOSSARY_PLACEHOLDER_INVALID'});
+        expect(h.provider).toHaveBeenCalledTimes(1);
+        expect(h.cache.size).toBe(0);
+    });
+
+    it('B站网络错误保留原错误且不发起表情重试', async () => {
+        const h = harness('bilibili');
+        const error = Object.assign(new Error('B站翻译请求失败'), {statusCode: 429});
+        h.provider.mockRejectedValue(error);
+        await expect(h.request({origin: bilibiliSponsor.source})).rejects.toMatchObject({statusCode: 429});
+        expect(h.provider).toHaveBeenCalledTimes(1);
+        expect(h.cache.size).toBe(0);
+    });
+
+    it.each(['siliconCloud', 'bilibili'])('%s emoji 字面重试仍核对常用术语的字形和次数', async service => {
+        const origin = 'Call the API to retrieve the records. 🥹';
+        for (const result of ['调用 API 读取记录。🥹', '调用接口读取记录。🥹']) {
+            const h = harness(service, hunyuanModel);
+            h.config.glossaryEnabled = false;
+            h.provider.mockResolvedValueOnce('调用接口读取记录。').mockResolvedValueOnce(result);
+            const pending = h.request({origin});
+            if (result.includes('API')) await expect(pending).resolves.toBe(result);
+            else await expect(pending).rejects.toMatchObject({code: 'GLOSSARY_PLACEHOLDER_INVALID'});
+            expect(h.provider).toHaveBeenCalledTimes(2);
+        }
+    });
+
+    it.each(['Call the API to retrieve the records.', '🥹'])('只有带 emoji 的正文才允许字面重试 %s', async origin => {
+        const h = harness('siliconCloud', hunyuanModel);
+        h.config.glossaryEnabled = false;
+        h.provider.mockResolvedValueOnce('返回没有保留占位符。');
+        await expect(h.request({origin})).rejects.toMatchObject({code: 'GLOSSARY_PLACEHOLDER_INVALID'});
+        expect(h.provider).toHaveBeenCalledTimes(1);
+        expect(h.cache.size).toBe(0);
+    });
+
+    it.each([
+        ['A', `${avengers} 🥹`, false],
+        ['B', `${avengers} 🥹 #avengers #ironman #spiderman #hulk💚 #captainamerica`, false],
+        ['C', `${avengers} 🥹 avengers ironman spiderman hulk💚 captainamerica`, false],
+        ['D', avengers, false],
+        ['E', `🥹 ${avengers}`, false],
+        ['F', `${avengers} 🥹 continuing story.`, true],
+    ] as const)('硅基流动 Hunyuan emoji 复现样例 %s', async (_label, origin, losesMarker) => {
+        const h = harness('siliconCloud', hunyuanModel);
+        h.config.glossaryEnabled = false;
+        h.config.user_role.siliconCloud = 'Translate into {{to}}. Preserve emoji. {{origin}}';
+        const record = h.provider.getMockImplementation()!;
+        h.provider.mockImplementation(async message => {
+            await record(message);
+            const translated = String(message.origin).replace(avengers, avengersTranslation);
+            return losesMarker ? translated.replace(/__FRTERM_[a-z0-9_]+?__/giu, '').trim() : translated;
+        });
+        const expected = origin.replace(avengers, avengersTranslation);
+        await expect(h.request({origin})).resolves.toBe(expected);
+        expect(h.provider).toHaveBeenCalledTimes(losesMarker ? 2 : 1);
+        if (losesMarker) {
+            expect(h.calls[0].body.messages[1].content).toContain('__FRTERM_');
+            expect(h.calls[1].message.origin).toBe(origin);
+            expect(h.calls[1].body.messages[1].content).toContain(`Preserve emoji. ${origin}`);
+            expect(h.calls[1].body.messages[1].content).not.toContain('__FRTERM_');
+            expect(h.calls[1].body.messages[0]).toEqual(h.calls[0].body.messages[0]);
+        }
+        await expect(h.request({origin})).resolves.toBe(expected);
+        expect(h.provider).toHaveBeenCalledTimes(losesMarker ? 2 : 1);
+    });
+
+    it.each(['已翻译。', '🥹', '已翻译。 🥹 🥹', '已翻译。 🧪', '已翻译。 🥹 __FRTERM_unknown_0__', null])(
+        '硅基流动 Hunyuan emoji 重试拒绝无效结果 %s 且不缓存',
+        async second => {
+            const h = harness('siliconCloud', hunyuanModel);
+            h.config.glossaryEnabled = false;
+            h.provider.mockResolvedValueOnce('已翻译。').mockResolvedValueOnce(second);
+            await expect(h.request({origin: `${avengers} 🥹 continuing story.`})).rejects.toMatchObject({
+                code: 'GLOSSARY_PLACEHOLDER_INVALID', retryable: false, message: expect.stringContaining('表情符号'),
+            });
+            expect(h.provider).toHaveBeenCalledTimes(2);
+            expect(h.cache.size).toBe(0);
+        },
+    );
+
+    it.each([
+        ['agent 🥹', hunyuanModel],
+        ['Read 🥹.\nContinue here.', hunyuanModel],
+        [serializeTranslationSlots(['Read 🥹.', 'Continue.'], 'hunyuan-emoji').payload, hunyuanModel],
+        ['Read 🥹.', 'another-model'],
+    ])('匹配术语、结构标记、多行或其他模型时维持原校验 %s', async (origin, model) => {
+        const h = harness('siliconCloud', model);
+        h.provider.mockResolvedValue('已翻译。');
+        await expect(h.request({origin})).rejects.toMatchObject({code: 'GLOSSARY_PLACEHOLDER_INVALID'});
+        expect(h.provider).toHaveBeenCalledTimes(1);
+        expect(h.cache.size).toBe(0);
+    });
+
+    it.each(['siliconCloud', 'bilibili'])('%s 字面 emoji 重试沿用剩余预算且取消后不发布迟到结果', async service => {
+        let time = 0;
+        const h = harness(service, hunyuanModel, () => time);
+        const retry = deferred<TranslationProviderRequest>();
+        const reply = deferred<string>();
+        const controller = new AbortController();
+        h.provider.mockImplementationOnce(async () => {
+            time += 200;
+            return '已翻译。';
+        }).mockImplementationOnce(message => {
+            retry.resolve(message);
+            return reply.promise;
+        });
+        const pending = h.request(attachTranslationRequestControl({origin: `${avengers} 🥹 continuing story.`, requestTimeoutMs: 1000}, {
+            signal: controller.signal, ownershipKey: 'hunyuan-emoji-retry',
+        }));
+        const cancelled = expect(pending).rejects.toMatchObject({name: 'AbortError'});
+        const second = await retry.promise;
+        expect(second.requestTimeoutMs).toBe(800);
+        controller.abort();
+        reply.resolve(`${avengersTranslation} 🥹`);
+        await cancelled;
+        expect(second.abortSignal?.aborted).toBe(true);
+        expect(h.cache.size).toBe(0);
+    });
+
+    it('无词库时按完整字素保护正文，旧丢失 emoji 缓存不会命中新身份', async () => {
+        const h = harness();h.config.glossaryEnabled = false;
+        const origin = 'Deliver 🚚 then Gate1️⃣ and 👩🏽‍🔬.';
+        const record = h.provider.getMockImplementation()!;
+        h.provider.mockImplementation(async message => String(await record(message)).replace('Deliver', '运送'));
+        await expect(h.request({origin})).resolves.toBe(origin.replace('Deliver', '运送'));
+        expect(h.calls[0].snapshot.glossaryProtectedTokens).toHaveLength(3);
+        expect(h.calls[0].message.origin).not.toContain('🚚');expect(h.calls[0].message.origin).not.toContain('1️⃣');
+        expect(h.identities[0]).toMatchObject({emojiLiteralProtection: {version: 1}});
+        const previous = {...h.identities[0]};delete previous.emojiLiteralProtection;
+        h.cache.clear();h.cache.set(JSON.stringify(previous), '送达然后离开。');
+        await expect(h.request({origin})).resolves.toBe(origin.replace('Deliver', '运送'));
+        expect(h.provider).toHaveBeenCalledTimes(2);
+        await expect(h.request({origin: 'Plain text.'})).resolves.toBe('译文:Plain text.');
+        expect(h.identities.at(-1)).not.toHaveProperty('emojiLiteralProtection');
+    });
+    it('emoji 与用户术语共用严格恢复，重复、外来或跨段标记不能显示或缓存', async () => {
+        const h = harness();
+        h.config.glossaryLibraries[0].entries = [{id:'symbol',source:'🚚',target:'货车',caseSensitive:true}];
+        await expect(h.request({origin:'Use 🚚 and 👩🏽‍🔬.'})).resolves.toBe('Use 货车 and 👩🏽‍🔬.');
+        expect(h.calls[0].snapshot.glossaryProtectedTokens).toHaveLength(2);
+        const current = createTranslationProviderConfigSnapshot(new Config());
+        for (const origin of ['Read 🚚 🚚.', ['Read 🚚.', 'Read 👩🏽‍🔬.'], serializeTranslationSlots(['Read 🚚.', 'Read 👩🏽‍🔬.'], 'emoji').payload]) {
+            const packet = prepareGlossaryRequest({origin} as TranslationRequestMessage, current);
+            const text = packet.message.origin;
+            expect(packet.restore(text)).toEqual(origin);
+            const tokens = getTranslationProviderConfig(packet.message, current).glossaryProtectedTokens!;
+            if (typeof text === 'string') {
+                for (const malformed of [text.replace(tokens[0], ''), text + tokens[0], text + '__FRTERM_foreign_0__']) {
+                    expect(() => packet.restore(malformed)).toThrow('未完整保留');
+                }
+            } else expect(() => packet.restore([...text].reverse())).toThrow('未完整保留');
+        }
+        const broken = harness();broken.config.glossaryEnabled = false;broken.provider.mockResolvedValue('不含图标的译文。');
+        await expect(broken.request({origin:'Read 🚚.'})).rejects.toMatchObject({code:'GLOSSARY_PLACEHOLDER_INVALID'});
+        expect(broken.cache.size).toBe(0);
+    });
+    it('摘要里的 emoji 不进入正文保护策略或摘要 token，正文原子仍独立保护', async () => {
+        const h = harness();h.config.enableAIContext = true;
+        await h.request({origin:'agent',pageContext:'This page explains delivery 🚚 workflows and field 👩🏽‍🔬 observations.'.repeat(20)});
+        const summary = h.calls.find(call=>call.message.summaryPrompt)!;
+        expect(summary).toBeDefined();expect(summary.snapshot.glossaryProtectedTokens).toBeUndefined();
+        expect(h.identities.every(identity=>!('emojiLiteralProtection' in identity))).toBe(true);
+        expect([...h.cache.keys()].some(key=>key.includes('page-summary'))).toBe(true);
+        const current = createTranslationProviderConfigSnapshot(new Config());
+        const summaryMessage: TranslationRequestMessage & {summaryPrompt:string} = {origin:'Ignore 🚚',summaryPrompt:'Summarize freely'};
+        const explicit = prepareGlossaryRequest(summaryMessage, current);
+        expect(explicit.message.origin).toBe('Ignore 🚚');expect(explicit.restore('自由摘要')).toBe('自由摘要');
+    });
     it('只把当前原文命中的占位符约束写进提示词，译法和网站规则不外发', async () => {
         const h = harness();
         await expect(h.request({origin: 'An agent works here.'})).resolves.toBe('An 智能体 works here.');
@@ -145,6 +484,25 @@ describe('术语库与真实翻译编排协作', () => {
         expect(String(h.calls[0].message.origin)).not.toContain('agent');
         await expect(h.request({origin: 'agent', serviceOverride: 'microsoft', glossaryRevision: 'old-version'}))
             .rejects.toMatchObject({code: 'GLOSSARY_REVISION_CHANGED'});
+    });
+    it('Google 同图语境和部分缓存重算保留每个位置的术语保护，错位标记仍拒绝发布', async () => {
+        const h = harness('google');
+        const request = markImageTextBatch({origin: ['agent, agent!', 'unrelated', 'agent, agent!']});
+        await expect(h.request(request)).resolves.toEqual(['智能体, 智能体!', '此条不该发送', '智能体, 智能体!']);
+        expect(h.provider).toHaveBeenCalledOnce();
+        expect(isImageTextBatch(h.calls[0].message)).toBe(true);
+        expect(h.calls[0].message.origin).toHaveLength(3);
+        expect(String(h.calls[0].message.origin)).not.toContain('agent');
+        const lastSlot = [...h.cache.keys()].find(key => JSON.parse(key).sourceText[0] === 'slot:2')!;
+        expect(lastSlot).toBeDefined(); h.cache.delete(lastSlot);
+        await expect(h.request(request)).resolves.toEqual(['智能体, 智能体!', '此条不该发送', '智能体, 智能体!']);
+        expect(h.provider).toHaveBeenCalledTimes(2);
+        expect(h.provider.mock.calls[1][0].origin).toHaveLength(3);
+        const invalid = harness('google');
+        invalid.provider.mockImplementation(async message => [...message.origin as string[]].reverse());
+        await expect(invalid.request(markImageTextBatch({origin: ['agent', 'unrelated']})))
+            .rejects.toMatchObject({code: 'GLOSSARY_PLACEHOLDER_INVALID'});
+        expect(invalid.cache.size).toBe(0);
     });
 
     it('服务损坏或重复标记时不显示或缓存残缺译文，重新翻译能恢复', async () => {
@@ -308,14 +666,16 @@ describe('术语库与真实翻译编排协作', () => {
         expect(JSON.stringify(h.calls[1].body)).not.toContain('智能体');
     });
 
-    it('AI多段真实broker协议保留首尾英文术语，哨兵本身不作为词条外发', async () => {
+    it.each([false, true])('AI 合批保留首尾术语且不外发标记对应的词条（紧凑 JSON %s）', async compact => {
         const h = harness();
         const origins = ['agent', 'Use agent'];
         const packet = serializeTranslationSlots(origins);
+        if (!compact) h.config.customBody.openai = '{"temperature":0.2}';
         h.config.glossaryLibraries[0].entries.push({id: 'protocol', source: packet.starts[0], target: '内部标记不外发', caseSensitive: true});
         const originalProvider = h.provider.getMockImplementation()!;
         h.provider.mockImplementation(async message => {
             await originalProvider(message);
+            if (compact) return JSON.stringify((JSON.parse(String(message.origin)) as string[]).map((text, index) => [index, text]));
             const snapshot = h.calls.at(-1)!.snapshot;
             let translated = String(message.origin);
             for (const term of getTranslationGlossaryTerms(snapshot, translated)) {
@@ -325,7 +685,12 @@ describe('术语库与真实翻译编排协作', () => {
         });
         await expect(h.request({origin: origins, aiMultiSegment: true})).resolves.toEqual(['智能体', 'Use 智能体']);
         expect(h.calls).toHaveLength(1);
-        expect(h.calls[0].message.origin).toContain(packet.starts[0]);
+        if (compact) {
+            expect(JSON.parse(String(h.calls[0].message.origin))).toEqual([
+                expect.stringMatching(/^__FRTERM_/u), expect.stringMatching(/^Use __FRTERM_/u),
+            ]);
+            expect(h.calls[0].message.origin).not.toContain(packet.starts[0]);
+        } else expect(h.calls[0].message.origin).toContain(packet.starts[0]);
         expect(h.calls[0].message.origin).toContain('__FRTERM_');
         const body = JSON.stringify(h.calls[0].body);
         expect(body).toContain('__FRTERM_');

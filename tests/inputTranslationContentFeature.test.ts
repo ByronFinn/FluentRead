@@ -113,6 +113,21 @@ function createUiFactory(records: any[]) {
     });
 }
 
+function viewportEventTarget() {
+    const listeners = new Map<string, Set<Listener>>();
+    return {
+        listeners,
+        addEventListener: vi.fn((type: string, listener: Listener, _options?: unknown) => {
+            if (!listeners.has(type)) listeners.set(type, new Set());
+            listeners.get(type)!.add(listener);
+        }),
+        removeEventListener: vi.fn((type: string, listener: Listener, _options?: unknown) => {
+            listeners.get(type)?.delete(listener);
+        }),
+        emit(type: string) { for (const listener of [...(listeners.get(type) || [])]) listener({type}); },
+    };
+}
+
 function mountHarness(overrides: {
     config?: Partial<InputTranslationContentConfig>;
     isSiteDisabled?: () => boolean;
@@ -159,6 +174,71 @@ afterEach(() => {
 });
 
 describe('input translation content feature', () => {
+    it.each(['restore','triple-cleanup'])('a late %s write cannot release the newer editor write lease',async phase=>{
+        const h=mountHarness({config:{inputBoxTranslationTrigger:phase==='restore'?'ctrl_enter':'triple_equal'}}),rich=fakeElement('div',{contenteditable:'true'});rich.innerText=rich.value='Hello';h.fakeDocument.activeElement=rich;
+        if(phase==='restore')await h.fakeDocument.emit('keydown',trustedKey({key:'Enter',ctrlKey:true}));
+        else for(let i=0;i<2;i++){
+            editable.readEditableCaretState.mockReturnValue({text:rich.innerText,caret:rich.innerText.length});await h.fakeDocument.emit('keydown',trustedKey({key:'=',code:'Equal'}));
+            rich.value+='=';rich.innerText+='=';editable.readEditableCaretState.mockReturnValue({text:rich.innerText,caret:rich.innerText.length});await h.fakeDocument.emit('input',{target:rich});
+        }
+        let oldFinish!:(value:string)=>void,newFinish!:(value:string)=>void,oldSignal!:AbortSignal,newSignal!:AbortSignal;
+        editable.replaceEditableText.mockImplementationOnce((_element,_text,_guard,_mode,_symbol,signal)=>{oldSignal=signal;return new Promise(resolve=>{oldFinish=resolve;});});
+        let oldTask=Promise.resolve();
+        if(phase==='restore'){const restore=h.tooltipRecords.at(-1).ui.mounted.children.at(-1);restore.listeners.get('click')[0]({isTrusted:true,preventDefault:vi.fn(),stopPropagation:vi.fn()});}
+        else {editable.readEditableCaretState.mockReturnValue({text:rich.innerText,caret:rich.innerText.length});oldTask=h.fakeDocument.emit('keydown',trustedKey({key:'=',code:'Equal'}));}
+        await vi.waitFor(()=>expect(oldSignal).toBeInstanceOf(AbortSignal));h.feature.invalidate();h.config.inputBoxTranslationTrigger='ctrl_enter';rich.innerText='New source';
+        editable.replaceEditableText.mockImplementationOnce((_element,_text,_guard,_mode,_symbol,signal)=>{newSignal=signal;return new Promise(resolve=>{newFinish=resolve;});});
+        const running=h.fakeDocument.emit('keydown',trustedKey({key:'Enter',ctrlKey:true}));await vi.waitFor(()=>expect(newSignal).toBeInstanceOf(AbortSignal));
+        oldFinish('stale');await oldTask;for(let i=0;i<10;i++)await Promise.resolve();
+        await h.fakeDocument.emit('paste',{isTrusted:false,target:rich});expect(newSignal.aborted).toBe(false);
+        await h.fakeDocument.emit('paste',{isTrusted:true,target:rich});expect(newSignal.aborted).toBe(true);newFinish('stale');await running;
+        expect(rich.innerText).toBe('New source');h.controller.abort();
+    });
+    it('does not cancel a native form control merely because it loses focus',async()=>{
+        let release!:(value:unknown)=>void;const h=mountHarness({sendMessage:()=>new Promise(resolve=>{release=resolve;})}),input=fakeElement('textarea');input.value='Hello';h.fakeDocument.activeElement=input;
+        const running=h.fakeDocument.emit('keydown',trustedKey({key:'Enter',ctrlKey:true}));await vi.waitFor(()=>expect(h.sendMessage).toHaveBeenCalledOnce());
+        h.fakeDocument.activeElement=fakeElement('input');await h.fakeDocument.emit('focusout',{target:input});release({success:true,translatedText:'Translated'});await running;
+        expect(input.value).toBe('Translated');expect(h.sendMessage.mock.calls.some(([message])=>message.type==='fluentReadTranslationCancel')).toBe(false);h.controller.abort();
+    });
+    it('an old retry action does not translate an edited draft',async()=>{
+        const h=mountHarness({sendMessage:async()=>({success:false,error:'controlled provider failure'})}),input=fakeElement('textarea');input.value='Hello';h.fakeDocument.activeElement=input;
+        await h.fakeDocument.emit('keydown',trustedKey({key:'Enter',ctrlKey:true}));const retry=h.tooltipRecords.at(-1).ui.mounted.children.at(-1);input.value='Edited draft';
+        retry.listeners.get('click')[0]({isTrusted:true,preventDefault:vi.fn(),stopPropagation:vi.fn()});for(let i=0;i<10;i++)await Promise.resolve();
+        expect(h.sendMessage).toHaveBeenCalledOnce();expect(input.value).toBe('Edited draft');h.controller.abort();
+    });
+    it('a queued cancel action from the previous request cannot cancel its successor',async()=>{
+        const replies:Array<(value:unknown)=>void>=[],h=mountHarness({sendMessage:()=>new Promise(resolve=>replies.push(resolve))}),input=fakeElement('textarea');input.value='Hello';h.fakeDocument.activeElement=input;
+        const first=h.fakeDocument.emit('keydown',trustedKey({key:'Enter',ctrlKey:true}));await vi.waitFor(()=>expect(replies).toHaveLength(1));const cancel=h.tooltipRecords.at(-1).ui.mounted.children.at(-1);
+        h.feature.invalidate();await first;input.value='New source';const next=h.fakeDocument.emit('keydown',trustedKey({key:'Enter',ctrlKey:true}));await vi.waitFor(()=>expect(replies).toHaveLength(2));
+        cancel.listeners.get('click')[0]({isTrusted:true,preventDefault:vi.fn(),stopPropagation:vi.fn()});
+        expect(h.sendMessage.mock.calls.filter(([message])=>message.type==='fluentReadTranslationCancel')).toHaveLength(1);replies[1]({success:true,translatedText:'Current answer'});await next;expect(input.value).toBe('Current answer');h.controller.abort();
+    });
+    it('reentrant host class cleanup cannot keep stale input visuals or revive a cancelled request',async()=>{
+        let release!:(value:unknown)=>void;const h=mountHarness({sendMessage:()=>new Promise(resolve=>{release=resolve;})}),input=fakeElement('textarea');input.value='Hello';h.fakeDocument.activeElement=input;
+        const running=h.fakeDocument.emit('keydown',trustedKey({key:'Enter',ctrlKey:true}));await vi.waitFor(()=>expect(h.sendMessage).toHaveBeenCalledOnce());
+        input.classList.remove.mockImplementationOnce(()=>h.feature.invalidate());h.feature.invalidate();release({success:true,translatedText:'Stale answer'});await running;
+        expect(input.value).toBe('Hello');expect(input.classList.values.has('fluent-input-translating')).toBe(false);h.controller.abort();
+    });
+    it('does not report a late restore failure after the input feature has been disposed',async()=>{
+        const h=mountHarness(),rich=fakeElement('div',{contenteditable:'true'});rich.innerText='Hello';h.fakeDocument.activeElement=rich;
+        await h.fakeDocument.emit('keydown',trustedKey({key:'Enter',ctrlKey:true}));let reject!:(error:Error)=>void,started=false;
+        editable.replaceEditableText.mockImplementationOnce(()=>{started=true;return new Promise((_resolve,fail)=>{reject=fail;});});
+        const restore=h.tooltipRecords.at(-1).ui.mounted.children.at(-1);restore.listeners.get('click')[0]({isTrusted:true,preventDefault:vi.fn(),stopPropagation:vi.fn()});
+        await vi.waitFor(()=>expect(started).toBe(true));h.controller.abort();reject(Error('late host restore failure'));
+        for(let i=0;i<10;i++)await Promise.resolve();expect(h.logger.error).not.toHaveBeenCalled();
+    });
+    it('keeps a new user draft when the background cancellation notification rejects', async () => {
+        let release!:(value:unknown)=>void;
+        const harness=mountHarness({sendMessage:()=>new Promise(resolve=>{release=resolve;})});
+        harness.sendMessage.mockImplementationOnce(()=>new Promise(resolve=>{release=resolve;})).mockRejectedValueOnce(new Error('background channel closed'));
+        const input=fakeElement('textarea');input.value='Original draft';harness.fakeDocument.activeElement=input;
+        const work=harness.fakeDocument.emit('keydown',trustedKey({key:'Enter',ctrlKey:true}));
+        await vi.waitFor(()=>expect(harness.sendMessage).toHaveBeenCalledOnce());
+        input.value='Updated draft';harness.controller.abort();await work;
+        release({success:true,translatedText:'迟到译文'});await Promise.resolve();await Promise.resolve();
+        expect(input.value).toBe('Updated draft');expect(harness.logger.error).not.toHaveBeenCalled();
+        expect(harness.sendMessage.mock.calls[1][0]).toEqual({type:'fluentReadTranslationCancel',clientRequestId:harness.sendMessage.mock.calls[0][0].clientRequestId});
+    });
     it('含 AI 的输入组合沿用独立预算，AI 默认变更不作废组合事务，超时仍发送精确取消', async () => {
         vi.useFakeTimers();
         const config = new Config();
@@ -382,6 +462,221 @@ describe('input translation content feature', () => {
         harness.controller.abort();
         expect(view.removeEventListener).toHaveBeenCalledWith('scroll', position, true);
         expect(view.removeEventListener).toHaveBeenCalledWith('resize', position);
+    });
+
+    it('同帧的滚动与可见视口事件只测量一次，旧提示和卸载后的排队帧不再测量', async () => {
+        const harness = mountHarness();
+        const frames = new Map<number, FrameRequestCallback>();
+        let nextFrame = 0;
+        const viewport = Object.assign(viewportEventTarget(), {width: 390, height: 600, offsetLeft: 0, offsetTop: 0});
+        const view = Object.assign(viewportEventTarget(), {
+            innerWidth: 390, innerHeight: 600, visualViewport: viewport,
+            requestAnimationFrame: vi.fn((callback: FrameRequestCallback) => {frames.set(++nextFrame, callback); return nextFrame;}),
+            cancelAnimationFrame: vi.fn((id: number) => {frames.delete(id);}),
+        });
+        (harness.fakeDocument as any).defaultView = view;
+        const input = fakeElement('textarea');input.value = 'Hello';harness.fakeDocument.activeElement = input;
+        await harness.fakeDocument.emit('keydown', trustedKey({key: 'Enter', ctrlKey: true}));
+        const tooltip = harness.tooltipRecords.at(-1).ui.mounted;
+        input.getBoundingClientRect.mockClear();tooltip.getBoundingClientRect.mockClear();
+        for (let index = 0; index < 20; index++) {
+            view.emit('scroll');view.emit('resize');viewport.emit('scroll');viewport.emit('resize');
+        }
+        expect(input.getBoundingClientRect).not.toHaveBeenCalled();
+        expect(tooltip.getBoundingClientRect).not.toHaveBeenCalled();
+        expect(frames.size).toBe(1);
+        input.getBoundingClientRect.mockReturnValue({left: 0, width: 80, top: 100, bottom: 130});
+        const [id, callback] = [...frames][0];frames.delete(id);callback(16);
+        expect(input.getBoundingClientRect).toHaveBeenCalledOnce();
+        expect(tooltip.getBoundingClientRect).toHaveBeenCalledOnce();
+        expect(tooltip.style).toMatchObject({left: '12px', top: '142px'});
+        view.emit('scroll');
+        const oldCallback = [...frames.values()][0];
+        input.value = 'New draft';await harness.fakeDocument.emit('input', {target: input});
+        expect(frames.size).toBe(0);
+        oldCallback(32);
+        expect(input.getBoundingClientRect).toHaveBeenCalledOnce();
+        await harness.fakeDocument.emit('keydown', trustedKey({key: 'Enter', ctrlKey: true}));
+        view.emit('scroll');
+        const unmountedCallback = [...frames.values()][0];
+        const measurements = input.getBoundingClientRect.mock.calls.length;
+        harness.controller.abort();
+        expect(frames.size).toBe(0);
+        unmountedCallback(48);
+        view.emit('scroll');viewport.emit('resize');
+        expect(input.getBoundingClientRect).toHaveBeenCalledTimes(measurements);
+        expect(harness.logger.error).not.toHaveBeenCalled();
+    });
+
+    it('键盘缩小与平移可见视口时重新夹边，卸载移除全部定位监听且不滚动宿主页', async () => {
+        const records: any[] = [];
+        const base = createUiFactory(records);
+        const harness = mountHarness({createUi: (context: unknown, options: any) => base(context, {
+            ...options,
+            onMount(container: HTMLElement) {
+                const tooltip = options.onMount(container);
+                tooltip.getBoundingClientRect.mockImplementation(() => ({
+                    width: Math.min(240, Number.parseFloat(tooltip.style.maxWidth)),
+                    height: Math.min(100, Number.parseFloat(tooltip.style.maxHeight)),
+                }));
+                return tooltip;
+            },
+        })});
+        const viewport = Object.assign(viewportEventTarget(), {width: 390, height: 280, offsetLeft: 20, offsetTop: 80});
+        const view: any = Object.assign(viewportEventTarget(), {
+            innerWidth: 390, innerHeight: 760, scrollX: 23, scrollY: 41, scrollTo: vi.fn(), visualViewport: viewport,
+        });
+        (harness.fakeDocument as any).defaultView = view;
+        const input = fakeElement('textarea');
+        input.value = 'Hello';
+        let rect = {left: 350, width: 40, top: 300, bottom: 330};
+        input.getBoundingClientRect.mockImplementation(() => rect);
+        harness.fakeDocument.activeElement = input;
+        await harness.fakeDocument.emit('keydown', trustedKey({key: 'Enter', ctrlKey: true}));
+        const tooltip = records.at(-1).ui.mounted;
+        expect(tooltip.style).toMatchObject({left: '158px', top: '188px', maxWidth: '360px', maxHeight: '256px'});
+
+        Object.assign(viewport, {width: 260, height: 220, offsetLeft: 40, offsetTop: 100});
+        viewport.emit('resize');
+        expect(tooltip.style).toMatchObject({left: '52px', top: '188px', maxWidth: '236px', maxHeight: '196px'});
+        rect = {left: 100, width: 40, top: 160, bottom: 190};
+        Object.assign(viewport, {offsetLeft: 60, offsetTop: 130});
+        viewport.emit('scroll');
+        expect(tooltip.style).toMatchObject({left: '72px', top: '202px'});
+        expect(view.scrollTo).not.toHaveBeenCalled();
+        expect([view.scrollX, view.scrollY]).toEqual([23, 41]);
+        expect(input.value).toBe('你好');
+        expect([...viewport.listeners.values()].map(listeners => listeners.size)).toEqual([1, 1]);
+
+        harness.controller.abort();
+        for (const listeners of viewport.listeners.values()) expect(listeners.size).toBe(0);
+        for (const listeners of view.listeners.values()) expect(listeners.size).toBe(0);
+        const previous = {...tooltip.style};
+        viewport.emit('resize');
+        viewport.emit('scroll');
+        view.emit('scroll');
+        expect(tooltip.style).toEqual(previous);
+    });
+
+    it('提示使用所属窗口的安全区并及时释放测量探针', async () => {
+        const records: any[] = [];
+        const base = createUiFactory(records);
+        const harness = mountHarness({createUi: (context: unknown, options: any) => base(context, {
+            ...options,
+            onMount(container: HTMLElement) {
+                const tooltip = options.onMount(container);
+                tooltip.getBoundingClientRect.mockImplementation(() => {
+                    expect(tooltip.style.maxWidth).toBe('348px');
+                    expect(tooltip.style.maxHeight).toBe('206px');
+                    return {width: 300, height: 120};
+                });
+                return tooltip;
+            },
+        })});
+        const document: any = harness.fakeDocument;
+        document.body = {appendChild: vi.fn()};
+        const createElement = document.createElement.bind(document);
+        document.createElement = vi.fn((tag: string) => {
+            const node = createElement(tag);
+            if (tag === 'span') node.remove = vi.fn();
+            return node;
+        });
+        document.defaultView = Object.assign(viewportEventTarget(), {
+            innerWidth: 390, innerHeight: 760, document,
+            visualViewport: Object.assign(viewportEventTarget(), {width: 390, height: 280, offsetLeft: 20, offsetTop: 80}),
+            getComputedStyle: vi.fn(() => ({paddingTop: '20px', paddingRight: '10px', paddingBottom: '30px', paddingLeft: '8px'})),
+        });
+        const input = fakeElement('textarea');
+        input.value = 'Hello';
+        input.getBoundingClientRect.mockReturnValue({left: 10, width: 80, top: 110, bottom: 140});
+        document.activeElement = input;
+        await document.emit('keydown', trustedKey({key: 'Enter', ctrlKey: true}));
+        expect(records.at(-1).ui.mounted.style).toMatchObject({left: '40px', top: '152px'});
+        expect(document.body.appendChild).toHaveBeenCalled();
+        for (const [probe] of document.body.appendChild.mock.calls) expect(probe.remove).toHaveBeenCalledOnce();
+        harness.controller.abort();
+    });
+
+    it('手动复制预览先按短窄可见区限制测量尺寸且不写入被拒绝的编辑宿主', async () => {
+        const records: any[] = [];
+        const base = createUiFactory(records);
+        const harness = mountHarness({createUi: (context: unknown, options: any) => base(context, {
+            ...options,
+            onMount(container: HTMLElement) {
+                const tooltip = options.onMount(container);
+                tooltip.getBoundingClientRect.mockImplementation(() => ({
+                    width: Math.min(320, Number.parseFloat(tooltip.style.maxWidth)),
+                    height: Math.min(420, Number.parseFloat(tooltip.style.maxHeight)),
+                }));
+                return tooltip;
+            },
+        })});
+        const viewport = Object.assign(viewportEventTarget(), {width: 220, height: 180, offsetLeft: 40, offsetTop: 100});
+        (harness.fakeDocument as any).defaultView = Object.assign(viewportEventTarget(), {
+            innerWidth: 390, innerHeight: 760, visualViewport: viewport,
+        });
+        const rich = fakeElement('div', {contenteditable: 'true'});
+        rich.innerText = 'Hello';
+        rich.getBoundingClientRect.mockReturnValue({left: 80, width: 80, top: 160, bottom: 180});
+        harness.fakeDocument.activeElement = rich;
+        editable.replaceEditableText.mockResolvedValueOnce('unsupported');
+        await harness.fakeDocument.emit('keydown', trustedKey({key: 'Enter', ctrlKey: true}));
+        const tooltip = records.at(-1).ui.mounted;
+        expect(tooltip.style).toMatchObject({width: '320px', maxWidth: '196px', maxHeight: '156px', left: '52px', top: '112px'});
+        expect(tooltip.children.at(-1)).toMatchObject({readOnly: true, value: '你好'});
+        expect(rich.innerText).toBe('Hello');
+        harness.controller.abort();
+    });
+
+    it('58px可见区回收垂直留白，84px恢复原间距且卸载后不再重新定位', async () => {
+        const records: any[] = [];
+        const base = createUiFactory(records);
+        const harness = mountHarness({createUi: (context: unknown, options: any) => base(context, {
+            ...options,
+            onMount(container: HTMLElement) {
+                const tooltip = options.onMount(container);
+                tooltip.getBoundingClientRect.mockImplementation(() => ({
+                    width: Math.min(240, Number.parseFloat(tooltip.style.maxWidth)),
+                    height: Math.min(400, Number.parseFloat(tooltip.style.maxHeight)),
+                }));
+                return tooltip;
+            },
+        })});
+        const viewport = Object.assign(viewportEventTarget(), {width: 320, height: 58, offsetLeft: 20, offsetTop: 80});
+        const view: any = Object.assign(viewportEventTarget(), {
+            innerWidth: 390, innerHeight: 760, scrollX: 23, scrollY: 41, scrollTo: vi.fn(), visualViewport: viewport,
+        });
+        (harness.fakeDocument as any).defaultView = view;
+        const input = fakeElement('textarea');
+        input.value = 'Hello';
+        input.getBoundingClientRect.mockReturnValue({left: 300, width: 40, top: 100, bottom: 130});
+        harness.fakeDocument.activeElement = input;
+        await harness.fakeDocument.emit('keydown', trustedKey({key: 'Enter', ctrlKey: true}));
+        const tooltip = records.at(-1).ui.mounted;
+        expect(tooltip.style).toMatchObject({left: '88px', top: '80px', maxWidth: '296px', maxHeight: '58px', paddingBlock: '7px'});
+        expect(Number.parseFloat(tooltip.style.maxHeight) - Number.parseFloat(tooltip.style.paddingBlock) * 2).toBe(44);
+
+        viewport.height = 84;
+        viewport.emit('resize');
+        expect(tooltip.style).toMatchObject({left: '88px', top: '92px', maxWidth: '296px', maxHeight: '60px', paddingBlock: '8px'});
+        expect(records.at(-1).ui.mounted).toBe(tooltip);
+        viewport.height = 58;
+        viewport.offsetTop = 140;
+        viewport.emit('scroll');
+        expect(tooltip.style).toMatchObject({left: '88px', top: '140px', maxWidth: '296px', maxHeight: '58px', paddingBlock: '7px'});
+        expect(view.scrollTo).not.toHaveBeenCalled();
+        expect([view.scrollX, view.scrollY]).toEqual([23, 41]);
+        expect(input.value).toBe('你好');
+        expect([...viewport.listeners.values()].map(listeners => listeners.size)).toEqual([1, 1]);
+
+        harness.controller.abort();
+        for (const listeners of viewport.listeners.values()) expect(listeners.size).toBe(0);
+        for (const listeners of view.listeners.values()) expect(listeners.size).toBe(0);
+        const lastStyle = {...tooltip.style};
+        viewport.height = 84;
+        viewport.emit('resize');
+        view.emit('scroll');
+        expect(tooltip.style).toEqual(lastStyle);
     });
 
     it.each(['keydown', 'compositionstart', 'paste', 'cut', 'ctrl_key'])('恢复原文等待期间的 %s 能立即取消写入', async type => {
@@ -927,6 +1222,7 @@ describe('input translation content feature', () => {
     it.each([
         ['password', (element: any) => { element.type = 'password'; }],
         ['readonly', (element: any) => { element.readOnly = true; }],
+        ['disabled fieldset', (element: any) => { element.matches = (selector: string) => selector === ':disabled'; }],
     ])('请求启动后变为 %s 时，即使提示仍在创建也不写回', async (_label, mutate) => {
         let releaseTooltip!: () => void;
         const tooltipBarrier = new Promise<void>((resolve) => { releaseTooltip = resolve; });
@@ -967,6 +1263,43 @@ describe('input translation content feature', () => {
         await pending;
 
         expect(input.value).toBe('Public draft');
+    });
+
+    it.each(['aria-disabled', 'aria-readonly'])('控件请求期间变为 %s 时拒绝迟到译文，解除后可重新翻译', async name => {
+        let release!: (value: unknown) => void;
+        const {fakeDocument, sendMessage} = mountHarness({sendMessage: () => new Promise(resolve => {release = resolve;})});
+        const input = fakeElement('textarea');
+        input.value = 'Public draft';
+        fakeDocument.activeElement = input;
+        const pending = fakeDocument.emit('keydown', trustedKey({key: 'Enter', ctrlKey: true}));
+        await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce());
+        input.getAttribute.mockImplementation((attribute: string) => attribute === name ? 'true' : null);
+        release({success: true, translatedText: '不应覆盖'});
+        await pending;
+        expect(input.value).toBe('Public draft');
+        input.getAttribute.mockReturnValue(null);
+        const next = fakeDocument.emit('keydown', trustedKey({key: 'Enter', ctrlKey: true}));
+        await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+        release({success: true, translatedText: '新的译文'});
+        await next;
+        expect(input.value).toBe('新的译文');
+    });
+
+    it.each(['textarea', 'div'])('请求期间祖先禁用 %s 时拒绝写回迟到译文', async tag => {
+        let release!: (value: unknown) => void;
+        const {fakeDocument, sendMessage} = mountHarness({sendMessage: () => new Promise(resolve => {release = resolve;})});
+        const input = fakeElement(tag, tag === 'div' ? {contenteditable: 'true'} : {});
+        input.value = 'Public draft'; input.innerText = 'Public draft'; input.textContent = 'Public draft';
+        let disabled = false;
+        input.closest.mockImplementation((selector: string) => selector.includes('aria-disabled') && disabled ? {} : null);
+        fakeDocument.activeElement = input;
+        const pending = fakeDocument.emit('keydown', trustedKey({key: 'Enter', ctrlKey: true}));
+        await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledOnce());
+        disabled = true;
+        release({success: true, translatedText: '不应覆盖'});
+        await pending;
+        expect(input.value).toBe('Public draft');
+        expect(editable.replaceEditableText).not.toHaveBeenCalled();
     });
 
     it.each([

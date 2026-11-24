@@ -1,7 +1,7 @@
 <!--
  * @file src/features/settings/ui/services/ApiKeyList.vue
  * 文件职责：集中管理同一服务的 API Key 输入、逐项连接结果及检查操作。
- * 主要内容：以密钥输入为主展示对齐列表与逐项结果，由服务标题栏检查或停止；“添加密钥”每次都新增一行并聚焦，存在多行时每行都可单独重测和删除，“仅用首个”下保留的其余密钥标为备用；输入下方容纳条件出现的密钥使用方式，保留失败详情、窄屏与键盘操作。
+ * 主要内容：以密钥输入为主展示对齐列表与逐项结果，列宽与输入尺寸消费统一服务表单 token，由服务标题栏检查或停止；“添加密钥”每次都新增一行并聚焦，存在多行时每行都可单独重测和删除，“仅用首个”下保留的其余密钥标为备用；输入下方容纳条件出现的密钥使用方式，保留失败详情、窄屏与键盘操作。
  * 模块边界：仅管理局部展示状态，通过事件交给父组件保存配置和执行检查；不发起网络请求，不把一次检查结果解释为实时健康权重。
  -->
 <template>
@@ -142,9 +142,9 @@ async function addKey(): Promise<void> {
 </script>
 
 <style scoped>
-.api-key-list { --key-success: #247454; --key-error: #b33d51; display: grid; grid-template-columns: 140px minmax(0, 640px); gap: 8px 16px; min-width: 0; margin: 0; padding: 14px 0; border-top: 1px solid var(--line); color: var(--ink); }
+.api-key-list { --key-success: #247454; --key-error: #b33d51; display: grid; grid-template-columns: var(--fr-service-label-width, 140px) minmax(0, var(--fr-service-control-width, 640px)); gap: 8px var(--fr-service-column-gap, 16px); min-width: 0; margin: 0; padding: var(--fr-settings-row-padding-block, 14px) 0; border-top: 1px solid var(--line); color: var(--ink); }
 .api-key-list svg { width: 16px; height: 16px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
-.api-key-heading { grid-column: 1; grid-row: 1; display: flex; align-items: center; align-self: start; gap: 3px; flex-wrap: wrap; min-height: 38px; min-width: 0; }
+.api-key-heading { grid-column: 1; grid-row: 1; display: flex; align-items: center; align-self: start; gap: 3px; flex-wrap: wrap; min-height: var(--fr-service-control-height, 40px); min-width: 0; }
 .api-key-heading strong { font-size: 13px; font-weight: 550; }
 .api-key-overview { grid-column: 2; grid-row: 2; font-size: 11px; color: var(--muted); line-height: 1.6; }
 .api-key-summary, .api-key-progress { display: inline-flex; align-items: center; gap: 7px; }
@@ -159,9 +159,9 @@ async function addKey(): Promise<void> {
 .api-key-prefix { color: var(--muted); font-size: 11px; padding-right: 6px; border-right: 1px solid var(--line); font-variant-numeric: tabular-nums; }
 .api-key-row.is-checking-row { background: transparent; }
 .api-key-row.is-standby .api-key-entry { opacity: .62; }
-.api-key-entry { width: 100%; max-width: 640px; min-width: 0; }
+.api-key-entry { width: 100%; max-width: var(--fr-service-control-width, 640px); min-width: 0; }
 .api-key-entry :deep(.el-input) { width: 100% !important; max-width: none !important; min-width: 0; }
-.api-key-entry :deep(.el-input__wrapper) { min-height: 38px; padding-inline: 11px; border-radius: 10px; background: var(--surface, #fff); box-shadow: inset 0 0 0 1px var(--line); }
+.api-key-entry :deep(.el-input__wrapper) { min-height: var(--fr-service-control-height, 40px); padding-inline: 11px; border-radius: 8px; background: var(--surface, #fff); box-shadow: inset 0 0 0 1px var(--line); }
 .api-key-entry :deep(.el-input__wrapper:hover) { box-shadow: inset 0 0 0 1px var(--line, #e3e7ee); }
 .api-key-entry :deep(.el-input__wrapper.is-focus) { background: var(--surface, #fff); box-shadow: inset 0 0 0 1px var(--brand, #ef4776); }
 .api-key-entry :deep(.el-input__inner) { font-size: 13px; letter-spacing: .05em; }

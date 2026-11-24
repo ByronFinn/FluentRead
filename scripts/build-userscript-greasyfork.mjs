@@ -14,6 +14,9 @@ const resources = [
     ['.output/userscript-vendor/fluentread-vendor.v1.js', `${resourceDir}/fluentread-vendor.v1.js`],
     ['.output/userscript-greasyfork/fluentread-data.v1.js', `${resourceDir}/fluentread-data.v1.js`],
 ];
+// 所有会改变 vendor 输出的本地源都必须存在于资源提交且保持一致。
+const vendorSources = ['userscript/vendorEntry.ts', 'userscript/vendor.vite.config.ts',
+    'scripts/testing/franc-runtime-build.ts', 'public/third-party-notices/franc-min-MIT.txt', 'pnpm-lock.yaml'];
 
 function run(command, args, extraEnv = {}) {
     const result = spawnSync(command, args, {
@@ -43,22 +46,22 @@ const baseUrl = prepareResources
     : `https://cdn.jsdelivr.net/gh/FluentRead/FluentRead@${commit}/${resourceDir}`;
 const buildEnv = {
     FLUENTREAD_USERSCRIPT_GREASYFORK_SOURCE: '1',
+    FLUENTREAD_USERSCRIPT_PREPARE_RESOURCES: prepareResources ? '1' : '0',
     FLUENTREAD_USERSCRIPT_VENDOR_URL: `${baseUrl}/fluentread-vendor.v1.js`,
     FLUENTREAD_USERSCRIPT_DATA_URL: `${baseUrl}/fluentread-data.v1.js`,
 };
 
 if (prepareResources) {
-    run('pnpm', ['exec', 'vite', 'build', '--config', 'userscript/vendor.vite.config.ts']);
+    run(process.execPath, ['node_modules/vite-userscript/bin/vite.js', 'build', '--config', 'userscript/vendor.vite.config.ts']);
 } else {
-    for (const source of ['userscript/vendorEntry.ts', 'userscript/vendor.vite.config.ts', 'pnpm-lock.yaml']) {
+    for (const source of vendorSources) {
         gitOutput(['cat-file', '-e', `${commit}:${source}`]);
     }
-    run('git', ['diff', '--exit-code', commit, '--',
-        'userscript/vendorEntry.ts', 'userscript/vendor.vite.config.ts', 'pnpm-lock.yaml']);
+    run('git', ['diff', '--exit-code', commit, '--', ...vendorSources]);
     fs.mkdirSync(path.resolve(root, '.output/userscript-vendor'), {recursive: true});
     fs.copyFileSync(path.resolve(root, resources[0][1]), path.resolve(root, resources[0][0]));
 }
-run('pnpm', ['exec', 'vite', 'build', '--config', 'userscript/vite.config.ts'], buildEnv);
+run(process.execPath, ['node_modules/vite-userscript/bin/vite.js', 'build', '--config', 'userscript/vite.config.ts'], buildEnv);
 
 for (const [built, tracked] of resources) {
     const builtBytes = fs.readFileSync(path.resolve(root, built));

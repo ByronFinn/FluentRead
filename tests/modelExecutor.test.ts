@@ -46,25 +46,25 @@ interface Harness {
     events: ModelCallEvent[];
     eventRequestIds: string[];
     createModel: ReturnType<typeof vi.fn>;
-    startHeartbeat: ReturnType<typeof vi.fn>;
-    stopHeartbeat: ReturnType<typeof vi.fn>;
-    emitEvent: ReturnType<typeof vi.fn>;
+    startHeartbeat: (requestId: string, intervalMs: number) => () => void;
+    stopHeartbeat: () => void;
+    emitEvent: (requestId: string, event: ModelCallEvent) => void;
 }
 
 /** 组装端口桩：默认注入成功的 doGenerate 模型，事件按到达顺序记录。 */
 function createHarness(model: LanguageModel | Error, options: Partial<Pick<Harness, 'emitEvent' | 'startHeartbeat'>> = {}): Harness {
     const events: ModelCallEvent[] = [];
     const eventRequestIds: string[] = [];
-    const stopHeartbeat = vi.fn();
+    const stopHeartbeat = vi.fn<() => void>();
     const createModel = vi.fn(() => {
         if (model instanceof Error) throw model;
         return model;
     });
-    const emitEvent = options.emitEvent ?? vi.fn((requestId: string, event: ModelCallEvent) => {
+    const emitEvent: (requestId: string, event: ModelCallEvent) => void = options.emitEvent ?? vi.fn((requestId: string, event: ModelCallEvent) => {
         eventRequestIds.push(requestId);
         events.push(event);
     });
-    const startHeartbeat = options.startHeartbeat ?? vi.fn(() => stopHeartbeat);
+    const startHeartbeat: (requestId: string, intervalMs: number) => () => void = options.startHeartbeat ?? vi.fn(() => stopHeartbeat);
     return {
         ports: {createModel, emitEvent, startHeartbeat},
         events,

@@ -1,10 +1,63 @@
 import {describe, expect, it, vi} from 'vitest';
 import {HarnessLedger, deriveEventMessage, deriveMessages, foldSurface, isSurfaceEvent} from '@/src/core/harness/surface';
 import {runHarnessLoop, type HarnessGenerateResult, type HarnessToolDefinition} from '@/src/core/harness/loop';
+import {z} from 'zod';
+import {z as zod3} from 'zod/v3';
+import {readContextInputSchema} from '@/src/services/harness/generation';
+import {isReadContextInput, READ_CONTEXT_INPUT_SCHEMA} from '@/src/services/harness/readContext';
 
 const tools: readonly HarnessToolDefinition[] = [{name: 'read_context', description: 'read', input: {type: 'object'}}];
 const result = (text: string, toolCalls: HarnessGenerateResult['toolCalls'] = []): HarnessGenerateResult => ({
     assistant: {role: 'assistant', content: text ? [{type: 'text', text}] : toolCalls.map(call => ({type: 'tool-call', toolCallId: call.id, toolName: call.name, input: call.input}))}, text, toolCalls,
+});
+
+describe('tool-free reading generation', () => {
+    it('does not require an unused executor when the original text is already supplied', async () => {
+        const generate = vi.fn().mockResolvedValue(result('direct answer'));
+        const output = await runHarnessLoop({generate, system: '', user: 'supplied source', tools: [], signal: new AbortController().signal});
+        expect(output.text).toBe('direct answer');
+        expect(generate).toHaveBeenCalledOnce();
+        await expect(runHarnessLoop({generate, system: '', user: 'source', tools, signal: new AbortController().signal})).rejects.toThrow('已声明的阅读工具缺少执行器');
+        expect(generate).toHaveBeenCalledOnce();
+    });
+
+    it('clears streamed text before a tool result starts another model answer', async () => {
+        const text: string[] = [];
+        const generate = vi.fn().mockImplementationOnce(async input => {
+            input.onText('preface');
+            return result('', [{id: 'context', name: 'read_context', input: {}}]);
+        }).mockImplementationOnce(async input => {input.onText('final');return result('final');});
+        await runHarnessLoop({generate, executeTool: async () => 'authorized paragraph', system: '', user: 'source', tools,
+            signal: new AbortController().signal, onText: value => text.push(value)});
+        expect(text).toEqual(['preface', '', 'final']);
+    });
+});
+
+describe('shared read_context wire validation', () => {
+    it('preserves the wire schema and Zod 3 behavior for JSON, inherited keys and non-JSON tool values', () => {
+        const previous = zod3.object({reason: zod3.string().max(200).optional()}).strict();
+        expect(z.toJSONSchema(readContextInputSchema, {target: 'draft-7', io: 'input'}))
+            .toEqual({...READ_CONTEXT_INPUT_SCHEMA, $schema: 'http://json-schema.org/draft-07/schema#'});
+        const inputs: unknown[] = [undefined, null, true, 0, NaN, '', [], ['reason'], () => undefined,
+            {}, {reason: undefined}, {reason: ''}, {reason: 'x'.repeat(200)}, {reason: 'x'.repeat(201)},
+            {reason: '🙂'.repeat(100)}, {reason: '🙂'.repeat(101)}, {reason: null}, {reason: 1}, {reason: false},
+            {reason: {}}, {extra: ''}, {reason: 'ok', extra: false}, new Date(), new Map(), new Set(), Promise.resolve(),
+            {then() {}, catch() {}}, Object.create(null), Object.create({reason: 'inherited'}),
+            Object.create({other: 'inherited'}), Object.defineProperty({}, 'extra', {value: true}),
+            {[Symbol('private')]: true}, new (class {reason = 'class field';})(),
+        ];
+        for (const value of inputs) {
+            const expected = previous.safeParse(value).success;
+            expect(readContextInputSchema.safeParse(value).success).toBe(expected);
+            expect(isReadContextInput(value)).toBe(expected);
+        }
+        for (let size = 0; size <= 220; size++) {
+            const value = {reason: 'x'.repeat(size)};
+            const expected = previous.safeParse(value).success;
+            expect(readContextInputSchema.safeParse(value).success).toBe(expected);
+            expect(isReadContextInput(value)).toBe(expected);
+        }
+    });
 });
 
 describe('Harness browser core', () => {

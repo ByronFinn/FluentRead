@@ -1,3 +1,3 @@
 # Writing assistant
 
-[Open the writing assistant guide](/en/guide/writing-assistant) for drafting, improving, and inserting replies in Gmail and GitHub.
+Follow the [writing assistant guide](/en/guide/writing-assistant) to draft, improve, and insert replies in Gmail and GitHub.

@@ -4,48 +4,48 @@ title: Maintainers — apply for ChatGPT access
 
 # Maintainers — apply for ChatGPT access
 
-**FluentRead has not submitted an application or received public integration approval. Its hosted backend is not deployed.** This page explains the maintainer application. Users should see [ChatGPT plan availability](/en/config/chatgpt-plan). Verified on October 14, 2026.
+**As checked on October 14, 2026, FluentRead had not submitted an application or received public integration approval, and its hosted backend was not deployed.** This page is for maintainers. Users should see [ChatGPT plan availability](/en/config/chatgpt-plan). The links, fields, and requirements below record that date.
 
 ## 1. Open the official interest form
 
-Open OpenAI's [Request a client ID](https://developers.openai.com/siwc/request-client-id) page and follow its **Sign in with ChatGPT interest form** link. This joins a waitlist; it does not immediately create a client ID. You can also open the [English form](https://openai.com/form/sign-in-with-chatgpt-interest/) or [Chinese form](https://openai.com/zh-Hans-CN/form/sign-in-with-chatgpt-interest/) directly.
+Open [Request a client ID](https://developers.openai.com/siwc/request-client-id) and choose **Sign in with ChatGPT interest form**, or open the [English](https://openai.com/form/sign-in-with-chatgpt-interest/) or [Chinese form](https://openai.com/zh-Hans-CN/form/sign-in-with-chatgpt-interest/) directly. Completing this form does not immediately create a client ID.
 
-<img src="/guides/chatgpt-application/01-request-client-id.jpg" alt="Official OpenAI Request a client ID page with the interest form link" width="1280" height="720" loading="lazy" />
+<img src="/guides/chatgpt-application/01-request-client-id.jpg" alt="Interest form link on the official OpenAI page" width="1280" height="720" loading="lazy" />
 
-Source: [OpenAI Developers](https://developers.openai.com/siwc/request-client-id), October 14, 2026. Actual page, unmodified.
+Screenshot: [OpenAI Developers](https://developers.openai.com/siwc/request-client-id), October 14, 2026; actual page, unmodified.
 
-OpenAI currently describes this application route as a limited trial for selected commercial partners. The form directs open-source developers to developer documentation. If you have an OpenAI representative, the [website guide](https://developers.openai.com/siwc/website) also says to contact them. Individual maintainers should describe their project and hosting needs truthfully; OpenAI does not promise acceptance or publish a review timeline.
+At that check, OpenAI described a limited trial for selected commercial partners and directed open-source developers to documentation. Individual maintainers can describe their project truthfully, but acceptance and a review timeline were not promised. If you have an OpenAI representative, follow the [website guide](https://developers.openai.com/siwc/website) to contact them.
 
-FluentRead seeks a public extension experience using ChatGPT plans. The [open-source plan documentation](https://developers.openai.com/siwc/token-sharing-open-source) directs paid or remotely hosted apps to the interest form. Being open source does not establish public hosting permission.
+FluentRead seeks a public extension flow using ChatGPT plans. The [open-source plan documentation](https://developers.openai.com/siwc/token-sharing-open-source) directs paid or remotely hosted apps to the interest form. Open-source status alone does not grant public hosting permission.
 
-<img src="/guides/chatgpt-application/02-interest-form-top.jpg" alt="Official Chinese interest form introduction explaining commercial partner and open-source routes" width="1280" height="720" loading="lazy" />
+<img src="/guides/chatgpt-application/02-interest-form-top.jpg" alt="Commercial partner and open-source guidance on the Chinese form" width="1280" height="720" loading="lazy" />
 
-Source: [OpenAI Chinese interest form](https://openai.com/zh-Hans-CN/form/sign-in-with-chatgpt-interest/), October 14, 2026. Actual page; fields empty, no submission.
+Screenshot: [OpenAI Chinese interest form](https://openai.com/zh-Hans-CN/form/sign-in-with-chatgpt-interest/), October 14, 2026; fields empty, not submitted.
 
-## 2. Complete the 8 actual fields
+## 2. Complete the project information
 
-These fields were verified in the official form. An asterisk means required; **Job title** has none. Adapt the suggestions to your actual circumstances. The screenshots show the Chinese interface.
+These eight fields were recorded on that date. Asterisks mark required fields. Use your actual details without inventing a company or identity.
 
-| Field | Suggested information for a FluentRead maintainer |
+| Field | Information |
 | --- | --- |
-| Work email * | A real contact address where you can receive a response. Do not invent a corporate address. |
-| Last name * | Your real family name. |
-| First name * | Your real given name. |
-| Company name * | Your actual company, if any. Otherwise explain truthfully, for example `Independent open-source developer / FluentRead project`. Do not invent a company; this wording does not guarantee eligibility. |
-| Website URL * | The real project website, `https://read.thinkstu.com/`. Add the open-source repository in the product description. |
-| Job title | `Open-source maintainer`, if accurate. This field is optional. |
-| Capabilities * | Choose the second option, requesting both sign-in and ChatGPT plan AI requests. |
-| Products * | Describe FluentRead's real features, open-source status, extension use case, and planned hosting. The draft below can help. |
+| Work email * | A real address where you can receive a response |
+| Last name * | Your family name |
+| First name * | Your given name |
+| Company name * | Your actual company; for a personal project, explain truthfully, for example `Independent open-source developer / FluentRead project`. This wording does not guarantee eligibility |
+| Website URL * | `https://read.thinkstu.com/`, with the repository in the product description |
+| Job title | Your actual role, such as `Open-source maintainer`; optional |
+| Capabilities * | The second option: sign-in and ChatGPT plan AI requests |
+| Products * | Features, open-source status, extension use case, and planned hosting; see the draft below |
 
-<img src="/guides/chatgpt-application/03-interest-form-fields.jpg" alt="Official Chinese form fields for email, names, company, website, job title, and capabilities" width="1280" height="720" loading="lazy" />
+<img src="/guides/chatgpt-application/03-interest-form-fields.jpg" alt="Personal, project, and capability fields in the Chinese form" width="1280" height="720" loading="lazy" />
 
-Source: [OpenAI Chinese interest form](https://openai.com/zh-Hans-CN/form/sign-in-with-chatgpt-interest/), October 14, 2026. Actual page; fields empty, no submission.
+Screenshot: [OpenAI Chinese interest form](https://openai.com/zh-Hans-CN/form/sign-in-with-chatgpt-interest/), October 14, 2026; fields empty, not submitted.
 
-FluentRead needs the second capability for translation, reading, and writing AI requests. Identity sign-in alone is insufficient. The [official quickstart](https://developers.openai.com/siwc/quickstart) distinguishes identity from plan permission; users must also be eligible and authorize plan use.
+Identity sign-in alone does not enable plan AI requests. The [official quickstart](https://developers.openai.com/siwc/quickstart) separates these capabilities. Users must also meet account requirements and authorize plan use.
 
 ## 3. Copyable product description
 
-This draft describes the requested experience, without claiming approval or an existing hosted service. Check it against the actual project before submitting.
+Check the actual project status before copying. This draft describes the request without claiming approval or a deployed backend.
 
 ```text
 FluentRead is an open-source browser extension for bilingual webpage translation, reading assistance, and writing. We would like eligible users to sign in with ChatGPT and authorize ChatGPT plan usage for these AI features.
@@ -58,23 +58,21 @@ Project: https://github.com/FluentRead/FluentRead
 Website: https://read.thinkstu.com/
 ```
 
-<img src="/guides/chatgpt-application/04-interest-form-plan-and-product.jpg" alt="Official Chinese form identity and plan options, product description field, and submit button" width="1280" height="720" loading="lazy" />
+<img src="/guides/chatgpt-application/04-interest-form-plan-and-product.jpg" alt="Plan permissions, product description, and submit action in the Chinese form" width="1280" height="720" loading="lazy" />
 
-Source: [OpenAI Chinese interest form](https://openai.com/zh-Hans-CN/form/sign-in-with-chatgpt-interest/), October 14, 2026. Actual page; fields empty, Submit not clicked.
+Screenshot: [OpenAI Chinese interest form](https://openai.com/zh-Hans-CN/form/sign-in-with-chatgpt-interest/), October 14, 2026; fields empty, Submit not clicked.
 
-The initial form has no callback URL, client ID, or completed OAuth server field. You can describe the real project and planned integration first; the development guide's integration prerequisites are not fields in this initial application. **These screenshots do not constitute an application.** Submission still requires OpenAI to confirm eligibility and permissions.
+The initial form on that date did not request a callback URL, client ID, or completed OAuth server. Describe the real project and plan first. These screenshots are not an application; submission still requires confirmation of eligibility and permissions.
 
-## 4. Confirm the integration after a response
+## 4. Confirm the integration conditions
 
-Before designing and deploying the public flow, confirm with OpenAI:
+Before designing or deploying the flow, confirm with OpenAI:
 
-- **Application and client type:** whether the browser extension and planned hosted backend are eligible, the public or confidential client type, and the assigned client ID.
-- **Exact callbacks:** allowed URLs for development and production, and the supported return to the extension. FluentRead has no approved, registered public callback yet.
-- **Plan usage:** approval must include ChatGPT plan AI requests. Confirm scopes, account eligibility, models, and limits; identity approval does not supply plan approval.
-- **Hosted operation:** permitted server-side token exchange, protection, refresh, and inference. The public hosted backend remains a proposal pending approval and deployment.
+- **Application and client type:** approval for the extension and backend, public or confidential client type, and assigned client ID.
+- **Callbacks:** exact development and production URLs and the supported return to the extension. FluentRead has no approved public callback.
+- **Plan usage:** approval for plan AI requests, scopes, account requirements, models, and limits.
+- **Hosting:** permission and requirements for token exchange, protection, refresh, and inference.
 
-The [website guide](https://developers.openai.com/siwc/website) requires a registered client, exact callback, and secure application-session backend for integration, but covers identity only. The [open-source plan registration guide](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) uses an HTTP listener on `127.0.0.1`; it does not explicitly document an extension `chrome.identity` or HTTPS callback for plan usage. OpenAI must confirm a supported public extension flow before this can be offered.
+At that check, the [website guide](https://developers.openai.com/siwc/website) covered identity only. The [open-source plan registration guide](https://developers.openai.com/siwc/token-sharing-open-source/sign-in) used an HTTP callback on `127.0.0.1`, without documenting extension `chrome.identity` or HTTPS callbacks for plan use. A public extension flow still needs official confirmation.
 
-The current [privacy policy](/en/guide/privacy) says FluentRead has no self-operated translation server. The planned backend would change data transmission. Before implementing and launching it after approval, disclose the actual credential storage, content forwarding, revocation and deletion, and data retention. The existing policy does not establish coverage for that future service.
-
-Approval, deployment, and real-account authorization validation must precede a public release with sign-in, automatic return, and working AI requests.
+A planned backend would change the data flow described in the current [privacy policy](/en/guide/privacy). Before implementation and launch after approval, disclose actual credential storage, content forwarding, revocation and deletion, and retention. Approval, deployment, and real-account authorization checks must precede a public release.

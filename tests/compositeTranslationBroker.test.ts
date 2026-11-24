@@ -51,6 +51,30 @@ function setup(members: string[] = [services.google, services.microsoft]) {
 afterEach(() => vi.useRealTimers());
 
 describe('组合翻译真实 broker 接入', () => {
+    it('所有供应商抛出空错误时仍返回明确失败，而不伪造成功或丢失路由记录', async () => {
+        const h = setup(); vi.mocked(h.providers.google).mockRejectedValue(undefined); vi.mocked(h.providers.microsoft).mockRejectedValue(undefined);
+        await expect(h.broker.translateWithCache({origin: sourceText, useCache: false})).rejects.toThrow('组合翻译没有可用的成员服务');
+        expect(h.providers.google).toHaveBeenCalledOnce(); expect(h.providers.microsoft).toHaveBeenCalledOnce();
+        expect(h.recordRequest.mock.calls[0][0].routes).toEqual([services.google, services.microsoft]);
+    });
+    it('跳过已关闭的组合成员并在其他成员上继续回退', async () => {
+        const h = setup([services.google, services.microsoft]);
+        h.config.disabledTranslationServices = [services.google];
+        await expect(h.broker.translateWithCache({origin: sourceText, useCache: false})).resolves.toBe(translatedText);
+        expect(h.providers.google).not.toHaveBeenCalled();
+        expect(h.providers.microsoft).toHaveBeenCalledOnce();
+        expect(h.recordRequest.mock.calls[0][0].routes).toEqual([services.microsoft]);
+    });
+
+    it('组合成员全部关闭时在 provider 调用前返回明确错误', async () => {
+        const h = setup([services.google, services.microsoft]);
+        h.config.disabledTranslationServices = [services.google, services.microsoft];
+        await expect(h.broker.translateWithCache({origin: sourceText, useCache: false}))
+            .rejects.toMatchObject({message: '组合翻译的所有成员都已关闭，请重新启用至少一个服务', kind: 'bad-request', retryable: false, code: 'TRANSLATION_SERVICE_DISABLED'});
+        expect(h.providers.google).not.toHaveBeenCalled();
+        expect(h.providers.microsoft).not.toHaveBeenCalled();
+    });
+
     it('图片组合的单条协议成员接受整批原样结果，沿用取消所有权且不换成员', async () => {
         const h = setup([services.claude, services.google]);
         h.config.token.claude = 'fixture-claude';
@@ -424,7 +448,7 @@ describe('组合翻译真实 broker 接入', () => {
             reportTranslationModelUsage(message, {usageAvailability: 'reported', totalTokens: 3});
             return message.summaryPrompt ? 'This page explains translation.' : translatedText;
         });
-        await expect(h.broker.translateWithCache({origin: sourceText, pageContext: 'A page about translation services.', useCache: false}))
+        await expect(h.broker.translateWithCache({origin: sourceText, pageContext: 'A page about translation services.'.repeat(40), useCache: false}))
             .resolves.toBe(translatedText);
         expect(h.providers.openai).toHaveBeenCalledTimes(2);
         expect(h.recordUsage.mock.calls.flatMap(call => call[0]).map(event => [event.serviceId, event.purpose]))
@@ -505,13 +529,16 @@ describe('组合翻译真实 broker 接入', () => {
         for (const key of itemKeys) h.cacheStore.set(key, '旧译文 <webpage_context>泄漏的私有参考</webpage_context>');
         const owner = new AbortController();
         const snapshots: unknown[] = [];
+        const quotaScopes: string[] = [];
         h.recordRequest.mockClear();
         h.providers.claude = vi.fn(async message => {
             expect(message.summaryPrompt).toBeUndefined();
             expect(message.context).toBe('');
             expect(message.pageContext).toBe('');
             expect(message.abortSignal?.aborted).toBe(false);
-            expect(getTranslationRequestScheduler(message)?.identity).toEqual({service: 'claude', model: 'claude-sonnet-4-5'});
+            const identity = getTranslationRequestScheduler(message)?.identity;
+            expect(identity).toEqual({service: 'claude', model: 'claude-sonnet-4-5', quotaScope: expect.stringMatching(/^[0-9a-f]{64}$/)});
+            quotaScopes.push(identity!.quotaScope!);
             const snapshot = getTranslationProviderConfig(message, h.config);
             snapshots.push(snapshot);
             expect(snapshot.token.claude).toBe('fixture-claude-before');
@@ -523,6 +550,7 @@ describe('组合翻译真实 broker 接入', () => {
         await expect(h.broker.translateWithCache(attachTranslationRequestControl({origin: origins, context, pageContext,
             modelOverride: 'group-model'}, {signal: owner.signal, ownershipKey: 'recover-cached-array'}))).resolves.toEqual(translations);
         expect(h.providers.claude).toHaveBeenCalledTimes(2);
+        expect(new Set(quotaScopes).size).toBe(1);
         expect(snapshots[0]).toStrictEqual(snapshots[1]);
         expect(snapshots.every(snapshot => Object.isFrozen(snapshot))).toBe(true);
         expect(owner.signal.aborted).toBe(false);

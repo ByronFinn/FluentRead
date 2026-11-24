@@ -1,0 +1,39 @@
+{
+  "id": "steam-review-content",
+  "url": "https://store.steampowered.com/app/570/Dota_2/?l=english",
+  "html": "<div id=\"app_reviews_hash\"><div role=\"button\" tabindex=\"0\" id=\"long-card\"><div><div><div><div>\n<a href=\"https://steamcommunity.com/id/fixture/recommended/570\">Recommended</a><div>\n  <div><a data-miniprofile=\"12345\" href=\"https://steamcommunity.com/id/fixture/\" id=\"long-author\">Example Player With A Long Display Name</a><span>Posted: a recent fixture date</span></div>\n  <div><div><div id=\"long-body\">This long review explains <strong id=\"dirty\">how careful teamwork helps new players learn</strong> across several matches.<br><br>Another line keeps <a id=\"reading-link\" href=\"https://example.test/guide\">an ordinary reading reference</a> and <code id=\"code\">ORIGINAL_CODE_TOKEN</code> within the same review.<br>The final line adds enough context to remain readable prose.</div><div><button id=\"long-helpful\">Was this review helpful?</button></div></div></div>\n</div></div></div></div></div></div><div role=\"button\" tabindex=\"0\" id=\"short-card\"><div><div><div><div>\n<a href=\"https://steamcommunity.com/id/fixture/recommended/570\">Recommended</a><div>\n  <div><a data-miniprofile=\"12345\" href=\"https://steamcommunity.com/id/fixture/\" id=\"short-author\">Example Player With A Long Display Name</a><span>Posted: a recent fixture date</span></div>\n  <div><div><div id=\"short-body\">A solid cooperative experience.</div><div><button id=\"short-helpful\">Was this review helpful?</button></div></div></div>\n</div></div></div></div></div></div><div role=\"button\" tabindex=\"0\" id=\"wrong-link-card\"><div><div><div><div>\n<a href=\"https://steamcommunity.com/id/fixture/discussions/570\">Recommended</a><div>\n  <div><a data-miniprofile=\"12345\" href=\"https://steamcommunity.com/id/fixture/\" id=\"wrong-link-author\">Example Player With A Long Display Name</a><span>Posted: a recent fixture date</span></div>\n  <div><div><div id=\"wrong-link-body\">This nearby explanation has a discussion link instead of a review permalink.</div><div><button id=\"wrong-link-helpful\">Was this review helpful?</button></div></div></div>\n</div></div></div></div></div></div><div role=\"button\" tabindex=\"0\"><a href=\"https://steamcommunity.com/id/fixture/recommended/570\">Recommended</a><div><span>A first metadata column</span><span>A second metadata column</span><div><div><div id=\"wrong-position-body\">This explanation occupies a different card column.</div></div></div></div></div></div><section><div role=\"button\" tabindex=\"0\" id=\"outside-card\"><div><div><div><div>\n<a href=\"https://steamcommunity.com/id/fixture/recommended/570\">Recommended</a><div>\n  <div><a data-miniprofile=\"12345\" href=\"https://steamcommunity.com/id/fixture/\" id=\"outside-author\">Example Player With A Long Display Name</a><span>Posted: a recent fixture date</span></div>\n  <div><div><div id=\"outside-body\">An ordinary explanation outside the review region.</div><div><button id=\"outside-helpful\">Was this review helpful?</button></div></div></div>\n</div></div></div></div></div></div></section><div class=\"game_purchase_price\" id=\"price\">Free To Play</div><div id=\"freeGameBtn\"><a href=\"javascript:ShowGotSteamModal()\"><span>Play Game</span></a></div>",
+  "required": [
+    "#long-body",
+    "#short-body"
+  ],
+  "guarded": [
+    "#long-author",
+    "#short-author",
+    "#wrong-link-author",
+    "#code",
+    "#price",
+    "#freeGameBtn"
+  ],
+  "controls": [
+    "#long-helpful",
+    "#short-helpful"
+  ],
+  "negative": [
+    "#wrong-link-body",
+    "#wrong-position-body",
+    "#outside-body"
+  ],
+  "dynamic": {
+    "selector": "#dirty",
+    "owner": "#long-body",
+    "to": "how newly updated teamwork advice helps every reader",
+    "appendHtml": "<div role=\"button\" tabindex=\"0\" id=\"new-card\"><div><div><div><div>\n<a href=\"https://steamcommunity.com/id/fixture/recommended/570\">Recommended</a><div>\n  <div><a data-miniprofile=\"12345\" href=\"https://steamcommunity.com/id/fixture/\" id=\"new-author\">Example Player With A Long Display Name</a><span>Posted: a recent fixture date</span></div>\n  <div><div><div id=\"new-body\">A newly appended review explains another useful gameplay example.<br>Its second line preserves a clear reading boundary.</div><div><button id=\"new-helpful\">Was this review helpful?</button></div></div></div>\n</div></div></div></div></div></div>"
+  },
+  "provenance": {
+    "kind": "original-authored-reproduction",
+    "evidence": "commerce-next/precise/steam-reviews.html and commerce-next/steam-fixed/full/diagnosis.json; exact public review-permalink and sibling body hierarchy, role=button/tabindex ancestor, and data-miniprofile anchors. Text, names and IDs independently authored.",
+    "limitations": [
+      "No copied review prose or hashed site classes. Synthetic core/snapshot tests are not real provider quality or live Steam acceptance."
+    ]
+  }
+}

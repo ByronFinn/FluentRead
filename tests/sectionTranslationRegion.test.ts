@@ -31,6 +31,8 @@ const harness = vi.hoisted(() => ({
     byRoot: new Map<unknown, unknown[]>(),
     requestSession: {requestSignal: new AbortController().signal, renderCommitGeneration: 0},
     stateListeners: new Set<(owner: unknown, state: Record<string, unknown> | undefined, previousState?: Record<string, unknown>) => void>(),
+    parentReads: 0,
+    seenRoots: [] as unknown[],
 }));
 
 vi.mock('@/src/services/config/store', () => ({config: harness.config}));
@@ -58,7 +60,7 @@ vi.mock('@/src/features/full-page-translation/content/state', () => ({
     },
 }));
 vi.mock('@/src/core/translation/public', () => ({
-    getComposedParent: (element: FakeElement & {shadowHost?: FakeElement}) => element.parentElement ?? element.shadowHost ?? null,
+    getComposedParent: (element: FakeElement & {shadowHost?: FakeElement}) => {harness.parentReads++; return element.parentElement ?? element.shadowHost ?? null;},
     maxComposedAncestorDepth: 512,
     getTranslationCandidateKey: (candidate: FakeCandidate) => candidate.nodes?.find(node => node.nodeType === 1 || node.nodeType === 3) ?? candidate.element,
     getTranslatableControlValueAttribute: (element: {getAttribute?: (name: string) => string}) => element.getAttribute ? 'value' : null,
@@ -67,6 +69,7 @@ vi.mock('@/src/core/translation/public', () => ({
         isWithinStructuralRegion: harness.structural,
         *discoverSteps(root: unknown) {
             harness.scopesUsed.push(scope);
+            harness.seenRoots.push(root);
             for (const step of harness.byRoot.get(root) ?? harness.discoveries[scope]) yield step;
         },
     }),
@@ -76,6 +79,7 @@ import {
     SECTION_PREVIEW_DISCOVERY_STEPS,
     inspectTranslationSection,
     toggleTranslationSection,
+    ensureTranslationSection,
 } from '@/src/features/full-page-translation/content/sectionTranslation';
 
 function element(id: string, top = 0, parent: FakeElement | null = null, text = `text ${id}`): FakeElement {
@@ -121,6 +125,7 @@ beforeEach(() => {
     harness.discoveries.all = [];
     harness.structural.mockReturnValue(false);
     harness.scopesUsed.length = 0;
+    harness.seenRoots.length = 0;
     harness.byRoot.clear();
     vi.stubGlobal('window', {innerHeight: 600});
 });
@@ -298,6 +303,15 @@ describe('局部翻译切换', () => {
             {element: segment, kind: 'content', reason: 'section-retry', scope: 'all', nodes: [source], allowTopLevelApplicationShell: true},
             {element: plain, kind: 'content', reason: 'section-retry'},
         ]);
+    });
+    it('区域重试保留自动应用外壳策略来源，交给共享请求门禁复验', async () => {
+        const owner = element('automatic-shell-owner', 0, root);
+        own(owner, 'error', {allowTopLevelApplicationShell: true, applicationShellPolicyId: 'mastodon'});
+        harness.translateTarget.mockResolvedValue({status: 'committed'});
+        await expect(toggleTranslationSection(root as unknown as Element)).resolves.toMatchObject({translated: 1});
+        expect(harness.translateTarget.mock.calls[0]![0]).toMatchObject({
+            element: owner, reason: 'section-retry', allowTopLevelApplicationShell: true, applicationShellPolicyId: 'mastodon',
+        });
     });
 
     it('配置检查未通过时不发出任何请求', async () => {
@@ -981,6 +995,38 @@ describe('区域批次响应、取消和精确所有权', () => {
 
 
 describe('连续划选的多个区域', () => {
+    it('多区域盘点按祖先深度而不是区域数平方读取父级', () => {
+        const count = 400;
+        const roots = Array.from({length: count}, (_, index) => element(`root-${index}`, index, root));
+        harness.parentReads = 0;
+        expect(inspectTranslationSection(roots as unknown as Element[])).toMatchObject({action: 'empty'});
+        expect(harness.parentReads).toBeLessThanOrEqual(count * 4);
+    });
+
+    it('按首次出现顺序去重，并跨 Shadow host 识别已选祖先', () => {
+        harness.config.translationScope = 'all';
+        const parent = element('parent', 0, root), child = element('child', 0, parent);
+        const standalone = element('standalone', 0, root), host = element('host', 0, root);
+        const shadowChild = Object.assign(element('shadow-child'), {shadowHost: host});
+        const selection = [child, standalone, shadowChild, parent, child, host, standalone];
+        expect(inspectTranslationSection(selection as unknown as Element[])).toMatchObject({action: 'empty'});
+        expect(harness.seenRoots).toEqual([standalone, parent, host]);
+    });
+
+    it('仅把 512 层以内的 composed 祖先当作已覆盖区域', () => {
+        harness.config.translationScope = 'all';
+        const leaf = element('deep-leaf'); let current = leaf;
+        let at512!: FakeElement;
+        for (let depth = 1; depth <= 513; depth++) {
+            const parent = element(`ancestor-${depth}`); current.parentElement = parent; current = parent;
+            if (depth === 512) at512 = parent;
+        }
+        inspectTranslationSection([leaf, at512] as unknown as Element[]);
+        expect(harness.seenRoots).toEqual([at512]);
+        harness.seenRoots.length = 0;
+        inspectTranslationSection([leaf, current] as unknown as Element[]);
+        expect(harness.seenRoots).toEqual([leaf, current]);
+    });
     it('仅翻译实际选中的两个区域，重叠根去重且统一按阅读位置派发', async () => {
         const first = element('first', 100, root), second = element('second', 30, root), outside = element('outside', 60, root);
         harness.byRoot.set(first, steps([candidate(first)])); harness.byRoot.set(second, steps([candidate(second)]));
@@ -1058,5 +1104,89 @@ describe('连续划选的多个区域', () => {
         const controller = new AbortController(); controller.abort();
         expect(await toggleTranslationSection([root] as unknown as Element[], undefined, controller.signal)).toMatchObject({action: 'cancelled'});
         expect(harness.translateTarget).not.toHaveBeenCalled();
+    });
+});
+
+
+describe('自动局部翻译只补齐未译内容', () => {
+    it('重复执行保留已有译文，新插入的段落单独翻译，失败节点不自动重试', async () => {
+        const translated = candidate(element('auto-done', 0, root));
+        const failed = candidate(element('auto-error', 30, root));
+        const fresh = candidate(element('auto-fresh', 60, root));
+        own(translated.element, 'translated', {translationInvocationIdentity: 'manual-profile'});
+        own(failed.element, 'error');
+        harness.discoveries.content = steps([translated, failed]);
+        const override = {profileId: 'automatic-profile', targetLanguage: 'ja'};
+        await expect(ensureTranslationSection(root as unknown as Element, override)).resolves.toMatchObject({action: 'settled'});
+        harness.discoveries.content = steps([translated, failed, fresh]);
+        harness.translateTarget.mockImplementation(async (item: FakeCandidate) => {
+            own(item.element, 'translated');
+            return {status: 'committed'};
+        });
+        await expect(ensureTranslationSection(root as unknown as Element, override)).resolves.toMatchObject({action: 'translated', translated: 1});
+        await expect(ensureTranslationSection(root as unknown as Element, override)).resolves.toMatchObject({action: 'settled'});
+        expect(harness.translateTarget).toHaveBeenCalledOnce();
+        expect(harness.translateTarget.mock.calls[0][0]).toBe(fresh);
+        expect(harness.restoreTranslationOwner).not.toHaveBeenCalled();
+        expect(harness.states.get(translated.element)?.translationInvocationIdentity).toBe('manual-profile');
+    });
+
+    it('祖先所有者保持原方案，发现阶段遗漏的错误所有者也不重试', async () => {
+        const ancestor = element('auto-ancestor');
+        const inner = element('auto-inner', 0, ancestor);
+        own(ancestor, 'translated', {translationInvocationIdentity: 'manual-profile'});
+        await expect(ensureTranslationSection(inner as unknown as Element, {targetLanguage: 'ja'})).resolves.toMatchObject({action: 'settled'});
+        harness.owners = [];
+        const error = candidate(element('auto-orphan-error', 0, root));
+        harness.states.set(error.element, {phase: 'error'});
+        harness.discoveries.content = steps([error]);
+        await expect(ensureTranslationSection(root as unknown as Element)).resolves.toMatchObject({action: 'settled'});
+        expect(harness.translateTarget).not.toHaveBeenCalled();
+        expect(harness.restoreTranslationOwner).not.toHaveBeenCalled();
+    });
+
+    it.each(['same', 'parent', 'child'] as const)('自动补齐不取消重叠的手动区域操作：%s', async mode => {
+        const region = element(`manual-region-${mode}`, 0, root);
+        const item = candidate(element(`manual-item-${mode}`, 0, region));
+        harness.discoveries.content = steps([item]);
+        let finish!: (value: unknown) => void;
+        harness.translateTarget.mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+        const manual = toggleTranslationSection(region as unknown as Element);
+        const automaticRoot = mode === 'same' ? region : mode === 'parent' ? root : item.element;
+        await expect(ensureTranslationSection(automaticRoot as unknown as Element)).resolves.toMatchObject({action: 'cancelled'});
+        expect(harness.translateTarget).toHaveBeenCalledOnce();
+        expect(harness.restoreTranslationOwner).not.toHaveBeenCalled();
+        expect(inspectTranslationSection(region as unknown as Element)).toMatchObject({action: 'restore'});
+        finish({status: 'committed'});
+        await expect(manual).resolves.toMatchObject({action: 'translated', translated: 1});
+    });
+
+    it('自动请求中全页恢复立即取消未派发内容，迟到结果不会留下完成记忆', async () => {
+        vi.useFakeTimers();
+        harness.config.maxConcurrentTranslations = 1;
+        const items = [candidate(element('auto-pending-a', 0, root)), candidate(element('auto-pending-b', 30, root))];
+        harness.discoveries.content = steps(items);
+        let finish!: (value: unknown) => void;
+        harness.translateTarget.mockImplementation((item: FakeCandidate) => {
+            own(item.element, 'loading');
+            return new Promise(resolve => {finish = resolve;});
+        });
+        harness.restoreTranslationOwner.mockImplementation((owner: unknown) => {
+            harness.states.delete(owner);
+            harness.owners = harness.owners.filter(value => value !== owner);
+            return true;
+        });
+        const lifecycle = new AbortController();
+        harness.requestSession.requestSignal = lifecycle.signal;
+        const automatic = ensureTranslationSection(root as unknown as Element);
+        lifecycle.abort();
+        await expect(automatic).resolves.toMatchObject({action: 'cancelled', restored: 1});
+        finish({status: 'unchanged'});
+        await Promise.resolve();
+        await vi.runAllTimersAsync();
+        expect(harness.translateTarget).toHaveBeenCalledOnce();
+        expect(harness.states.size).toBe(0);
+        expect(inspectTranslationSection(root as unknown as Element)).toMatchObject({action: 'translate', pending: 2});
+        expect(vi.getTimerCount()).toBe(0);
     });
 });

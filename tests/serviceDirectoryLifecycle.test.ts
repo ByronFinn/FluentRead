@@ -2,25 +2,19 @@
  * @file tests/serviceDirectoryLifecycle.test.ts
  * 文件职责：验证服务目录和免费权重设置的实际组件生命周期、缓存模板及有界读取。
  * 主要内容：覆盖停用与切换、迟到后台快照、轮询合并、目录焦点、搜索计算、显式设置默认服务、公开版套餐旧配置展示及默认动作门控、开发版正常选择、分组导航、帧内布局合并、缓存位置与尺寸/字体观察的旧 DOM 事件。
- * 模块边界：编译真实客户端 Vue setup 和缓存模板并实际 mount，模块加载器只解析导入；浏览器消息、DOM 几何与观察器使用受控端口，不复制目录业务；真实 UI 另行验证。
+ * 模块边界：直接导入并实际挂载生产客户端 SFC；浏览器消息、DOM 几何与观察器使用受控端口，不复制目录业务；真实 UI 另行验证。
  */
-import {createRequire} from 'node:module'
-import {resolve} from 'node:path'
-import vue from '@vitejs/plugin-vue'
-import {createServer, type ViteDevServer} from 'vite'
-import {compileVueFixture} from './helpers/compiledVueFixture'
+import * as runtime from 'vue'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import {Config} from '@/src/core/config/model'
 import {FREE_TRANSLATION_PROVIDERS} from '@/src/core/config/freeTranslation'
 import {calculateFreeTranslationWeightSnapshot, FREE_TRANSLATION_WEIGHT_REFRESH_INTERVAL_MS} from '@/src/services/translation/freeWeights'
 
-const runtime = createRequire(import.meta.url)('vue') as typeof import('vue')
-let server: ViteDevServer, app: import('vue').App, state: Record<string, any>, props: Record<string, any>
+let app: import('vue').App, state: Record<string, any>, props: Record<string, any>
 let shown: import('vue').Ref<boolean>, nodes: Node[], source: Record<string, any>, hostRoot: Node
 type Node = {tag: string; props: Record<string, any>; value?: string; focus?: () => void; closest?: (selector?: string) => unknown; parent?: Node; children?: Node[];
   style?: Record<string, string>; dataset?: Record<string, string>; scrollTop?: number; clientHeight?: number; scrollHeight?: number;
   getClientRects?: () => unknown[]; getBoundingClientRect?: () => {top: number}; querySelectorAll?: (selector: string) => Node[]}
-const clientModules = new Map<string, string>()
 const groupScroll = vi.fn(), readRects = vi.fn(), readBounds = vi.fn(), sectionQueries = vi.fn(), reducedMotion = vi.fn(() => false)
 const animationFrames = new Map<number, FrameRequestCallback>(), fontListeners = new Set<() => void>()
 let animationFrameId = 0, frameTime = 0, development = false
@@ -52,49 +46,35 @@ function deferred<T>() {let resolve!: (value: T) => void, reject!: (error: unkno
 function response(ids = props.config.freeTranslationOrder) {return {success: true, snapshot: calculateFreeTranslationWeightSnapshot(ids, [], 123)}}
 function node(predicate: (n: Node) => boolean) {const found = [...nodes].reverse().find(predicate);expect(found).toBeDefined();return found!}
 beforeEach(async () => {
-  vi.clearAllMocks();intervals.clear();timeouts.clear();clientModules.clear();observers.length = 0;animationFrames.clear();fontListeners.clear();geometry.visible = true;geometry.tops.clear();reducedMotion.mockReturnValue(false);development = false
+  vi.clearAllMocks();intervals.clear();timeouts.clear();observers.length = 0;animationFrames.clear();fontListeners.clear();geometry.visible = true;geometry.tops.clear();reducedMotion.mockReturnValue(false);development = false
   vi.stubGlobal('requestAnimationFrame', requestFrame);vi.stubGlobal('cancelAnimationFrame', cancelFrame)
-  vi.stubGlobal('document', {fonts: {addEventListener: (_type: string, callback: () => void) => fontListeners.add(callback), removeEventListener: (_type: string, callback: () => void) => fontListeners.delete(callback)}})
-  vi.stubGlobal('window', {matchMedia: () => ({matches: reducedMotion()})})
+  // 免费设置会注册/释放页面恢复事件；端口保留真实 EventTarget 语义，不用空函数掩盖监听生命周期。
+  vi.stubGlobal('document', Object.assign(new EventTarget(), {visibilityState: 'visible', fonts: {addEventListener: (_type: string, callback: () => void) => fontListeners.add(callback), removeEventListener: (_type: string, callback: () => void) => fontListeners.delete(callback)}}))
+  vi.stubGlobal('window', Object.assign(new EventTarget(), {matchMedia: () => ({matches: reducedMotion()})}))
   vi.stubGlobal('ResizeObserver', class {
     observe = vi.fn();unobserve = vi.fn();disconnect = vi.fn()
     constructor(callback: () => void) {observers.push({callback, observe: this.observe, unobserve: this.unobserve, disconnect: this.disconnect})}
   })
-  send.mockReset();send.mockResolvedValue({success: false});vi.stubGlobal('__fluentreadDirectorySend', send)
-  server = await createServer({root: process.cwd(), configFile: false, appType: 'custom', logLevel: 'silent',
-    resolve: {alias: {'@': process.cwd()}}, server: {hmr: false, middlewareMode: true}, ssr: {noExternal: ['webextension-polyfill']},
-    plugins: [{name: 'service-directory-controlled-ports', enforce: 'pre', resolveId(id) {
-      if (clientModules.has(id)) return id
-      if (id === 'webextension-polyfill') return '\0directory-browser'
-      if (/\/src\/ui\/i18n(?:\.ts)?$/u.test(id)) return '\0directory-i18n'
-      if (/\/src\/platform\/chatgpt-plan\/buildMode(?:\.ts)?$/u.test(id)) return '\0directory-build-mode'
-      if (id.endsWith('.vue') && !/\/(?:ServiceCatalog|FreeTranslationSettings)\.vue$/u.test(id)) return '\0directory-display'
-      return null
-    }, load(id) {
-      if (clientModules.has(id)) return clientModules.get(id)
-      if (id === '\0directory-browser') return 'export default {runtime: {sendMessage: (...args) => globalThis.__fluentreadDirectorySend(...args)}}'
-      if (id === '\0directory-i18n') return 'export const useUiI18n = () => ({t: key => key, translateLegacy: text => text})'
-      if (id === '\0directory-build-mode') return `export const chatGPTPlanDevelopmentEnabled = ${development};`
-      if (id === '\0directory-display') return "import {h} from 'vue';export default {setup(_, {attrs, slots}) {return () => h('button', {...attrs, 'data-directory-port': attrs.item?.value}, slots.default?.())}}"
-      return null
-    }}, vue()]})
+  send.mockReset();send.mockResolvedValue({success: false})
+  vi.doMock('webextension-polyfill', () => ({default: {runtime: {sendMessage: send}}}))
+  vi.doMock('@/src/ui/i18n', () => ({useUiI18n: () => ({t: (key: string) => key, translateLegacy: (text: string) => text})}))
+  vi.doMock('@/src/platform/chatgpt-plan/buildMode', () => ({get chatGPTPlanDevelopmentEnabled() {return development}}))
+  const display = () => ({default: {setup(_: unknown, {attrs, slots}: any) {return () => runtime.h('button', {...attrs, 'data-directory-port': attrs.item?.value}, slots.default?.())}}})
+  vi.doMock('@/src/ui/components/ServiceIcon.vue', display)
+  vi.doMock('@/src/features/settings/ui/services/ServiceNatureBadge.vue', display)
+  vi.doMock('@/src/features/settings/ui/services/ModelPicker.vue', display)
+  vi.doMock('@/src/features/settings/ui/services/ServiceCatalogItem.vue', display)
+  vi.doMock('@/src/features/settings/ui/components/FieldHelp.vue', display)
 })
 afterEach(async () => {
   try {app?.unmount();await settle()}
-  finally {
-    vi.restoreAllMocks()
-    try {await server?.close()}
-    finally {vi.unstubAllGlobals();clientModules.clear()}
-  }
+  finally {vi.restoreAllMocks();vi.unstubAllGlobals()}
 })
 async function mount(name: string, values: Record<string, unknown>, listeners: Record<string, unknown> = {}) {
-  const path = `src/features/settings/ui/services/${name}.vue`, filename = resolve(path)
-  const compiled = compileVueFixture(filename, {id: 'directory-lifecycle', cacheHandlers: true, includeScript: false})
-  const clientId = `${filename}.lifecycle-client.ts`
-  clientModules.set(clientId, compiled.scriptSource)
-  const component = (await server.ssrLoadModule(clientId)).default
-  expect(compiled.templateErrors).toEqual([])
-  component.render = new Function('Vue', compiled.renderCode)(runtime)
+  vi.resetModules()
+  const component = name === 'ServiceCatalog'
+    ? (await import('@/src/features/settings/ui/services/ServiceCatalog.vue')).default
+    : (await import('@/src/features/settings/ui/services/FreeTranslationSettings.vue')).default
   if (!vi.isMockFunction(globalThis.setInterval)) {
     const originalInterval = globalThis.setInterval, originalTimeout = globalThis.setTimeout, clearInterval = globalThis.clearInterval, clearTimeout = globalThis.clearTimeout
     vi.spyOn(globalThis, 'setInterval').mockImplementation(((callback: () => void, ms: number, ...args: any[]) => {
@@ -145,14 +125,20 @@ async function mount(name: string, values: Record<string, unknown>, listeners: R
     insertStaticContent: (_html, parent, anchor) => {const start = {tag: '#static-start', props: {}}, end = {tag: '#static-end', props: {}};insert(start, parent, anchor);insert(end, parent, anchor);return [start, end]}})
   source = runtime.shallowReactive({active: true, context: {}, ...values})
   app = renderer.createApp({setup: () => () => runtime.h(runtime.KeepAlive, null, {default: () => shown.value
-    ? runtime.h(component, {...source, ...listeners, ref: (vm: any) => {if (vm) {state = vm.$.setupState;props = vm.$.props}}})
+    ? runtime.h(component as runtime.Component, {...source, ...listeners, ref: (vm: any) => {if (vm) {state = vm.$.setupState;props = vm.$.props}}})
     : runtime.h({render: () => null}, {key: 'other'})})})
   const display = {setup(_props: unknown, {attrs, slots}: any) {return () => runtime.h('input', attrs, slots.default?.())}}
   app.component('el-input', display);app.component('el-input-number', display);app.component('el-switch', display)
   app.component('el-tooltip', {setup(_props: unknown, {slots}: any) {return () => runtime.h('span', null, slots.default?.())}})
   app.config.warnHandler = () => {};hostRoot = {tag: '#root', props: {}};app.mount(hostRoot);await settle()
 }
-async function mountFree(values: Record<string, unknown> = {}) {await mount('FreeTranslationSettings', {config: runtime.reactive(new Config()), ...values})}
+async function openProviders(open: boolean) {
+  publicNode(n => n.props['data-free-provider-disclosure'] !== undefined).props.onToggle({currentTarget: {open}})
+  await settle()
+}
+async function mountFree(values: Record<string, unknown> = {}) {
+  await mount('FreeTranslationSettings', {config: runtime.reactive(new Config()), ...values})
+}
 async function mountCatalog(values: Record<string, unknown> = {}, listeners: Record<string, unknown> = {}) {await mount('ServiceCatalog', {service: 'microsoft', defaultService: 'microsoft', services: catalog,
   favoriteServices: [], configuredServices: [], modelOptions: [], showModel: false, maximumModels: 5, maximumModelLength: 50, customModelCount: 0, allowCustomModels: false, ...values}, {'onUpdate:service': emitted, 'onUpdate:default-service': defaultEmitted, 'onAdd:service': emitted, ...listeners})}
 function invalidate(reason: string) {
@@ -167,6 +153,21 @@ function invalidate(reason: string) {
 }
 
 describe('免费设置的轮询和模板事件归属', () => {
+  it('默认展开即轮询，手动收起立即取消等待并拒绝迟到结果，再展开重新读取', async () => {
+    const pending = deferred<unknown>();send.mockReturnValueOnce(pending.promise)
+    await mountFree()
+    expect(publicNode(n => n.props['data-free-provider-disclosure'] !== undefined).props.open).toBe(true)
+    expect(send).toHaveBeenCalledOnce();expect(timerCount()).toBe(2)
+    // 表单仍挂载，既有节点开关和邮箱草稿不因折叠丢失。
+    expect(descendants(hostRoot).filter(n => n.props['data-fallback-provider'])).toHaveLength(FREE_TRANSLATION_PROVIDERS.length)
+    state.myMemoryEmailDraft = 'unsaved@example.test'
+    await openProviders(false);expect(timerCount()).toBe(0);expect(state.myMemoryEmailDraft).toBe('unsaved@example.test')
+    pending.resolve(response());await settle();expect(state.weightSnapshot).toBeNull()
+    await tickIntervals(2);expect(send).toHaveBeenCalledOnce()
+    send.mockResolvedValueOnce(response());await openProviders(true)
+    expect(send).toHaveBeenCalledTimes(2);expect(state.weightSnapshot.observedAt).toBe(123);expect(timerCount()).toBe(1)
+    props.active = false;await settle();expect(timerCount()).toBe(0)
+  })
   it.each(['hidden', 'cached', 'unmount', 'config', 'advanced', 'sequential'])('%s之后丢弃旧权重响应，停用时不再轮询', async reason => {
     const pending = deferred<unknown>();send.mockReturnValueOnce(pending.promise);await mountFree();const old = response();expect(send).toHaveBeenCalledOnce()
     invalidate(reason);await settle();pending.resolve(old);await settle();expect(state.weightSnapshot?.observedAt).not.toBe(123)
@@ -176,6 +177,20 @@ describe('免费设置的轮询和模板事件归属', () => {
     const config = runtime.reactive(new Config());config.freeTranslationMode = 'sequential';await mountFree({config});expect(send).not.toHaveBeenCalled();expect(timerCount()).toBe(0)
     state.setMode('balanced');await settle();expect(send).toHaveBeenCalledOnce();expect(timerCount()).toBe(1)
     props.advanced = true;await settle();expect(timerCount()).toBe(0);props.advanced = false;await settle();expect(send).toHaveBeenCalledTimes(2);expect(timerCount()).toBe(1)
+  })
+  it('目录已移除的免费线路从界面隐藏，重排可见线路时保留它的原位置', async () => {
+    const config = runtime.reactive(new Config())
+    config.freeTranslationMode = 'sequential'
+    config.freeTranslationOrder = ['microsoft', 'myMemory', 'google']
+    config.disabledTranslationServices = ['myMemory']
+    await mountFree({config})
+    const visible = () => descendants(hostRoot).filter(n => n.props['data-fallback-provider']).map(n => n.props['data-fallback-provider'])
+    expect(visible().slice(0, 2)).toEqual(['microsoft', 'google'])
+    expect(visible()).not.toContain('myMemory')
+    state.move('microsoft', 1);await settle()
+    expect(config.freeTranslationOrder).toEqual(['google', 'myMemory', 'microsoft'])
+    config.disabledTranslationServices = [];await settle()
+    expect(visible().slice(0, 3)).toEqual(['google', 'myMemory', 'microsoft'])
   })
   it('同一轮读取合并并发调用，完成后允许下一轮', async () => {
     await mountFree();send.mockClear();const pending = deferred<unknown>();send.mockReturnValue(pending.promise)
@@ -228,9 +243,9 @@ describe('免费设置的轮询和模板事件归属', () => {
   it('隐藏清空未提交邮箱并拒绝直接动作，重开不复活旧超时回调', async () => {
     await mountFree();state.myMemoryEmailDraft = 'draft@example.test';invalidate('hidden');await settle();expect(state.myMemoryEmailDraft).toBe('')
     state.setMode('sequential');state.toggle('deeplx', true);state.move('microsoft', 1);state.myMemoryEmailDraft = 'late@example.test';state.commitMyMemoryEmail();expect(props.config.myMemoryEmail).toBe('');expect(props.config.freeTranslationMode).toBe('balanced');expect(props.config.freeTranslationOrder).not.toContain('deeplx')
-    app.unmount();await mountFree({advanced: true});const old = node(n => n.props['aria-label'] === '每个服务最多等待（秒）').props['onUpdate:modelValue'];const initial = props.config.freeTranslationTimeoutMs
+    app.unmount();await mountFree({advanced: true});const old = node(n => n.props['aria-label'] === 'settings.services.waitTimeout').props['onUpdate:modelValue'];const initial = props.config.freeTranslationTimeoutMs
     props.active = false;await settle();props.active = true;await settle();old(9);expect(props.config.freeTranslationTimeoutMs).toBe(initial)
-    node(n => n.props['aria-label'] === '每个服务最多等待（秒）').props['onUpdate:modelValue'](9);expect(props.config.freeTranslationTimeoutMs).toBe(9000)
+    node(n => n.props['aria-label'] === 'settings.services.waitTimeout').props['onUpdate:modelValue'](9);expect(props.config.freeTranslationTimeoutMs).toBe(9000)
   })
   it('未知模式、非布尔开关与分流模式排序不写入配置', async () => {
     await mountFree();const original = props.config.freeTranslationOrder.slice();state.setMode('unknown');state.toggle('deeplx', 'yes');state.move('microsoft', 1)
@@ -250,6 +265,26 @@ describe('免费设置的轮询和模板事件归属', () => {
 })
 
 describe('服务目录的搜索和导航归属', () => {
+  it('移除项不出现在主目录或搜索中，目录仅保留自定义服务入口', async () => {
+    const change = vi.fn(), add = vi.fn()
+    await mountCatalog({disabledServices: []}, {onToggleAvailability: change, 'onAdd:service': add})
+    const google = () => descendants(hostRoot).find(n => n.props['data-directory-port'] === 'google')
+    google()!.props.onRemove('google')
+    expect(change).toHaveBeenLastCalledWith('google', false)
+    expect(google()).toBeDefined()
+
+    source.disabledServices = ['google'];await settle()
+    expect(google()).toBeUndefined()
+    await search('ＧＯＯＧＬＥ')
+    expect(state.visibleDirectoryGroups).toHaveLength(0)
+    expect(descendants(hostRoot).some(n => n.props['data-service-restore-menu'] !== undefined || n.props['data-service-restore'] !== undefined)).toBe(false)
+    publicNode(n => n.props['data-testid'] === 'custom-service-add').props.onClick()
+    expect(add).toHaveBeenCalledOnce()
+    expect(change).toHaveBeenCalledOnce()
+
+    source.disabledServices = [];await settle()
+    expect(google()).toBeDefined()
+  })
   it('组合归入自定义目录且目录仅保留一个添加服务入口，旧上下文事件失效', async () => {
     const added = vi.fn()
     await mountCatalog({services: [...catalog, {value: 'composite:daily', label: 'Daily'}]}, {'onAdd:service': added})
@@ -280,6 +315,11 @@ describe('服务目录的搜索和导航归属', () => {
     props.service = 'google';if (reason === 'service') props.service = 'microsoft';else invalidate(reason);await settle();expect(focus).not.toHaveBeenCalled()
     if (reason === 'service') {expect(scroll).toHaveBeenCalledOnce();expect(workspaceScroll).toHaveBeenCalledOnce()}
     else {expect(scroll).not.toHaveBeenCalled();expect(workspaceScroll).not.toHaveBeenCalled()}
+  })
+  it('当前服务标题始终支持程序聚焦且不加入普通Tab顺序', async () => {
+    await mountCatalog();expect(publicNode(n => n.tag === 'h4' && n.parent?.props.class === 'detail-title-row').props.tabindex).toBe('-1')
+    source.active = false;await settle();source.active = true;source.service = 'google';await settle()
+    expect(publicNode(n => n.tag === 'h4' && n.parent?.props.class === 'detail-title-row').props.tabindex).toBe('-1')
   })
   it('正常切换或重复当前服务都关闭目录、恢复一次焦点并回到配置顶部', async () => {
     await mountCatalog();state.directoryOpen = true;props.service = 'google';await settle();expect(state.directoryOpen).toBe(false);expect(focus).toHaveBeenCalledOnce();expect(scroll).toHaveBeenCalledOnce()

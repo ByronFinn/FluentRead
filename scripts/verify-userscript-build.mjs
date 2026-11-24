@@ -2,7 +2,7 @@
  * @file scripts/verify-userscript-build.mjs
  * 文件职责：校验 userscript 产物的元信息、资源协议、体积与兼容性运行边界。
  * 主要内容：静态断言及隔离 VM 兼容层检查；体积预算按已测量的共享功能增量调整。
- * 模块边界：只读取构建产物，不安装脚本、不访问外部页面或修改运行配置。
+ * 模块边界：只读取构建产物和本地包版本，不安装脚本、不访问外部页面或修改运行配置。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,6 +11,11 @@ import vm from 'node:vm';
 
 const root = process.cwd();
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const vueVersion = JSON.parse(fs.readFileSync(path.join(root, 'node_modules/vue/package.json'), 'utf8')).version;
+const elementPlusVersion = JSON.parse(fs.readFileSync(path.join(root, 'node_modules/element-plus/package.json'), 'utf8')).version;
+const vueRequire = `// @require      https://cdn.jsdelivr.net/npm/vue@${vueVersion}/dist/vue.global.prod.js`;
+const vueBridgeRequire = '// @require      https://cdn.jsdelivr.net/gh/FluentRead/FluentRead@1cd92296ef25e89a411193894a1225db582e4a17/userscript/vueElementPlusBridge.v1.js';
+const elementPlusRequire = `// @require      https://cdn.jsdelivr.net/npm/element-plus@${elementPlusVersion}/dist/index.full.min.js`;
 const artifactPath = path.join(root, '.output/userscript/fluent-read.user.js');
 const source = fs.readFileSync(artifactPath, 'utf8');
 const artifactBytes = Buffer.byteLength(source);
@@ -126,7 +131,24 @@ const artifactBytes = Buffer.byteLength(source);
 // 同依赖独立主线 e806feff0 为 2,081,039，最终候选为 2,094,364；主线预算余 61 字节，
 // 在主线 2,081,100 预算上按既有 1 KB 步长最小增加 14 KB，余 736 字节，全部原校验保留。
 // 构建日志、前后产物与散列见工作区 research/deeplx-direct-968-20261014/userscript-size/。
-const MAX_USERSCRIPT_BYTES = 2_095_100;
+// 阅读语言预检：同依赖独立 main 0fef0669 为 2,092,304 字节，候选为 2,099,247，增加 6,943（0.332%）。
+// 原预算余 2,796，按既有 1 KB 步长最小增加 5 KB；保留协议、资源和 VM 运行断言，余量 853 字节。
+// 即时显示模式切换：同依赖独立 main 391499398 为 2,099,247，候选为 2,101,020，增加 1,773（0.0845%）。
+// 利用原余量 853 后按既有 1 KB 步长最小增加 1 KB，余 80；全部协议、资源及 VM 校验保留。
+// 构建环境与产物散列见 docs/reports/popup-display-mode-20261018/userscript-size.json。
+// man7 手册的可恢复正文分段：同依赖独立 main 5a362c671 为 2,101,032 字节，
+// 候选为 2,106,163，增加 5,131（0.2442%）；按既有 1 KB 步长最小增加 6 KB，余 937。
+// 保留全部协议、资源和 VM 校验；构建对照与散列见 docs/reports/man7-pre-translation-20261021/userscript-size.json。
+// 保存局部翻译区域与完整本地化：合入主线后，同依赖独立基线 0a7728d61 为 2,104,733，
+// 候选为 2,124,262 字节，增加 19,529（0.9279%），未新增依赖；范围校验、唯一定位和队列复用共享实现。
+// 利用主线预算 2,107,100 的余量后，按既有 1 KB 步长最小增加 18 KB，余 838；全部协议、资源及 VM 校验保留。
+// 构建对照与散列见 docs/reports/section-rules-1044-20261022/userscript-size.json。
+// 阅读生命周期修复：同依赖独立主线 0ad3d431 为 2,124,326 字节，候选为 2,126,170，
+// 净增 1,844（0.0868%）；无新增依赖，涵盖语言边界、等待取消和动态扫描。
+// 利用原余量后按既有 1 KB 步长最小增加 2 KB，余 930 字节；全部协议、资源及 VM 断言保留。
+// 构建对照与散列见 docs/reports/reading-consistency-20261023/userscript-size.json。
+// 发布审计整合已进一步缩小产物，继续使用审计开始时的原上限，不沿用上游增加的 2 KB 余量。
+const MAX_USERSCRIPT_BYTES = 2_125_100;
 const preludeStartMarker = '/* FluentRead userscript compatibility prelude:start */';
 const preludeEndMarker = '/* FluentRead userscript compatibility prelude:end */';
 const preludeStart = source.indexOf(preludeStartMarker);
@@ -147,16 +169,17 @@ const assertions = [
   [source.includes('// @grant        GM.xmlHttpRequest'), 'Safari GM request grant is required'],
   [source.includes('// @inject-into  content'), 'Safari GM APIs require content-world injection'],
   [source.includes('// @connect      *'), 'provider requests require @connect'],
-  [source.includes('// @require      https://cdn.jsdelivr.net/npm/vue@3.5.13/dist/vue.global.prod.js'), 'pinned Vue @require is missing'],
-  [source.includes('// @require      https://cdn.jsdelivr.net/gh/FluentRead/FluentRead@1cd92296ef25e89a411193894a1225db582e4a17/userscript/vueElementPlusBridge.v1.js'), 'pinned Vue / Element Plus UMD bridge @require is missing'],
+  [source.includes(vueRequire), 'pinned Vue @require is missing'],
+  [source.includes(vueBridgeRequire), 'pinned Vue / Element Plus UMD bridge @require is missing'],
   [!source.includes('FluentRead/FluentRead@main/userscript/'), 'userscript resources must use an immutable commit'],
-  [source.indexOf('vue.global.prod.js') < source.indexOf('vueElementPlusBridge.v1.js')
-    && source.indexOf('vueElementPlusBridge.v1.js') < source.indexOf('element-plus@2.9.3/dist/index.full.min.js'), 'Vue bridge must load between Vue and Element Plus'],
-  [source.includes('// @require      https://cdn.jsdelivr.net/npm/element-plus@2.9.3/dist/index.full.min.js'), 'pinned Element Plus @require is missing'],
+  [source.includes(elementPlusRequire), 'pinned Element Plus @require is missing'],
+  [source.indexOf(vueRequire) < source.indexOf(vueBridgeRequire)
+    && source.indexOf(vueBridgeRequire) < source.indexOf(elementPlusRequire), 'Vue bridge must load between Vue and Element Plus'],
   [source.includes('// @require      https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako_inflate.min.js'), 'pako fallback @require is missing'],
   [source.includes('globalThis.__fluentReadUserscriptCssCompressed='), 'userscript CSS must be compressed'],
   [source.includes('__FLUENTREAD_BROWSER_CAPABILITY_BUILD__:userscript:mv2__'), 'userscript browser capability marker is missing'],
-  [artifactBytes <= MAX_USERSCRIPT_BYTES, `artifact exceeds the ${MAX_USERSCRIPT_BYTES.toLocaleString()}-byte size budget`],
+  [artifactBytes <= MAX_USERSCRIPT_BYTES,
+    `artifact is ${artifactBytes.toLocaleString()} bytes; ${Math.max(0, artifactBytes - MAX_USERSCRIPT_BYTES).toLocaleString()} bytes over the ${MAX_USERSCRIPT_BYTES.toLocaleString()}-byte size budget`],
   [!/(^|[^\w])import\s*\(/u.test(source), 'the artifact must not contain runtime dynamic imports'],
   [!/\bglobalThis\s*(?:\.\s*(?:browser|chrome)\b|\[\s*['"](?:browser|chrome)['"]\s*\])/u.test(source), 'privileged browser shims must stay lexical'],
   [source.split('// ==UserScript==').length === 2, 'metadata header must occur exactly once'],
@@ -167,6 +190,7 @@ const assertions = [
   [source.length > 10_000, 'artifact is unexpectedly small'],
   [!source.includes('fluent-read-area-translator-container'), 'area translator must be excluded from userscript'],
   [!source.includes('fluent-read-image-translation-root'), 'image translator must be excluded from userscript'],
+  [!source.includes('data-fr-slot'), 'extension-only image context protocol must be excluded from userscript'],
   [!source.includes('fluent-read-video-subtitle-style'), 'video subtitle runtime must be excluded from userscript'],
   [!source.includes('onnx-community/Qwen3-0.6B-ONNX') && !source.includes('onnx-community/Qwen2.5-0.5B'), 'highlight model artifacts must be excluded from userscript while retaining preference compatibility'],
   [!source.includes('90ad34e62bb47572a06e0235696076976d59e9fcf5ab173d9a44689ba01b7d52') && !source.includes('8a04114ba59cc42b47d804d35d1d5c61d746ae4634f41f796768c6e302d39b9e'), 'highlight artifact manifests must be removed when only model preferences are used'],

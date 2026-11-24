@@ -1,8 +1,9 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {createPdfPagePreview, paintPdfTranslation, rasterizePdfReadingPages, rasterizePdfTranslationPage, renderPdfReadingPages} from '@/src/features/document-translation/ui/pdfPreview';
+import {createPdfPagePreview, paintPdfTranslation, rasterizePdfReadingPages, rasterizePdfTranslationPage, renderPdfReadingPages, renderPdfPageImage} from '@/src/features/document-translation/ui/pdfPreview';
 import type {ParsedDocument} from '@/src/features/document-translation/core/document';
 
 const pdf = vi.hoisted(() => ({width: 600, height: 800, render: vi.fn(), cleanup: vi.fn()}));
+vi.mock('@/src/features/document-translation/ui/pdfScanPreview', () => ({readPdfScanGraphics: async () => [], cropPdfScanRegions: () => []}));
 vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
     GlobalWorkerOptions: {},
     getDocument: () => ({promise: Promise.resolve({getPage: async () => ({
@@ -41,6 +42,11 @@ beforeEach(() => {
     vi.stubGlobal('document', {createElement: () => {
         const canvas = {width: 0, height: 0,
             getContext: (): object => context,
+            toDataURL: vi.fn((type: string) => {
+                sizes.push([canvas.width, canvas.height]);
+                if (failEncoding) throw new Error('fixture canvas encoding failure');
+                return `data:${type};base64,AQID`;
+            }),
             toBlob: (done: (value: Blob | null) => void, type?: string, quality?: number) => {
                 encodings.push({type, quality});
                 sizes.push([canvas.width, canvas.height]);
@@ -259,6 +265,46 @@ describe('PDF readable export complete content and resource lifecycle', () => {
 });
 
 describe('PDF rasterizer resource lifecycle', () => {
+    it('does not encode a PDF OCR image when cancellation arrives after rendering resolves', async () => {
+        let rendered!: () => void;
+        pdf.render.mockReturnValue({promise: new Promise<void>(resolve => {rendered = resolve;}), cancel: vi.fn()});
+        const controller = new AbortController(), reason = new Error('document changed after page rendering');
+        const work = renderPdfPageImage(new Uint8Array([1]), 1, 300, controller.signal);
+        await vi.waitFor(() => expect(pdf.render).toHaveBeenCalledOnce());
+        rendered(); queueMicrotask(() => controller.abort(reason));
+        await expect(work).rejects.toBe(reason);
+        expect(canvases[0].toDataURL).not.toHaveBeenCalled();
+        expect(canvases[0]).toMatchObject({width: 0, height: 0});
+        expect(pdf.cleanup).toHaveBeenCalledOnce();
+    });
+    it.each([false, true])('encodes an OCR page at its rendered dimensions and releases its canvas when encoding fails=%s', async fails => {
+        failEncoding = fails;
+        const work = renderPdfPageImage(new Uint8Array([1]), 1, 300);
+        if (fails) await expect(work).rejects.toThrow('fixture canvas encoding failure');
+        else await expect(work).resolves.toMatchObject({image: 'data:image/png;base64,AQID', width: 2500, height: 3333});
+        expect(canvases[0].toDataURL).toHaveBeenCalledWith('image/png');
+        expect(sizes).toEqual([[2500, 3333]]); expect(canvases[0]).toMatchObject({width: 0, height: 0});
+        expect(pdf.cleanup).toHaveBeenCalledOnce();
+    });
+    it.each([[6000, 8000], [500, 20000]])('bounds the OCR canvas for an oversized %s x %s page', async (width, height) => {
+        pdf.width = width; pdf.height = height;
+        const result = await renderPdfPageImage(new Uint8Array([1]), 1, width);
+        expect(result.width * result.height).toBeLessThanOrEqual(9_000_000);
+        expect(Math.max(result.width, result.height)).toBeLessThanOrEqual(4096);
+        expect(canvases[0]).toMatchObject({width: 0, height: 0});
+    });
+    it.each(['短译文\n', '\n短译文\r\n \t\r\n'])('does not add a continuation note for boundary blank lines: %j', async text => {
+        const model = previewDocument();
+        if (model.binary?.kind !== 'pdf') throw new Error('PDF expected');
+        const original = model.binary.pages[0].blocks[0];
+        // 紧贴下方的保留块限制借位；旧算法会把首尾空行算进 10pt 的单行区域并误判溢出。
+        const blocks = [{...original, height: 10, fontSize: 10, lineHeight: 10},
+            {...original, segmentIndex: -1, y: original.y + 10, preserveSource: true}];
+        const result = await rasterizePdfTranslationPage({...input(), blocks, translations: [text]});
+        if (result instanceof Uint8Array) throw new Error('PDF raster metadata expected');
+        expect(result.overflowNotes).toEqual([]);
+        expect(result.textItems?.map(item => item.text)).toEqual(['短译文']);
+    });
     it('exports a readable excerpt and full overflow note using one JPEG canvas and one pixel readback', async () => {
         const model = previewDocument();
         const binary = model.binary;
@@ -363,5 +409,39 @@ describe('PDF rasterizer resource lifecycle', () => {
         expect(canvases[0].getContext().fillRect).toHaveBeenCalledOnce();
         expect(canvases[0]).toMatchObject({width: 0, height: 0});
         expect(pdf.cleanup).toHaveBeenCalledOnce();
+    });
+});
+
+describe('PDF searchable raster metadata', () => {
+    it.each(['left', 'center', 'right'] as const)('exports actual painted line position for %s alignment without retaining pixel memory', async textAlign => {
+        const block = {segmentIndex: 0, x: 20, y: 30, width: 200, height: 40, fontSize: 12, lineHeight: 14, lineCount: 1, fontFamily: 'sans', fontWeight: 400 as const, textAlign};
+        const result = await rasterizePdfTranslationPage({...input(), blocks: [block], translations: ['Searchable line']});
+        expect(result).not.toBeInstanceOf(Uint8Array);
+        if (result instanceof Uint8Array) throw new Error('Missing searchable metadata');
+        expect(result.textItems).toHaveLength(1);
+        const item = result.textItems![0];
+        const painted = canvases[0].getContext().fillText.mock.calls[0];
+        const scale = 2.4;
+        const width = Math.min('Searchable line'.length * 8, painted[3]);
+        expect(item).toMatchObject({segmentIndex: 0, text: 'Searchable line', y: 30});
+        expect(item.width).toBeCloseTo(width / scale);
+        expect(item.x).toBeCloseTo((painted[1] - (textAlign === 'center' ? width / 2 : textAlign === 'right' ? width : 0)) / scale);
+        expect(canvases[0]).toMatchObject({width: 0, height: 0});
+    });
+
+    it('keeps complete selectable lines and source page footer in offline continuation raster pages', async () => {
+        const text = 'Offline continuation 🦄 🔬 text. '.repeat(200) + '\n'.repeat(90) + 'Exact final line.';
+        const plan = {pageNumber: 3, hasTranslation: true, entries: [{kind: 'text' as const, id: 'long', pageNumber: 3,
+            segmentIndex: 0, role: 'paragraph', source: 'Source', text, translated: true, sourceRect: {x: 20, y: 30, width: 200, height: 40}}]};
+        const results = [];
+        for await (const result of rasterizePdfReadingPages({...input(), pageNumber: 3, plan, footerLabel: 'Source page 3'})) results.push(result);
+        expect(results.length).toBeGreaterThan(1);
+        const content = results.flatMap(result => result.textItems!.filter(item => item.segmentIndex === 0).map(item => item.text)).join('').replace(/\s/gu, '');
+        expect(content).toBe(text.replace(/\s/gu, ''));
+        expect(results.every((result, index) => result.textItems!.at(-1)!.text === `Source page 3 · ${index + 1}/${results.length}`)).toBe(true);
+        expect(results.every(result => result.textItems!.some(item => item.segmentIndex === 0 && item.text))).toBe(true);
+        expect(results.slice(0, -1).every(result => result.height === 792)).toBe(true);
+        expect(results.at(-1)).toMatchObject({width: 612, height: 104, textItems: [{text: 'Exact final line.', y: 42}, {segmentIndex: -1, y: 79}]});
+        expect(canvases.every(canvas => canvas.width === 0 && canvas.height === 0)).toBe(true);
     });
 });

@@ -1,0 +1,55 @@
+{
+  "id": "bluesky-quote-metadata",
+  "url": "https://bsky.app/profile/example.test",
+  "html": "<main>\n<div data-testid=\"feedItem-by-fixture.example\" role=\"link\" tabindex=\"0\">\n<a id=\"main-author\" href=\"/profile/fixture.example\" dir=\"auto\" aria-label=\"View profile\">Fixture Main Author</a>\n<div data-testid=\"postText\" id=\"main-body\">This ordinary post explains why an embedded quotation needs its own reading boundary.</div>\n<div role=\"link\" aria-label=\"Post by quoted.example\" id=\"quote-card\">\n  <div id=\"quote-header\"><div><div data-testid=\"userAvatarImage\"></div></div><div><div><div dir=\"auto\" id=\"quote-author\">Fixture Quoted Author</div><div dir=\"auto\" id=\"quote-handle\">@quoted.example</div></div><div dir=\"auto\" data-tooltip=\"Fixture date\" id=\"quote-time\">Earlier this month</div></div></div>\n  <div dir=\"auto\" data-word-wrap=\"1\" id=\"quote-body\">The quoted discussion thanks <a href=\"/profile/quoted-reader.example\" dir=\"auto\" aria-label=\"View profile\" id=\"quote-mention\">@quoted-reader.example</a> for <span id=\"quote-dirty\">a helpful independent explanation</span> and <a href=\"https://example.test/reading\" id=\"quote-reading-link\">a detailed reading reference</a>.</div>\n  <div><div role=\"link\" aria-label=\"Post by nested.example\" id=\"nested-quote-card\">\n    <div id=\"nested-header\"><div data-testid=\"userAvatarImage\"></div><div><div dir=\"auto\" id=\"nested-author\">Fixture Nested Author</div><div dir=\"auto\" id=\"nested-handle\">@nested.example</div><div data-tooltip=\"Another fixture date\" id=\"nested-time\">Several weeks ago</div></div></div>\n    <div dir=\"auto\" data-word-wrap=\"1\" id=\"nested-body\">This nested quotation thanks <a href=\"/profile/nested-reader.example\" dir=\"auto\" aria-label=\"View profile\" id=\"nested-mention\">@nested-reader.example</a> for another readable explanation.</div>\n  </div></div>\n</div>\n<div role=\"link\" aria-label=\"Ordinary linked prose\" id=\"without-avatar\"><div><span data-tooltip=\"An ordinary hint\">An ordinary header hint</span></div><div dir=\"auto\" id=\"without-avatar-body\">Readable prose without an avatar keeps its ordinary <a href=\"/profile/reference.example\" dir=\"auto\" aria-label=\"View profile\" id=\"lookalike-mention\">profile reference</a>.</div></div>\n<div role=\"link\" aria-label=\"Another linked prose\" id=\"without-time\"><div><div data-testid=\"userAvatarImage\"></div><div dir=\"auto\" id=\"without-time-title\">An ordinary title without a timestamp remains readable</div></div><div dir=\"auto\">Another useful explanation remains readable.</div></div>\n<div role=\"link\" id=\"without-label\"><div><div data-testid=\"userAvatarImage\"></div><span data-tooltip=\"Hint\" id=\"without-label-title\">An unlabeled linked explanation remains readable</span></div><div dir=\"auto\">More ordinary prose remains readable.</div></div>\n</div>\n<section id=\"outside-feed\"><div role=\"link\" aria-label=\"Outside linked prose\"><div id=\"outside-header\"><div data-testid=\"userAvatarImage\"></div><span data-tooltip=\"Outside hint\">An outside profile reference remains readable</span></div><div dir=\"auto\">The component markers outside the observed feed scope do not suppress this prose.</div></div></section>\n</main>",
+  "required": [
+    "#main-body",
+    "#quote-body",
+    "#nested-body",
+    "#without-avatar-body",
+    "#without-time-title",
+    "#outside-header"
+  ],
+  "forbidden": [
+    "#main-author",
+    "#quote-header",
+    "#quote-author",
+    "#quote-handle",
+    "#quote-time",
+    "#nested-header",
+    "#nested-author",
+    "#nested-handle",
+    "#nested-time"
+  ],
+  "mentions": [
+    "#quote-mention",
+    "#nested-mention",
+    "#lookalike-mention"
+  ],
+  "sourceAssertions": {
+    "required": [
+      "The quoted discussion thanks",
+      "@quoted-reader.example",
+      "a helpful independent explanation",
+      "a detailed reading reference",
+      "This nested quotation thanks",
+      "@nested-reader.example",
+      "Readable prose without an avatar",
+      "An ordinary title without a timestamp",
+      "An outside profile reference"
+    ],
+    "forbidden": [
+      "Fixture Quoted Author",
+      "@quoted.example",
+      "Earlier this month",
+      "Fixture Nested Author",
+      "@nested.example",
+      "Several weeks ago"
+    ]
+  },
+  "provenance": {
+    "kind": "original-authored-reproduction",
+    "evidence": "social-next/native-scroll-header-fixed/quote-component-saved-dom.html and quote-author-evidence.json",
+    "note": "Only observed semantic attributes and direct-child structure are reproduced. All prose, identities, handles, dates, IDs and URLs are independently authored. Nested and near-component cases test rule boundaries, not asserted current site layouts."
+  }
+}

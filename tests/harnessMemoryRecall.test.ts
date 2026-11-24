@@ -1,5 +1,5 @@
 import {describe, expect, it, vi} from 'vitest';
-import {createLearningMemoryRecall} from '@/src/services/harness/memoryRecall';
+import {createLearningMemoryRecall, readMemory} from '@/src/services/harness/memoryRecall';
 import type {LearningMemory} from '@/src/services/harness/learningMemory';
 
 const now = Date.now();
@@ -28,5 +28,28 @@ describe('learning memory browser adapter', () => {
     });
     it('lets runtime report repository failures without treating failed storage as an empty successful recall', async () => {
         await expect(createLearningMemoryRecall({list: async () => {throw new Error('storage');}})('practice')).rejects.toThrow('storage');
+    });
+    it('does not read notes when the caller has already cancelled', async () => {
+        const controller = new AbortController(); controller.abort();
+        const reader = {recall: vi.fn(async () => [])};
+        await expect(readMemory(reader, 'grammar', controller.signal)).rejects.toThrow('已取消');
+        expect(reader.recall).not.toHaveBeenCalled();
+    });
+    it('skips search projections for filler queries at the 200-note limit and still reads current preferences', async () => {
+        const entries = Array.from({length: 198}, (_, index) => entry(`lesson-${index}`, `grammar lesson ${index}`));
+        const earlier = entry('first', 'Use short examples', 'preference');
+        const later = entry('second', 'Use everyday words', 'preference');
+        entries.push(earlier, later);
+        const store = {list: vi.fn(async () => entries)}, recall = createLearningMemoryRecall(store);
+        const iso = vi.spyOn(Date.prototype, 'toISOString');
+        try {
+            expect(await recall('ok了吗')).toEqual([earlier]);
+            later.updatedAt += 1;
+            expect(await recall('')).toEqual([later]);
+            expect(iso).not.toHaveBeenCalled();
+            expect((await recall('grammar'))[0]).toBe(later);
+            expect(iso).toHaveBeenCalledTimes(400);
+            expect(store.list).toHaveBeenCalledTimes(3);
+        } finally {iso.mockRestore();}
     });
 });

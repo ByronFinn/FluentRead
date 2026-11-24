@@ -1,0 +1,865 @@
+{
+  "version": 1,
+  "freezeUtc": "2026-10-25 13:42:24 UTC",
+  "baseHead": "ee85d44cff562c26b3bc5e70c17daaab8f721800",
+  "scope": "Six independent original alpha/paragraph-structure regression inputs; design and all source truth freeze before any OCR. No OCR-based selection or retuning. Existing51 are immutable.",
+  "pillowVersion": "12.3.0",
+  "fontFiles": [
+    {
+      "key": "bold",
+      "path": "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+      "sha256": "d72db21f9242aedd6b917d8549ad5921766b24d5f8d0becfda2ff4c620b3c2e0"
+    },
+    {
+      "key": "regular",
+      "path": "/System/Library/Fonts/Supplemental/Arial.ttf",
+      "sha256": "525979822591a3447cfc49d943d6f7683508e25543407871c0ed8fed05fd2bd9"
+    },
+    {
+      "key": "cjk",
+      "path": "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
+      "sha256": "cf8cf2c882e1e344ac2e6207fe172657a30dc2c6e1ee65a9e29a7b582c4d4154"
+    }
+  ],
+  "resourceCaps": {
+    "scenes": 6,
+    "maxWidth": 1600,
+    "maxHeight": 1200,
+    "maxScenePixels": 1920000,
+    "maxTotalPixels": 12000000,
+    "maxRegionsPerScene": 12
+  },
+  "notes": [
+    "All PNGs preserve RGBA source alpha. Existing protectedProbes contain only opaque RGB points; protectedAlphaProbes is explicit additional source truth, not a claim that the current browser runner validates alpha.",
+    "Transparent interword holes are computed from fixed font metrics and verified to have zero glyph-mask coverage before compositing. They test repair-patch source preservation without destroying written source text.",
+    "No fonts, model weights, third-party artwork or generated AI image are bundled. Font files are external inputs identified by exact SHA256.",
+    "A common panel is not asserted to be a common paragraph. Every complete independent label and caption is retained in paragraphGroups."
+  ],
+  "scenes": [
+    {
+      "name": "transparent-lantern-bridge-balloons",
+      "size": [
+        1200,
+        1000
+      ],
+      "sourceLanguage": "ja",
+      "structure": "Two pale semitransparent speech balloons float over transparent space; original lantern bridge and birds remain independent illustration.",
+      "artworkRule": "transparent-lantern-bridge-balloons",
+      "regions": [
+        {
+          "id": "left-first",
+          "text": "FOLLOW THE LANTERNS",
+          "x": 110,
+          "y": 175,
+          "fontSize": 32,
+          "fontKey": "bold",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "left",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "left-second",
+          "text": "THE PATH IS STILL OPEN",
+          "x": 110,
+          "y": 235,
+          "fontSize": 32,
+          "fontKey": "bold",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "left",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "right-first",
+          "text": "橋のそばで待っていて。",
+          "x": 665,
+          "y": 230,
+          "fontSize": 30,
+          "fontKey": "cjk",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "right",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "right-second",
+          "text": "地図を持って戻るよ。",
+          "x": 665,
+          "y": 290,
+          "fontSize": 30,
+          "fontKey": "cjk",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "right",
+          "rotationDegrees": 0,
+          "vertical": false
+        }
+      ],
+      "negativeRegions": [
+        [
+          70,
+          560,
+          1130,
+          940
+        ]
+      ],
+      "protectedPoints": [
+        [
+          600,
+          820
+        ],
+        [
+          300,
+          740
+        ],
+        [
+          900,
+          740
+        ]
+      ],
+      "alphaProbePoints": [
+        [
+          0,
+          0
+        ],
+        [
+          1150,
+          500
+        ],
+        [
+          85,
+          190
+        ],
+        [
+          620,
+          250
+        ]
+      ]
+    },
+    {
+      "name": "translucent-riverside-notice",
+      "size": [
+        1400,
+        1000
+      ],
+      "sourceLanguage": "en",
+      "structure": "An alpha-white notice overlays deterministic market awnings, produce and a textured photographic-style background; title, wrapped notice and platform label are separate.",
+      "artworkRule": "translucent-riverside-notice",
+      "regions": [
+        {
+          "id": "title",
+          "text": "RIVERSIDE NOTICE",
+          "x": 210,
+          "y": 190,
+          "fontSize": 48,
+          "fontKey": "bold",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "title",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "notice-first",
+          "text": "The last ferry leaves at eight.",
+          "x": 210,
+          "y": 330,
+          "fontSize": 36,
+          "fontKey": "regular",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "notice",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "notice-second",
+          "text": "Please keep the riverside gate clear.",
+          "x": 210,
+          "y": 395,
+          "fontSize": 36,
+          "fontKey": "regular",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "notice",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "platform",
+          "text": "PLATFORM 3",
+          "x": 210,
+          "y": 545,
+          "fontSize": 30,
+          "fontKey": "bold",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "platform",
+          "rotationDegrees": 0,
+          "vertical": false
+        }
+      ],
+      "negativeRegions": [
+        [
+          40,
+          700,
+          1360,
+          950
+        ]
+      ],
+      "protectedPoints": [
+        [
+          250,
+          800
+        ],
+        [
+          700,
+          800
+        ],
+        [
+          1150,
+          800
+        ]
+      ],
+      "alphaProbePoints": [
+        [
+          0,
+          0
+        ],
+        [
+          10,
+          500
+        ],
+        [
+          150,
+          200
+        ],
+        [
+          700,
+          950
+        ]
+      ],
+      "noticeAlpha": 156,
+      "backgroundSeed": 19
+    },
+    {
+      "name": "perforated-alpha-dock-note",
+      "size": [
+        1200,
+        1000
+      ],
+      "sourceLanguage": "en",
+      "structure": "A floating cream dock note contains zero-alpha and partial-alpha perforations inside the bounding boxes of complete text, confined to interword whitespace; no source glyph is cut.",
+      "artworkRule": "perforated-alpha-dock-note",
+      "regions": [
+        {
+          "id": "dock-first",
+          "text": "THE DOCK IS QUIET",
+          "x": 240,
+          "y": 225,
+          "fontSize": 42,
+          "fontKey": "bold",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "dock",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "dock-second",
+          "text": "KEEP A LIGHT ON",
+          "x": 240,
+          "y": 335,
+          "fontSize": 42,
+          "fontKey": "bold",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "dock",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "port",
+          "text": "PORT 12",
+          "x": 240,
+          "y": 565,
+          "fontSize": 30,
+          "fontKey": "bold",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "port",
+          "rotationDegrees": 0,
+          "vertical": false
+        }
+      ],
+      "negativeRegions": [
+        [
+          80,
+          720,
+          1120,
+          950
+        ]
+      ],
+      "protectedPoints": [
+        [
+          140,
+          160
+        ],
+        [
+          600,
+          830
+        ],
+        [
+          1030,
+          870
+        ]
+      ],
+      "alphaProbePoints": [
+        [
+          0,
+          0
+        ],
+        [
+          1190,
+          990
+        ],
+        [
+          110,
+          400
+        ]
+      ],
+      "holes": [
+        {
+          "regionId": "dock-first",
+          "afterPrefix": "THE",
+          "alpha": 0,
+          "width": 6,
+          "height": 18
+        },
+        {
+          "regionId": "dock-second",
+          "afterPrefix": "KEEP",
+          "alpha": 96,
+          "width": 6,
+          "height": 18
+        }
+      ]
+    },
+    {
+      "name": "same-tone-cabin-controls",
+      "size": [
+        1200,
+        1000
+      ],
+      "sourceLanguage": "en",
+      "structure": "One continuous dark panel contains a wrapped instruction and two independent same-font status labels, with equal baseline spacing and a blank shared background. Colored switch indicators distinguish label roles without adding a dividing frame.",
+      "artworkRule": "same-tone-cabin-controls",
+      "regions": [
+        {
+          "id": "body-first",
+          "text": "KEEP THE CABIN CLOSED",
+          "x": 70,
+          "y": 150,
+          "fontSize": 33,
+          "fontKey": "bold",
+          "fill": [
+            210,
+            240,
+            250,
+            255
+          ],
+          "paragraphId": "body",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "body-second",
+          "text": "THE CREW RETURNS AT DAWN",
+          "x": 70,
+          "y": 220,
+          "fontSize": 33,
+          "fontKey": "bold",
+          "fill": [
+            210,
+            240,
+            250,
+            255
+          ],
+          "paragraphId": "body",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "lights",
+          "text": "CABIN LIGHTS",
+          "x": 780,
+          "y": 150,
+          "fontSize": 33,
+          "fontKey": "bold",
+          "fill": [
+            210,
+            240,
+            250,
+            255
+          ],
+          "paragraphId": "lights",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "reserve",
+          "text": "RESERVE POWER",
+          "x": 780,
+          "y": 220,
+          "fontSize": 33,
+          "fontKey": "bold",
+          "fill": [
+            210,
+            240,
+            250,
+            255
+          ],
+          "paragraphId": "reserve",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "cabin",
+          "text": "CABIN 04",
+          "x": 70,
+          "y": 440,
+          "fontSize": 30,
+          "fontKey": "bold",
+          "fill": [
+            255,
+            193,
+            80,
+            255
+          ],
+          "paragraphId": "cabin",
+          "rotationDegrees": 0,
+          "vertical": false
+        }
+      ],
+      "negativeRegions": [
+        [
+          80,
+          620,
+          1120,
+          930
+        ]
+      ],
+      "protectedPoints": [
+        [
+          250,
+          800
+        ],
+        [
+          600,
+          800
+        ],
+        [
+          950,
+          800
+        ]
+      ],
+      "alphaProbePoints": [
+        [
+          0,
+          0
+        ],
+        [
+          1190,
+          500
+        ],
+        [
+          40,
+          60
+        ],
+        [
+          400,
+          500
+        ]
+      ]
+    },
+    {
+      "name": "inverse-neighbor-tidal-balloons",
+      "size": [
+        1400,
+        1000
+      ],
+      "sourceLanguage": "en",
+      "structure": "A black balloon with white lettering and a pale balloon with black lettering sit close together above original tide illustration; independent lower caption must remain separate.",
+      "artworkRule": "inverse-neighbor-tidal-balloons",
+      "regions": [
+        {
+          "id": "dark-first",
+          "text": "WE CAN CROSS NOW",
+          "x": 130,
+          "y": 195,
+          "fontSize": 40,
+          "fontKey": "bold",
+          "fill": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "paragraphId": "dark",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "dark-second",
+          "text": "THE TIDE IS FALLING",
+          "x": 130,
+          "y": 265,
+          "fontSize": 40,
+          "fontKey": "bold",
+          "fill": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "paragraphId": "dark",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "pale-first",
+          "text": "HOLD THE ROPE",
+          "x": 800,
+          "y": 215,
+          "fontSize": 40,
+          "fontKey": "bold",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "pale",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "pale-second",
+          "text": "I WILL GO FIRST",
+          "x": 800,
+          "y": 285,
+          "fontSize": 40,
+          "fontKey": "bold",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "pale",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "caption",
+          "text": "The channel before sunrise.",
+          "x": 110,
+          "y": 610,
+          "fontSize": 30,
+          "fontKey": "regular",
+          "fill": [
+            255,
+            255,
+            255,
+            255
+          ],
+          "paragraphId": "caption",
+          "rotationDegrees": 0,
+          "vertical": false
+        }
+      ],
+      "negativeRegions": [
+        [
+          60,
+          730,
+          1340,
+          950
+        ]
+      ],
+      "protectedPoints": [
+        [
+          250,
+          830
+        ],
+        [
+          700,
+          850
+        ],
+        [
+          1150,
+          830
+        ]
+      ],
+      "alphaProbePoints": [
+        [
+          0,
+          0
+        ],
+        [
+          700,
+          50
+        ],
+        [
+          85,
+          150
+        ],
+        [
+          1320,
+          250
+        ]
+      ]
+    },
+    {
+      "name": "bound-atlas-rule-and-inset-card",
+      "size": [
+        1600,
+        1100
+      ],
+      "sourceLanguage": "en",
+      "structure": "A semitransparent bound atlas has a cross-spine heading, two separate text columns, a one-pixel rule, an inset legend card and an independently rotated spine index.",
+      "artworkRule": "bound-atlas-rule-and-inset-card",
+      "regions": [
+        {
+          "id": "title",
+          "text": "ATLAS OF THE INNER COAST",
+          "x": 360,
+          "y": 100,
+          "fontSize": 46,
+          "fontKey": "bold",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "title",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "left-first",
+          "text": "Turn toward the old lighthouse.",
+          "x": 140,
+          "y": 300,
+          "fontSize": 32,
+          "fontKey": "regular",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "left",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "left-second",
+          "text": "The narrow path follows the sea.",
+          "x": 140,
+          "y": 365,
+          "fontSize": 32,
+          "fontKey": "regular",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "left",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "right-first",
+          "text": "Wait until the bells are quiet.",
+          "x": 925,
+          "y": 300,
+          "fontSize": 32,
+          "fontKey": "regular",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "right",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "right-second",
+          "text": "Then take the eastern stairs.",
+          "x": 925,
+          "y": 365,
+          "fontSize": 32,
+          "fontKey": "regular",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "right",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "key",
+          "text": "MAP KEY",
+          "x": 140,
+          "y": 465,
+          "fontSize": 30,
+          "fontKey": "bold",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "key",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "card",
+          "text": "NORTH PIER",
+          "x": 1040,
+          "y": 485,
+          "fontSize": 30,
+          "fontKey": "bold",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "card",
+          "rotationDegrees": 0,
+          "vertical": false
+        },
+        {
+          "id": "spine",
+          "text": "INDEX 09",
+          "x": 780,
+          "y": 665,
+          "fontSize": 24,
+          "fontKey": "bold",
+          "fill": [
+            18,
+            28,
+            34,
+            255
+          ],
+          "paragraphId": "spine",
+          "rotationDegrees": 90,
+          "vertical": false
+        }
+      ],
+      "negativeRegions": [
+        [
+          90,
+          700,
+          680,
+          1010
+        ],
+        [
+          960,
+          700,
+          1500,
+          1010
+        ]
+      ],
+      "protectedPoints": [
+        [
+          300,
+          860
+        ],
+        [
+          1250,
+          860
+        ],
+        [
+          800,
+          1010
+        ]
+      ],
+      "alphaProbePoints": [
+        [
+          0,
+          0
+        ],
+        [
+          1550,
+          1050
+        ],
+        [
+          110,
+          630
+        ],
+        [
+          1500,
+          600
+        ]
+      ]
+    }
+  ]
+}

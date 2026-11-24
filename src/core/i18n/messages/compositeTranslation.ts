@@ -1,49 +1,51 @@
 /**
  * @file src/core/i18n/messages/compositeTranslation.ts
  * 文件职责：集中维护组合翻译服务创建、成员编辑、策略解释与删除确认的七语界面文案。
- * 主要内容：为设置页提供稳定语义键，各语言保留一致的服务名插值；说明轮流首选及其重置条件、成员沿用既有配置和故障转移时限。
+ * 主要内容：为设置页提供稳定语义键，各语言保留一致的服务名插值；中文独立导出供运行时回退目录引用，七语聚合表继续供构建期语言包使用；说明轮流首选及其重置条件、成员沿用既有配置和故障转移时限。
  * 模块边界：只输出静态文案，不保存配置、检测服务健康或选择翻译成员。
  */
+export const compositeTranslationChineseMessages = {
+  "settings.services.composite.add": "添加组合",
+  "settings.services.composite.badge": "组合",
+  "settings.services.composite.title": "添加组合翻译",
+  "settings.services.composite.name": "名称",
+  "settings.services.composite.namePlaceholder": "例如：日常翻译",
+  "settings.services.composite.nameRequired": "请输入服务名称",
+  "settings.services.composite.nameTooLong": "名称最多 80 个字符",
+  "settings.services.composite.members": "成员",
+  "settings.services.composite.membersHelp": "选择至少两项已有服务，选择后直接加入。可以排序或移除，不能加入其他组合。",
+  "settings.services.composite.addMember": "添加成员",
+  "settings.services.composite.selectMember": "选择成员服务",
+  "settings.services.composite.empty": "还没有成员服务，添加后才能检查连接或翻译。",
+  "settings.services.composite.membersRequired": "至少选择两个成员服务",
+  "settings.services.composite.moveUp": "上移 {service}",
+  "settings.services.composite.moveDown": "下移 {service}",
+  "settings.services.composite.removeMember": "移除 {service}",
+  "settings.services.composite.strategy": "调用方式",
+  "settings.services.composite.random": "随机",
+  "settings.services.composite.randomHelp": "每次随机排列成员，失败后尝试下一项。",
+  "settings.services.composite.sequential": "轮流",
+  "settings.services.composite.sequentialHelp": "按 A→B→C→A 轮流首选，失败后尝试剩余成员。",
+  "settings.services.composite.smart": "智能",
+  "settings.services.composite.smartHelp": "优先使用近期成功率高、响应快的成员，失败后切换。",
+  "settings.services.composite.timeout": "等待时间",
+  "settings.services.composite.timeoutBehavior": "单个成员超时后，会自动尝试其他成员。",
+  "settings.services.composite.timeoutHelp": "默认 12 秒，可设置 1–45 秒；整轮仍受翻译请求的总等待时间限制。",
+  "settings.services.composite.timeoutInvalid": "请输入 1–45 秒的整数",
+  "settings.services.composite.sharedConfig": "沿用成员各自的模型、密钥及其他设置。",
+  "settings.services.composite.delete": "删除",
+  "settings.services.composite.deleteTitle": "删除组合翻译",
+  "settings.services.composite.deleteConfirm": "确定删除“{name}”吗？只删除组合，保留成员服务及其配置。",
+  "settings.services.composite.save": "保存组合",
+  "settings.services.composite.sequentialDetails": "每次请求按 A→B→C→A 轮流首选；失败或超时后尝试其余成员，每个成员最多一次。后台重启或成员列表、顺序变化时从第一项重新轮流。",
+  "settings.services.composite.customTitle": "添加自定义服务",
+  "settings.services.composite.serviceType": "服务类型",
+  "settings.services.composite.interfaceType": "兼容接口",
+  "settings.services.composite.compositeType": "组合翻译",
+} as const;
+
 export const compositeTranslationMessages = {
-  "zh-CN": {
-    "settings.services.composite.add": "添加组合",
-    "settings.services.composite.badge": "组合",
-    "settings.services.composite.title": "添加组合翻译",
-    "settings.services.composite.name": "名称",
-    "settings.services.composite.namePlaceholder": "例如：日常翻译",
-    "settings.services.composite.nameRequired": "请输入服务名称",
-    "settings.services.composite.nameTooLong": "名称最多 80 个字符",
-    "settings.services.composite.members": "成员",
-    "settings.services.composite.membersHelp": "选择至少两项已有服务，选择后直接加入。可以排序或移除，不能加入其他组合。",
-    "settings.services.composite.addMember": "添加成员",
-    "settings.services.composite.selectMember": "选择成员服务",
-    "settings.services.composite.empty": "还没有成员服务，添加后才能检查连接或翻译。",
-    "settings.services.composite.membersRequired": "至少选择两个成员服务",
-    "settings.services.composite.moveUp": "上移 {service}",
-    "settings.services.composite.moveDown": "下移 {service}",
-    "settings.services.composite.removeMember": "移除 {service}",
-    "settings.services.composite.strategy": "调用方式",
-    "settings.services.composite.random": "随机",
-    "settings.services.composite.randomHelp": "每次随机排列成员，失败后尝试下一项。",
-    "settings.services.composite.sequential": "轮流",
-    "settings.services.composite.sequentialHelp": "按 A→B→C→A 轮流首选，失败后尝试剩余成员。",
-    "settings.services.composite.smart": "智能",
-    "settings.services.composite.smartHelp": "优先使用近期成功率高、响应快的成员，失败后切换。",
-    "settings.services.composite.timeout": "超时（秒）",
-    "settings.services.composite.timeoutHelp": "默认 12 秒，可设置 1–45 秒；整轮仍受翻译请求的总等待时间限制。",
-    "settings.services.composite.timeoutInvalid": "请输入 1–45 秒的整数",
-    "settings.services.composite.sharedConfig": "沿用成员各自的模型、密钥及其他设置。",
-    "settings.services.composite.delete": "删除",
-    "settings.services.composite.deleteTitle": "删除组合翻译",
-    "settings.services.composite.deleteConfirm": "确定删除“{name}”吗？只删除组合，保留成员服务及其配置。",
-    "settings.services.composite.save": "保存组合",
-    "settings.services.composite.sequentialDetails": "每次请求按 A→B→C→A 轮流首选；失败或超时后尝试其余成员，每个成员最多一次。后台重启或成员列表、顺序变化时从第一项重新轮流。",
-    "settings.services.composite.customTitle": "添加自定义服务",
-    "settings.services.composite.serviceType": "服务类型",
-    "settings.services.composite.interfaceType": "兼容接口",
-    "settings.services.composite.compositeType": "组合翻译",
-    "settings.services.composite.advanced": "更多设置"
-  },
+  "zh-CN": compositeTranslationChineseMessages,
   "en-US": {
     "settings.services.composite.add": "Add combination",
     "settings.services.composite.badge": "Combined",
@@ -68,7 +70,8 @@ export const compositeTranslationMessages = {
     "settings.services.composite.sequentialHelp": "Rotate the first choice A→B→C→A; try remaining members after a failure.",
     "settings.services.composite.smart": "Smart",
     "settings.services.composite.smartHelp": "Prefer recent reliability and speed; switch members after a failure.",
-    "settings.services.composite.timeout": "Timeout (seconds)",
+    "settings.services.composite.timeout": "Wait time",
+    "settings.services.composite.timeoutBehavior": "If a member times out, the next member is tried automatically.",
     "settings.services.composite.timeoutHelp": "Defaults to 12 seconds; accepts 1–45 seconds. The complete attempt remains subject to the translation request timeout.",
     "settings.services.composite.timeoutInvalid": "Enter a whole number from 1 to 45 seconds",
     "settings.services.composite.sharedConfig": "Members keep their own model, key, and other settings.",
@@ -81,7 +84,6 @@ export const compositeTranslationMessages = {
     "settings.services.composite.serviceType": "Service type",
     "settings.services.composite.interfaceType": "Compatible endpoint",
     "settings.services.composite.compositeType": "Combined translation",
-    "settings.services.composite.advanced": "More settings"
   },
   "ja-JP": {
     "settings.services.composite.add": "組み合わせを追加",
@@ -107,7 +109,8 @@ export const compositeTranslationMessages = {
     "settings.services.composite.sequentialHelp": "最初のサービスを A→B→C→A と交代し、失敗したら残りを試します。",
     "settings.services.composite.smart": "スマート",
     "settings.services.composite.smartHelp": "最近の成功率と応答速度を優先し、失敗したら切り替えます。",
-    "settings.services.composite.timeout": "待機時間（秒）",
+    "settings.services.composite.timeout": "待機時間",
+    "settings.services.composite.timeoutBehavior": "メンバーがタイムアウトすると、次のメンバーを自動で試します。",
     "settings.services.composite.timeoutHelp": "初期値は12秒、範囲は1～45秒です。試行全体には翻訳リクエストの制限時間も適用されます。",
     "settings.services.composite.timeoutInvalid": "1～45秒の整数を入力してください",
     "settings.services.composite.sharedConfig": "各サービスのモデル、キー、その他の設定を使用します。",
@@ -120,7 +123,6 @@ export const compositeTranslationMessages = {
     "settings.services.composite.serviceType": "サービスの種類",
     "settings.services.composite.interfaceType": "互換インターフェース",
     "settings.services.composite.compositeType": "組み合わせ翻訳",
-    "settings.services.composite.advanced": "その他の設定"
   },
   "ko-KR": {
     "settings.services.composite.add": "조합 추가",
@@ -146,7 +148,8 @@ export const compositeTranslationMessages = {
     "settings.services.composite.sequentialHelp": "첫 서비스를 A→B→C→A로 바꾸고 실패하면 나머지를 시도합니다.",
     "settings.services.composite.smart": "지능형",
     "settings.services.composite.smartHelp": "최근 성공률과 응답 속도를 우선하며 실패하면 전환합니다.",
-    "settings.services.composite.timeout": "제한 시간(초)",
+    "settings.services.composite.timeout": "대기 시간",
+    "settings.services.composite.timeoutBehavior": "멤버의 대기 시간이 초과되면 다음 멤버를 자동으로 시도합니다.",
     "settings.services.composite.timeoutHelp": "기본값은 12초이며 1–45초로 설정할 수 있습니다. 전체 시도에는 번역 요청의 제한 시간도 적용됩니다.",
     "settings.services.composite.timeoutInvalid": "1–45초 사이의 정수를 입력하세요",
     "settings.services.composite.sharedConfig": "각 서비스의 모델, 키 및 기타 설정을 사용합니다.",
@@ -159,7 +162,6 @@ export const compositeTranslationMessages = {
     "settings.services.composite.serviceType": "서비스 유형",
     "settings.services.composite.interfaceType": "호환 인터페이스",
     "settings.services.composite.compositeType": "번역 조합",
-    "settings.services.composite.advanced": "추가 설정"
   },
   "fr-FR": {
     "settings.services.composite.add": "Ajouter une combinaison",
@@ -185,7 +187,8 @@ export const compositeTranslationMessages = {
     "settings.services.composite.sequentialHelp": "Alterne le premier choix A→B→C→A ; essaie les autres en cas d’échec.",
     "settings.services.composite.smart": "Intelligente",
     "settings.services.composite.smartHelp": "Privilégie la fiabilité récente et la rapidité ; change de membre en cas d’échec.",
-    "settings.services.composite.timeout": "Délai (secondes)",
+    "settings.services.composite.timeout": "Temps d’attente",
+    "settings.services.composite.timeoutBehavior": "Si un membre dépasse ce délai, le suivant est essayé automatiquement.",
     "settings.services.composite.timeoutHelp": "12 secondes par défaut, réglable entre 1 et 45 secondes. La tentative complète reste soumise au délai de la requête de traduction.",
     "settings.services.composite.timeoutInvalid": "Saisissez un entier entre 1 et 45 secondes",
     "settings.services.composite.sharedConfig": "Chaque membre conserve son modèle, sa clé et ses autres paramètres.",
@@ -198,7 +201,6 @@ export const compositeTranslationMessages = {
     "settings.services.composite.serviceType": "Type de service",
     "settings.services.composite.interfaceType": "Interface compatible",
     "settings.services.composite.compositeType": "Traduction combinée",
-    "settings.services.composite.advanced": "Autres paramètres"
   },
   "ru-RU": {
     "settings.services.composite.add": "Добавить комбинацию",
@@ -224,7 +226,8 @@ export const compositeTranslationMessages = {
     "settings.services.composite.sequentialHelp": "Чередует первый сервис A→B→C→A; при ошибке пробует остальные.",
     "settings.services.composite.smart": "Умная",
     "settings.services.composite.smartHelp": "Предпочитает недавнюю надёжность и скорость; при ошибке меняет сервис.",
-    "settings.services.composite.timeout": "Ожидание (секунды)",
+    "settings.services.composite.timeout": "Время ожидания",
+    "settings.services.composite.timeoutBehavior": "Если время ожидания участника истекло, автоматически пробуется следующий.",
     "settings.services.composite.timeoutHelp": "По умолчанию 12 секунд, допустимо от 1 до 45. Общая попытка также ограничена временем запроса перевода.",
     "settings.services.composite.timeoutInvalid": "Введите целое число от 1 до 45 секунд",
     "settings.services.composite.sharedConfig": "Каждый сервис сохраняет свою модель, ключ и остальные настройки.",
@@ -237,7 +240,6 @@ export const compositeTranslationMessages = {
     "settings.services.composite.serviceType": "Тип сервиса",
     "settings.services.composite.interfaceType": "Совместимый интерфейс",
     "settings.services.composite.compositeType": "Комбинированный перевод",
-    "settings.services.composite.advanced": "Другие настройки"
   },
   "es-ES": {
     "settings.services.composite.add": "Añadir combinación",
@@ -263,7 +265,8 @@ export const compositeTranslationMessages = {
     "settings.services.composite.sequentialHelp": "Alterna el primero A→B→C→A; prueba los restantes si falla.",
     "settings.services.composite.smart": "Inteligente",
     "settings.services.composite.smartHelp": "Prioriza la fiabilidad reciente y la rapidez; cambia de miembro si falla.",
-    "settings.services.composite.timeout": "Tiempo (segundos)",
+    "settings.services.composite.timeout": "Tiempo de espera",
+    "settings.services.composite.timeoutBehavior": "Si un miembro supera este tiempo, se prueba automáticamente el siguiente.",
     "settings.services.composite.timeoutHelp": "12 segundos de forma predeterminada; admite de 1 a 45. El intento completo sigue sujeto al tiempo máximo de la solicitud de traducción.",
     "settings.services.composite.timeoutInvalid": "Introduce un número entero de 1 a 45 segundos",
     "settings.services.composite.sharedConfig": "Cada miembro conserva su modelo, clave y otros ajustes.",
@@ -276,7 +279,6 @@ export const compositeTranslationMessages = {
     "settings.services.composite.serviceType": "Tipo de servicio",
     "settings.services.composite.interfaceType": "Interfaz compatible",
     "settings.services.composite.compositeType": "Traducción combinada",
-    "settings.services.composite.advanced": "Más ajustes"
   }
 } as const;
 

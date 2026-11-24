@@ -9,6 +9,8 @@ import {TranslationRequestError, serializeTranslationError} from '@/src/services
 import DocumentApp from '@/src/app/document-translation/DocumentApp.vue';
 import {documentRetryBackoff} from '@/src/app/document-translation/runtime';
 import DocumentSegmentEditor from '@/src/app/document-translation/DocumentSegmentEditor.vue';
+const defaultDocumentRetryWaitMs = documentRetryBackoff.maxWaitMs;
+const defaultDocumentRetryDurationMs = documentRetryBackoff.maxDurationMs;
 
 // Only external ports are controlled. Both original client SFC templates, the app adapter,
 // parsing, segment translator, text export and (unless explicitly delayed) ZIP writer run.
@@ -34,7 +36,7 @@ vi.mock('@/src/services/config/store', async () => {
         requestConfigPatch: (patch: unknown, send: (message: unknown) => Promise<unknown>) => send({patch}),
     };
 });
-vi.mock('@/src/services/translation/client', () => ({translateText: ports.single, translateTextBatch: ports.batch}));
+vi.mock('@/src/services/translation/client', async original => ({...await original<typeof import('@/src/services/translation/client')>(), translateText: ports.single, translateTextBatch: ports.batch}));
 vi.mock('@/src/features/document-translation/services/binary', async () => {
     const actual = await vi.importActual<typeof import('@/src/features/document-translation/services/binary')>('@/src/features/document-translation/services/binary');
     ports.download.mockImplementation(actual.createDocumentDownload);
@@ -136,7 +138,7 @@ function find(predicate: (node: Host) => boolean, within = root): Host {
 }
 const labelled = (label: string, within = root) => find(node => node.props['aria-label'] === label, within);
 const dialog = (heading: string) => find(node => node.tag === 'dialog' && node.props['aria-labelledby'] === heading);
-const button = (label: string, within = root) => find(node => node.tag === 'button' && textOf(node) === label, within);
+const button = (label: string, within = root) => find(node => node.tag === 'button' && (textOf(node) === label || node.props['aria-label'] === label), within);
 const taskbar = () => find(node => node.props['aria-label'] === '当前文档与翻译任务');
 const translateButton = () => find(node => node.tag === 'button' && String(node.props.class).includes('translate-document-button'), taskbar());
 const editor = () => labelled('全量译文校订');
@@ -179,8 +181,15 @@ function broadcast(patch: Partial<Config>) {
     Object.assign(ports.config, next);
     ports.observer!(next);
 }
+async function selectDownloadVersion(mode: 'bilingual' | 'translated', within: Host): Promise<void> {
+    await fire(find(node => node.tag === 'input' && node.props.name === 'document-download-version' && node.props.value === mode, within), 'change');
+}
+async function requestDownloadVersion(mode: 'bilingual' | 'translated', within: Host): Promise<void> {
+    await selectDownloadVersion(mode, within);
+    await fire(find(node => node.props.class === 'download-submit', within), 'click');
+}
 async function downloadReady() {
-    await fire(button('下载文件 ↓'), 'click');
+    await fire(button('下载'), 'click');
     return dialog('download-document-heading');
 }
 beforeEach(async () => {
@@ -222,6 +231,12 @@ afterEach(async () => {
 });
 
 describe('document user actions: configuration consumers', () => {
+    it('shows configuration readiness failure without enabling translation or losing the imported document', async () => {
+        apps.pop()!.unmount(); const ready = deferred<unknown>(undefined); ports.ready = ready.promise; mount();
+        await importFiles(file('readiness-failure.txt')); ready.reject(new Error('configuration unavailable')); await flush();
+        expect(textOf(root)).toContain('document.config.loadFailed'); expect(translateButton().props.disabled).toBe(true);
+        expect(ports.single).not.toHaveBeenCalled(); expect(ports.batch).not.toHaveBeenCalled();
+    });
     it('defaults to batching for each document and retains a local opt-out without saving global settings', async () => {
         const globalBatching = ports.config.enableAIMultiSegment;
         await importFiles(file('batch-first.txt', 'First passage.\n\nSecond passage.'), file('batch-second.txt', 'Third passage.\n\nFourth passage.'));
@@ -231,7 +246,7 @@ describe('document user actions: configuration consumers', () => {
         await fire(translateButton(), 'click');
         await vi.waitFor(() => expect(ports.single).toHaveBeenCalledTimes(2));
         expect(ports.batch).not.toHaveBeenCalled();
-        await vi.waitFor(() => expect(button('下载文件 ↓', taskbar()).props.disabled).toBe(false));
+        await vi.waitFor(() => expect(button('下载', taskbar()).props.disabled).toBe(false));
         await selectFile('batch-second.txt');
         expect(localToggle().checked).toBe(true);
         await fire(translateButton(), 'click');
@@ -396,6 +411,7 @@ describe('document user actions: download consumers', () => {
         expect(ports.download).toHaveBeenCalledOnce();
         expect(blobs).toHaveLength(0);
         await selectFile('zip-progress-first.txt');
+        await fire(button('校订译文'), 'click');
         expect(textarea(0).value).toBe('T:Original text.');
     });
 
@@ -403,12 +419,13 @@ describe('document user actions: download consumers', () => {
         await importFiles(file('episode.srt', '1\n00:00:01,000 --> 00:00:02,000\nFirst\n\n2\n00:00:03,000 --> 00:00:04,000\nSecond\n'));
         await edit(0, '第一段校订');
         const download = await downloadReady();
-        const submit = button('下载双语文件', download);
-        expect(submit.props.disabled).toBe(true);
-        await fire(find(node => node.tag === 'input' && node.type === 'checkbox', download), 'change', {checked: true});
-        await fire(button('仅译文适合直接阅读和分享', download), 'click');
-        expect(button('下载译文文件', download).props.disabled).toBe(false);
-        await fire(button('下载译文文件', download), 'click');
+        await requestDownloadVersion('translated', download);
+        expect(ports.download).not.toHaveBeenCalled();
+        expect(blobs).toHaveLength(0);
+        await fire(button('返回', download), 'click');
+        expect(find(node => node.props.class === 'download-submit', download).props.disabled).toBe(false);
+        await requestDownloadVersion('translated', download);
+        await fire(button('下载当前结果', download), 'click');
         await vi.waitFor(() => expect(blobs).toHaveLength(1));
         const content = await blobs[0].text();
         expect(content).toContain('00:00:01,000 --> 00:00:02,000\n第一段校订');
@@ -417,25 +434,33 @@ describe('document user actions: download consumers', () => {
         expect(anchors[0].download).toBe('episode.translated.srt');
         expect(anchors[0].click).toHaveBeenCalledOnce();
         expect(download.open).toBe(false);
-        await fire(button('下载文件 ↓'), 'click');
-        expect(find(node => node.tag === 'input' && node.type === 'checkbox', download).checked).toBe(false);
-        expect(button('下载双语文件', download).props.disabled).toBe(true);
+        await fire(button('下载'), 'click');
+        await requestDownloadVersion('bilingual', download);
+        expect(ports.download).toHaveBeenCalledOnce();
+        expect(button('下载当前结果', download).props.disabled).toBe(false);
     });
 
-    it('preserves the translated reading choice on download and keeps the previous output choice when reading source', async () => {
+    it('selects a version before downloading without changing the reading mode', async () => {
         await importFiles(file('reading.txt')); await edit(0, '校订');
         await fire(button('阅读'), 'click');
         await fire(button('译文', labelled('阅读方式')), 'click');
         const download = await downloadReady();
-        expect(textOf(download)).toContain('reading.translated.txt');
-        expect(textOf(find(node => node.tag === 'pre', download))).toBe('校订');
-        await fire(button('返回文档', download), 'click');
-        await fire(button('原文', labelled('阅读方式')), 'click');
-        await fire(button('下载文件 ↓'), 'click');
-        expect(textOf(download)).toContain('reading.translated.txt');
-        await fire(button('双语对照同时保留原文和译文', download), 'click');
-        expect(textOf(find(node => node.tag === 'pre', download))).toContain('Original text.');
-        expect(textOf(find(node => node.tag === 'pre', download))).toContain('校订');
+        expect(textOf(download)).not.toContain('reading.txt');
+        await selectDownloadVersion('translated', download);
+        expect(ports.download).not.toHaveBeenCalled();
+        expect(blobs).toHaveLength(0);
+        await requestDownloadVersion('bilingual', download);
+        await vi.waitFor(() => expect(blobs).toHaveLength(1));
+        expect(await blobs[0].text()).toContain('Original text.');
+        expect(await blobs[0].text()).toContain('校订');
+        expect(anchors[0].download).toBe('reading.bilingual.txt');
+        expect(button('译文', labelled('阅读方式')).props['aria-pressed']).toBe(true);
+        await downloadReady();
+        await requestDownloadVersion('translated', download);
+        await vi.waitFor(() => expect(blobs).toHaveLength(2));
+        expect(await blobs[1].text()).toBe('校订');
+        expect(anchors[1].download).toBe('reading.translated.txt');
+        expect(button('译文', labelled('阅读方式')).props['aria-pressed']).toBe(true);
     });
 
     it('blocks Escape during export, discards late progress and bytes after cancel, then hands off exactly one retry URL', async () => {
@@ -443,7 +468,7 @@ describe('document user actions: download consumers', () => {
         const download = await downloadReady();
         const late = deferred<DocumentDownload>({data: 'late', fileName: 'late.txt', mimeType: 'text/plain'});
         ports.download.mockReturnValueOnce(late.promise);
-        await fire(button('下载双语文件', download), 'click');
+        await requestDownloadVersion('bilingual', download);
         const controls = ports.download.mock.calls[0][3] as CreateDocumentDownloadOptions;
         controls.onPdfProgress!({phase: 'rendering', completedPages: 1, totalPages: 3}); await flush();
         expect(textOf(download)).toContain('document.export.pages {"completed":1,"total":3}');
@@ -462,7 +487,7 @@ describe('document user actions: download consumers', () => {
         expect(textarea(0).value).toBe('reviewed');
         const guard = beforeUnload(); win.dispatchEvent(guard);
         expect(guard.defaultPrevented).toBe(true);
-        await fire(button('下载双语文件', download), 'click');
+        await requestDownloadVersion('bilingual', download);
         await vi.waitFor(() => expect(anchors).toHaveLength(1));
         expect(anchors[0].click).toHaveBeenCalledOnce();
         const after = beforeUnload(); win.dispatchEvent(after);
@@ -475,11 +500,11 @@ describe('document user actions: download consumers', () => {
         await importFiles(file('export-error.txt')); await edit(0, 'reviewed');
         const download = await downloadReady();
         ports.download.mockRejectedValueOnce(error);
-        await fire(button('下载双语文件', download), 'click');
+        await requestDownloadVersion('bilingual', download);
         expect(textOf(download)).toContain('encode failed');
         expect(download.open).toBe(true);
         expect(blobs).toHaveLength(0);
-        await fire(button('下载双语文件', download), 'click');
+        await requestDownloadVersion('bilingual', download);
         await vi.waitFor(() => expect(blobs).toHaveLength(1));
         expect(textOf(download)).not.toContain('encode failed');
     });
@@ -489,13 +514,13 @@ describe('document user actions: download consumers', () => {
         const download = await downloadReady();
         const createAnchor = (window as any).document.createElement;
         (window as any).document.createElement = () => ({click: () => {throw new Error('download blocked');}});
-        await fire(button('下载双语文件', download), 'click');
+        await requestDownloadVersion('bilingual', download);
         await vi.waitFor(() => expect(textOf(download)).toContain('download blocked'));
         expect(revoked).toEqual(['blob:actions-1']);
         const before = beforeUnload(); win.dispatchEvent(before);
         expect(before.defaultPrevented).toBe(true);
         (window as any).document.createElement = createAnchor;
-        await fire(button('下载双语文件', download), 'click');
+        await requestDownloadVersion('bilingual', download);
         await vi.waitFor(() => expect(anchors).toHaveLength(1));
         apps.pop()!.unmount(); await flush();
         expect(revoked).toEqual(['blob:actions-1', 'blob:actions-2']);
@@ -506,7 +531,7 @@ describe('document user actions: download consumers', () => {
         const download = await downloadReady();
         vi.useFakeTimers();
         ports.download.mockResolvedValueOnce({data: 'reviewed', fileName: 'url.txt', mimeType: 'text/plain'});
-        await fire(button('下载双语文件', download), 'click');
+        await requestDownloadVersion('bilingual', download);
         expect(anchors[0].click).toHaveBeenCalledOnce();
         await vi.advanceTimersByTimeAsync(999);
         expect(revoked).toEqual([]);
@@ -561,11 +586,29 @@ describe('document user actions: download consumers', () => {
         const zip = await JSZip.loadAsync(await blobs[0].arrayBuffer());
         expect(await zip.file('1/zip-first.translated.txt')!.async('string')).toBe('T:Original text.');
         await selectFile('zip-first.txt');
+        await fire(button('校订译文'), 'click');
         expect(textarea(0).value).toBe('T:Original text.');
     });
 });
 
 describe('document user actions: real editor events and parent consumers', () => {
+    it('filters spreadsheet proofreading by the selected columns and keeps cell identities for edits', async () => {
+        apps.pop()!.unmount();
+        const document = parseDocument('table.csv', 'Name,Description\nPrivate label,Visible description');
+        const scope = ref(new Set([1, 3]));
+        const translations = ['名称', '说明', '原有校订', '可见译文'];
+        const update = vi.fn();
+        mount({setup: () => () => h(DocumentSegmentEditor, {document, translations, scopeIds: scope.value, disabled: false, onUpdate: update})});
+        expect(walk(editor()).filter(node => node.tag === 'textarea')).toHaveLength(2);
+        expect(textOf(editor())).not.toContain('Private label');
+        expect(textarea(3).value).toBe('可见译文');
+        await fire(textarea(3), 'input', {value: '校订说明'});
+        expect(update).toHaveBeenLastCalledWith(3, '校订说明');
+        scope.value = new Set([0, 2]); await flush();
+        expect(textarea(2).value).toBe('原有校订');
+        expect(textOf(editor())).not.toContain('Visible description');
+    });
+
     it('keeps retained revisions collapsed and read-only, renders forty at a time and resets disclosure on document changes', async () => {
         apps.pop()!.unmount();
         const current = ref<ParsedDocument>(parseDocument('retained-first.txt', 'Current source wording.'));
@@ -671,7 +714,9 @@ describe('document user actions: real editor events and parent consumers', () =>
         expect(textOf(taskbar())).toContain('翻译完成');
         await fire(button('阅读'), 'click');
         const download = await downloadReady();
-        expect(textOf(find(node => node.tag === 'pre', download))).toContain('Second reviewed');
+        await requestDownloadVersion('translated', download);
+        await vi.waitFor(() => expect(blobs).toHaveLength(1));
+        expect(await blobs[0].text()).toContain('Second reviewed');
     });
 
     it('clears search, pending filter, page and editing focus on parent document switch, then restores only the first file translations', async () => {
@@ -681,12 +726,16 @@ describe('document user actions: real editor events and parent consumers', () =>
         await fire(pendingFilter(), 'change', {checked: true});
         await fire(textarea(1), 'focus');
         await selectFile('editor-second.json');
+        expect(walk(root).some(node => node.props['aria-label'] === '全量译文校订')).toBe(false);
+        await fire(button('校订译文'), 'click');
         expect(search().value).toBe('');
         expect(pendingFilter().checked).toBe(false);
-        await fire(button('校订译文'), 'click');
         await fire(search(), 'input', {value: 'First'});
         expect(walk(editor()).filter(node => node.tag === 'textarea')).toHaveLength(1);
         await selectFile('editor-first.json');
+        expect(walk(root).some(node => node.props['aria-label'] === '全量译文校订')).toBe(false);
+        await fire(button('校订译文'), 'click');
+        expect(search().value).toBe('');
         expect(textarea(0).value).toBe('Saved first');
         expect(textarea(1).value).toBe('');
     });
@@ -701,6 +750,33 @@ describe('document user actions: real editor events and parent consumers', () =>
         current.value = parseDocument('second.txt', 'Match\n\nDifferent'); await flush();
         expect(walk(editor()).filter(node => node.tag === 'textarea')).toHaveLength(1);
         expect(walk(editor()).find(node => node.props['data-segment-id'] === 1)).toBeUndefined();
+    });
+
+    it('keeps proofreading text directions independent while searching and saving exact edits', async () => {
+        apps.pop()!.unmount();
+        const current = parseDocument('directions.txt', 'מחקר 2026 GPU\n\nEnglish source.');
+        const translations = ref(['中文译文。', 'ترجمة عربية.']);
+        const retained = [{source: 'مصدر قديم.', translation: 'Retained English correction.'}];
+        const update = vi.fn((index: number, value: string) => {translations.value[index] = value;});
+        mount({setup: () => () => h(DocumentSegmentEditor, {document: current, translations: translations.value,
+            retainedRevisions: retained, disabled: false, onUpdate: update})});
+        const source = find(node => node.props.class === 'document-source', find(node => node.props['data-segment-id'] === 0));
+        expect(source.props.dir).toBe('auto'); expect(textOf(source)).toBe(current.segments[0].source);
+        expect(textarea(0).props.dir).toBe('auto'); expect(textarea(0).value).toBe('中文译文。');
+        expect(textarea(1).props.dir).toBe('auto'); expect(textarea(1).value).toBe('ترجمة عربية.');
+        expect(search().props.dir).toBe('auto');
+        await fire(search(), 'input', {value: 'מחקר'});
+        expect(walk(editor()).filter(node => node.tag === 'textarea')).toHaveLength(1);
+        const exact = '  مراجعة GPU 2026.  ';
+        await fire(textarea(0), 'input', {value: exact});
+        expect(update).toHaveBeenLastCalledWith(0, exact); expect(textarea(0).value).toBe(exact);
+        const details = find(node => node.tag === 'details'); await fire(details, 'toggle', {open: true});
+        const oldText = walk(details).filter(node => ['document-source', 'document-translation'].includes(node.props.class));
+        expect(oldText.map(node => [node.props.dir, textOf(node)])).toEqual([
+            ['auto', retained[0].source], ['auto', retained[0].translation],
+        ]);
+        expect(editor().props.dir).toBeUndefined();
+        expect(walk(editor()).filter(node => node.props.class === 'segment-edit-columns').every(node => node.props.dir === undefined)).toBe(true);
     });
 
     it('shows the original wording for whole-sentence segments and explains the markers only where a translation carries them', async () => {
@@ -797,6 +873,7 @@ describe('document user actions: confirmation and task consumers', () => {
         expect(ports.batch.mock.calls.map(call => call[1])).toEqual(['failed.txt', 'succeeded.txt', 'failed.txt']);
         expect(textOf(taskbar())).not.toContain('offline');
         await selectFile('succeeded.txt');
+        await fire(button('校订译文'), 'click');
         expect(textarea(0).value).toBe('T:Original text.');
     });
 
@@ -809,6 +886,7 @@ describe('document user actions: confirmation and task consumers', () => {
         expect(ports.batch).not.toHaveBeenCalled();
         expect(textarea(0).value).toBe('reviewed first');
         await selectFile('pending.txt');
+        await fire(button('校订译文'), 'click');
         expect(textarea(0).value).toBe('');
     });
 
@@ -842,6 +920,7 @@ describe('document user actions: confirmation and task consumers', () => {
         await fire(labelled('document.batch.remove second.txt'), 'click');
         await fire(button('document.batch.remove', confirmation), 'click');
         expect(textOf(root)).not.toContain('second.txt');
+        await fire(button('校订译文'), 'click');
         expect(textarea(0).value).toBe('first reviewed');
     });
 
@@ -858,6 +937,7 @@ describe('document user actions: confirmation and task consumers', () => {
         expect(textOf(root)).toContain('把文件拖到这里');
         expect(walk(root).some(node => node.tag === 'textarea')).toBe(false);
         await importFiles(file('new.txt'));
+        await fire(button('校订译文'), 'click');
         expect(textarea(0).value).toBe('');
     });
 
@@ -891,6 +971,7 @@ describe('document user actions: confirmation and task consumers', () => {
         expect(signal.aborted).toBe(true);
         late.resolve(['late 16', 'late 17']); await flush();
         expect(textOf(taskbar())).toContain('已暂停');
+        await fire(button('校订译文'), 'click');
         expect(textarea(16).value).toBe('');
         await edit(0, 'manual kept');
         await fire(translateButton(), 'click');
@@ -932,6 +1013,71 @@ describe('document user actions: confirmation and task consumers', () => {
         expect(waits.slice(1)).toEqual([2000, 4000]); expect(textOf(taskbar())).toContain('翻译中断'); expect(textOf(taskbar())).not.toContain('将自动重试');
     });
 
+    it('honors a 90-second rate-limit hint and completes the actual batch automatically without another click', async () => {
+        const pendingWait = deferred<void>(undefined), waits: number[] = [];
+        Object.assign(documentRetryBackoff, {maxWaitMs: defaultDocumentRetryWaitMs, sleep: (milliseconds: number) => {
+            waits.push(milliseconds); return pendingWait.promise;
+        }});
+        await importFiles(file('long-rate-limit.txt', 'First batched passage.\n\nSecond batched passage.'));
+        ports.batch.mockRejectedValueOnce(new TranslationRequestError(serializeTranslationError({
+            message: '429 rate limited, retry later', kind: 'rate-limit', retryable: true, statusCode: 429, retryAfterMs: 90_000,
+        })));
+        await fire(translateButton(), 'click');
+        await vi.waitFor(() => expect(waits).toEqual([90_000]));
+        expect(textOf(taskbar())).toContain('document.translationProgress.waitingRetry');
+        expect(textOf(taskbar())).toContain('将自动重试');
+        expect(textOf(taskbar())).toContain('90s');
+        expect(button('暂停翻译', taskbar()).props.disabled).not.toBe(true);
+        expect(ports.batch).toHaveBeenCalledOnce();
+        pendingWait.resolve();
+        await vi.waitFor(() => expect(textOf(taskbar())).toContain('翻译完成'));
+        expect(ports.batch).toHaveBeenCalledTimes(2);
+        expect(ports.batch.mock.calls[1][0]).toEqual(['First batched passage.', 'Second batched passage.']);
+        await fire(button('校订译文'), 'click');
+        expect(textarea(0).value).toBe('T:First batched passage.');
+        expect(textarea(1).value).toBe('T:Second batched passage.');
+        expect(textOf(taskbar())).not.toContain('将自动重试');
+    });
+
+    it('pauses a long rate-limit wait immediately and never sends a late retry even when the test sleep ignores abort', async () => {
+        const pendingWait = deferred<void>(undefined); let waitingSignal: AbortSignal | undefined;
+        Object.assign(documentRetryBackoff, {maxWaitMs: defaultDocumentRetryWaitMs, sleep: (_milliseconds: number, signal?: AbortSignal) => {
+            waitingSignal = signal; return pendingWait.promise;
+        }});
+        await importFiles(file('pause-long-wait.txt'));
+        ports.batch.mockRejectedValueOnce(new TranslationRequestError(serializeTranslationError({
+            message: '429 wait for quota', kind: 'rate-limit', retryable: true, statusCode: 429, retryAfterMs: 90_000,
+        })));
+        await fire(translateButton(), 'click');
+        await vi.waitFor(() => expect(textOf(taskbar())).toContain('90s'));
+        await fire(button('暂停翻译', taskbar()), 'click');
+        expect(waitingSignal?.aborted).toBe(true);
+        expect(textOf(taskbar())).toContain('已暂停');
+        expect(textOf(taskbar())).not.toContain('将自动重试');
+        expect(textOf(translateButton())).toBe('继续翻译');
+        pendingWait.resolve(); await flush();
+        expect(ports.batch).toHaveBeenCalledOnce();
+        await fire(button('校订译文'), 'click');
+        expect(textarea(0).value).toBe('');
+        expect(textOf(taskbar())).toContain('已暂停');
+    });
+
+    it('uses the ten-minute document waiting budget without spending ten real minutes', async () => {
+        expect(defaultDocumentRetryWaitMs).toBe(600_000);
+        expect(defaultDocumentRetryDurationMs).toBe(600_000);
+        const waits: number[] = [];
+        Object.assign(documentRetryBackoff, {maxWaitMs: defaultDocumentRetryWaitMs, sleep: async (milliseconds: number) => {waits.push(milliseconds);}});
+        await importFiles(file('ten-minute-budget.txt'));
+        ports.batch.mockRejectedValue(new Error('503 service temporarily unavailable'));
+        await fire(translateButton(), 'click');
+        await vi.waitFor(() => expect(textOf(taskbar())).toContain('翻译中断'));
+        expect(waits.reduce((total, milliseconds) => total + milliseconds, 0)).toBe(600_000);
+        expect(Math.max(...waits)).toBeLessThanOrEqual(60_000);
+        expect(waits.some(milliseconds => milliseconds === 60_000)).toBe(true);
+        expect(ports.batch).toHaveBeenCalledTimes(waits.length + 1);
+        expect(textOf(taskbar())).not.toContain('将自动重试');
+    });
+
     it('turns a typed disabled-service result into pause before the configuration broadcast arrives', async () => {
         await importFiles(file('disabled.txt'));
         ports.batch.mockRejectedValueOnce(new TranslationRequestError(serializeTranslationError({
@@ -953,6 +1099,7 @@ describe('document user actions: confirmation and task consumers', () => {
         await fire(button('document.batch.pause'), 'click');
         await selectFile('queue-second.txt');
         pending.resolve(['late']); await flush();
+        await fire(button('校订译文'), 'click');
         expect(textarea(0).value).toBe('');
         await selectFile('queue-first.txt');
         expect(textOf(taskbar())).toContain('已暂停');
@@ -960,6 +1107,7 @@ describe('document user actions: confirmation and task consumers', () => {
         await vi.waitFor(() => expect(textOf(root)).toContain('document.batch.completed {"count":2}'));
         await selectFile('queue-first.txt');
         expect(textOf(taskbar())).toContain('翻译完成');
+        await fire(button('校订译文'), 'click');
         expect(textarea(0).value).toBe('T:Original text.');
         expect(ports.batch).toHaveBeenCalledTimes(3);
     });
@@ -973,6 +1121,7 @@ describe('document user actions: confirmation and task consumers', () => {
         expect(textOf(root)).toContain('document.batch.externalSettings');
         expect(ports.batch).toHaveBeenCalledOnce();
         expect(language).not.toBe('fr');
+        await fire(button('校订译文'), 'click');
         expect(textarea(0).value).toBe('first snapshot');
         await selectFile('snapshot-second.txt');
         expect(textOf(taskbar())).toContain('准备就绪');

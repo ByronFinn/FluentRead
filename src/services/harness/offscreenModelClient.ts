@@ -221,11 +221,11 @@ function openModelCallChannel(
         config: request.config,
         options: stripAbortSignal(request.options),
     };
-    const cancelMessage: ModelCallCancelMessage & {readonly target: 'offscreen'} = {
+    const cancelMessage = {
         type: MODEL_CALL_CANCEL_OFFSCREEN_MESSAGE_TYPE,
         target: 'offscreen',
         requestId,
-    };
+    } as const satisfies ModelCallCancelMessage;
     // send 的响应即受理；send reject（取消/超时/连接失败）时 client 已尽力发出
     // cancelMessage，这里清理登记并把错误原样抛给调用方（受理前失败没有结果可言）。
     void ports.getClient().send<unknown, OffscreenMessageEnvelope<ModelCallStartMessage>>(startMessage, {

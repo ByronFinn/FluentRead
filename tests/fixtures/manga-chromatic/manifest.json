@@ -1,0 +1,1395 @@
+{
+  "version": 1,
+  "generator": "scripts/testing/generate-manga-chromatic-fixtures.py",
+  "generatorSha256": "051afc38187318c652e507db0eddddeb069e427b0c8f21b390e109104e7a73ca",
+  "designSha256": "1287de36a49b5002a2ee1e0a2be683a685ca30db40a9efa5288e35fa605935e6",
+  "sourceFrozenAtUtc": "2026-10-25T10:04:02.866672+00:00",
+  "pillowVersion": "12.3.0",
+  "fonts": [
+    {
+      "key": "bold",
+      "sha256": "d72db21f9242aedd6b917d8549ad5921766b24d5f8d0becfda2ff4c620b3c2e0"
+    },
+    {
+      "key": "regular",
+      "sha256": "525979822591a3447cfc49d943d6f7683508e25543407871c0ed8fed05fd2bd9"
+    },
+    {
+      "key": "cjk",
+      "sha256": "cf8cf2c882e1e344ac2e6207fe172657a30dc2c6e1ee65a9e29a7b582c4d4154"
+    }
+  ],
+  "notes": [
+    "Eight original deterministic chromatic diagnostics, independently frozen before any OCR.",
+    "No actual model crop edge or expected OCR result is prescribed; model detection decides physical crops.",
+    "Complete original strings are anchors, including low-contrast tail, small gray Latin/digits and CJK.",
+    "Independent suite; no old43 asset, manifest, truth or generator is modified; no fonts or model data bundled."
+  ],
+  "fixtures": [
+    {
+      "name": "white-red-magenta-independent-labels",
+      "file": "white-red-magenta-independent-labels.png",
+      "mime": "image/png",
+      "width": 900,
+      "height": 900,
+      "sourceLanguage": "en",
+      "scene": "Opaque pure red and magenta on white; independent full labels and neutral gray control",
+      "regions": [
+        {
+          "id": "red-valve",
+          "text": "CLOSE THE RED VALVE",
+          "anchor": "CLOSE THE RED VALVE",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 96,
+            "y0": 150,
+            "x1": 563,
+            "y1": 179
+          },
+          "vertical": false,
+          "fontSize": 40,
+          "fontKey": "bold",
+          "paragraphId": "red-valve",
+          "sourceStyle": {
+            "fill": [
+              255,
+              0,
+              0
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "27c3bd7781fbeb95195e6b4de6d2b67e2acba4e72bb5cfe55255b9284bd2ff95"
+        },
+        {
+          "id": "pink-tag",
+          "text": "KEEP THE PINK TAG",
+          "anchor": "KEEP THE PINK TAG",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 97,
+            "y0": 285,
+            "x1": 496,
+            "y1": 314
+          },
+          "vertical": false,
+          "fontSize": 40,
+          "fontKey": "bold",
+          "paragraphId": "pink-tag",
+          "sourceStyle": {
+            "fill": [
+              255,
+              0,
+              255
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "dc2a40d9f6c09ec40940f5d658bc7e222850add6ee944da3d3b33034fa808ba2"
+        },
+        {
+          "id": "gray-control",
+          "text": "GRAY CONTROL LINE",
+          "anchor": "GRAY CONTROL LINE",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 96,
+            "y0": 435,
+            "x1": 436,
+            "y1": 458
+          },
+          "vertical": false,
+          "fontSize": 32,
+          "fontKey": "bold",
+          "paragraphId": "gray-control",
+          "sourceStyle": {
+            "fill": [
+              80,
+              80,
+              80
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "e1ad67b053093d5ab8cadcd8574afbd2a92e416fc2559f255f8d47fe454a8736"
+        }
+      ],
+      "expectedSource": [
+        "CLOSE THE RED VALVE",
+        "KEEP THE PINK TAG",
+        "GRAY CONTROL LINE"
+      ],
+      "expectedAnchors": [
+        "CLOSE THE RED VALVE",
+        "KEEP THE PINK TAG",
+        "GRAY CONTROL LINE"
+      ],
+      "anchorOccurrences": {
+        "CLOSE THE RED VALVE": 1,
+        "KEEP THE PINK TAG": 1,
+        "GRAY CONTROL LINE": 1
+      },
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 75,
+            "y0": 590,
+            "x1": 825,
+            "y1": 845
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 240,
+          "y": 720,
+          "rgb": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 450,
+          "y": 720,
+          "rgb": [
+            255,
+            0,
+            255
+          ]
+        },
+        {
+          "x": 660,
+          "y": 720,
+          "rgb": [
+            80,
+            80,
+            80
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "1287de36a49b5002a2ee1e0a2be683a685ca30db40a9efa5288e35fa605935e6",
+        "old43Unmodified": true
+      },
+      "paragraphGroups": [
+        [
+          "red-valve"
+        ],
+        [
+          "pink-tag"
+        ],
+        [
+          "gray-control"
+        ]
+      ],
+      "sha256": "8326b7e30f58c124f52d2955fe633e3b96e40d42359d65bc1838b9e688f8dcc6",
+      "bytes": 17689,
+      "imageMode": "RGB"
+    },
+    {
+      "name": "black-cyan-oxygen-hud",
+      "file": "black-cyan-oxygen-hud.png",
+      "mime": "image/png",
+      "width": 900,
+      "height": 900,
+      "sourceLanguage": "en",
+      "scene": "Cyan two-line instrument instruction on exact black; amber numeric time remains independent",
+      "regions": [
+        {
+          "id": "oxygen-first",
+          "text": "CHECK THE OXYGEN",
+          "anchor": "CHECK THE OXYGEN",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 91,
+            "y0": 150,
+            "x1": 504,
+            "y1": 179
+          },
+          "vertical": false,
+          "fontSize": 40,
+          "fontKey": "bold",
+          "paragraphId": "oxygen",
+          "sourceStyle": {
+            "fill": [
+              0,
+              255,
+              255
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "2ac2af002e7a15ae4666fe81ab222323b6952e5d168c3759af5cedb57077dfc5"
+        },
+        {
+          "id": "oxygen-second",
+          "text": "BEFORE OPENING",
+          "anchor": "BEFORE OPENING",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 92,
+            "y0": 200,
+            "x1": 451,
+            "y1": 229
+          },
+          "vertical": false,
+          "fontSize": 40,
+          "fontKey": "bold",
+          "paragraphId": "oxygen",
+          "sourceStyle": {
+            "fill": [
+              0,
+              255,
+              255
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "2910106e5e95b91b119dfd11f21084106c92f858dbb4bc23767ec3432ccdf3bd"
+        },
+        {
+          "id": "clock",
+          "text": "08:45",
+          "anchor": "08:45",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 96,
+            "y0": 380,
+            "x1": 179,
+            "y1": 405
+          },
+          "vertical": false,
+          "fontSize": 34,
+          "fontKey": "regular",
+          "paragraphId": "clock",
+          "sourceStyle": {
+            "fill": [
+              255,
+              190,
+              0
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "ebbba228644411b6d8f381bb8ccf863e0483f6ab802f9c077343367c578498a3"
+        }
+      ],
+      "expectedSource": [
+        "CHECK THE OXYGEN",
+        "BEFORE OPENING",
+        "08:45"
+      ],
+      "expectedAnchors": [
+        "CHECK THE OXYGEN",
+        "BEFORE OPENING",
+        "08:45"
+      ],
+      "anchorOccurrences": {
+        "CHECK THE OXYGEN": 1,
+        "BEFORE OPENING": 1,
+        "08:45": 1
+      },
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 70,
+            "y0": 510,
+            "x1": 830,
+            "y1": 845
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 200,
+          "y": 710,
+          "rgb": [
+            0,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 450,
+          "y": 710,
+          "rgb": [
+            255,
+            190,
+            0
+          ]
+        },
+        {
+          "x": 700,
+          "y": 710,
+          "rgb": [
+            0,
+            255,
+            255
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "1287de36a49b5002a2ee1e0a2be683a685ca30db40a9efa5288e35fa605935e6",
+        "old43Unmodified": true
+      },
+      "paragraphGroups": [
+        [
+          "oxygen-first",
+          "oxygen-second"
+        ],
+        [
+          "clock"
+        ]
+      ],
+      "sha256": "4535e1cf5606beb71a0274a8f554969a73c39671759aa1ad82709621a131e665",
+      "bytes": 16005,
+      "imageMode": "RGB"
+    },
+    {
+      "name": "equal-luma-red-green-cards",
+      "file": "equal-luma-red-green-cards.png",
+      "mime": "image/png",
+      "width": 900,
+      "height": 900,
+      "sourceLanguage": "en",
+      "scene": "Two colored cards reverse red and green with equal rounded BT601 luma; global luminance conversion is a negative control",
+      "regions": [
+        {
+          "id": "red-on-green",
+          "text": "RED INK ON GREEN",
+          "anchor": "RED INK ON GREEN",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 87,
+            "y0": 165,
+            "x1": 451,
+            "y1": 192
+          },
+          "vertical": false,
+          "fontSize": 38,
+          "fontKey": "bold",
+          "paragraphId": "red-on-green",
+          "sourceStyle": {
+            "fill": [
+              255,
+              0,
+              0
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "81e2dd50246749cfa49fcf161392f1a1f532deab0e1c6fcf6fe294fb3b5b01b5"
+        },
+        {
+          "id": "green-on-red",
+          "text": "GREEN INK ON RED",
+          "anchor": "GREEN INK ON RED",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 86,
+            "y0": 405,
+            "x1": 452,
+            "y1": 432
+          },
+          "vertical": false,
+          "fontSize": 38,
+          "fontKey": "bold",
+          "paragraphId": "green-on-red",
+          "sourceStyle": {
+            "fill": [
+              0,
+              130,
+              0
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "36683b888a8e1dd8f4abb4ff19456a3f701ec277b9c38c2de7745cc3512d542a"
+        },
+        {
+          "id": "neutral-control",
+          "text": "KEEP COLOR CONTRAST",
+          "anchor": "KEEP COLOR CONTRAST",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 87,
+            "y0": 625,
+            "x1": 482,
+            "y1": 648
+          },
+          "vertical": false,
+          "fontSize": 32,
+          "fontKey": "bold",
+          "paragraphId": "neutral-control",
+          "sourceStyle": {
+            "fill": [
+              45,
+              45,
+              45
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "126b6190e07e96b2a40f505941b8a3d0f817db3ac6fb7b25d17a6eb4500e6968"
+        }
+      ],
+      "expectedSource": [
+        "RED INK ON GREEN",
+        "GREEN INK ON RED",
+        "KEEP COLOR CONTRAST"
+      ],
+      "expectedAnchors": [
+        "RED INK ON GREEN",
+        "GREEN INK ON RED",
+        "KEEP COLOR CONTRAST"
+      ],
+      "anchorOccurrences": {
+        "RED INK ON GREEN": 1,
+        "GREEN INK ON RED": 1,
+        "KEEP COLOR CONTRAST": 1
+      },
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 70,
+            "y0": 730,
+            "x1": 830,
+            "y1": 850
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 160,
+          "y": 790,
+          "rgb": [
+            0,
+            130,
+            0
+          ]
+        },
+        {
+          "x": 450,
+          "y": 790,
+          "rgb": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 740,
+          "y": 790,
+          "rgb": [
+            0,
+            130,
+            0
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "1287de36a49b5002a2ee1e0a2be683a685ca30db40a9efa5288e35fa605935e6",
+        "old43Unmodified": true
+      },
+      "paragraphGroups": [
+        [
+          "red-on-green"
+        ],
+        [
+          "green-on-red"
+        ],
+        [
+          "neutral-control"
+        ]
+      ],
+      "lumaPair": {
+        "colors": [
+          [
+            255,
+            0,
+            0
+          ],
+          [
+            0,
+            130,
+            0
+          ]
+        ],
+        "formula": "(299R+587G+114B)/1000",
+        "values": [
+          76.245,
+          76.31
+        ],
+        "rounded8Bit": [
+          76,
+          76
+        ],
+        "absoluteDifference": 0.065,
+        "scope": "Base opaque colors, not a claim that every antialiased sample is identical"
+      },
+      "sha256": "ab3df9b657421ac4d603b7b406d11a89049bef3117b0c2a9d98784949f634fb0",
+      "bytes": 16797,
+      "imageMode": "RGB"
+    },
+    {
+      "name": "translucent-red-dialogue-overlay",
+      "file": "translucent-red-dialogue-overlay.png",
+      "mime": "image/png",
+      "width": 900,
+      "height": 900,
+      "sourceLanguage": "en",
+      "scene": "True alpha red speech overlays and low-brightness original artwork; gray reference separate",
+      "regions": [
+        {
+          "id": "glass-dialogue",
+          "text": "SPEAK THROUGH THE GLASS",
+          "anchor": "SPEAK THROUGH THE GLASS",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 126,
+            "y0": 160,
+            "x1": 682,
+            "y1": 187
+          },
+          "vertical": false,
+          "fontSize": 38,
+          "fontKey": "bold",
+          "paragraphId": "glass-dialogue",
+          "sourceStyle": {
+            "fill": [
+              255,
+              0,
+              0
+            ],
+            "alpha": 200
+          },
+          "glyphAlphaSha256": "e1b98320d5b9fbfe4051866c35a20cd98b4882821536be33738aea0c2e1dd499"
+        },
+        {
+          "id": "red-signal",
+          "text": "KEEP THE SIGNAL CLEAR",
+          "anchor": "KEEP THE SIGNAL CLEAR",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 167,
+            "y0": 430,
+            "x1": 625,
+            "y1": 456
+          },
+          "vertical": false,
+          "fontSize": 36,
+          "fontKey": "bold",
+          "paragraphId": "red-signal",
+          "sourceStyle": {
+            "fill": [
+              255,
+              0,
+              0
+            ],
+            "alpha": 160
+          },
+          "glyphAlphaSha256": "1a57b4964b88128abfc507ca4bb8ca378a473b14831ea4dff8efc33202f62638"
+        },
+        {
+          "id": "gray-reference",
+          "text": "GRAY REFERENCE LINE",
+          "anchor": "GRAY REFERENCE LINE",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 96,
+            "y0": 650,
+            "x1": 426,
+            "y1": 670
+          },
+          "vertical": false,
+          "fontSize": 28,
+          "fontKey": "regular",
+          "paragraphId": "gray-reference",
+          "sourceStyle": {
+            "fill": [
+              70,
+              70,
+              70
+            ],
+            "alpha": 210
+          },
+          "glyphAlphaSha256": "dfac84938bf171ba567e1e0715e6eebdec8138a4343b63f69cee51a93c0fbe58"
+        }
+      ],
+      "expectedSource": [
+        "SPEAK THROUGH THE GLASS",
+        "KEEP THE SIGNAL CLEAR",
+        "GRAY REFERENCE LINE"
+      ],
+      "expectedAnchors": [
+        "SPEAK THROUGH THE GLASS",
+        "KEEP THE SIGNAL CLEAR",
+        "GRAY REFERENCE LINE"
+      ],
+      "anchorOccurrences": {
+        "SPEAK THROUGH THE GLASS": 1,
+        "KEEP THE SIGNAL CLEAR": 1,
+        "GRAY REFERENCE LINE": 1
+      },
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 90,
+            "y0": 730,
+            "x1": 810,
+            "y1": 850
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 250,
+          "y": 800,
+          "rgb": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 450,
+          "y": 800,
+          "rgb": [
+            255,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 650,
+          "y": 800,
+          "rgb": [
+            255,
+            0,
+            0
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "1287de36a49b5002a2ee1e0a2be683a685ca30db40a9efa5288e35fa605935e6",
+        "old43Unmodified": true
+      },
+      "paragraphGroups": [
+        [
+          "glass-dialogue"
+        ],
+        [
+          "red-signal"
+        ],
+        [
+          "gray-reference"
+        ]
+      ],
+      "protectedRgbaProbes": [
+        {
+          "x": 0,
+          "y": 0,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 450,
+          "y": 400,
+          "rgba": [
+            255,
+            0,
+            0,
+            30
+          ]
+        },
+        {
+          "x": 450,
+          "y": 800,
+          "rgba": [
+            255,
+            0,
+            0,
+            255
+          ]
+        }
+      ],
+      "sha256": "884f78dfc09b80aa8d5cf3e97e58235c1572b8fa7883487b74aa4dcac9affe38",
+      "bytes": 17564,
+      "imageMode": "RGBA"
+    },
+    {
+      "name": "translucent-cyan-night-hud",
+      "file": "translucent-cyan-night-hud.png",
+      "mime": "image/png",
+      "width": 900,
+      "height": 900,
+      "sourceLanguage": "en",
+      "scene": "High-brightness cyan translucent HUD and wordless icons; white reference and retained source alpha",
+      "regions": [
+        {
+          "id": "cyan-light",
+          "text": "STAY INSIDE THE LIGHT",
+          "anchor": "STAY INSIDE THE LIGHT",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 101,
+            "y0": 160,
+            "x1": 548,
+            "y1": 187
+          },
+          "vertical": false,
+          "fontSize": 38,
+          "fontKey": "bold",
+          "paragraphId": "cyan-light",
+          "sourceStyle": {
+            "fill": [
+              0,
+              255,
+              255
+            ],
+            "alpha": 190
+          },
+          "glyphAlphaSha256": "9beb015a3b4aaeb0617c2ca8f0ede6eee7a1a2eb56e6ed9c910e7c57752c72b8"
+        },
+        {
+          "id": "cyan-signal",
+          "text": "WAIT FOR MY SIGNAL",
+          "anchor": "WAIT FOR MY SIGNAL",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 100,
+            "y0": 330,
+            "x1": 487,
+            "y1": 356
+          },
+          "vertical": false,
+          "fontSize": 36,
+          "fontKey": "bold",
+          "paragraphId": "cyan-signal",
+          "sourceStyle": {
+            "fill": [
+              0,
+              255,
+              255
+            ],
+            "alpha": 150
+          },
+          "glyphAlphaSha256": "970d8e20badd73297a6bef0723e882c7e1bc612fe7473efe5ce29624356a6ab9"
+        },
+        {
+          "id": "white-reference",
+          "text": "WHITE REFERENCE LINE",
+          "anchor": "WHITE REFERENCE LINE",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 100,
+            "y0": 490,
+            "x1": 464,
+            "y1": 512
+          },
+          "vertical": false,
+          "fontSize": 30,
+          "fontKey": "regular",
+          "paragraphId": "white-reference",
+          "sourceStyle": {
+            "fill": [
+              255,
+              255,
+              255
+            ],
+            "alpha": 210
+          },
+          "glyphAlphaSha256": "e3ed4443be6d04bd2e1542fb1729e602573a188bf9e8bb8f29aead3a102b7080"
+        }
+      ],
+      "expectedSource": [
+        "STAY INSIDE THE LIGHT",
+        "WAIT FOR MY SIGNAL",
+        "WHITE REFERENCE LINE"
+      ],
+      "expectedAnchors": [
+        "STAY INSIDE THE LIGHT",
+        "WAIT FOR MY SIGNAL",
+        "WHITE REFERENCE LINE"
+      ],
+      "anchorOccurrences": {
+        "STAY INSIDE THE LIGHT": 1,
+        "WAIT FOR MY SIGNAL": 1,
+        "WHITE REFERENCE LINE": 1
+      },
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 80,
+            "y0": 620,
+            "x1": 820,
+            "y1": 850
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 200,
+          "y": 750,
+          "rgb": [
+            0,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 450,
+          "y": 750,
+          "rgb": [
+            0,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 700,
+          "y": 750,
+          "rgb": [
+            0,
+            255,
+            255
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "1287de36a49b5002a2ee1e0a2be683a685ca30db40a9efa5288e35fa605935e6",
+        "old43Unmodified": true
+      },
+      "paragraphGroups": [
+        [
+          "cyan-light"
+        ],
+        [
+          "cyan-signal"
+        ],
+        [
+          "white-reference"
+        ]
+      ],
+      "protectedRgbaProbes": [
+        {
+          "x": 0,
+          "y": 0,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 450,
+          "y": 400,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 450,
+          "y": 750,
+          "rgba": [
+            0,
+            255,
+            255,
+            255
+          ]
+        }
+      ],
+      "sha256": "847365e398a32457f60c08f89ab8e1b01e9cc6093c43d70745d543f18d05b3b8",
+      "bytes": 15822,
+      "imageMode": "RGBA"
+    },
+    {
+      "name": "thin-aa-gray-and-chromatic-tail",
+      "file": "thin-aa-gray-and-chromatic-tail.png",
+      "mime": "image/png",
+      "width": 900,
+      "height": 900,
+      "sourceLanguage": "ja",
+      "scene": "Four-times sampled thin Latin/CJK text, near-white gray, real gray descenders and complete black-prefix/pink-tail source",
+      "regions": [
+        {
+          "id": "soft-gray",
+          "text": "FOLLOW THE SOFT LIGHT",
+          "anchor": "FOLLOW THE SOFT LIGHT",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 80,
+            "y0": 100,
+            "x1": 460,
+            "y1": 122
+          },
+          "vertical": false,
+          "fontSize": 30,
+          "fontKey": "regular",
+          "paragraphId": "soft-gray",
+          "sourceStyle": {
+            "fill": [
+              225,
+              225,
+              225
+            ],
+            "alpha": 255,
+            "supersample": 4
+          },
+          "glyphAlphaSha256": "b9525845812f308ba1478fafc4fa4fa975d149b61248a5d3c7a075814f1b3823"
+        },
+        {
+          "id": "color-tail",
+          "text": "KEEP THE LAST LIGHT",
+          "anchor": "KEEP THE LAST LIGHT",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 80,
+            "y0": 240,
+            "x1": 453,
+            "y1": 265
+          },
+          "vertical": false,
+          "fontSize": 34,
+          "fontKey": "regular",
+          "paragraphId": "color-tail",
+          "sourceStyle": {
+            "fill": [
+              255,
+              170,
+              210
+            ],
+            "alpha": 255,
+            "supersample": 4,
+            "prefix": "KEEP ",
+            "prefixFill": [
+              40,
+              40,
+              40
+            ]
+          },
+          "glyphAlphaSha256": "e3476e3e10d4a8dda27f3f54991ae011db77e63772a79abeb5fe8dc864e95783"
+        },
+        {
+          "id": "gray-descenders",
+          "text": "gray gypq 107",
+          "anchor": "gray gypq 107",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 80,
+            "y0": 390,
+            "x1": 220,
+            "y1": 411
+          },
+          "vertical": false,
+          "fontSize": 22,
+          "fontKey": "regular",
+          "paragraphId": "gray-descenders",
+          "sourceStyle": {
+            "fill": [
+              110,
+              110,
+              110
+            ],
+            "alpha": 255,
+            "supersample": 4
+          },
+          "glyphAlphaSha256": "3ebddb2d451e405b9bbafacc5c1d817bf11540712335a809e4f8191d716b2967"
+        },
+        {
+          "id": "thin-cjk",
+          "text": "細い光をたどる",
+          "anchor": "細い光をたどる",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 80,
+            "y0": 500,
+            "x1": 289,
+            "y1": 529
+          },
+          "vertical": false,
+          "fontSize": 30,
+          "fontKey": "cjk",
+          "paragraphId": "thin-cjk",
+          "sourceStyle": {
+            "fill": [
+              35,
+              100,
+              220
+            ],
+            "alpha": 255,
+            "supersample": 4
+          },
+          "glyphAlphaSha256": "d1d4017755a80c6c953a9ac3b9e105d2ee597f7efd88cfeea3607dfd17e829c6"
+        }
+      ],
+      "expectedSource": [
+        "FOLLOW THE SOFT LIGHT",
+        "KEEP THE LAST LIGHT",
+        "gray gypq 107",
+        "細い光をたどる"
+      ],
+      "expectedAnchors": [
+        "FOLLOW THE SOFT LIGHT",
+        "KEEP THE LAST LIGHT",
+        "gray gypq 107",
+        "細い光をたどる"
+      ],
+      "anchorOccurrences": {
+        "FOLLOW THE SOFT LIGHT": 1,
+        "KEEP THE LAST LIGHT": 1,
+        "gray gypq 107": 1,
+        "細い光をたどる": 1
+      },
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 60,
+            "y0": 620,
+            "x1": 840,
+            "y1": 845
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 120,
+          "y": 720,
+          "rgb": [
+            110,
+            110,
+            110
+          ]
+        },
+        {
+          "x": 450,
+          "y": 740,
+          "rgb": [
+            255,
+            170,
+            210
+          ]
+        },
+        {
+          "x": 780,
+          "y": 760,
+          "rgb": [
+            35,
+            100,
+            220
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "1287de36a49b5002a2ee1e0a2be683a685ca30db40a9efa5288e35fa605935e6",
+        "old43Unmodified": true
+      },
+      "paragraphGroups": [
+        [
+          "soft-gray"
+        ],
+        [
+          "color-tail"
+        ],
+        [
+          "gray-descenders"
+        ],
+        [
+          "thin-cjk"
+        ]
+      ],
+      "sha256": "fe2b5f39a2a85c8137168ecc8db560ad20fc89bac96d10dae53dc9265a0bf36a",
+      "bytes": 28579,
+      "imageMode": "RGB"
+    },
+    {
+      "name": "mixed-color-edge-screenshot",
+      "file": "mixed-color-edge-screenshot.png",
+      "mime": "image/png",
+      "width": 900,
+      "height": 900,
+      "sourceLanguage": "en",
+      "scene": "Nonuniform painted screenshot with separate opposing-color door tags and a gray control over a mixed border",
+      "regions": [
+        {
+          "id": "edge-heading",
+          "text": "COLOR ON THE EDGE",
+          "anchor": "COLOR ON THE EDGE",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 72,
+            "y0": 105,
+            "x1": 522,
+            "y1": 135
+          },
+          "vertical": false,
+          "fontSize": 42,
+          "fontKey": "bold",
+          "paragraphId": "edge-heading",
+          "sourceStyle": {
+            "fill": [
+              255,
+              240,
+              130
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "7e914b473a2cff3c92471e0d61a40d21ee177ccfea18494ba8c69823a2a1b4d2"
+        },
+        {
+          "id": "north-tag",
+          "text": "NORTH DOOR",
+          "anchor": "NORTH DOOR",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 107,
+            "y0": 350,
+            "x1": 297,
+            "y1": 370
+          },
+          "vertical": false,
+          "fontSize": 28,
+          "fontKey": "bold",
+          "paragraphId": "north-tag",
+          "sourceStyle": {
+            "fill": [
+              255,
+              110,
+              80
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "5379ed2f0dee02600e36d4313c797e349e52a6cd8146443b0f952f9db51c8897"
+        },
+        {
+          "id": "south-tag",
+          "text": "SOUTH DOOR",
+          "anchor": "SOUTH DOOR",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 506,
+            "y0": 350,
+            "x1": 696,
+            "y1": 370
+          },
+          "vertical": false,
+          "fontSize": 28,
+          "fontKey": "bold",
+          "paragraphId": "south-tag",
+          "sourceStyle": {
+            "fill": [
+              30,
+              240,
+              255
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "e231884f750bf72b4d6d13e19bbef2871fb3cb033a0a802db65b48b29f634747"
+        },
+        {
+          "id": "mixed-control",
+          "text": "MIXED BORDER CONTROL",
+          "anchor": "MIXED BORDER CONTROL",
+          "translation": "受控译文用于彩色文本回归。",
+          "bbox": {
+            "x0": 82,
+            "y0": 510,
+            "x1": 466,
+            "y1": 532
+          },
+          "vertical": false,
+          "fontSize": 30,
+          "fontKey": "regular",
+          "paragraphId": "mixed-control",
+          "sourceStyle": {
+            "fill": [
+              215,
+              215,
+              215
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "be36c29474bdd97bdcd7e5b711e3f3e303e005bfe5519862991c4582b862113e"
+        }
+      ],
+      "expectedSource": [
+        "COLOR ON THE EDGE",
+        "NORTH DOOR",
+        "SOUTH DOOR",
+        "MIXED BORDER CONTROL"
+      ],
+      "expectedAnchors": [
+        "COLOR ON THE EDGE",
+        "NORTH DOOR",
+        "SOUTH DOOR",
+        "MIXED BORDER CONTROL"
+      ],
+      "anchorOccurrences": {
+        "COLOR ON THE EDGE": 1,
+        "NORTH DOOR": 1,
+        "SOUTH DOOR": 1,
+        "MIXED BORDER CONTROL": 1
+      },
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 50,
+            "y0": 650,
+            "x1": 850,
+            "y1": 850
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 150,
+          "y": 750,
+          "rgb": [
+            250,
+            170,
+            80
+          ]
+        },
+        {
+          "x": 450,
+          "y": 750,
+          "rgb": [
+            60,
+            210,
+            200
+          ]
+        },
+        {
+          "x": 750,
+          "y": 750,
+          "rgb": [
+            170,
+            140,
+            240
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "1287de36a49b5002a2ee1e0a2be683a685ca30db40a9efa5288e35fa605935e6",
+        "old43Unmodified": true
+      },
+      "paragraphGroups": [
+        [
+          "edge-heading"
+        ],
+        [
+          "north-tag"
+        ],
+        [
+          "south-tag"
+        ],
+        [
+          "mixed-control"
+        ]
+      ],
+      "sha256": "e95e9ea0ed8201aa171d046044b21cfc068050e02c4a9f2679aae1793ab6eca8",
+      "bytes": 45401,
+      "imageMode": "RGB"
+    },
+    {
+      "name": "wordless-chromatic-diagram",
+      "file": "wordless-chromatic-diagram.png",
+      "mime": "image/png",
+      "width": 900,
+      "height": 900,
+      "sourceLanguage": "auto",
+      "scene": "Entirely wordless red/magenta/cyan/color-pair geometric artwork with no hidden letter or digit source",
+      "regions": [],
+      "expectedSource": [],
+      "expectedAnchors": [],
+      "anchorOccurrences": {},
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 0,
+            "y0": 0,
+            "x1": 900,
+            "y1": 900
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 100,
+          "y": 100,
+          "rgb": [
+            255,
+            255,
+            255
+          ]
+        },
+        {
+          "x": 700,
+          "y": 100,
+          "rgb": [
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 450,
+          "y": 750,
+          "rgb": [
+            255,
+            0,
+            255
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "1287de36a49b5002a2ee1e0a2be683a685ca30db40a9efa5288e35fa605935e6",
+        "old43Unmodified": true
+      },
+      "expectedNoText": true,
+      "sha256": "28584fbcc76bc55f93bb19b7740e25b392c6ba98af4e572d9ac0cb3ba6d57c40",
+      "bytes": 16082,
+      "imageMode": "RGB"
+    }
+  ]
+}

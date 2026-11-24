@@ -1,7 +1,7 @@
 <!--
  * @file src/features/settings/ui/LearningMemoryManager.vue
  * 文件职责：让用户查看和维护主动保存的本机学习笔记，区分保存笔记与允许 AI 参考的开关。
- * 主要内容：提供本地搜索、类型选择、单条添加编辑、删除和清空；按 200 条与每条 2000 字限制提示容量，并隔离迟到读取；日期格式器在本组件每轮同步模板渲染内复用，下轮重新读取系统默认语言与时区。
+ * 主要内容：提供本地搜索、类型选择、单条添加编辑、删除和清空；长笔记使用原生折叠容器原位阅读全文，阅读无需进入编辑；按 200 条与每条 2000 字限制提示容量，并隔离迟到读取；日期格式器在本组件每轮同步模板渲染内复用，下轮重新读取系统默认语言与时区。
  * 模块边界：只通过 reading-assistant 无 UI 的公共客户端管理记忆，不加载阅读卡、不检索模型、不直接访问数据库、不自动收集网页或学习信息。
  -->
 <template>
@@ -42,28 +42,34 @@
       <div class="fr-memory-list">
         <article v-for="memory in filteredMemories" :key="memory.id" class="fr-memory-item">
           <header><span>{{ kindLabel(memory.kind) }}</span><small>{{ formatDate(memory.updatedAt) }}</small></header>
-          <p data-i18n-ignore>{{ memory.content }}</p>
-          <footer><button type="button" class="fr-memory-link" :disabled="mutating" @click="editMemory(memory)">{{ t('learning.memoryViewEdit') }}</button><button type="button" class="fr-memory-link" :disabled="mutating" @click="removeMemory(memory.id)">{{ translateLegacy('删除') }}</button></footer>
+          <details v-if="memory.content.length > 180 || memory.content.split('\n').length > 3" class="fr-memory-content" @keydown.esc.stop.prevent="($event.currentTarget as HTMLDetailsElement).open = false">
+            <summary><span class="fr-memory-preview" data-i18n-ignore>{{ memory.content }}</span><span class="fr-memory-expand">{{ translateLegacy('展开') }}</span><span class="fr-memory-collapse">{{ translateLegacy('收起') }}</span></summary>
+            <p data-i18n-ignore>{{ memory.content }}</p>
+          </details>
+          <p v-else data-i18n-ignore>{{ memory.content }}</p>
+          <footer><button type="button" class="fr-memory-link" :disabled="mutating" @click="editMemory(memory)">{{ translateLegacy('编辑') }}</button><button type="button" class="fr-memory-link" :disabled="mutating" @click="removeMemory(memory.id)">{{ translateLegacy('删除') }}</button></footer>
         </article>
       </div>
-      <div v-if="memories.length" class="fr-memory-bottom"><small v-if="memories.length >= 200">{{ t('learning.memoryLimit') }}</small><span v-else /><button type="button" class="fr-memory-link" :disabled="mutating" @click="clearMemories">{{ t('learning.memoryClear') }}</button></div>
+      <div v-if="memories.length" class="fr-memory-bottom"><small v-if="memories.length >= 200">{{ t('learning.memoryLimit') }}</small><span v-else /><button type="button" class="fr-memory-link" :disabled="mutating || confirmingClear" @click="clearMemories">{{ t('learning.memoryClear') }}</button></div>
     </template>
+    <el-dialog :key="clearRevision" :model-value="confirmingClear" :onUpdate:modelValue="clearActions.open" :title="t('common.confirm')" width="min(460px, calc(100vw - 32px))" destroy-on-close>
+      <p>{{ t('learning.memoryClearConfirm') }}</p>
+      <template #footer><el-button :onClick="clearActions.cancel">{{ t('common.cancel') }}</el-button><el-button type="danger" :onClick="clearActions.confirm">{{ t('common.confirm') }}</el-button></template>
+    </el-dialog>
   </section>
 </template>
 <script setup lang="ts">
-import {ElMessageBox} from 'element-plus';
-import 'element-plus/es/components/message-box/style/css';
 import UiSelect from '@/src/ui/components/UiSelect.vue';
 import {ElOption} from 'element-plus';
 import {useUiI18n as useControlI18n} from '@/src/ui/i18n';
 const {translateLegacy: translateControlLabel} = useControlI18n();
 
-import {computed, onBeforeUnmount, onMounted, ref} from 'vue'
+import {computed, onBeforeUnmount, onDeactivated, onMounted, ref, watch} from 'vue'
 import {clearLearningMemories, deleteLearningMemory, listLearningMemories, saveLearningMemory, type LearningMemory} from '@/src/features/reading-assistant/public'
 import {useUiI18n} from '@/src/ui/i18n'
 import {useRenderDateFormatter} from '@/src/ui/dateFormat'
 
-defineProps<{enabled: boolean}>()
+const props = defineProps<{enabled: boolean; isVisible?: () => boolean}>()
 const emit = defineEmits<{navigate: [section: string]}>()
 const {t, translateLegacy} = useUiI18n()
 const memories = ref<LearningMemory[]>([])
@@ -86,6 +92,11 @@ const kindLabel = (kind: LearningMemory['kind']) => kinds.value.find(item => ite
 const formatDate = useRenderDateFormatter({month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit'})
 let generation = 0
 let active = true
+const confirmingClear = ref(false)
+const clearRevision = ref(0)
+function invalidateClearConfirmation() { clearRevision.value += 1; confirmingClear.value = false }
+watch(() => props.isVisible?.() ?? true, visible => {if (!visible) invalidateClearConfirmation()}, {flush: 'sync'})
+onDeactivated(invalidateClearConfirmation)
 const errorText = (failure: unknown) => failure instanceof Error ? failure.message : t('learning.memoryError')
 function sortMemories(items: LearningMemory[]) { return [...items].sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)) }
 async function loadMemories() {
@@ -149,11 +160,23 @@ async function removeMemory(id: string) {
     if (active) mutating.value = false
   }
 }
-async function clearMemories() {
-  if (!active || mutating.value) return
-  try { await ElMessageBox.confirm(t('learning.memoryClearConfirm'), t('common.confirm'), {type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel')}) }
-  catch { return }
-  if (!active || mutating.value) return
+function clearMemories() {
+  if (!active || mutating.value || confirmingClear.value || props.isVisible?.() === false) return
+  clearRevision.value += 1
+  confirmingClear.value = true
+}
+const clearActions = computed(() => {
+  const revision = clearRevision.value
+  const isCurrent = () => active && confirmingClear.value && revision === clearRevision.value && props.isVisible?.() !== false
+  return {
+    open: (value: boolean) => {if (!value && isCurrent()) invalidateClearConfirmation()},
+    cancel: () => {if (isCurrent()) invalidateClearConfirmation()},
+    confirm: () => {if (isCurrent()) void commitClear()},
+  }
+})
+async function commitClear() {
+  confirmingClear.value = false
+  if (mutating.value) return
   generation += 1
   loading.value = false
   mutating.value = true
@@ -170,7 +193,7 @@ async function clearMemories() {
   }
 }
 onMounted(() => { void loadMemories() })
-onBeforeUnmount(() => { active = false; generation += 1 })
+onBeforeUnmount(() => { active = false; invalidateClearConfirmation(); generation += 1 })
 </script>
 <style scoped>
 .fr-learning-memory { color:var(--ink); }
@@ -192,7 +215,15 @@ onBeforeUnmount(() => { active = false; generation += 1 })
 .fr-memory-item { min-width:0; padding:14px; border:1px solid var(--line); border-radius:12px; background:var(--surface); }
 .fr-memory-item header { display:flex; gap:12px; align-items:center; justify-content:space-between; color:var(--muted); font-size:11px; }
 .fr-memory-item header small { flex-shrink:0; font-size:10px; }
-.fr-memory-item > p { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; margin:10px 0; font-size:13px; line-height:1.75; white-space:pre-wrap; overflow-wrap:anywhere; }
+.fr-memory-item > p,.fr-memory-content p,.fr-memory-preview { margin:10px 0; font-size:13px; line-height:1.75; white-space:pre-wrap; overflow-wrap:anywhere; }
+.fr-memory-content > summary { display:block; margin:0; padding:0; border:0; border-radius:0; background:transparent; color:var(--ink); font:inherit; font-weight:400; list-style:none; cursor:pointer; }
+.fr-memory-content > summary::-webkit-details-marker { display:none; }
+.fr-memory-content > summary::after { display:none; content:none; }
+.fr-memory-content > summary:focus-visible { outline:2px solid var(--brand); outline-offset:3px; }
+.fr-memory-preview { display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.fr-memory-expand,.fr-memory-collapse { color:var(--brand-strong); font-size:12px; line-height:1.8; }
+.fr-memory-collapse,.fr-memory-content[open] .fr-memory-preview,.fr-memory-content[open] .fr-memory-expand { display:none; }
+.fr-memory-content[open] .fr-memory-collapse { display:inline; }
 .fr-memory-item footer { display:flex; justify-content:space-between; gap:12px; }
 .fr-memory-editor { margin-top:16px; padding:18px; border:1px solid var(--line); border-radius:12px; background:var(--surface); }
 .fr-memory-editor h3 { margin:0 0 16px; font-size:14px; }
@@ -207,7 +238,7 @@ onBeforeUnmount(() => { active = false; generation += 1 })
 .fr-memory-empty strong { font-size:13px; }
 .fr-memory-empty p { margin:8px auto 0; max-width:420px; color:var(--muted); font-size:12px; line-height:1.7; }
 .fr-memory-feedback { margin:14px 0; color:var(--muted); font-size:12px; line-height:1.6; }
-.fr-memory-feedback.is-error { color:var(--warning,#b26a00); }
+.fr-memory-feedback.is-error { color:var(--fr-danger); }
 .fr-memory-bottom { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-top:14px; }
 .fr-memory-bottom small { color:var(--muted); font-size:11px; }
 .fr-learning-memory > details.fr-memory-options[class] > summary { width:fit-content; min-height:0; margin:8px 0 0; padding:0; border:0; border-radius:0; color:var(--muted); background:transparent; font:inherit; font-size:11px; font-weight:400; cursor:pointer; }

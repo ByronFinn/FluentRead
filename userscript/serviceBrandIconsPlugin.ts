@@ -1,13 +1,14 @@
 /**
  * @file userscript/serviceBrandIconsPlugin.ts
  * 文件职责：仅为完整独立脚本无损压缩本地服务品牌路径数据。
- * 主要内容：校验完整输入，在首次请求已有品牌时通过既有 pako 字符串端口恢复并缓存全表。
+ * 主要内容：校验完整输入，以既有 ASCII85 保存完整 gzip 字节，在首次请求已有品牌时通过既有 pako 字符串端口恢复并缓存全表。
  * 模块边界：不改变图标、provider或许可，不顶层解压，不新增全局、异步或网络回退。
  */
 import {createHash} from 'node:crypto';
 import {readFileSync, realpathSync} from 'node:fs';
 import {resolve} from 'node:path';
-import {gzipSync} from 'node:zlib';
+import {gzipLargeStandaloneUserscriptData, gzipUserscriptBuildData} from './buildGzip';
+import {encodeUserscriptDataCompact} from './buildDataEncoding';
 import {normalizePath, type Plugin} from 'vite';
 
 const allowedAttributes = new Set(['d', 'clip-rule', 'fill-rule', 'opacity', 'fill-opacity']);
@@ -33,7 +34,7 @@ function validateBrandPaths(value: unknown): asserts value is Record<string, Arr
 }
 
 /** 普通、Greasy Fork 与扩展出口不替换；只接受无 query/虚拟前缀的精确物理模块。 */
-export function createUserscriptServiceBrandIconsCompressionPlugin(root: string, enabled = false): Plugin {
+export function createUserscriptServiceBrandIconsCompressionPlugin(root: string, enabled = false, standalone = false): Plugin {
     const sourcePath = enabled
         ? normalizePath(realpathSync(resolve(root, 'src/ui/assets/serviceBrandIcons.ts')))
         : '';
@@ -48,23 +49,30 @@ export function createUserscriptServiceBrandIconsCompressionPlugin(root: string,
             const paths: unknown = JSON.parse(source.toString('utf8'));
             validateBrandPaths(paths);
             const serialized = JSON.stringify(paths);
-            const compressed = gzipSync(Buffer.from(serialized, 'utf8'), {level: 9}).toString('base64');
+            const input = Buffer.from(serialized, 'utf8');
+            const baseline = gzipUserscriptBuildData(input, 8, standalone);
             const sourceSha256 = createHash('sha256').update(source).digest('hex');
-            return [
-                `/* Non-code Lobe Icons paths; original JSON sha256 ${sourceSha256}; existing MIT notice retained. */`,
-                "import {inflateWithPako} from '@/userscript/pakoRuntime';",
-                'const knownBrands = Object.create(null);',
-                `for (const service of ${JSON.stringify(Object.keys(paths))}) knownBrands[service] = true;`,
-                'let brandPaths;',
-                'export function getServiceBrandIcon(service) {',
-                '    if (brandPaths !== undefined) return Object.hasOwn(brandPaths, service) ? brandPaths[service] : undefined;',
-                '    if (!Object.hasOwn(knownBrands, service)) return undefined;',
-                `    const restored = JSON.parse(inflateWithPako(Uint8Array.from(atob(${JSON.stringify(compressed)}), character => character.charCodeAt(0))));`,
-                "    if (restored === null || typeof restored !== 'object' || Array.isArray(restored) || !Object.hasOwn(restored, service) || !Array.isArray(restored[service]) || restored[service].length === 0) throw new Error('Invalid restored service brand paths');",
-                '    brandPaths = restored;',
-                '    return restored[service];',
-                '}',
-            ].join('\n');
+            const emit = (bytes: Uint8Array) => {
+                const compressed = encodeUserscriptDataCompact(bytes);
+                return [
+                    `/* Non-code Lobe Icons paths; original JSON sha256 ${sourceSha256}; existing MIT notice retained. */`,
+                    "import {inflateWithPako} from '@/userscript/pakoRuntime';",
+                    "import {decodeUserscriptData} from '@/userscript/dataEncoding';",
+                    'const knownBrands = Object.create(null);',
+                    `for (const service of ${JSON.stringify(Object.keys(paths))}) knownBrands[service] = true;`,
+                    'let brandPaths;',
+                    'export function getServiceBrandIcon(service) {',
+                    '    if (brandPaths !== undefined) return Object.hasOwn(brandPaths, service) ? brandPaths[service] : undefined;',
+                    '    if (!Object.hasOwn(knownBrands, service)) return undefined;',
+                    `    const restored = JSON.parse(inflateWithPako(decodeUserscriptData(${JSON.stringify(compressed)})));`,
+                    "    if (restored === null || typeof restored !== 'object' || Array.isArray(restored) || !Object.hasOwn(restored, service) || !Array.isArray(restored[service]) || restored[service].length === 0) throw new Error('Invalid restored service brand paths');",
+                    '    brandPaths = restored;',
+                    '    return restored[service];',
+                    '}',
+                ].join('\n');
+            };
+            return standalone ? gzipLargeStandaloneUserscriptData(input, root, 0)
+                .then(candidate => emit(candidate.byteLength < baseline.byteLength ? candidate : baseline)) : emit(baseline);
         },
     };
 }

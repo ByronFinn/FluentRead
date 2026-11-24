@@ -1,7 +1,7 @@
 <!--
  * @file src/features/settings/ui/AreaTranslationSettings.vue
  * 文件职责：提供图片翻译内的圈选区域设置，组织触发快捷键、识别与翻译的常用选择，并按需提供提示词和本地语言包设置。
- * 主要内容：紧凑模式只展示一个开关标题，详细选项按需展开；复用设置行和品牌按钮，提供预设与自定义录制的圈选快捷键及占用提示，显示当前模型识图能力，通过所属编辑弹窗即时修改识图提示词；隐藏、配置变更或缓存停用时释放草稿、缓存监听和 OCR 子界面。
+ * 主要内容：紧凑模式只展示一个开关标题，详细选项按需展开；复用设置行和品牌按钮，提供预设与自定义录制的圈选快捷键及两点选取等入口的占用提示，显示当前模型识图能力，通过所属编辑弹窗即时修改识图提示词；隐藏、配置变更或缓存停用时释放草稿、缓存监听和 OCR 子界面。
  * 模块边界：只修改父级配置并发出开关事件；配置持久化由 SettingsSections 负责，快捷键解析与归一化归 core，不截图、不调用模型、不下载识别资源。
  -->
 <template>
@@ -91,6 +91,7 @@ import {
 } from '@/src/core/config/areaTranslation';
 import {canonicalizeHotkey, resolveConfiguredHotkey} from '@/src/core/hotkey';
 import {resolveSectionTranslationHotkey} from '@/src/core/config/sectionTranslation';
+import {resolveReservedClickSelectionHotkey} from '@/src/core/config/clickSelection';
 import {resolveParagraphCopyHotkey} from '@/src/core/config/paragraphCopy';
 import {
     findEnabledQuickTranslationHotkeyConflict,
@@ -129,6 +130,7 @@ const hotkeyDisplayName = computed(() => areaTranslationHotkeyDisplayName(
 /** 列出已被其他功能占用的快捷键，避免两个功能同时响应同一个组合键。 */
 function reservedHotkeyOwners(): {hotkey: string; feature: string}[] {
     return [
+        {hotkey: resolveReservedClickSelectionHotkey(props.config), feature: translateLegacy('两点选取')},
         {hotkey: resolveConfiguredHotkey(props.config.hotkey, props.config.customHotkey), feature: t('popup.hoverTranslation')},
         {hotkey: resolveConfiguredHotkey(props.config.floatingBallHotkey, props.config.customFloatingBallHotkey), feature: t('quickTranslation.commonFullPageShortcut')},
         {
@@ -220,7 +222,8 @@ const supportsAI = computed(() => servicesType.isUseAIContext(
   service.value,
   resolveConfiguredModel(props.config.model[service.value], props.config.customModel[service.value]),
 ));
-const unavailableMessage = computed(() => getTranslationServiceUnavailableMessage(service.value));
+const unavailableMessage = computed(() => props.config.disabledTranslationServices.includes(service.value)
+  ? t('settings.services.library.serviceDisabledMessage') : getTranslationServiceUnavailableMessage(service.value));
 const savedServiceUnavailable = computed(() => props.config.areaTranslationService
   && !props.serviceOptions.some(item => item.value === props.config.areaTranslationService));
 

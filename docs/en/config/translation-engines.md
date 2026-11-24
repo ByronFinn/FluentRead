@@ -4,324 +4,240 @@ outline: false
 
 # Choose your translation service
 
-FluentRead displays translations produced by your selected service. Use the default service or configure another machine translation provider, AI service, or local model.
-
-ChatGPT plan integration is not available in current public releases; the required application and approval have not been completed. Continue using an available provider. Existing settings and completed translations are retained; if this service or model was saved previously, choose an available provider for the features you need without deleting the saved configuration. See [ChatGPT plan availability](./chatgpt-plan.md).
+FluentRead sends text to the service you choose. Start with free translation, or connect an existing machine-translation account, AI provider, or local model.
 
 <GuideVisual kind="provider" en />
 
-## Combined translation services
-
-In **Translation services**, select **Custom service**, then choose **Combined translation** in the same creation window. Enter a name and select at least two existing services, such as Google translation, Microsoft translation, or a custom AI endpoint. Selecting a service adds it immediately; use the member buttons to reorder or remove it. Combinations cannot contain other combinations. To add your own API address, choose **Compatible endpoint** in this window instead. After saving, the combination appears in the custom service directory and can be set as the default or selected from the extension menu, document reader, and other service selectors.
-
-| Strategy | How members are selected |
-| --- | --- |
-| Round robin | Rotate the first-choice member in list order for each request; try the remaining members after a failure or timeout |
-| Random | Shuffle the list for each request and try remaining members after a failure or timeout |
-| Smart | Rank members by recent success rate and response speed, then try the next after a failure or timeout |
-
-**Round robin** rotates the first-choice service across consecutive requests: **A→B→C→A**. If that member fails or times out, the current request continues with the next member and wraps to the beginning when needed. Each member is tried at most once per request. Restarting the background process or changing the member list or order resets the rotation to the first member.
-
-Each request returns the first successful translation; it does not merge several translations. Smart routing evaluates availability and speed rather than translation quality. Each member keeps its own model, API key, prompts, and request limits. Configure the member services first; model selection and key rotation continue to follow each member's existing settings.
-
-**More settings → Timeout (seconds)** controls the wait for each member, defaults to 12 seconds, and accepts 1–45 seconds. The complete request remains subject to the overall translation timeout, so later members may receive no attempt when the remaining budget runs out. Cancelling translation stops the current attempt and prevents further fallback. Fallback may send the same source to several providers and consume allowance at each provider. Consider their data policies and fees when choosing members.
-
-Select a saved combination to edit its name, members, and routing. Only the selected strategy has a short description; its help icon explains the detailed rules. Change the timeout under **More settings**, then select **Save**. **Check connection** in the title bar sends a short translation through the saved strategy. An imported combination or one whose member services were deleted may have no members; it is kept for repair and cannot translate or run a connection check. Deleting a combination keeps all member services and their settings.
-
-## Multi-text requests and reliability
-
-Full-page translation automatically groups short passages with the same request settings when using Google translation, Microsoft translation, DeepL, Azure Translator, or Google Cloud Translation. Their native multi-text interfaces keep each source associated with its own result. **AI multi-paragraph translation** remains off by default; other machine translation services continue requesting passages individually.
-
-Each of these five services has a **Request limits → Combine translation requests** switch, enabled by default. Turn it off to request passages individually for that service. The free aggregate service follows the same preference when it calls Google or Microsoft. Changes save automatically and apply to newly started translations. **AI multi-paragraph translation** remains a separate option and is off by default.
-
-Results are displayed only after the complete array passes count, type, and nonempty checks. Interfaces with item IDs also require unique, complete IDs. Broken responses are rejected as a whole and recovered individually within the remaining timeout. Failed recovery preserves the original text and shows a failure state; invalid results are never cached. Fewer requests do not reduce character-based billing.
-
-<details class="guide-details">
-<summary>Configure a service</summary>
-
-## Configure a service
-
-The service directory is organized by category: click a category heading to collapse or expand it, use the category names at the top of the page to jump to a category, or search the list. Selecting an entry opens its settings; **Set as default translation service** in the details title bar changes the default explicitly.
-
-The model and connection fields stay visible. **Key management** sits beside the API Key fields. **Model preferences**, **Prompt templates**, **Request limits**, and **API compatibility** expand independently as needed. Collapsing a section keeps its settings active and saved. Cloud services show a quota summary; expand the setup guide for instructions. Eligibility and overage behavior depend on the provider and plan.
-
-In General settings, **Configure service** beside the default service opens its configuration directly. On narrow screens, the service directory opens with **Switch service to configure** and closes after selection.
-
-Compact directory rows keep full service names visible and leave more room for model and connection fields. The directory and details scroll separately on desktop; on narrow screens, connection fields and advanced options share one scroll area after the directory closes. Leaving local model settings stops that page's progress subscription and cancels its trial translation. Background downloads continue, and returning reads the current progress again.
-
-</details>
-
-## Google translation speed and fallback
-
-Google translation requires no user API key. Full-page translation groups paragraphs with the same language settings for about 120 milliseconds, with up to 32 paragraphs and a budget of 10,000 escaped characters per batch. A single paragraph exceeding that budget is sent separately. Full batches are sent immediately, reducing small requests on long pages and during continuous scrolling. The first request favors the browser batch endpoint; later requests rank the four endpoints by recent success rate, response time, and current load. Every tenth batch uses a less-observed available endpoint to discover faster or recovered routes. No additional speed setting is needed.
-
-Network errors and service failures trigger another endpoint; endpoints that reject access cool down. All four endpoints share request pacing, so switching endpoints does not start another burst. A rate limit pauses all four, following the service's waiting period when provided and increasing the delay otherwise. Only one recovery probe runs after the wait; other paragraphs resume when it succeeds. Grouping, queueing, waiting, and fallback share an 8-second budget, with at most 2 seconds per endpoint. Cancelling translation stops that caller's wait. If the required wait exceeds the remaining budget, the request ends; the free aggregate service can then try a different provider.
-
-These are internal Google web endpoints with no guaranteed public free quota. Availability depends on your network, region, and service limits. Grouping and backoff reduce requests and ease throttling; they do not increase Google's server-side quota. Chrome’s built-in page translation, Chrome's local translation API, and Google Cloud Translation each use separate paths.
-
 ## Which one fits?
 
-| What you want | A starting point |
+| What you need | Choose |
 | --- | --- |
-| Start immediately | Free translation service, without an API key |
-| Use an existing provider | The corresponding Microsoft, Google, DeepL, or other service |
-| Trade a cloud key for a stable free quota | A **Cloud vendors** service: Google Cloud, Azure, Alibaba Cloud, Tencent Cloud, Baidu, or Volcengine, each with a monthly free character quota |
-| Explain sentences, tone, or expressions | An AI service with a working model and credentials |
-| Translate text locally | **Local model translation**, **Ollama (local)**, or available [Chrome local translation](/en/guide/chrome-translator) |
+| Start without a key | Free translation service |
+| Use an existing translation account | Its DeepL, Microsoft, Google, or other service |
+| Use an official cloud API | Google Cloud, Azure, Alibaba Cloud, Tencent Cloud, Baidu, or Volcengine |
+| Translate complex expressions or use AI explanations | An AI service with a working key and model |
+| Process translation text locally | Local model translation, Ollama, or [Built-in browser translation](/en/guide/chrome-translator) |
+| Rotate services or retry with another provider | Combined translation |
 
-FluentRead is free and open source. Third-party services may charge separately. A web chat subscription does not necessarily include API access.
+FluentRead is free and open source. Providers may charge separately. Chat subscriptions may not include API allowance; check free quotas, regional availability, and overage rules with your provider.
 
 ## Connect and use it
 
-1. Open translation services in settings and select the service to configure.
-2. Enter its key and address when available; select a model for AI services. Use details supplied by the provider. **Check connection** remains available with an empty API Key; services that require credentials report missing credentials or authentication failure in the result.
-3. Check the connection from the right side of the service details title bar. This sends a short request and may use a small amount of your allowance.
-4. Select **Set as default translation service** to the left of **Check connection**, then try a sentence. General settings and the extension menu update to the same default service.
+1. Open **Settings → Translation services**, then search for or select a service.
+2. Enter the provider’s key and URL when required. AI services also need a model.
+3. Choose **Check connection**. It sends a short request and may use allowance; success describes that check only.
+4. Choose **Set as default translation service**, then try a webpage. Documents, subtitles, and the reading card can have separate selections.
 
-::: tip Configuring is not selecting the default
-Clicking a service in the directory only opens its configuration. Choose **Set as default translation service** to the left of **Check connection** to change the webpage default. You can also choose it from General settings or the extension menu. Documents, subtitles, and the reading card have their own selections.
-:::
+Selecting a directory entry opens its connection settings and leaves the default service selected. You can assign services from **Translation service** in the extension menu or **Services by feature** in General settings. **Services by feature** starts expanded. Select its heading to collapse it.
 
-<figure class="doc-figure"><a href="/screenshots/ui/en-US/settings-services.webp" target="_blank" rel="noopener"><img class="doc-screenshot" src="/screenshots/ui/en-US/settings-services.webp" width="2560" height="1600" alt="Translation service directory and connection settings" loading="lazy" /></a><figcaption>Configure a connection, then select the service you want to use.</figcaption></figure>
+<figure class="doc-figure"><a href="/screenshots/ui/en-US/settings-services.webp" target="_blank" rel="noopener"><img class="doc-screenshot" src="/screenshots/ui/en-US/settings-services.webp" width="2560" height="1600" alt="FluentRead translation service directory and connection settings" loading="lazy" /></a><figcaption>Configure and check the connection, then choose the default or assign it to a feature.</figcaption></figure>
 
-<details class="guide-details">
-<summary>Use several API keys</summary>
+## Remove and add back services
 
-## Use several API keys
+In **Settings → Translation services**, select the **×** beside a service. Click **Confirm** or press Enter when the dialog opens to remove the service from the directory and stop new requests to it. If you remove the default, the confirmation names the service that will take over. Keep at least one available service in the directory.
 
-For a service with an API Key field, open **Key management** below the API Key fields, enable key rotation, and add one key per row using **Add key** below the list. Existing single keys are kept. All rows use the same service address, model, region, and custom headers; use a separate custom service when those settings differ.
-
-Requests are shared evenly at first. If a key fails, FluentRead tries another and temporarily reduces how often the failing key is used. Invalid keys and exhausted quotas can be paused. The default recovery wait is 1 minute; adjust it from **Settings → Advanced → Request limits** between 1 and 60 minutes. A rate limit with a server-provided waiting period follows that period instead. Changing keys does not bypass your configured request rate or total timeout. Health is temporary and resets when the extension's background process restarts.
-
-**Check all** above the list tests each distinct, filled row in order, with the summary and individual results shown together. Select a failed status to see its reason, or use the row's check button to test it again. You can stop the remaining checks. A failed row does not stop the rest. Empty rows and duplicates do not make extra requests. Checks send a short translation and may use a small amount of your provider allowance. Results describe that check, rather than guaranteeing future availability.
-
-</details>
-
-<details class="guide-details">
-<summary>The free service</summary>
+To restore a service, open **Custom service** and choose **Restore removed services**. Search for and select the service, then click **Add service**. Your saved keys, models, and feature assignments are preserved. While the service is removed, other pickers mark it as unavailable or hide it. Combined and free translation skip it while keeping their saved member settings.
 
 ## The free service
 
-Free translation calls enabled endpoints operated by their providers. All endpoint cards are shown together, with connection status and allocation shares. Choose which ones participate; Automatic balance distributes requests, while Priority order tries them in list order.
+**Automatic balance** distributes requests among enabled services based on availability and speed. Failure may send the same text to another provider. **Priority order** tries the list in order; keep at least one enabled. To use one provider only, disable the others or select its standalone service.
 
-The default **Automatic balance** mode places Microsoft first and prefers it for the initial request. The background scheduler dynamically adapts distribution using success rate, response time, and recent errors. A failed request switches to another service. Disable entries or choose **Priority order** to try them in list order. Keep at least one enabled.
+Choose candidates under the participating-services section. Free web endpoints can change, throttle requests, or stop working. Paused candidates are tried again later; health records stay local. Doubao Web and Reverso are experimental. Check language support for each service, including Traditional Chinese targets and Apertium’s Chinese pairs.
 
-The scheduler maintains these allocation signals automatically. Users configure only enabled services and the mode; health and performance records used for balancing stay local.
+Doubao Web uses anonymous guest parameters and does not read personal cookies or the API key configured for the separate Doubao service. Anonymous access does not guarantee continued free use. Each candidate has its own data policy.
 
-New configurations enable all 17 free endpoints without API keys: Microsoft, Bilibili Translation, Tencent TranSmart, Volcengine, Doubao Web Translation, Google, Youdao Web, ICIBA, Yandex, MyMemory, Sogou, Reverso, Apertium, Alibaba Translate, ModernMT, Lara, and Lingvanex. Missing or invalid enabled-service lists use the same default. This default change does not re-enable Doubao in existing nonempty explicit lists. Doubao, Sogou, and Reverso use experimental web endpoints, and Apertium currently has no Chinese language pairs. DeepLX and Lingva have been removed from the free pool; standalone DeepLX can still be configured separately.
+Bilibili Translate sends lines from the same text block together when they fit within one request and preserves the original line breaks. This works independently of the **AI multi-paragraph translation** setting. If the response has a different line count, is empty, or is truncated, FluentRead translates each line separately.
 
-**Doubao Web Translation** passed live connection and paragraph-translation checks using the production extension in isolated Edge. Separate command-line requests also returned anonymous translations, without an account login or API key. It is an experimental endpoint enabled by default and can be disabled in the free-service list. Access failures or unsupported targets move to another enabled endpoint. Traditional Chinese targets are currently unsupported and are never silently changed to Simplified Chinese. It uses anonymous guest parameters from the web service, refreshes temporary credentials automatically, and keeps them in memory only. It does not read personal account cookies or the Volcengine Ark API key configured for the separate Doubao service. These tests establish availability only on the local network at the time of testing. The web endpoint may change or stop working; keyless access does not guarantee permanent free access or continued availability.
+## Google translation speed and fallback
 
-Rate limits normally pause a provider for minutes, blocked access for hours, and exhausted daily quotas for about a day. Recovery records are stored locally and survive background restarts. Each attempt has a five-second timeout by default.
+Google translation needs no key. Page translation automatically groups short passages to reduce requests and tries another available endpoint after failure. Rate limits cause a wait before retrying; these measures do not increase the provider’s quota.
 
-Free services have changing availability and allowances. Provider web endpoints have their own data policies. Keep only one entry, or select a standalone service, if you want requests to go to only that provider.
+Free Google translation, Google Cloud Translation, Chrome’s built-in page translation, and Chrome local translation are separate services.
 
-</details>
+## Multi-text requests and reliability
 
-<details class="guide-details">
-<summary>MyMemory</summary>
+Google, Microsoft, DeepL, Azure, and Google Cloud enable **Request limits → Combine translation requests** by default. Page translation groups short passages with matching settings and keeps each result paired with its source. Disable it for individual requests. The free service follows this setting when using Google or Microsoft.
+
+This differs from **AI multi-paragraph translation**, which is off by default. Grouping reduces request count, not character-based charges. Missing or broken results trigger individual recovery; failed recovery keeps the original and shows a failure instead of caching invalid output.
+
+## Claude and DeepSeek Responses translation
+
+For translation through these interfaces, FluentRead waits for a complete nonstreaming response. Translation requests remain nonstreaming even if the custom request body sets `stream: true`. Explicit truncation, refusal, or unfinished tool calls produce an error instead of being presented as a complete translation.
+
+DeepSeek Responses can return a completed server-side search alongside the final translation; search availability depends on the selected model and service. Translation does not execute client-side tool calls.
+
+## Combined translation services
+
+1. Choose **Custom service → Combined translation** and enter a name.
+2. Add at least two existing services and arrange their order. Combinations cannot contain other combinations.
+3. Select a strategy and timeout, save, then check the connection.
+4. Set it as the default or assign it to a feature like any other service.
+
+| Strategy | Behavior |
+| --- | --- |
+| Round robin | Rotate the first choice through the list; try other members after failure |
+| Random | Shuffle the order for each request and try remaining members after failure |
+| Smart | Prefer recently successful, faster members and fall back after failure |
+
+Each request returns the first successful result, without combining several translations. Smart routing does not assess translation quality. Members keep their own models, keys, prompts, and limits, so configure them first.
+
+Each member has a default timeout of 12 seconds, adjustable from 1–45 seconds, within the overall request deadline. Cancellation stops fallback. Trying several providers can send the same source and consume allowance at each; consider their data policies and charges. Deleting a combination keeps member services. Imported combinations with no members need repair before use.
+
+## Use several API keys
+
+Enable rotation in **Key management**, then add one key per row. Keys share the service URL, model, region, and headers. Create separate services when those settings differ.
+
+Requests are distributed across keys. Failures try another key; invalid, rate-limited, or exhausted keys are paused or used less often. Rotation does not bypass service limits or the overall timeout.
+
+**Check connection** tests distinct nonempty keys in order. Row controls can retest one key, and you can stop remaining checks. Empty and duplicate entries make no extra requests. Checks may use a small allowance.
 
 ## MyMemory
 
-Select **MyMemory** and click **Check connection**. The contact email is optional. The check translates a fixed short sentence from English to Chinese, so you do not need to change your source or target language first. Your saved language and email settings are preserved.
-
-Regular translation still uses your selected languages. If automatic detection cannot identify the source language of a short text, select it manually and retry.
-
-</details>
-
-<details class="guide-details">
-<summary>DeepL</summary>
+The contact email is optional. Check the connection directly. Regular translation uses your chosen languages; if detection cannot identify a short source, select its language manually.
 
 ## DeepL
 
-Choose API Free or API Pro and enter the matching key. A DeepL website subscription and a DeepL API plan are different products.
-
-</details>
-
-<details class="guide-details">
-<summary>DeepLX</summary>
+Choose **DeepL API Free** or **API Pro** and enter the matching key. Website subscriptions and API plans are separate products.
 
 ## DeepLX
 
-When the API Key is empty and the service URL is blank or unchanged from the default, FluentRead first connects directly to DeepL’s anonymous endpoint. If that fails, it falls back to the default public DeepLX endpoint. Long text is split into requests within the endpoint’s 1500 UTF-16 code unit limit, and the translations are combined.
+With an empty key and an empty or default service URL, FluentRead first tries DeepL’s anonymous endpoint, then the default public DeepLX endpoint. A custom URL, proxy, or key keeps requests on the specified route; proxy takes priority.
 
-For a custom service, enter the full translation endpoint, such as `https://deeplx.example.com/translate`. Entering only a domain does not automatically add `/translate`. A custom URL, a configured proxy, or an API Key keeps requests on the specified route. A proxy URL takes priority over the service URL.
+Use the complete custom path, such as `https://deeplx.example.com/translate`. A domain alone does not add `/translate`. Keyless endpoints can leave the key empty. For token authentication, enter the token without `Bearer`; it is sent in a header by default. If the provider requires URL authentication, use its supported placeholder form:
 
-Endpoints that do not require authentication can be used and checked with an empty API Key. If the site requires authentication, enter only its Token value, without a `Bearer` prefix. The Token is sent in the request header by default. If the site requires it in the URL, follow the site's instructions:
+- Query: <code v-pre>https://deeplx.example.com/translate?token={{apiKey}}</code>
+- Path: <code v-pre>https://deeplx.example.com/{{apiKey}}/translate</code>
 
-- Query parameter: <code v-pre>https://deeplx.example.com/translate?token={{apiKey}}</code>
-- URL path: <code v-pre>https://deeplx.example.com/{{apiKey}}/translate</code>
-
-Keep <code v-pre>{{apiKey}}</code> exactly as written. It is replaced with your saved API Key when sending, so you do not need to put the actual Token in the URL. A configured proxy URL takes priority; use the full path and the site's required Token format there too. Then click **Check connection**.
-
-If several endpoints are configured, an empty Key skips addresses containing <code v-pre>{{apiKey}}</code> or <code v-pre>{{token}}</code> and uses any valid anonymous addresses in the effective list. If all effective addresses require a token, enter a Key first. An unresolved token address does not silently switch to the default public endpoint.
-
-</details>
-
-<details class="guide-details">
-<summary>Cloud vendors</summary>
+Keep the placeholder unchanged rather than writing a real token in the URL. A missing required key does not fall back to a public endpoint.
 
 ## Cloud vendors
 
-The **Cloud vendors** group lists the official machine translation APIs of the major cloud platforms: Google Cloud Translation, Azure Translator, Alibaba Cloud Machine Translation, Tencent Cloud Translate, Baidu Translate, and Volcengine Translation. They are separate from the free web endpoints in the machine translation group (Google Translate, Microsoft Translator): the free endpoints need no key but may be throttled, while the cloud APIs need a key issued in the vendor console and give you a stable service with a published free quota.
+Enable the official API and create credentials in the provider’s console. Select the service and open its setup guide for console and API links.
 
-| Service | Official free quota | You fill in |
-| --- | --- | --- |
-| Google Cloud Translation | 500,000 characters per month | API key |
-| Azure Translator | F0 tier: 2 million characters per month | Key + region |
-| Alibaba Cloud Machine Translation | General edition: 1 million characters per month | AccessKey ID + AccessKey Secret + region |
-| Tencent Cloud Translate | 5 million characters per month | SecretId + SecretKey |
-| Baidu Translate | Standard tier: 50,000 characters per month | APP ID + secret key |
-| Volcengine Translation | 2 million characters per month | Access Key ID + Secret Access Key + region |
+| Service | Fields |
+| --- | --- |
+| Google Cloud Translation | API key |
+| Azure Translator | Key and region |
+| Alibaba Cloud Translation | AccessKey ID, AccessKey Secret, and region |
+| Tencent Cloud Translation | SecretId and SecretKey |
+| Baidu Translate | APP ID and key |
+| Volcengine Translate | Access Key ID, Secret Access Key, and region |
 
-Select any cloud vendor in settings to see its free quota summary. Expand **Setup guide** for the three-step instructions and links to the **console** and **API docs**. Follow the guide to obtain the key, enter it in the form below, and click **Check connection**. Free allowances, eligibility and overage behavior depend on the provider console and your current plan.
+Use the resource’s actual region. For authentication failures, check matching and active keys, translation permissions, service activation, and account status. Timestamp signature errors also require checking the device clock. Report the provider’s error code without sharing keys or complete requests.
 
-::: tip Match the region to your resource
-For Azure, Alibaba Cloud, and Volcengine the region is part of the request signature or decides the request host. A wrong region usually shows up as 401/403 or a signature mismatch; keep it identical to the region of the resource in the console.
-:::
-
-Paired secrets (AccessKey Secret, SecretKey, and similar) are stored only on this device, like API keys. Shared configurations and configuration history never include them; full backups keep them.
-
-</details>
-
-<details class="guide-details">
-<summary>Local model translation</summary>
+Credentials stay local and are excluded from public configuration sharing and settings history. Full backups and cloud backups with explicit sensitive-settings consent can include them.
 
 ## Local model translation
 
-Choose a model under **Settings → Translation services → Local model translation** and download it. Once it is available offline, try a short translation, then select this service in the extension menu. No API key or separate server is required; translation text stays on this device.
+Under **Translation services → Local model translation**, choose and download a model. Once it is ready for offline use, try a sentence and select it as your service. It requires no key or separate server; translation text is processed on the device.
 
-| Model | Download | Intended use |
+| Model | Approximate download | Use |
 | --- | --- | --- |
-| Chinese / English lightweight pack | About 239 MB | Simple everyday sentences in both directions; review technical terms and complex wording |
-| Hunyuan Hy-MT2 1.8B | About 1.13 GB | Chinese, English, Japanese and more languages; more demanding text, with higher memory requirements |
-| Japanese / English lightweight pack | About 214 MB | Mainly Japanese-to-English reading; English-to-Japanese quality is limited, so prefer Hunyuan |
+| Lightweight Chinese–English pack | 239 MB | Simple Chinese–English sentences |
+| Hunyuan Hy-MT2 1.8B | 1.13 GB | More languages and complex expressions, with higher memory needs |
+| Lightweight Japanese–English pack | 214 MB | Japanese-to-English; limited English-to-Japanese quality |
 
-Downloads continue when you leave the settings page. You can pause them and resume saved progress after restarting the browser. Files must finish verification before translation is available, even if the progress is nearly 100%.
+Pause, resume, or retry downloads; leaving settings does not stop background downloading. Files must finish verification before use. If a source fails, another source supplies the same fixed, verified version.
 
-Model files are downloaded on demand. Simplified Chinese browser environments try two Hugging Face mirrors first; other environments try the official source first. Failures advance to another source. All sources use the same pinned versions and file checks; connectivity depends on your network.
+Models stay in this browser and are excluded from configuration backups. Deletion requires confirmation and affects only the chosen model. Download size is not runtime memory use: loading can noticeably increase CPU, RAM, or GPU use, and idle resources are released. See the [local-model FAQ](/en/guide/faq#do-local-models-reload-on-every-request-or-stay-in-memory-forever).
 
-Deleting a model requires confirmation and keeps other models and settings. Model files belong to the current browser and are not included in settings backups.
-
-Download size is not runtime memory. Even a lightweight pack can briefly add around 1–2 GB of memory use, with CPU spikes while loading. Models are released after 30 seconds of inactivity. Text length, browser and graphics hardware affect actual usage. Unsupported browsers show a warning for Hunyuan. The userscript edition does not download or run these models.
-
-Local Hunyuan is separate from the Hunyuan cloud service. Model sources and licenses are linked from each card's information button.
-
-</details>
-
-<details class="guide-details">
-<summary>AI services</summary>
+This feature requires the browser extension and is unavailable in the userscript. Model information links show sources and licenses. If a model is incompatible with the browser, choose another model or service.
 
 ## AI services
 
-New configurations favor lightweight models for everyday translation:
+Enter the service key, select a model available to your account, and check the connection. Use a custom model when needed, copying its API model ID from the provider. Azure uses your deployment name.
 
-| Service | Default model |
-| --- | --- |
-| DeepSeek | `deepseek-flash` (V4.1 Flash) |
-| OpenAI | `gpt-5.4-mini` |
-| Gemini | `gemini-3.5-flash-lite` |
-| Qwen | `qwen3.8-flash` |
-| Claude | `claude-haiku-4-5` |
-| Xiaomi MiMo | `mimo-v2.6-flash` |
-| StepFun | `step-2-mini` |
-| OpenRouter | `google/gemini-3.5-flash-lite` |
+Default models suit everyday translation; larger models remain optional. For discontinued-model errors, check the provider’s current list. Review models and custom request parameters after restoring older backups too. Prices and allowance depend on the provider.
 
-Catalog updates preserve your saved supported and custom models. MiMo will retire `mimo-v2.5` and `mimo-v2.5-pro` at 10:00 Beijing time on October 21, 2026. Saved official selections move to `mimo-v2.6-flash` and `mimo-v2.6-pro` respectively; custom model names stay unchanged. See the [Xiaomi retirement notice](https://mimo.mi.com/docs/zh-CN/updates/deprecate). Thinking is off by default for DeepSeek; models that cannot disable it use their lowest supported level. Larger models remain available for manual selection. Charges depend on the provider.
+### Extra AI context and multi-paragraph translation
 
-See the [DeepSeek changelog](https://api-docs.deepseek.com/updates/) for the new ID. The previous `deepseek-v4-flash` ID remains available as a compatibility alias. The retired Hunyuan `hy3-preview` is migrated to `hy3`.
+Both options are off by default and can be enabled separately:
 
-Select a configured service and model. Use the custom-model option if yours is not listed. For a compatible third-party endpoint, add the address and model under your custom services.
+- **Extra AI context** sends the title, description, parts of the article, chapter definitions, and completed translations as reference. It may improve consistency but increases submitted context, allowance, and waiting time. References remain in the current session, may miss distant content, and do not guarantee correctness.
+- **AI multi-paragraph translation** sends directly adjacent passages under the same parent together to reduce requests. It requires an AI service that supports general prompts; combined services are not supported. Hover translation still sends its current paragraph only.
 
-For Azure, enter the actual deployment name as the model and your resource or complete API address as the endpoint.
+When a batch falls back to individual requests, each passage appears as soon as its translation is ready. Passages that fail can be retried individually.
+
+Once enabled, **Batch limits** default to at most **8 text fragments and 2,000 source characters**, adjustable to **2–32** and **500–12,000** respectively. A batch splits when either limit is reached; a single long paragraph stays intact without truncation. A rich-text paragraph can contain several fragments, so fragments do not equal webpage paragraphs. The collection window is fixed at **32 ms**: later fragments do not extend it, and batches are not guaranteed to fill.
+
+Turning the option off preserves the limits. **Reset** restores the two default values. OpenAI-compatible chat services with default prompts and request bodies use compact JSON for batching and validate the translation order by index. A malformed response temporarily switches that route back to paragraph markers. Custom prompts and advanced request bodies use paragraph markers.
+
+Larger batches depend more on the model returning every translation. If the batch structure is intact, empty, echoed, or clearly wrong-language passages are translated again individually. If a repair fails, the original remains available with a retry action. Batches that fail validation or echo all source text fall back to individual requests for the current page session. Only complete, validated batches enter the cache.
+
+AI services with shared backoff honor the wait indicated by the service. When the service gives no wait time and continues to rate-limit requests, FluentRead increases the delay. One request checks recovery before other requests sharing that quota resume.
+
+Restore the original page and restart full-page translation after changes. Use a [glossary](/en/guide/glossary) for required terms.
 
 ### Custom-service Base URLs
 
-Custom services use **OpenAI Chat Completions**. Enter a complete endpoint or a Base URL ending in a version path such as `/v1`. For example, `https://opencode.ai/zen/v1` sends requests to `https://opencode.ai/zen/v1/chat/completions`. A bare host and port gets `/v1/chat/completions`; other nonstandard paths are treated as complete endpoints. A proxy configured in API compatibility still takes priority and is used as a complete endpoint without automatic path completion. Query parameters are preserved.
+**Custom service → Compatible endpoint** uses OpenAI Chat Completions:
 
-For [OpenCode Zen](https://opencode.ai/docs/zen/) or [OpenCode Go](https://opencode.ai/docs/go/), check both the model protocol and its endpoint. Their Base URLs are `https://opencode.ai/zen/v1` and `https://opencode.ai/zen/go/v1`, respectively. Choose a model supporting `/chat/completions` in the official model table, and enter its API model ID without the `opencode/` or `opencode-go/` configuration prefix. Models requiring `/responses`, `/messages`, or the native Gemini API cannot be used directly with this custom service.
+| URL form | Request destination |
+| --- | --- |
+| `https://api.example.com` | Adds `/v1/chat/completions` |
+| `https://api.example.com/v1` | Adds `/chat/completions` |
+| Complete endpoint path | Uses the entered URL |
 
-### Local ACP agent bridge
+Other nonstandard paths are treated as complete endpoints. A proxy takes priority and requires its full path, without automatic completion. Query parameters are retained. Models offering only `/responses`, `/messages`, or native Gemini protocols cannot use this compatible endpoint directly.
 
-A browser extension cannot launch a local CLI or connect to ACP over standard input and output. FluentRead offers an optional [local ACP bridge](https://github.com/FluentRead/FluentRead/blob/main/scripts/agent-bridge/bridge.mjs). It listens only on `127.0.0.1` and forwards text requests from a custom service to an authenticated [GitHub Copilot CLI](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server) or [OpenCode ACP agent](https://opencode.ai/docs/acp/). Install the corresponding official CLI and sign in using its own instructions first. You do not enter the agent's login credentials in FluentRead; the CLI uses its own sign-in state or environment variables. The bridge does not change the provider's quota or usage rules.
-
-1. From the FluentRead source directory, run `node scripts/agent-bridge/bridge.mjs --agent=copilot`. Use `--agent=opencode` for OpenCode. Keep the terminal running.
-2. The terminal prints a local endpoint and a token generated for this run. Add a **Custom service** with endpoint `http://127.0.0.1:47627/v1/chat/completions`, put the printed token in **API Key**, set the model to `default`, then use **Check connection**. `default` uses the CLI's configured default model; you may also enter a model ID advertised by the agent over ACP. Update the API Key if a restart generates a new token.
-3. Select that custom service for text translation. Every request gets a separate session. The bridge disables agent tools and rejects file, terminal, and permission requests. It supports only text, non-streaming Chat Completions requests; image requests are rejected. Press Ctrl+C in the terminal to stop the bridge.
-
-Browser requests must come from an extension origin and include the token; another local process with the token can also call the loopback endpoint. Keep the token out of public exports, screenshots, and Issues. Page text is sent to the model service used by the selected agent, which may also retain local session history. The bridge processes requests serially. Whole-page translation can issue multiple agent prompts, each of which may consume subscription allowance. Available models and quota depend on your provider account. This feature has protocol tests with a local mock ACP agent but has not been verified with a live Copilot or OpenCode account.
-
-If you have an OpenCode Zen API key and only need its currently free Big Pickle model, configure the Zen API endpoint above with model ID `big-pickle`; the ACP bridge is unnecessary. Free-model availability, duration, and data terms are listed in the [official model table](https://opencode.ai/docs/zen/).
-
-If the connection check returns HTTP 404 with an HTML page, check the endpoint and model protocol; that response does not establish that the API key is invalid. JSON model errors retain the provider's specific explanation. Never include API keys in public issue reports.
-
-Extra AI context can reference the page title and parts of the article to help with meaning. It sends more text and can increase usage and waiting time. Multi-paragraph translation groups directly adjacent passages under the same parent and may reduce request counts. Missing or duplicate markers and incomplete results cause the whole group to fall back to individual translation; later passages with the same settings use individual requests for the current page session. Both options are off by default and can be enabled independently.
-
-Restore existing translations before translating with changed settings. Use [glossaries](/en/guide/glossary) for consistent terminology.
-
-With extra AI context enabled, an unusually long result for a short heading or an output that includes reference material triggers one retry of the affected text without page context or its summary. Valid passages in the same batch are preserved. A retry that still explicitly repeats reference material is reported as a failure so you can retry manually; that output is neither displayed nor cached. Length alone triggers verification and does not reject a legitimate longer translation. After upgrading, extra-context requests use a new cache identity to avoid reusing affected results cached by older versions.
-
-### Tencent Hunyuan connection failures
-
-Select **Tencent Hunyuan** and enter an API key created in the Hunyuan console. The default uses the official Hunyuan endpoint. **Tencent Hunyuan Translate** is a separate service that requires a SecretId and SecretKey.
-
-If an older version reports `Failed to fetch`, enter `https://api.hunyuan.cloud.tencent.com/v1/chat/completions` under **Request settings → Proxy URL**, then check the connection again. For a custom proxy or TokenHub, use the full endpoint and matching key provided by that platform.
-
-See Tencent's [official integration guide](https://cloud.tencent.com/document/product/1729/116755) for endpoint and API key instructions.
-
-</details>
-
-<details class="guide-details">
-<summary>Local models</summary>
-
-## Local models
-
-Install and run Ollama and download a model before connecting it. Performance depends on the model and computer.
-
-Ollama follows the same [request limits](/en/config/#request-limits). Under its **Request limits**, choose **Entire service → Custom** and set concurrency to **1** to share one active request slot across models and translation features. **Current model** limits only that model. After cancellation or timeout, the next request starts once the previous network request has finished.
-
-Pick **Ollama (local)** under aggregation platforms: it connects to `http://127.0.0.1:11434` by default and needs no API key; enter the name of a model you have pulled (for example `qwen3:8b`). If Ollama runs on another machine or port, enter the full `/v1/chat/completions` URL in **Server URL**. Browser extensions must be allowed as an origin: start Ollama with `OLLAMA_ORIGINS=*`, otherwise requests are rejected by CORS.
-
-The aggregation platforms group also includes Mistral AI, Cohere, Cerebras, Together AI, Fireworks AI, DeepInfra, and Perplexity (OpenAI-compatible platforms). Configure them like any other AI service: enter the platform key and choose a model.
-
-Choosing a local model determines where that translation goes. Dictionary, read-aloud, downloads, and other independent tools can still use network services. See [Data & privacy](/en/guide/privacy).
-
-</details>
-
-<details class="guide-details">
-<summary>Connection failed?</summary>
-
-## Connection failed?
-
-Check the key, address, model, and provider balance. If short sentences work but long pages do not, reduce concurrency or try another service. Never include real credentials in feedback. See [Troubleshooting](/en/guide/faq).
-
-Youdao Web and ICIBA currently support English and Simplified Chinese directions. Yandex does not support Traditional Chinese targets. Unsupported directions fall back to another candidate. Free web endpoints may be rate-limited or unavailable.
-
-</details>
-
-<details class="guide-details">
-<summary>Custom request headers</summary>
+For example, [OpenCode Zen](https://opencode.ai/docs/zen/) uses `https://opencode.ai/zen/v1`. Check that the model supports Chat Completions, and enter its API ID without the client’s `opencode/` prefix. Go’s restrictions are in its [official guide](https://opencode.ai/docs/go/).
 
 ## Custom request headers
 
-Select a custom OpenAI-compatible service in the categorized directory, then open **API compatibility → Custom request headers**. Enter a JSON object with string values, for example:
+Open **API compatibility → Custom request headers** and enter the provider’s JSON:
 
 ```json
-{"x-opencode-session": "a71a2ad6-1d1f-4e92-a30e-e35c8fd623ab"}
+{"X-Title": "My translation client"}
 ```
 
-Headers apply only to this service and override matching defaults regardless of letter case. Leave blank to use defaults. A saved session ID stays the same across requests. Click **Check connection** after configuring it. Extra authentication headers, `HTTP-Referer`, and `X-Title` are supported. If your service uses custom authentication without a Bearer token, turn off the model's API Key requirement. Browser restrictions on headers still apply.
+Names and values must be strings; matching names replace defaults. You can save a stable session identifier here. If custom authentication replaces a Bearer token, disable the model’s API key requirement when appropriate.
 
-Headers are stored as credentials: public exports and history omit them, while full backups retain them. Re-enter them after changing the endpoint or proxy.
-
-[OpenCode Go's documentation](https://opencode.ai/docs/go/#where-can-i-use-it) requires a stable session header and also specifies client and traffic requirements. Configurable headers do not imply certified compatibility with that service.
+Headers apply only to that custom service and are stored as credentials. Public sharing and settings history exclude them; full backups retain them. Enter them again after changing endpoint or proxy. Browser-restricted headers cannot be overridden through this field.
 
 ### Remove Origin / Referer by domain
 
-Some gateways reject the browser's extension origin. Ordinary custom headers cannot reliably override `Origin` or `Referer`. In any AI service, open **API compatibility → Remove source request headers** and add the actual request domain, such as `api.example.com`. If you use a proxy, add the proxy's domain.
+For a self-hosted API rejecting extension origins, add its actual domain under **API compatibility → Remove origin headers**. Use the proxy domain when applicable.
 
-The list is empty by default. New entries remove Origin; enable Referer removal separately if needed. The list is shared by all services and matches exact domains, without subdomains. Enter no scheme, port, path or wildcard. Delete an entry or uncheck a header to restore defaults. Settings save automatically and survive browser restarts.
+Enter an exact domain without protocol, port, path, or wildcard. Subdomains do not match automatically. Origin removal is selected by default; Referer is optional. The shared list affects only extension requests. Remove a rule to restore defaults. Userscripts and browsers without the required API do not offer this control.
 
-Only requests initiated by FluentRead are affected. The browser applies network rules using the existing `declarativeNetRequestWithHostAccess` permission. Rule installation errors block the request and allow retry. Userscripts and browsers without this API do not support this option. Endpoint, key and model errors still need their own fixes.
+### Gemini proxy URLs
 
-</details>
+Enter the full endpoint, optionally using this template:
+
+```text
+https://myproxy.example/v1beta/models/{model}:generateContent?key={key}
+```
+
+Placeholders use the current model and saved key. A URL containing `{key}` receives that key; importing or changing the proxy retains the saved key, so use a trusted proxy. Without the placeholder, no key is appended automatically. An empty proxy uses the official endpoint.
+
+### Tencent Hunyuan connection failures
+
+**Tencent Hunyuan** uses a Hunyuan console API key. **Hunyuan Translation** instead needs SecretId and SecretKey. A custom gateway needs its matching full endpoint and credentials; see the [official integration guide](https://cloud.tencent.com/document/product/1729/116755).
+
+### Local ACP agent bridge
+
+This experimental feature requires running a local program. Install and sign in to GitHub Copilot CLI or OpenCode first, then run the [bridge](https://github.com/FluentRead/FluentRead/blob/main/scripts/agent-bridge/bridge.mjs) from the source checkout:
+
+```sh
+node scripts/agent-bridge/bridge.mjs --agent=copilot
+```
+
+Use `--agent=opencode` for OpenCode. Keep the terminal open. Configure the displayed loopback URL and token as a compatible service, using model `default` or an Agent model ID. Update the token if restarting changes it. Press Ctrl+C to stop.
+
+The bridge accepts text-only, nonstreaming requests and disables Agent tools, files, terminal actions, and permission requests. Text still reaches the Agent’s model provider, may consume subscription allowance, and may leave local session records. Other local processes with the token can call it. Keep the token private. Real-account CLI compatibility needs your own verification; a working API can be used directly without the bridge.
+
+## Local models
+
+Ollama needs installation, a running server, and a downloaded model. Select **Ollama (local)**, enter the downloaded model name, and use the default `http://127.0.0.1:11434` without a key. Other devices or ports need a full `/v1/chat/completions` URL. Allow the extension’s origin in Ollama’s server settings.
+
+For slower computers, set the service’s **Request limits → Entire service → Custom** concurrency to **1**. Only that service’s translation requests are local; dictionaries and read-aloud may still use the network. See the [privacy policy](/en/guide/privacy).
+
+## ChatGPT plan availability
+
+ChatGPT sign-in is unavailable in current public releases. Choose an available service; see [integration status](/en/config/chatgpt-plan).
+
+## Connection failed?
+
+Check the URL, key, model, region, and account allowance. If short text works but an article fails, reduce concurrency or the task size. An HTTP 404 returning a webpage usually calls for checking endpoint paths and protocols; it alone does not establish an invalid key.
+
+Echoed source or wrong-language results trigger retry or fallback. Repeated failure keeps the original and shows an error. See [Troubleshooting](/en/guide/faq), and report error codes or redacted screenshots without keys.

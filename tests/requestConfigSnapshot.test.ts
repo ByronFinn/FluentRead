@@ -21,6 +21,8 @@ import {
     getTranslationGlossarySourceSlots,
     allowUnchangedTranslationResult,
     isUnchangedTranslationResultAllowed,
+    markImageTextBatch,
+    isImageTextBatch,
 } from '@/src/services/translation/requestSnapshot';
 import {TRANSLATION_MODEL_USAGE_OBSERVER, TRANSLATION_PROVIDER_CONFIG, TRANSLATION_REQUEST_CONTROL, TRANSLATION_REQUEST_SCHEDULER, TRANSLATION_ROUTE_OBSERVER, TRANSLATION_REMAINING_BUDGET} from '@/src/services/translation/types';
 import {createTranslationRequestScheduler} from '@/src/services/translation/requestScheduler';
@@ -64,6 +66,18 @@ function configSource(overrides: Partial<TranslationConfigSource> = {}): Transla
 }
 
 describe('translation provider request config snapshot', () => {
+    it.each(['chrome', 'firefox', 'userscript'])('%s 同图批次受平台和内部标记共同约束，JSON、自报字段和逐条回退不能启用', browser => {
+        vi.stubEnv('BROWSER', browser);
+        try {
+            const request = markImageTextBatch({origin: ['First.', 'Second.']});
+            for (const internal of [request, {...request}, createTranslationRequestSnapshot(request)]) {
+                expect(isImageTextBatch(internal)).toBe(browser !== 'userscript');
+            }
+            for (const ordinary of [JSON.parse(JSON.stringify(request)), {origin: request.origin, imageTextBatch: true}, {...request, origin: 'First.'}]) {
+                expect(isImageTextBatch(ordinary)).toBe(false);
+            }
+        } finally {vi.unstubAllEnvs();}
+    });
     it('图片原样响应策略随内部快照和展开保留，公开字段与 JSON 无法附加策略', () => {
         const request = allowUnchangedTranslationResult({origin: 'Original English sentence.'});
         for (const internal of [request, {...request}, createTranslationRequestSnapshot(request)]) {
@@ -227,6 +241,36 @@ describe('translation provider request config snapshot', () => {
             expect(getTranslationGlossarySourceText(text)).toBe(text);
         }
     });
+    it('短命名空间的长正文不会分配按全文长度增长的边界表', () => {
+        const text = 'readable words. '.repeat(15000);
+        const packet = serializeTranslationSlots([text], 'short');
+        const NativeArray = globalThis.Uint32Array;
+        const allocations: number[] = [];
+        vi.stubGlobal('Uint32Array', new Proxy(NativeArray, {
+            construct(target, args) {
+                if (typeof args[0] === 'number') allocations.push(args[0]);
+                return Reflect.construct(target, args);
+            },
+        }));
+        try {
+            expect(getTranslationGlossarySourceSlots(packet.payload)).toEqual({packet, texts: [text]});
+            expect(allocations.length).toBeGreaterThan(0);
+            expect(Math.max(...allocations)).toBeLessThan(256);
+        } finally { vi.unstubAllGlobals(); }
+    });
+    it('正文中的完整重复前缀不能冒充外层槽边界', () => {
+        const start = '___FLUENTREAD_x_0_BEGIN___';
+        const end = '___FLUENTREAD_x_0_END___';
+        const malformed = `${start} ${start} text ${end}`;
+        expect(getTranslationGlossarySourceSlots(malformed)).toBeUndefined();
+        expect(getTranslationGlossarySourceText(malformed)).toBe(malformed);
+    });
+    it('当合法前缀覆盖长正文时仍正确恢复来源和字面重叠标记', () => {
+        const texts = ['a'.repeat(5000), '___FLUENTREAD_literal_999_BEGIN___ and readable source'];
+        const packet = serializeTranslationSlots(texts, 'literal');
+        expect(getTranslationGlossarySourceSlots(packet.payload)).toEqual({packet, texts});
+    });
+
     it('keeps out-of-range and nonstandard literal markers inside their source slots', () => {
         const sources = ['An agent reads ___FLUENTREAD_literal_999_BEGIN___example___FLUENTREAD_literal_999_END___ and ___FLUENTREAD_literal_01_BEGIN___text___FLUENTREAD_literal_01_END___.',
             'The next source explains translation settings.'];

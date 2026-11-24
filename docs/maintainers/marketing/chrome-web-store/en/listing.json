@@ -1,0 +1,7 @@
+{
+  "title": "FluentRead-流畅阅读",
+  "shortDescription": "Read web pages in two languages, translate selected text, and choose from multiple translation services.",
+  "descriptionFile": "description.txt",
+  "language": "en",
+  "sourceLanguageInScreenshots": "auto"
+}

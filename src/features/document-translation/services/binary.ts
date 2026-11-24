@@ -1,17 +1,24 @@
 /**
  * @file src/features/document-translation/services/binary.ts
- * 文件职责：处理 PDF、EPUB 与 DOCX 二进制文档的受限解析和导出，把压缩包或页面文本转换为统一 ParsedDocument，并生成可下载的双语产物。
- * 主要内容：相同译文回退原文；Word 段落记下表格单元格供阅读视图排版；按实际字节限制导入、按需加载二进制依赖，包含归档安全上限、可取消 PDF 提取与译文回填；PDF 字形边界回退无效的零/负 ascent 并包含有限负 descent，字号与基线保持不变；零宽文字项使用受限同行位置估算，不把组合标记当作额外字形；默认逐页原版左右对照，保留旋转裁剪、直接嵌入 JPEG 并保存溢出译文批注，显式重排端口才生成续页；ePub/DOCX 导出让出主线程并使用可取消归档流，ePub 保持首项 mimetype 无压缩及 XHTML 章节格式；未改资源保留原压缩方式，文本导出直接使用 core 的回退规则避免重复规范化。
- * 模块边界：此服务可以依赖 JSZip、pdf-lib 和二进制 I/O，但不负责调用翻译服务或渲染设置页；文本格式规则归 core/document，浏览器 Canvas 光栅实现由 ui/pdfPreview 通过接口注入。
+ * 文件职责：处理 PDF、EPUB 与 DOCX 二进制文档的受限解析和导出，把压缩包或页面文本转换为统一 ParsedDocument，并生成可下载的双语产物；扫描页以图像并集和原生正文证据判定，兼容独立页码、图像外的少量原生页眉页脚及拼接扫描图。
+ * 主要内容：相同译文回退原文；Word 段落记下表格单元格供阅读视图排版；按实际字节限制导入、按需加载二进制依赖，包含归档安全上限、可取消 PDF 提取与译文回填；原生旋转内容必要时沿用 sourceRotation 展示坐标，PDF 字形边界回退无效的零/负 ascent 并包含有限负 descent，原始字号与基线保持不变；复用已加载数学字形轮廓收紧通用字体边界，非剪切拉伸分隔符的横向字号只供行归组；零宽文字项使用受限同行位置估算，不把组合标记当作额外字形；默认逐页原版左右对照，保留旋转裁剪并直接嵌入 JPEG，支持文字几何的光栅端口添加可搜索复制的 Unicode 层（连接符与相邻字符共用 CID，保留组合表情及原行 advance）和溢出段落的可见全文续页，批注仍保留完整译文，候选标记避让复用已有几何数组而不逐候选复制；ePub/DOCX 导出让出主线程并使用可取消归档流，ePub 保持首项 mimetype 无压缩及 XHTML 章节格式；未改资源保留原压缩方式，文本导出直接使用 core 的回退规则避免重复规范化。
+ * EPUB 目录在归档时复用实际导出的章节标题译文，兼容原有阅读和历史记录。
+ * Word 由 core/docxInline 验证和回填链接与字符样式；复杂段落原位保留，译文另起一段。
+ * 文本上传在此按原始字节检查大小并识别 UTF-8 或带 BOM 的 UTF-16，防止乱码进入后续分段。
+ * 模块边界：此服务可以依赖 JSZip、pdf-lib 和二进制 I/O，但不负责调用翻译服务或渲染设置页；文本格式规则归 core/document，电子书目录规则归 core/epubNavigation，PDF 目录书签由按需加载的 pdfOutline 按实际输出落点写入，浏览器 Canvas 光栅实现由 ui/pdfPreview 通过接口注入，独立应用的 PDF.js 静态地址由 pdfResources 端口提供。
  */
 import {hasDistinctTranslation} from '@/src/core/translation/result';
+import {pdfFallbackBidiLine} from '../core/pdfFallbackBidi';
+import {stripDocumentInlineMarkers} from '@/src/core/translation/documentInlineMarkers';
 import type JSZip from 'jszip';
-import type {PDFEmbeddedPage} from 'pdf-lib';
-import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
+import type {PDFDict, PDFDocument, PDFEmbeddedPage} from 'pdf-lib';
+import {getPdfResources} from './pdfResources';
 import {generateDocumentArchive, preserveStoredDocumentEntries} from './archive';
-import {analyzePdfPageLayout, extractPdfGraphicsShapes, type PdfLayoutAtom, type PdfLayoutBlock} from '../core/pdfLayoutAnalysis';
+import {analyzePdfPageLayout, extractPdfGraphicsShapes, type PdfGraphicsShape, type PdfLayoutAtom, type PdfLayoutBlock} from '../core/pdfLayoutAnalysis';
 import {buildPdfReadingPlan, type PdfReadingPlan, type PdfReadingPresentation} from '../core/pdfReadingPlan';
-import type {PdfReadingOutputPage, PdfTextMeasure} from '../core/pdfTextLayout';
+import {paginatePdfReadingPlan, type PdfReadingOutputPage, type PdfTextMeasure} from '../core/pdfTextLayout';
+import type {PdfReadingTextEntry} from '../core/pdfReadingRegions';
+import type {EpubNavigationEntry, EpubNavigationKind, EpubNavigationTarget} from '../core/epubNavigation';
 
 import {
     getDocumentMaxBytes,
@@ -33,7 +40,7 @@ import {
 } from '@/src/features/document-translation/core/document';
 
 const BINARY_DOCUMENT_FORMATS = new Set<DocumentFormat>(['pdf', 'epub', 'docx']);
-const DOCX_PARAGRAPH_PATTERN = /<w:p\b[^>]*>[\s\S]*?<\/w:p>/gu;
+const DOCX_PARAGRAPH_PATTERN = /<w:p(?=[\s/>])(?:[^"'<>]|"[^"]*"|'[^']*')*?(?:\/>|>[\s\S]*?<\/w:p\s*>)/gu;
 
 /**
  * 按文档顺序回答“这个位置在哪个表格的第几行第几格”。位置必须递增地询问；嵌套表格里的段落归到外层表格的那一格。
@@ -74,6 +81,7 @@ export interface PdfTextStyle {
     descent?: number;
     fontFamily?: string;
     vertical?: boolean;
+    glyphBounds?: ReadonlyMap<string, readonly [number, number]>;
 }
 
 export interface PdfTextAtom {
@@ -85,6 +93,7 @@ export interface PdfTextAtom {
     fontFamily: string;
     baseline?: number;
     fontSize?: number;
+    layoutFontSize?: number;
 }
 
 export interface PdfTextLine {
@@ -165,10 +174,27 @@ export interface PdfRasterPageResult {
     data: Uint8Array;
     format: 'png' | 'jpeg';
     overflowNotes?: PdfOverflowNote[];
+    /** 与实际光栅绘制一致的行；存在此字段的端口支持可搜索文字及完整溢出续页。 */
+    textItems?: PdfRasterTextItem[];
+}
+/** 行左上角与实际绘制宽度使用未旋转的 PDF 点；对齐锚点已由光栅端口转换为左边缘。 */
+export interface PdfRasterTextItem {
+    /** 仅完整单行实际以该基方向测量并绘制时提供；服务仍独立核对完整目标身份。 */
+    direction?: 'ltr' | 'rtl';
+    segmentIndex: number;
+    text: string;
+    x: number;
+    y: number;
+    width: number;
+    fontSize: number;
 }
 export type PdfPageRasterizer = (input: PdfRasterPageInput) => Promise<Uint8Array | PdfRasterPageResult>;
-export interface PdfReadingRasterPage {bytes: Uint8Array; width: number; height: number; format?: 'png' | 'jpeg'}
-export type PdfReadingRasterizer = (input: PdfRasterPageInput & {plan: PdfReadingPlan}) => AsyncIterable<PdfReadingRasterPage>;
+export interface PdfReadingRasterPage {
+    bytes: Uint8Array; width: number; height: number; format?: 'png' | 'jpeg'; textItems?: PdfRasterTextItem[];
+    /** 与光栅页一致的重排坐标，供原图区域中的文字投影到可搜索层。 */
+    items?: PdfReadingOutputPage['items'];
+}
+export type PdfReadingRasterizer = (input: PdfRasterPageInput & {plan: PdfReadingPlan; footerLabel?: string}) => AsyncIterable<PdfReadingRasterPage>;
 /** 可见文字由 PDF 字体绘制；PNG 只承载公式/图表等需要保留的原图区域。 */
 export interface PdfReadingRenderedPage extends PdfReadingOutputPage {regionImage?: Uint8Array}
 export type PdfReadingRenderer = (input: PdfRasterPageInput & {plan: PdfReadingPlan; measureText: PdfTextMeasure}) => AsyncIterable<PdfReadingRenderedPage>;
@@ -320,6 +346,9 @@ export function median(values: number[]): number {
     return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
 }
 
+/** 数学字体常以整套字库极值声明 ascent/descent；短数学项使用已加载轮廓，普通长正文不额外解析路径。 */
+const MATH_GLYPH_TOKEN = /^[A-Za-z\d\p{Script=Greek}\p{Sm}\p{P}\s]{1,32}$/u;
+
 export function pdfTextAtoms(
     items: PdfTextItem[],
     styles: Record<string, PdfTextStyle>,
@@ -349,13 +378,27 @@ export function pdfTextAtoms(
                 ? 1 + style.descent
                 : 0.8;
         const x = transform[4];
-        const y = transform[5] - fontHeight * ascent;
+        let y = transform[5] - fontHeight * ascent;
         // 高 ascent 字体的一个 em 不一定覆盖 p/g 降部；按声明的负 descent 补足字形下界。
         // 只扩展边界，保留既有最小高度；字号、基线、advance 和遮罩 padding 不变。
-        const height = typeof style.descent === 'number' && Number.isFinite(style.descent) && style.descent < 0
+        let height = typeof style.descent === 'number' && Number.isFinite(style.descent) && style.descent < 0
             ? fontHeight * Math.max(1, ascent - style.descent)
             : fontHeight;
         let width = Math.max(fontHeight * 0.2, Math.abs(item.width));
+        const fontWidth = Math.hypot(transform[0], transform[1]);
+        const stretchedDelimiter = fontWidth > 0 && fontHeight > fontWidth * 1.4 && /^[|¦∥()[\]{}=+\-−?.,;:!\s]+$/u.test(text);
+        let layoutFontSize: number | undefined;
+        if (style.glyphBounds && Math.abs(transform[1]) < .01 && Math.abs(transform[2]) < .01) {
+            const bounds = Array.from(text.replace(/\s/gu, ''), character => style.glyphBounds!.get(character));
+            if (bounds.every((value): value is readonly [number, number] => !!value)) {
+                const top = Math.max(...bounds.map(value => value[1])), bottom = Math.min(...bounds.map(value => value[0]));
+                y = transform[5] - fontHeight * top;
+                height = fontHeight * (top - bottom);
+                width = Math.max(fontWidth * 0.2, Math.abs(item.width));
+                // 原始纵向字号供导出矩阵使用；已证实的非剪切拉伸字形按横向字号参与基线与脚标归组。
+                if (stretchedDelimiter && Math.abs(transform[1]) < .01 && Math.abs(transform[2]) < .01) layoutFontSize = fontWidth;
+            }
+        }
         if (!Number.isFinite(item.width) || item.width === 0) {
             // PDF.js 的多码点字形（如含 variation selector 的数学字母）可能丢失 advance。
             // 只在此时估算：组合/格式字符不占额外 em；孤立组合符沿用原来的小矩形。
@@ -381,9 +424,30 @@ export function pdfTextAtoms(
             width,
             height,
             fontFamily: style.fontFamily || 'sans-serif',
-            ...(includeLineDetails ? {baseline: transform[5], fontSize: fontHeight} : {}),
+            ...(includeLineDetails ? {baseline: transform[5], fontSize: fontHeight, ...(layoutFontSize ? {layoutFontSize} : {})} : {}),
         }];
     }).filter((atom) => atom.x < viewport.width && atom.y < viewport.height && atom.x + atom.width > 0 && atom.y + atom.height > 0);
+}
+
+/**
+ * /Rotate 通常只改变展示方向，仍优先使用未旋转内容坐标。
+ * 少数实际报告先把文字物理转向再设 /Rotate：未旋转提取会删掉整页字形。
+ * 只有展示坐标能恢复四分之三以上文字、且明显优于原坐标时才采用它；沿用扫描页已有 sourceRotation 契约，原页导出方向与文字坐标分别保留。
+ */
+export function pdfPageTextGeometry(items: PdfTextItem[], styles: Record<string, PdfTextStyle>,
+    display: {width: number; height: number; transform: number[]; rotation?: number},
+    canonical: {width: number; height: number; transform: number[]}) {
+    const rotation = (((display.rotation || 0) % 360 + 360) % 360) as NonNullable<PdfDocumentPage['rotation']>;
+    const atoms = pdfTextAtoms(items, styles, canonical, true) as PdfLayoutAtom[];
+    if (rotation) {
+        const characters = (values: readonly {text: string}[]) => values.reduce((sum, item) => sum + item.text.replace(/\s/gu, '').length, 0);
+        const total = items.reduce((sum, item) => sum + item.str.replace(/[\s\u0000]/gu, '').length, 0), count = characters(atoms);
+        if (count < total * .5) {
+            const visible = pdfTextAtoms(items, styles, display, true) as PdfLayoutAtom[], recovered = characters(visible);
+            if (recovered > 0 && recovered >= total * .75 && recovered > count * 2) return {viewport: display, atoms: visible, sourceRotation: rotation};
+        }
+    }
+    return {viewport: canonical, atoms, ...(rotation ? {rotation} : {})};
 }
 
 export function pdfTextLines(atoms: PdfTextAtom[], pageWidth: number): PdfTextLine[] {
@@ -629,6 +693,147 @@ export function pdfTextBlocks(lines: PdfTextLine[], pageWidth: number): Array<Om
         .sort((left, right) => left.y - right.y || left.x - right.x);
 }
 
+/** 少量原生页眉页脚不代表扫描图内已有文字层；原生正文与图表题注仍优先保留，重叠图像只计一次面积。 */
+function isScannedPdfPage(atoms: readonly PdfLayoutAtom[], blocks: readonly PdfLayoutBlock[], graphics: readonly PdfGraphicsShape[], width: number, height: number): boolean {
+    const pageNumber = /^(?:\d{1,4}|(?:page\s+)?\d{1,4}\s*(?:\/|of)\s*\d{1,4})$/iu;
+    const images = graphics.filter(shape => shape.kind === 'image').map(shape => ({
+        left: Math.max(0, shape.x), right: Math.min(width, shape.x + shape.width),
+        top: Math.max(0, shape.y), bottom: Math.min(height, shape.y + shape.height),
+    })).filter(image => image.right > image.left && image.bottom > image.top);
+    const onlyPageNumbers = blocks.length > 0 && blocks.every(block => block.kind === 'footer'
+        && block.y > height * .92 && pageNumber.test(block.source.trim()));
+    if (atoms.length && !onlyPageNumbers) {
+        // 公报、合同等会在扫描附件外再排一个原生标题或发布页脚。只有边缘少量文字、且与图像完全分离时才放行；
+        // 不因一张大照片、图表的标题/题注，或被版面保护器归为 figure-label 的原生正文而覆盖现有文字层。
+        const nativeBodyKinds: readonly PdfLayoutBlock['kind'][] = ['caption', 'metadata', 'formula', 'table'];
+        if (!blocks.length || blocks.reduce((length, block) => length + block.source.length, 0) > 160
+            || blocks.some(block => nativeBodyKinds.includes(block.kind)
+                || /^(?:(?:fig(?:ure)?\.?|table|chart|plate|diagram|photo(?:graph)?|image)\s*(?:\d|[ivx]+\b|[:.])|[图表圖図]\s*[\d一二三四五六七八九十])/iu.test(block.source.trim()))) return false;
+        let headerLines = 0, footerLines = 0;
+        for (const block of blocks) {
+            if (block.y + block.height <= height * .15) headerLines += block.lineCount;
+            else if (block.y >= height * .85) footerLines += block.lineCount;
+            else return false;
+        }
+        if (headerLines > 2 || footerLines > 2 || atoms.some(atom =>
+            !(atom.y + atom.height <= height * .15 || atom.y >= height * .85)
+            || images.some(image => atom.x < image.right && atom.x + atom.width > image.left
+                && atom.y < image.bottom && atom.y + atom.height > image.top))) return false;
+    }
+
+    const target = width * height * .5;
+    if (images.some(image => (image.right - image.left) * (image.bottom - image.top) >= target)) return true;
+    if (images.length < 2) return false;
+
+    // 扫描线配合区间覆盖计数，精确求图像并集；分块扫描件不要求单张图达到半页，重叠水印不会重复累加。
+    const ys = [...new Set(images.flatMap(image => [image.top, image.bottom]))].sort((a, b) => a - b);
+    const positions = new Map(ys.map((y, index) => [y, index]));
+    const events = images.flatMap(image => [
+        {x: image.left, from: positions.get(image.top)!, to: positions.get(image.bottom)!, delta: 1},
+        {x: image.right, from: positions.get(image.top)!, to: positions.get(image.bottom)!, delta: -1},
+    ]).sort((a, b) => a.x - b.x);
+    const counts = new Int32Array(ys.length * 4), lengths = new Float64Array(ys.length * 4);
+    const update = (node: number, left: number, right: number, from: number, to: number, delta: number): void => {
+        if (from <= left && right <= to) counts[node] += delta;
+        else {
+            const middle = (left + right) >>> 1;
+            if (from < middle) update(node * 2, left, middle, from, to, delta);
+            if (to > middle) update(node * 2 + 1, middle, right, from, to, delta);
+        }
+        lengths[node] = counts[node] > 0 ? ys[right] - ys[left] : right - left > 1 ? lengths[node * 2] + lengths[node * 2 + 1] : 0;
+    };
+    let area = 0, previous = events[0].x;
+    for (const event of events) {
+        area += (event.x - previous) * lengths[1];
+        if (area >= target) return true;
+        update(1, 0, ys.length - 1, event.from, event.to, event.delta);
+        previous = event.x;
+    }
+    return false;
+}
+
+/** PDF.js 6 FontPathInfo.path 按 DrawOPS 交错操作码和绝对坐标；只读取有限的包围盒数据。 */
+function pdfGlyphYBounds(outline: unknown): readonly [number, number] | undefined {
+    if (typeof outline !== 'object' || !outline || !('path' in outline)) return;
+    const path = outline.path;
+    if (!ArrayBuffer.isView(path) || !('length' in path)) return;
+    const points = path as unknown as ArrayLike<number>;
+    if (points.length > 4096 || points[0] !== 0) return; // moveTo
+    const coordinateCounts = [2, 2, 6, 4, 0]; // moveTo, lineTo, curveTo, quadraticCurveTo, closePath
+    let low = Infinity, high = -Infinity;
+    for (let index = 0; index < points.length;) {
+        const count = coordinateCounts[points[index++]];
+        if (count === undefined || index + count > points.length) return;
+        for (const end = index + count; index < end; index += 2) {
+            const x = points[index], y = points[index + 1];
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+            low = Math.min(low, y);
+            high = Math.max(high, y);
+        }
+    }
+    if (low >= -4 && high <= 4 && high > low) return [low, high];
+}
+
+/** 解析阶段本已禁用 FontFace；复用 PDF.js 已加载的数学分隔符、括号组件和重音轮廓，不保留额外字库或解析普通字体。 */
+function pdfMathGlyphStyles(items: readonly PdfTextItem[], styles: Record<string, PdfTextStyle>,
+    operators: {fnArray: readonly number[]; argsArray: readonly any[]}, ops: Record<string, number>,
+    objects?: {has(key: string): boolean; get(key: string): any}): Record<string, PdfTextStyle> {
+    if (!objects) return styles;
+    const requested = new Map<string, Set<string>>();
+    for (const item of items) {
+        const matrix = item.transform as number[];
+        const style = styles[item.fontName];
+        if (style?.vertical) continue;
+        if (!/^[⎛⎜⎝⎞⎟⎠⎡⎢⎣⎤⎥⎦⎧⎨⎩⎫⎬⎭→^\s]+$/u.test(item.str)
+            && !(style && (style.ascent ?? 0) - (style.descent ?? 0) >= 1.25 && MATH_GLYPH_TOKEN.test(item.str))
+            && (!/^[|¦∥()[\]{}=+\-−\s]+$/u.test(item.str) || Math.hypot(matrix[2], matrix[3]) <= Math.hypot(matrix[0], matrix[1]) * 1.4)) continue;
+        let characters = requested.get(item.fontName);
+        if (!characters) requested.set(item.fontName, characters = new Set());
+        for (const character of item.str.replace(/\s/gu, '')) characters.add(character);
+    }
+    if (!requested.size) return styles;
+    const result = {...styles};
+    const boundsByFont = new Map<string, Map<string, readonly [number, number]>>();
+    const visited = new Set<string>();
+    const unsupported = new Map<string, Set<string>>();
+    const fontStack: string[] = [];
+    let font = '';
+    for (let index = 0; index < operators.fnArray.length; index++) {
+        const args = operators.argsArray[index];
+        if (operators.fnArray[index] === ops.save || operators.fnArray[index] === ops.paintFormXObjectBegin) {fontStack.push(font); continue;}
+        if (operators.fnArray[index] === ops.restore || operators.fnArray[index] === ops.paintFormXObjectEnd) {font = fontStack.pop() ?? font; continue;}
+        if (operators.fnArray[index] === ops.setFont) {font = args[0]; continue;}
+        if (operators.fnArray[index] !== ops.showText || !requested.has(font)) continue;
+        for (const glyph of args[0]) {
+            if (!glyph || typeof glyph.unicode !== 'string') continue;
+            if (glyph.accent || glyph.vmetric || Array.from(glyph.unicode).length !== 1) {
+                let characters = unsupported.get(font);
+                if (!characters) unsupported.set(font, characters = new Set());
+                for (const character of glyph.unicode) characters.add(character);
+                continue;
+            }
+            if (!requested.get(font)!.has(glyph.unicode)) continue;
+            const id = `${font}_path_${glyph.fontChar}`;
+            if (visited.has(id)) continue;
+            visited.add(id);
+            try {
+                if (!objects.has(id)) continue;
+                const limits = pdfGlyphYBounds(objects.get(id));
+                if (!limits) continue;
+                const [low, high] = limits;
+                let bounds = boundsByFont.get(font);
+                if (!bounds) {boundsByFont.set(font, bounds = new Map()); result[font] = {...styles[font], glyphBounds: bounds};}
+                const previous = bounds.get(glyph.unicode);
+                // 同一 Unicode 可映射多种字体字形；取并集，不能只按首个较小字形裁切后续变体。
+                bounds.set(glyph.unicode, previous ? [Math.min(previous[0], low), Math.max(previous[1], high)] : [low, high]);
+            } catch { /* 缺失或不可读轮廓保持原字体边界，不能使整页导入失败。 */ }
+        }
+    }
+    // 未解析组合重音位移、竖排指标及连字映射时，整项回退原字体范围，不能借其它同Unicode轮廓代替。
+    for (const [font, characters] of unsupported) for (const character of characters) boundsByFont.get(font)?.delete(character);
+    return result;
+}
+
 async function parsePdf(fileName: string, bytes: Uint8Array, signal?: AbortSignal, onProgress?: ParseDocumentFileOptions['onPdfProgress']): Promise<ParsedDocument> {
     if (new TextDecoder('latin1').decode(bytes.slice(0, 5)) !== '%PDF-') {
         throw new Error('PDF 文件签名无效，文件可能已损坏或扩展名不正确');
@@ -636,20 +841,21 @@ async function parsePdf(fileName: string, bytes: Uint8Array, signal?: AbortSigna
 
     const segments: DocumentSegment[] = [];
     const pages: PdfDocumentPage[] = [];
-    const pdfAssetRoot = typeof window !== 'undefined' ? `${window.location.origin}/pdfjs` : '';
+    const {assetRoot: pdfAssetRoot, workerUrl} = getPdfResources();
     const pdfJs = await import('pdfjs-dist/legacy/build/pdf.mjs');
     const {getDocument: getPdfDocument, GlobalWorkerOptions} = pdfJs;
     signal?.throwIfAborted();
-    if (typeof window !== 'undefined') GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+    if (typeof window !== 'undefined') GlobalWorkerOptions.workerSrc = workerUrl;
     const loadingTask = getPdfDocument({
         data: new Uint8Array(bytes),
         disableFontFace: true,
-        isEvalSupported: false,
+        disableWorkerRendering: true,
         useWorkerFetch: false,
         ...(pdfAssetRoot ? {
             cMapPacked: true,
             cMapUrl: `${pdfAssetRoot}/cmaps/`,
             standardFontDataUrl: `${pdfAssetRoot}/standard_fonts/`,
+            wasmUrl: `${pdfAssetRoot}/wasm/`,
         } : {}),
     });
 
@@ -667,19 +873,19 @@ async function parsePdf(fileName: string, bytes: Uint8Array, signal?: AbortSigna
             try {
                 signal?.throwIfAborted();
                 const displayViewport = page.getViewport({scale: 1});
-                const rotation = (((displayViewport.rotation || 0) % 360 + 360) % 360) as NonNullable<PdfDocumentPage['rotation']>;
                 // /Rotate 是页面展示元数据，不能让原本横排的正文被竖排过滤器误删。
-                const viewport = rotation ? page.getViewport({scale: 1, rotation: 0}) : displayViewport;
                 const textContent = await awaitDocumentRead(page.getTextContent(), signal);
                 signal?.throwIfAborted();
-                const atoms = pdfTextAtoms(
-                    textContent.items.filter((item): item is PdfTextItem => 'str' in item),
-                    textContent.styles as Record<string, PdfTextStyle>,
-                    viewport,
-                    true,
-                ) as PdfLayoutAtom[];
-                const graphics = typeof page.getOperatorList === 'function'
-                    ? extractPdfGraphicsShapes(await awaitDocumentRead(page.getOperatorList(), signal), pdfJs.OPS, viewport) : [];
+                const items = textContent.items.filter((item): item is PdfTextItem => 'str' in item);
+                const operators = typeof page.getOperatorList === 'function' ? await awaitDocumentRead(page.getOperatorList(), signal) : undefined;
+                const styles = operators ? pdfMathGlyphStyles(items, textContent.styles as Record<string, PdfTextStyle>, operators, pdfJs.OPS, page.commonObjs) : textContent.styles as Record<string, PdfTextStyle>;
+                const {viewport, atoms, ...orientation} = pdfPageTextGeometry(
+                    items,
+                    styles,
+                    displayViewport,
+                    displayViewport.rotation ? page.getViewport({scale: 1, rotation: 0}) : displayViewport,
+                );
+                const graphics = operators ? extractPdfGraphicsShapes(operators, pdfJs.OPS, viewport) : [];
                 signal?.throwIfAborted();
                 const {blocks: layoutBlocks, preservedRegions} = analyzePdfPageLayout({atoms, graphics, width: viewport.width, height: viewport.height});
                 const {blocks, segmentIndexes} = pdfPageSegments(layoutBlocks, pageNumber, segments);
@@ -687,14 +893,14 @@ async function parsePdf(fileName: string, bytes: Uint8Array, signal?: AbortSigna
                     pageNumber,
                     width: displayViewport.width,
                     height: displayViewport.height,
-                    ...(rotation ? {rotation} : {}),
+                    ...orientation,
                     segmentIndexes,
                     blocks,
                     preservedRegions,
                     layoutBoundaries: graphics.filter(shape => shape.kind === 'path' &&
                         (shape.width >= 12 && shape.height <= 5 || shape.height >= 12 && shape.width <= 5)),
-                    // 没有任何文字、且有一张图像盖住半页以上：这是扫描页。空白页和只有矢量图形的页不算。
-                    ...(atoms.length === 0 && graphics.some(shape => shape.kind === 'image' && shape.width * shape.height >= viewport.width * viewport.height * 0.5) ? {scanned: true} : {}),
+                    // 至少半页的图像并集，且没有原生正文（容许独立页码及图像外少量边缘文字）；空白页与正文配图不算扫描页。
+                    ...(isScannedPdfPage(atoms, layoutBlocks, graphics, viewport.width, viewport.height) ? {scanned: true} : {}),
                 });
                 onProgress?.({completed: pageNumber, total: pdf.numPages});
             } finally {
@@ -750,6 +956,29 @@ export function chapterTitle(source: string, fallback: string): string {
     return title || fallback;
 }
 
+interface EpubManifestItem {path: string; mediaType: string; properties: string[]}
+
+async function readEpubPackage(zip: JSZip, container: JSZip.JSZipObject, signal?: AbortSignal) {
+    const containerXml = await readArchiveText(container, signal);
+    const rootfileMatch = containerXml.match(/<rootfile\b([^>]*)\/?\s*>/iu);
+    const opfPath = rootfileMatch ? parseXmlAttributes(rootfileMatch[1])['full-path'] : '';
+    if (!opfPath || !zip.file(opfPath)) return undefined;
+
+    const opfXml = await readArchiveText(zip.file(opfPath)!, signal);
+    const manifest = new Map<string, EpubManifestItem>();
+    for (const [, item] of opfXml.matchAll(/<item\b([^>]*)\/?\s*>/giu)) {
+        const attributes = parseXmlAttributes(item);
+        if (attributes.id && attributes.href) {
+            manifest.set(attributes.id, {
+                path: resolveZipPath(opfPath, attributes.href),
+                mediaType: attributes['media-type'] || '',
+                properties: (attributes.properties || '').split(/\s+/u),
+            });
+        }
+    }
+    return {opfXml, manifest};
+}
+
 async function parseEpub(fileName: string, bytes: Uint8Array, signal?: AbortSignal): Promise<ParsedDocument> {
     let zip: JSZip;
     try {
@@ -772,27 +1001,9 @@ async function parseEpub(fileName: string, bytes: Uint8Array, signal?: AbortSign
         throw new Error('ePub 文件签名无效，文件可能已损坏或扩展名不正确');
     }
 
-    const containerXml = await readArchiveText(containerEntry, signal);
-    const rootfileMatch = containerXml.match(/<rootfile\b([^>]*)\/?\s*>/iu);
-    const opfPath = rootfileMatch ? parseXmlAttributes(rootfileMatch[1])['full-path'] : '';
-    if (!opfPath || !zip.file(opfPath)) {
-        throw new Error('ePub 文件结构无效：找不到内容清单 OPF');
-    }
-
-    const opfXml = await readArchiveText(zip.file(opfPath)!, signal);
-    const manifest = new Map<string, {path: string; mediaType: string}>();
-    const itemPattern = /<item\b([^>]*)\/?\s*>/giu;
-    let itemMatch = itemPattern.exec(opfXml);
-    while (itemMatch) {
-        const attributes = parseXmlAttributes(itemMatch[1]);
-        if (attributes.id && attributes.href) {
-            manifest.set(attributes.id, {
-                path: resolveZipPath(opfPath, attributes.href),
-                mediaType: attributes['media-type'] || '',
-            });
-        }
-        itemMatch = itemPattern.exec(opfXml);
-    }
+    const epub = await readEpubPackage(zip, containerEntry, signal);
+    if (!epub) throw new Error('ePub 文件结构无效：找不到内容清单 OPF');
+    const {opfXml, manifest} = epub;
 
     const orderedChapters: Array<{path: string; mediaType: string}> = [];
     const itemrefPattern = /<itemref\b([^>]*)\/?\s*>/giu;
@@ -887,6 +1098,7 @@ async function parseDocx(fileName: string, bytes: Uint8Array, signal?: AbortSign
     if (!zip.file('[Content_Types].xml') || !zip.file('word/document.xml')) {
         throw new Error('DOCX 文件结构无效，文件可能已损坏或扩展名不正确');
     }
+    const {analyzeDocxInlineParagraph} = await import('../core/docxInline');
 
     const partPaths = Object.keys(zip.files)
         .filter((path) => /^word\/(?:document|header\d+|footer\d+|footnotes|endnotes)\.xml$/u.test(path))
@@ -915,7 +1127,8 @@ async function parseDocx(fileName: string, bytes: Uint8Array, signal?: AbortSign
         DOCX_PARAGRAPH_PATTERN.lastIndex = 0;
         let paragraphMatch = DOCX_PARAGRAPH_PATTERN.exec(source);
         while (paragraphMatch) {
-            const text = docxParagraphText(paragraphMatch[0]);
+            const inline = analyzeDocxInlineParagraph(paragraphMatch[0]);
+            const text = inline.kind === 'free' ? inline.source : docxParagraphText(paragraphMatch[0]);
             if (text) {
                 const segmentIndex = segments.length;
                 segments.push({
@@ -924,6 +1137,7 @@ async function parseDocx(fileName: string, bytes: Uint8Array, signal?: AbortSign
                     contextLabel: partSegmentIndex === 0 ? docxPartTitle(path) : undefined,
                     pathLabel: docxPartTitle(path),
                     role: docxParagraphRole(paragraphMatch[0], path),
+                    ...(inline.kind === 'free' && inline.spans.length ? {docxInline: true as const} : {}),
                 });
                 const table = tableAt(paragraphMatch.index);
                 paragraphSegments.push({paragraphIndex, segmentIndex, ...(table ? {table} : {})});
@@ -942,7 +1156,7 @@ async function parseDocx(fileName: string, bytes: Uint8Array, signal?: AbortSign
         label: getDocumentFormatLabel('docx'),
         parts: [],
         segments,
-        binary: {kind: 'docx', bytes, parts},
+        binary: {kind: 'docx', bytes, parts, inlineFormatting: true},
     };
 }
 
@@ -968,10 +1182,27 @@ export async function parseDocumentFile(file: DocumentFileLike, options: ParseDo
     }
     if (file.size !== undefined) assertDocumentSize(file.size, file.name);
     if (isBinaryDocumentFormat(format)) return parseBinaryDocument(file.name, await awaitDocumentRead(file.arrayBuffer(), options.signal), options);
-    const source = await awaitDocumentRead(file.text(), options.signal);
+    // 原生 File.text() 固定按 UTF-8 解码，读不到旧字幕和笔记的 UTF-16 BOM。已有文本适配器继续提供解码后的字符串。
+    const input = file instanceof Blob
+        ? await awaitDocumentRead(file.arrayBuffer(), options.signal)
+        : await awaitDocumentRead(file.text(), options.signal);
     options.signal?.throwIfAborted();
-    assertDocumentSize(source.length, file.name);
-    assertDocumentSize(new TextEncoder().encode(source).byteLength, file.name);
+    let source: string;
+    if (typeof input === 'string') {
+        source = input;
+        assertDocumentSize(source.length, file.name);
+        assertDocumentSize(new TextEncoder().encode(source).byteLength, file.name);
+    } else {
+        assertDocumentSize(input.byteLength, file.name);
+        const [first, second] = new Uint8Array(input, 0, Math.min(2, input.byteLength));
+        const encoding = first === 0xff && second === 0xfe ? 'utf-16le'
+            : first === 0xfe && second === 0xff ? 'utf-16be' : 'utf-8';
+        try {
+            source = new TextDecoder(encoding, {fatal: true, ignoreBOM: format === 'csv' || format === 'tsv'}).decode(input);
+        } catch (error) {
+            throw new Error('文件编码无效，请另存为 UTF-8 后重试', {cause: error});
+        }
+    }
     // 文档翻译页面按整句翻译 Markdown：一句话不会被行内链接和代码拆散。
     return parseDocument(file.name, source, {markdownSentences: true});
 }
@@ -984,7 +1215,8 @@ async function renderPdf(
     options: CreateDocumentDownloadOptions,
 ): Promise<Uint8Array> {
     const binary = document.binary as Extract<NonNullable<ParsedDocument['binary']>, {kind: 'pdf'}>;
-    const {PDFDocument, PDFHexString, degrees, rgb} = await import('pdf-lib');
+    const {PDFDocument, PDFDict, EncryptedPDFError, PDFHexString, PDFString, PDFName, degrees, rgb, pushGraphicsState, popGraphicsState,
+        concatTransformationMatrix, setTextRenderingMode, TextRenderingMode, beginText, endText, setFontAndSize, showText} = await import('pdf-lib');
     options.signal?.throwIfAborted();
     const outputPdf = await PDFDocument.create();
     outputPdf.setTitle(`${document.fileName} - FluentRead`);
@@ -1014,11 +1246,24 @@ async function renderPdf(
     // 默认下载与原版对照阅读一致，一张原页对应一张译页；重排续页仅供显式阅读导出端口使用。
     const readingExport = Boolean((options.pdfReadingRenderer || options.pdfReadingRasterizer)
         && (options.pdfPresentation === 'readable' || !options.pdfPageRasterizer));
+    // 标准 PDF 页标签把新增续页与原文页关联；查看器导航与外部验收都无需猜测插页后的物理页码。
+    const layoutPageLabels: Array<number | PDFDict> = [];
+    const labelLayoutPage = (label: string) => layoutPageLabels.push(outputPdf.getPageCount() - 1, outputPdf.context.obj({P: PDFHexString.fromText(label)}));
     const changedPages = binary.pages.map(page => page.segmentIndexes.some(segmentIndex =>
         hasDistinctTranslation(document.segments[segmentIndex]?.source ?? '', translations[segmentIndex])));
-    if (mode === 'bilingual' || changedPages.some(changed => !changed)) {
-        const sourcePdf = await awaitDocumentRead(PDFDocument.load(binary.bytes), options.signal);
+    const needsSource = mode === 'bilingual' || changedPages.some(changed => !changed);
+    let sourcePdf: PDFDocument | undefined;
+    try {sourcePdf = await awaitDocumentRead(PDFDocument.load(binary.bytes), options.signal);}
+    catch (error) {
         options.signal?.throwIfAborted();
+        // 纯译文光栅原本无需 pdf-lib 读取原页；已由 PDF.js 打开的受保护文件不能因可选目录提取而失去下载能力。
+        // 锁定的 pdf-lib 1.17.1 用 ES5 Error 继承，EncryptedPDFError 的 instanceof 不成立；只匹配该构造器的完整固定消息。
+        if (needsSource || !(error instanceof Error) || error.message !== new EncryptedPDFError().message) throw error;
+    }
+    options.signal?.throwIfAborted();
+    const {createPdfExportOutline} = await import('./pdfOutline');
+    const outline = createPdfExportOutline(sourcePdf, outputPdf, document, translations);
+    if (sourcePdf && needsSource) {
         const required = new Set(binary.pages.filter((_page, index) => mode === 'bilingual' || !changedPages[index]).map(page => page.pageNumber));
         const pages = sourcePdf.getPages().map((page, index) => ({page, pageNumber: index + 1}))
             .filter(({page, pageNumber}) => required.has(pageNumber) && page.node.Contents());
@@ -1071,7 +1316,8 @@ async function renderPdf(
                     candidates.push({x: pageData.width - 18, y, width: 14, height: 14}, {x: 4, y, width: 14, height: 14});
                 }
             }
-            let marker = candidates.find(candidate => ![...occupied, ...markers].some(other => intersects(candidate, other)));
+            let marker = candidates.find(candidate => !occupied.some(other => intersects(candidate, other))
+                && !markers.some(other => intersects(candidate, other)));
             const gutter = offsetX - pageData.width;
             if (!marker && gutter > 2) marker = candidates.map(candidate => ({x: -gutter + 1, y: candidate.y, width: Math.min(14, gutter - 2), height: 14}))
                 .find(candidate => !markers.some(other => intersects(candidate, other)));
@@ -1096,16 +1342,217 @@ async function renderPdf(
         hasDistinctTranslation(document.segments[segmentIndex]?.source ?? '', translation) ? translation : '');
     // 延迟到需要文字页时加载；没有变化的双语文档只复制原页，不准备字体。
     let readingFont: Awaited<ReturnType<typeof import('./pdfReadingFont')['embedPdfReadingFont']>> | undefined;
+    let readingFontLoadFailed = false;
+    let readingFontLoadError: unknown;
     const prepareReadingFont = async () => {
+        if (readingFontLoadFailed) throw readingFontLoadError;
         if (!readingFont) {
-            const {embedPdfReadingFont, loadPdfReadingFontBytes} = await import('./pdfReadingFont');
-            const bytes = await awaitDocumentRead((options.pdfFontLoader ?? loadPdfReadingFontBytes)(options.signal), options.signal);
+            try {
+                const {embedPdfReadingFont, loadPdfReadingFontBytes} = await import('./pdfReadingFont');
+                const bytes = await awaitDocumentRead((options.pdfFontLoader ?? loadPdfReadingFontBytes)(options.signal), options.signal);
+                options.signal?.throwIfAborted();
+                readingFont = await awaitDocumentRead(embedPdfReadingFont(outputPdf, bytes, options.signal), options.signal);
+                await yieldToBrowser();
+                options.signal?.throwIfAborted();
+            } catch (error) {
+                // 一份离线导出只尝试一次字体；后续原页直接复用 Canvas 降级，不能逐页重复等待全部 CDN。
+                readingFontLoadFailed = true;
+                readingFontLoadError = error;
+                throw error;
+            }
+        }
+        return readingFont;
+    };
+    // 光栅层已经承载真实字形；不可见层使用独立 ToUnicode 映射保全任何 Unicode，普通原版导出不必联网下载字体。
+    // 这个 CID 字体只能用于 Invisible 模式；可见全文续页仍使用经过字形校验的真实开放字体。
+    type SelectableFont = {font: ReturnType<typeof outputPdf.context.register>; unicode: ReturnType<typeof outputPdf.context.register>; descendant: ReturnType<typeof outputPdf.context.register>;
+        defaultWidth: number; characters: Map<string, number>; names: WeakMap<ReturnType<typeof outputPdf.addPage>, ReturnType<ReturnType<typeof outputPdf.addPage>['node']['newFontDictionary']>>};
+    const selectableFonts = new Map<boolean, SelectableFont>();
+    const fallbackText = (text: string, bidi = false) => {
+        let resource = selectableFonts.get(bidi);
+        if (!resource) {
+            const fontName = bidi ? 'FluentReadBidiSourceText' : 'FluentReadSourceText', defaultWidth = bidi ? 500 : 1000;
+            const unicode = outputPdf.context.register(outputPdf.context.flateStream(''));
+            const descriptor = outputPdf.context.register(outputPdf.context.obj({Type: 'FontDescriptor', FontName: fontName,
+                Flags: 4, FontBBox: [0, -200, 1000, 900], ItalicAngle: 0, Ascent: 900, Descent: -200, CapHeight: 700, StemV: 80}));
+            const descendant = outputPdf.context.register(outputPdf.context.obj({Type: 'Font', Subtype: 'CIDFontType2', BaseFont: fontName,
+                CIDSystemInfo: {Registry: PDFString.of('Adobe'), Ordering: PDFString.of('Identity'), Supplement: 0}, FontDescriptor: descriptor, CIDToGIDMap: 'Identity', DW: defaultWidth}));
+            const font = outputPdf.context.register(outputPdf.context.obj({Type: 'Font', Subtype: 'Type0', BaseFont: fontName,
+                Encoding: 'Identity-H', DescendantFonts: [descendant], ToUnicode: unicode}));
+            resource = {font, unicode, descendant, defaultWidth, characters: new Map(), names: new WeakMap()}; selectableFonts.set(bidi, resource);
+        }
+        let hex = '';
+        // PDF.js 会过滤独立 Cf 字形；将连接符等格式字符与相邻字符放入同一个 CID，保全组合表情及文字语义。
+        for (const character of text.match(/\p{Cf}*[\s\S]\p{Cf}*/gu)!) {
+            let code = resource.characters.get(character);
+            if (code === undefined) {
+                if (resource.characters.size >= 65_535) throw new Error('PDF 原文包含过多独立字形，无法保全搜索文字');
+                code = resource.characters.size + 1; resource.characters.set(character, code);
+            }
+            hex += code.toString(16).padStart(4, '0');
+        }
+        return {encoded: PDFHexString.of(hex), resource};
+    };
+    const validRasterTextItem = (item: PdfRasterTextItem, width: number, height: number) => typeof item.text === 'string' && Boolean(item.text.trim())
+        && [item.x, item.y, item.width, item.fontSize].every(Number.isFinite) && item.width > 0 && item.fontSize > 0
+        && item.x >= 0 && item.y >= 0 && item.x < width && item.y < height;
+    const drawSelectableLayout = async (target: ReturnType<typeof outputPdf.addPage>, pageData: PdfDocumentPage, painted: PdfRasterTextItem[], offsetX: number) => {
+        const rotation = pageData.rotation ?? 0;
+        const contentHeight = rotation === 90 || rotation === 270 ? pageData.width : pageData.height;
+        const contentWidth = rotation === 90 || rotation === 270 ? pageData.height : pageData.width;
+        const validPainted = painted.filter(item => validRasterTextItem(item, contentWidth, contentHeight));
+        // 只排除光栅端口实际擦除并绘制过的源块；非法几何或无绘制行的块仍保留原字符。
+        const paintedBySegment = new Map<number, PdfRasterTextItem[]>();
+        for (const item of validPainted) {
+            const lines = paintedBySegment.get(item.segmentIndex);
+            if (lines) lines.push(item); else paintedBySegment.set(item.segmentIndex, [item]);
+        }
+        const ordered = pageData.blocks.map((block, index) => {
+            const translated = block.segmentIndex >= 0 ? paintedBySegment.get(block.segmentIndex) : undefined;
+            const source = document.segments[block.segmentIndex]?.source ?? block.source ?? '';
+            const sourceItems: PdfRasterTextItem[] = (block.lines?.length ? block.lines : [{...block, text: source}])
+                .map(line => ({segmentIndex: block.segmentIndex, text: line.text, x: line.x, y: line.y, width: line.width, fontSize: line.fontSize ?? block.fontSize}));
+            return {order: block.readingOrder ?? index, items: translated ?? sourceItems};
+        }).sort((left, right) => left.order - right.order).flatMap(value => value.items);
+        const knownIndexes = new Set(pageData.blocks.map(block => block.segmentIndex));
+        ordered.push(...validPainted.filter(item => !knownIndexes.has(item.segmentIndex)));
+        let processed = 0;
+        for (const item of ordered) {
             options.signal?.throwIfAborted();
-            readingFont = await awaitDocumentRead(embedPdfReadingFont(outputPdf, bytes, options.signal), options.signal);
+            if (!validRasterTextItem(item, contentWidth, contentHeight)) continue;
+            const text = item.text.replace(/[\r\n\t]/gu, ' ');
+            // CID 字形为 1pt 计量；分别缩放行宽和行高，避免极端字号先乘字符数而溢出。
+            const candidate = item.direction && paintedBySegment.get(item.segmentIndex)?.length === 1
+                ? pdfFallbackBidiLine(item.text, visibleTranslations[item.segmentIndex] ?? '') : undefined;
+            const baseScale = item.width / Array.from(text).length;
+            const bidi = candidate?.direction === item.direction && candidate && Number.isFinite(baseScale / candidate.advance) ? candidate : undefined;
+            // 新半 em 字宽与 X 轴逆缩放共同保留原有均匀槽起点及总 advance；不声称真实 Canvas 逐字形几何。
+            const scale = baseScale / (bidi?.advance ?? 1);
+            const baseline = contentHeight - item.y - item.fontSize * 0.9;
+            // 先将该行的真实左上角映射到旋转后的页，再沿行方向精确匹配光栅绘制宽度。
+            const matrix = rotation === 90 ? [0, -scale, item.fontSize, 0, offsetX + baseline, pageData.height - item.x]
+                : rotation === 180 ? [-scale, 0, 0, -item.fontSize, offsetX + pageData.width - item.x, pageData.height - baseline]
+                    : rotation === 270 ? [0, scale, -item.fontSize, 0, offsetX + pageData.width - baseline, item.x]
+                        : [scale, 0, 0, item.fontSize, offsetX + item.x, baseline];
+            target.pushOperators(pushGraphicsState(), concatTransformationMatrix(...matrix as [number, number, number, number, number, number]),
+                setTextRenderingMode(TextRenderingMode.Invisible));
+            const {encoded, resource} = fallbackText(bidi?.visualText ?? text, Boolean(bidi));
+            let name = resource.names.get(target);
+            if (!name) {name = target.node.newFontDictionary(bidi ? 'FluentReadBidiSourceText' : 'FluentReadSourceText', resource.font); resource.names.set(target, name);}
+            target.pushOperators(beginText(), setFontAndSize(name, 1), showText(encoded), endText());
+            target.pushOperators(popGraphicsState());
+            if (++processed % 32 === 0) {await yieldToBrowser(); options.signal?.throwIfAborted();}
+        }
+    };
+    const readingRegionText = (pageData: PdfDocumentPage, items: PdfReadingOutputPage['items']): PdfRasterTextItem[] => {
+        const sourceRuns = pageData.blocks.map((block, index) => ({block, order: block.readingOrder ?? index}))
+            .sort((left, right) => left.order - right.order).flatMap(({block}) => (block.lines?.length
+            ? block.lines.flatMap(line => (line.runs?.length ? line.runs : [line]).map(run => ({...run, fontSize: run.fontSize ?? line.fontSize ?? block.fontSize})))
+            : [{...block, text: document.segments[block.segmentIndex]?.source ?? block.source ?? ''}])
+            .map(run => ({...run, segmentIndex: block.segmentIndex})));
+        const projected: PdfRasterTextItem[] = [];
+        for (const item of items) {
+            if (item.kind !== 'region') continue;
+            const rect = item.sourceRect;
+            if (!(rect.width > 0) || !(rect.height > 0)) continue;
+            const scaleX = item.width / rect.width, scaleY = item.height / rect.height;
+            for (const run of sourceRuns) {
+                if (!run.text || ![run.x, run.y, run.width, run.height, run.fontSize].every(Number.isFinite) || run.width <= 0 || run.height <= 0) continue;
+                // 一个字形只归属于包含其中心的条带；跨页边界采用半开区间，既不重复也不丢掉压线文字。
+                const centerY = run.y + run.height / 2;
+                if (centerY < rect.y || centerY >= rect.y + rect.height) continue;
+                const characters = Array.from(run.text), advance = run.width / characters.length;
+                const selected = characters.map((text, index) => ({text, index})).filter(({index}) => {
+                    const centerX = run.x + (index + 0.5) * advance;
+                    return centerX >= rect.x && centerX < rect.x + rect.width;
+                });
+                if (!selected.length) continue;
+                projected.push({segmentIndex: run.segmentIndex, text: selected.map(value => value.text).join(''),
+                    x: item.x + (run.x + selected[0].index * advance - rect.x) * scaleX,
+                    y: item.y + (run.y - rect.y) * scaleY,
+                    width: selected.length * advance * scaleX, fontSize: run.fontSize * scaleY});
+            }
+        }
+        return projected;
+    };
+    const addReadingReturnLink = (page: ReturnType<typeof outputPdf.addPage>, source: ReturnType<typeof outputPdf.addPage>, width: number) =>
+        page.node.addAnnot(outputPdf.context.register(outputPdf.context.obj({Type: 'Annot', Subtype: 'Link',
+            Rect: [42, 17, 42 + width, 31], Border: [0, 0, 0], Dest: [source.ref, PDFName.of('Fit')]})));
+    const appendRasterReadingPages = async (pageData: PdfDocumentPage, plan: PdfReadingPlan,
+        settings: {requireText?: boolean; footerLabel?: string; layoutPage?: ReturnType<typeof outputPdf.addPage>} = {}) => {
+        let generatedPages = 0;
+        for await (const rendered of options.pdfReadingRasterizer!({...pageData, sourceBytes: binary.bytes, translations: visibleTranslations,
+            signal: options.signal, plan, imageFormat: 'png', footerLabel: settings.footerLabel})) {
+            options.signal?.throwIfAborted();
+            const text = [...(rendered.textItems ?? []), ...readingRegionText(pageData, rendered.items ?? [])];
+            if (settings.requireText) {
+                const reported = (rendered.textItems ?? []).filter(item => validRasterTextItem(item, rendered.width, rendered.height));
+                const missingText = rendered.items?.some(item => item.kind === 'text' && item.text.trim()
+                    && !reported.some(value => value.text === item.text));
+                // 完整公式/插图可以独占一页且没有字符；只有真实阅读计划中的有效原图条带才能作为纯图页。
+                const imageOnly = rendered.items?.some(item => item.kind === 'region' && item.width > 0 && item.height > 0
+                    && item.sourceRect.width > 0 && item.sourceRect.height > 0 && plan.entries.some(entry => entry.kind === 'region'
+                        && item.sourceRect.x >= entry.sourceRect.x - 0.000001 && item.sourceRect.y >= entry.sourceRect.y - 0.000001
+                        && item.sourceRect.x + item.sourceRect.width <= entry.sourceRect.x + entry.sourceRect.width + 0.000001
+                        && item.sourceRect.y + item.sourceRect.height <= entry.sourceRect.y + entry.sourceRect.height + 0.000001));
+                if (missingText || (!reported.some(item => item.text.trim()) && !imageOnly)) throw new Error('PDF 续页光栅端口未提供可搜索文字，已停止不完整导出');
+            }
+            const image = await embedImage(rendered.bytes, rendered.format);
+            const page = outputPdf.addPage([rendered.width, rendered.height]);
+            if (!settings.layoutPage) outline.readingPage(pageData, page, rendered.items?.filter(item => item.kind === 'text') ?? rendered.textItems ?? []);
+            if (settings.layoutPage) labelLayoutPage(`${pageData.pageNumber} · 译文续页 ${generatedPages + 1}`);
+            page.drawImage(image, {x: 0, y: 0, width: rendered.width, height: rendered.height});
+            if (text.length) await drawSelectableLayout(page, {...pageData, rotation: 0, width: rendered.width, height: rendered.height, blocks: []}, text, 0);
+            if (settings.layoutPage) addReadingReturnLink(page, settings.layoutPage, rendered.width - 84);
+            generatedPages += 1;
             await yieldToBrowser();
             options.signal?.throwIfAborted();
         }
-        return readingFont;
+        if (settings.requireText && !generatedPages) throw new Error('PDF 光栅端口没有生成完整译文续页，已停止不完整导出');
+    };
+    const appendOverflowPages = async (pageData: PdfDocumentPage, notes: PdfOverflowNote[], layoutPage: ReturnType<typeof outputPdf.addPage>) => {
+        const entries: PdfReadingTextEntry[] = [];
+        const seen = new Set<number>();
+        for (const note of notes) {
+            if (seen.has(note.segmentIndex)) continue;
+            seen.add(note.segmentIndex);
+            const ordinal = pageData.blocks.findIndex(block => block.segmentIndex === note.segmentIndex) + 1;
+            const sourceRect = {x: note.x, y: note.y, width: note.width, height: note.height};
+            for (const [suffix, text, role] of [['heading', `第 ${pageData.pageNumber} 页 · 段落 ${ordinal || note.segmentIndex + 1} · 完整译文`, 'heading'],
+                ['body', note.text, 'paragraph']] as const) {
+                entries.push({kind: 'text', id: `overflow-${pageData.pageNumber}-${note.segmentIndex}-${suffix}`, pageNumber: pageData.pageNumber,
+                    segmentIndex: note.segmentIndex, role, source: '', text, translated: true, sourceRect});
+            }
+        }
+        const plan: PdfReadingPlan = {pageNumber: pageData.pageNumber, entries, hasTranslation: true};
+        let embedded: Awaited<ReturnType<typeof prepareReadingFont>>;
+        try {
+            embedded = await prepareReadingFont();
+            for (const entry of entries) await embedded.prepareText(entry.text);
+        } catch (error) {
+            options.signal?.throwIfAborted();
+            if (!options.pdfReadingRasterizer) throw error;
+            // 操作系统 Canvas 保持缺字的可见外观；逐页图像仍加 CID 文字层，不让 emoji 或字体离线丢掉整份下载。
+            await appendRasterReadingPages(pageData, plan, {requireText: true, layoutPage, footerLabel: `原文第 ${pageData.pageNumber} 页 · 译文续页`});
+            return;
+        }
+        const pages = paginatePdfReadingPlan(plan, (text, font) => embedded.measureText(text.replace(/\t/gu, ' '), font.size),
+            {compactLastPage: true});
+        for (const [index, rendered] of pages.entries()) {
+            options.signal?.throwIfAborted();
+            const page = outputPdf.addPage([rendered.width, rendered.height]);
+            labelLayoutPage(`${pageData.pageNumber} · 译文续页 ${index + 1}`);
+            // 此私有计划只含文字；分页器不为其产生区域或空行绘制项。
+            for (const item of rendered.items as Array<Extract<PdfReadingOutputPage['items'][number], {kind: 'text'}>>) embedded.drawText(page, item.text.replace(/\t/gu, ' '), {size: item.font.size,
+                x: item.x, y: rendered.height - item.y - embedded.font.heightAtSize(item.font.size, {descender: false}), color: rgb(0.094, 0.129, 0.184)});
+            const footer = `原文第 ${pageData.pageNumber} 页 · 译文续页 ${index + 1}/${pages.length}`;
+            await embedded.prepareText(footer);
+            embedded.drawText(page, footer, {size: 9, x: 42, y: 20, color: rgb(0.35, 0.4, 0.48)});
+            // 每张续页都可返回对应原版页；点击区域在正文之外，打印不覆盖任何段落。
+            addReadingReturnLink(page, layoutPage, embedded.measureText(footer, 9));
+            await yieldToBrowser();
+            options.signal?.throwIfAborted();
+        }
     };
     for (const [index, pageData] of binary.pages.entries()) {
         options.signal?.throwIfAborted();
@@ -1118,6 +1565,8 @@ async function renderPdf(
         const offsetX = mode === 'bilingual' && !readingExport ? pageData.width + gap : 0;
         if (!pageChanged) {
             const page = outputPdf.addPage([offsetX ? pageData.width * 2 + gap : pageData.width, pageData.height]);
+            outline.layoutPage(pageData, page, offsetX);
+            if (!readingExport) labelLayoutPage(String(pageData.pageNumber));
             if (source) drawSourcePage(page, source, pageData);
             if (source && offsetX) drawSourcePage(page, source, pageData, offsetX);
             options.onPdfProgress?.({phase: 'rendering', completedPages: index + 1, totalPages});
@@ -1139,13 +1588,24 @@ async function renderPdf(
             }
             const plan = buildPdfReadingPlan(document, pageData, translations);
             if (options.pdfReadingRenderer) {
-                const embedded = await prepareReadingFont();
-                for (const entry of plan.entries) if (entry.kind === 'text') await embedded.prepareText(entry.text);
+                let embedded: Awaited<ReturnType<typeof prepareReadingFont>>;
+                try {
+                    embedded = await prepareReadingFont();
+                    for (const entry of plan.entries) if (entry.kind === 'text') await embedded.prepareText(entry.text);
+                } catch (error) {
+                    options.signal?.throwIfAborted();
+                    if (!options.pdfReadingRasterizer) throw error;
+                    await appendRasterReadingPages(pageData, plan, {requireText: true});
+                    options.onPdfProgress?.({phase: 'rendering', completedPages: index + 1, totalPages});
+                    await yieldToBrowser();
+                    continue;
+                }
                 for await (const rendered of options.pdfReadingRenderer({...rasterInput, plan,
                     measureText: (text, font) => embedded.measureText(text.replace(/\t/gu, ' '), font.size),
                 })) {
                     options.signal?.throwIfAborted();
                     const page = outputPdf.addPage([rendered.width, rendered.height]);
+                    outline.readingPage(pageData, page, rendered.items.filter(item => item.kind === 'text'));
                     if (rendered.regionImage) {
                         const image = await embedImage(rendered.regionImage, 'png');
                         page.drawImage(image, {x: 0, y: 0, width: rendered.width, height: rendered.height});
@@ -1157,6 +1617,8 @@ async function renderPdf(
                             color: rgb(0.094, 0.129, 0.184),
                         });
                     }
+                    const regionText = readingRegionText(pageData, rendered.items);
+                    if (regionText.length) await drawSelectableLayout(page, {...pageData, rotation: 0, width: rendered.width, height: rendered.height, blocks: []}, regionText, 0);
                     await yieldToBrowser();
                     options.signal?.throwIfAborted();
                 }
@@ -1164,12 +1626,7 @@ async function renderPdf(
                 await yieldToBrowser();
                 continue;
             }
-            for await (const rendered of options.pdfReadingRasterizer!({...rasterInput, plan})) {
-                options.signal?.throwIfAborted();
-                const image = await embedImage(rendered.bytes, rendered.format);
-                outputPdf.addPage([rendered.width, rendered.height]).drawImage(image, {x: 0, y: 0, width: rendered.width, height: rendered.height});
-                await yieldToBrowser();
-            }
+            await appendRasterReadingPages(pageData, plan);
             options.onPdfProgress?.({phase: 'rendering', completedPages: index + 1, totalPages});
             await yieldToBrowser();
             continue;
@@ -1178,9 +1635,15 @@ async function renderPdf(
         const encoded = rendered instanceof Uint8Array ? {data: rendered} : rendered;
         const image = await embedImage(encoded.data, 'format' in encoded ? encoded.format : undefined);
         const page = outputPdf.addPage([offsetX ? pageData.width * 2 + gap : pageData.width, pageData.height]);
+        outline.layoutPage(pageData, page, offsetX);
+        labelLayoutPage(String(pageData.pageNumber));
         if (source && mode === 'bilingual') drawSourcePage(page, source, pageData);
         page.drawImage(image, {x: offsetX, y: 0, width: pageData.width, height: pageData.height});
         if ('overflowNotes' in encoded && encoded.overflowNotes?.length) addOverflowNotes(page, pageData, encoded.overflowNotes, offsetX);
+        if ('textItems' in encoded && encoded.textItems) {
+            await drawSelectableLayout(page, pageData, encoded.textItems, offsetX);
+            if (encoded.overflowNotes?.length) await appendOverflowPages(pageData, encoded.overflowNotes, page);
+        }
         options.onPdfProgress?.({phase: 'rendering', completedPages: index + 1, totalPages});
         await yieldToBrowser();
     }
@@ -1188,6 +1651,23 @@ async function renderPdf(
     options.onPdfProgress?.({phase: 'saving', completedPages: totalPages, totalPages});
     await yieldToBrowser();
     options.signal?.throwIfAborted();
+    outline.write();
+    if (layoutPageLabels.length) outputPdf.catalog.set(PDFName.of('PageLabels'), outputPdf.context.obj({Nums: layoutPageLabels}));
+    for (const [bidi, {unicode, descendant, defaultWidth, characters}] of selectableFonts) {
+        // 合并 CID 仍使用原先每码点的 advance，避免修复复制文本时挪动搜索/选择的行几何。
+        const widths = [...characters].flatMap(([character, code]) => {
+            const length = Array.from(character).length;
+            return length > 1 ? [code, [defaultWidth * length]] : [];
+        });
+        if (widths.length) outputPdf.context.lookup(descendant, PDFDict).set(PDFName.of('W'), outputPdf.context.obj(widths));
+        const pairs = [...characters].map(([character, code]) => `<${code.toString(16).padStart(4, '0')}> <${PDFHexString.fromText(character).asString().slice(4)}>`);
+        const groups: string[] = [];
+        for (let index = 0; index < pairs.length; index += 100) {
+            const chunk = pairs.slice(index, index + 100);
+            groups.push(`${chunk.length} beginbfchar\n${chunk.join('\n')}\nendbfchar`);
+        }
+        outputPdf.context.assign(unicode, outputPdf.context.flateStream(`/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def\n/CMapName /${bidi ? 'FluentReadBidiSourceUnicode' : 'FluentReadSourceUnicode'} def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n${groups.join('\n')}\nendcmap\nCMapName currentdict /CMap defineresource pop\nend\nend`));
+    }
     const bytes = await awaitDocumentRead(outputPdf.save({useObjectStreams: true, objectsPerTick: 20}), options.signal);
     options.signal?.throwIfAborted();
     return bytes;
@@ -1200,7 +1680,39 @@ async function renderEpub(document: ParsedDocument, translations: readonly strin
     const zip = await awaitDocumentRead(JSZip.loadAsync(document.binary.bytes), options.signal);
     options.signal?.throwIfAborted();
     assertArchiveSafety(zip, 'ePub');
-    preserveStoredDocumentEntries(zip, document.binary.bytes, new Set(document.binary.chapters.map(chapter => chapter.path)));
+    const {readEpubHeadingTranslations, readEpubNavigation, renderEpubNavigation, resolveEpubNavigationTarget} = await import('../core/epubNavigation');
+    const container = zip.file('META-INF/container.xml');
+    const epub = container && await readEpubPackage(zip, container, options.signal);
+    const packageTag = epub?.opfXml.match(/<package\b([^>]*)>/iu);
+    const epub2 = packageTag && parseXmlAttributes(packageTag[1]).version === '2.0';
+    const navigation = new Map<string, {
+        source: string;
+        kind: EpubNavigationKind;
+        links: EpubNavigationEntry[];
+        targets: Array<EpubNavigationTarget | undefined>;
+        rendered?: string;
+    }>();
+    if (epub) {
+        const {opfXml, manifest} = epub;
+        const navFiles = [...manifest.values()]
+            .filter(item => item.mediaType === 'application/xhtml+xml' && item.properties.includes('nav'))
+            .map(item => ({path: item.path, kind: 'xhtml' as const}));
+        const spine = opfXml.match(/<spine\b([^>]*)>/iu);
+        const ncx = spine ? manifest.get(parseXmlAttributes(spine[1]).toc) : undefined;
+        for (const {path, kind} of [
+            ...navFiles,
+            ...(ncx?.mediaType === 'application/x-dtbncx+xml' ? [{path: ncx.path, kind: 'ncx' as const}] : []),
+        ]) {
+            const entry = zip.file(path);
+            if (!entry) continue;
+            const source = await readArchiveText(entry, options.signal);
+            const links = readEpubNavigation(source, kind);
+            if (links?.length) navigation.set(path, {source, kind, links, targets: links.map(link => resolveEpubNavigationTarget(path, link.href))});
+        }
+    }
+    const destinations = new Set([...navigation.values()].flatMap(file => file.targets.map(target => target?.path)));
+    const headings = new Map<string, Map<string, string>>();
+    const changedPaths = new Set<string>();
     for (const chapter of document.binary.chapters) {
         await yieldDocumentTask();
         options.signal?.throwIfAborted();
@@ -1208,8 +1720,28 @@ async function renderEpub(document: ParsedDocument, translations: readonly strin
         const chapterTranslations = translations.slice(chapter.segmentOffset, chapter.segmentOffset + chapter.segmentCount);
         // XHTML chapters must remain XML; do not rewrite literal source/script text while fixing generated line breaks.
         const xhtml = chapter.mediaType === 'application/xhtml+xml' || !chapter.mediaType && /xmlns\s*=\s*["']http:\/\/www\.w3\.org\/1999\/xhtml["']/iu.test(chapter.source);
-        zip.file(chapter.path, renderDocument(parsedChapter, chapterTranslations, mode, Infinity, {xhtml}));
+        const renderOptions = {xhtml: xhtml && epub2 ? 'epub2' as const : xhtml};
+        const rendered = renderDocument(parsedChapter, chapterTranslations, mode, Infinity, renderOptions);
+        const nav = navigation.get(chapter.path);
+        if (nav) nav.rendered = rendered;
+        headings.delete(chapter.path);
+        if (destinations.has(chapter.path) && parsedChapter.segments.some(({id, source}) => hasDistinctTranslation(source, chapterTranslations[id]))) {
+            const localized = mode === 'translated' ? rendered : renderDocument(parsedChapter, chapterTranslations, 'translated', Infinity, renderOptions);
+            headings.set(chapter.path, readEpubHeadingTranslations(chapter.source, localized));
+        }
+        zip.file(chapter.path, rendered);
+        changedPaths.add(chapter.path);
     }
+    for (const [path, {source, kind, links, targets, rendered = source}] of navigation) {
+        options.signal?.throwIfAborted();
+        const labels = targets.map(target => target && headings.get(target.path)?.get(target.fragment));
+        const updated = renderEpubNavigation(source, links, rendered, kind, mode, labels);
+        if (updated !== rendered) {
+            zip.file(path, updated);
+            changedPaths.add(path);
+        }
+    }
+    preserveStoredDocumentEntries(zip, document.binary.bytes, changedPaths);
     zip.file('mimetype', 'application/epub+zip', {compression: 'STORE'});
     // 更新文件不会改变 JSZip 的键顺序；EPUB 要求 mimetype 是第一条本地记录。
     const {mimetype, ...resources} = zip.files;
@@ -1223,7 +1755,7 @@ async function renderEpub(document: ParsedDocument, translations: readonly strin
 }
 
 export function docxTextNodes(value: string): string {
-    const tokens = value.replace(/\r\n?/gu, '\n').split(/(\n|\t)/u);
+    const tokens = value.replace(/[^\u0009\u000a\u000d\u0020-\ud7ff\ue000-\ufffd\u{10000}-\u{10ffff}]/gu, '').replace(/\r\n?/gu, '\n').split(/(\n|\t)/u);
     const content = tokens.map((token) => {
         if (token === '\n') return '<w:br/>';
         if (token === '\t') return '<w:tab/>';
@@ -1232,25 +1764,16 @@ export function docxTextNodes(value: string): string {
     return content || '<w:t></w:t>';
 }
 
-function translatedDocxParagraph(value: string): string {
-    return `<w:p><w:pPr><w:spacing w:before="0" w:after="120"/></w:pPr><w:r><w:rPr><w:color w:val="E83B6B"/></w:rPr>${docxTextNodes(value)}</w:r></w:p>`;
-}
+const DOCX_TRANSLATED_PROPERTIES = '<w:rPr><w:color w:val="E83B6B"/></w:rPr>';
+const DOCX_TRANSLATED_PARAGRAPH = '<w:p><w:pPr><w:spacing w:before="0" w:after="120"/></w:pPr>';
 
-function replaceDocxParagraphText(paragraph: string, value: string): string {
-    let replaced = false;
-    return paragraph.replace(/<w:t\b[^>]*>[\s\S]*?<\/w:t>|<w:tab\b[^>]*\/>|<w:(?:br|cr)\b[^>]*\/>/gu, () => {
-        if (replaced) return '';
-        replaced = true;
-        return docxTextNodes(value);
-    });
-}
-
-export function renderDocxPart(
+export async function renderDocxPart(
     document: ParsedDocument,
     part: DocxDocumentPart,
     translations: readonly string[],
     mode: DocumentRenderMode,
-): string {
+): Promise<string> {
+    const {analyzeDocxInlineParagraph, renderDocxInlineRuns} = await import('../core/docxInline');
     const segmentByParagraph = new Map(part.paragraphSegments.map((entry) => [entry.paragraphIndex, entry.segmentIndex]));
     let paragraphIndex = 0;
     DOCX_PARAGRAPH_PATTERN.lastIndex = 0;
@@ -1258,11 +1781,22 @@ export function renderDocxPart(
         const segmentIndex = segmentByParagraph.get(paragraphIndex);
         paragraphIndex += 1;
         if (segmentIndex === undefined) return paragraph;
-        const translation = translations[segmentIndex] ?? document.segments[segmentIndex]?.source ?? '';
-        if (!hasDistinctTranslation(document.segments[segmentIndex]?.source ?? '', translation)) return paragraph;
-        return mode === 'bilingual'
-            ? `${paragraph}${translatedDocxParagraph(translation)}`
-            : replaceDocxParagraphText(paragraph, translation);
+        const segment = document.segments[segmentIndex];
+        const translation = translations[segmentIndex] ?? '';
+        if (!segment || !hasDistinctTranslation(segment.source, translation)) return paragraph;
+        const inline = analyzeDocxInlineParagraph(paragraph);
+        if (inline.kind === 'invalid') return paragraph;
+        const isBilingual = mode === 'bilingual';
+        if (inline.kind === 'free') {
+            const runs = renderDocxInlineRuns(inline, translation, docxTextNodes, isBilingual ? DOCX_TRANSLATED_PROPERTIES : '');
+            if (runs !== undefined) return isBilingual
+                ? `${paragraph}${DOCX_TRANSLATED_PARAGRAPH}${runs}</w:p>`
+                : `${inline.prefix}${runs}</w:p>`;
+        }
+        const plain = inline.kind === 'free' ? stripDocumentInlineMarkers(translation) : translation;
+        return hasDistinctTranslation(inline.kind === 'free' ? stripDocumentInlineMarkers(inline.source) : segment.source, plain)
+            ? `${paragraph}${DOCX_TRANSLATED_PARAGRAPH}<w:r>${DOCX_TRANSLATED_PROPERTIES}${docxTextNodes(plain)}</w:r></w:p>`
+            : paragraph;
     });
 }
 
@@ -1277,7 +1811,7 @@ async function renderDocx(document: ParsedDocument, translations: readonly strin
     for (const part of document.binary.parts) {
         await yieldDocumentTask();
         options.signal?.throwIfAborted();
-        zip.file(part.path, renderDocxPart(document, part, translations, mode));
+        zip.file(part.path, await renderDocxPart(document, part, translations, mode), {createFolders: false});
     }
     return generateDocumentArchive(zip, {
         mimeType: getDocumentMimeType('docx'),

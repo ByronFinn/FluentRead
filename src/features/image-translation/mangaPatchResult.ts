@@ -1,24 +1,46 @@
 /**
  * @file src/features/image-translation/mangaPatchResult.ts
  * 文件职责：定义漫画局部无损结果的消息边界和阅读会话内的轻量缓存。
- * 主要内容：共用清字蒙版余量，以逐框归约计算绘制边界，不将长页源框展开为函数参数，合并重叠绘制范围；校验坐标、尺寸和二进制预算，立即去除传输用 base64；缓存仅保存压缩图块及文字坐标，按真实字节与张数淘汰。
+ * 主要内容：共用清字蒙版余量，注音按自己的源字高确定余量，并为原文碰撞检查提供同一查询；以逐框归约计算绘制边界，不将长页源框展开为函数参数，合并重叠绘制范围；校验坐标、尺寸和二进制预算，立即去除传输用 base64；缓存仅保存压缩图块及文字坐标，按真实字节与张数淘汰。
  * 模块边界：无 DOM、存储、模型与网络副作用；调用方负责来源身份、任务取消和画布合成。
  */
 import type {OcrLine} from './core';
 import type {MangaRegion} from './services/mangaRegions';
 export interface MangaPatchRect {x: number; y: number; width: number; height: number}
 export interface MangaPatchPacket {width: number; height: number; patches: Array<MangaPatchRect & {image: string}>}
-export interface MangaCompressedPage {width: number; height: number; patches: Array<MangaPatchRect & {bytes: Uint8Array}>; lines: Array<OcrLine & {backgroundColor: string; sourceText?: string}>}
+export interface MangaCompressedPage {width: number; height: number; patches: Array<MangaPatchRect & {bytes: Uint8Array}>; lines: Array<OcrLine & {backgroundColor: string; sourceText?: string; renderSkipped?: true; numericUncertain?: true}>}
 const MAX_PIXELS = 16_777_216;
 export const MANGA_LIGHT_CACHE_BYTES = 16 * 1024 * 1024;
 export const MANGA_LIGHT_CACHE_PAGES = 100;
 
+/** 注音框按坐标匹配，跨消息复制后仍有效；每个候选只建一次索引，不在碰撞循环反复扫描注音。 */
+export function createMangaMaskFontResolver(region: Pick<MangaRegion, 'fontSize' | 'ruby'>): (box: OcrLine['bbox']) => number {
+    const fallback = region.fontSize;
+    if (!region.ruby?.length) return () => fallback;
+    const key = (box: OcrLine['bbox']) => `${box.x0},${box.y0},${box.x1},${box.y1}`;
+    const sizes = new Map<string, number>();
+    for (const reading of region.ruby) {
+        if (Number.isFinite(reading.fontSize) && reading.fontSize! > 0) sizes.set(key(reading.bbox), reading.fontSize!);
+    }
+    return box => sizes.get(key(box)) ?? fallback;
+}
+
+/** 与修补蒙版共用边界，直接判断单框相交而不分配整组蒙版。 */
+export function mangaMaskBoxIntersects(box: OcrLine['bbox'], fontSize: number, width: number, height: number, target: OcrLine['bbox']): boolean {
+    const margin = Math.max(2, Math.min(14, Math.ceil(fontSize * .2)));
+    return Math.max(0, Math.floor(box.x0)-margin)<target.x1 && target.x0<Math.min(width, Math.ceil(box.x1)+margin)
+        && Math.max(0, Math.floor(box.y0)-margin)<target.y1 && target.y0<Math.min(height, Math.ceil(box.y1)+margin);
+}
+
 export function mangaMaskBoxes(region: MangaRegion, width: number, height: number) {
-    const margin = Math.max(2, Math.min(14, Math.ceil(region.fontSize * .2)));
-    return (region.sourceBoxes || [region.bbox]).map(box => ({
-        x0: Math.max(0, Math.floor(box.x0) - margin), y0: Math.max(0, Math.floor(box.y0) - margin),
-        x1: Math.min(width, Math.ceil(box.x1) + margin), y1: Math.min(height, Math.ceil(box.y1) + margin),
-    }));
+    const sourceSize = createMangaMaskFontResolver(region);
+    return (region.sourceBoxes || [region.bbox]).map(box => {
+        const margin = Math.max(2, Math.min(14, Math.ceil(sourceSize(box) * .2)));
+        return {
+            x0: Math.max(0, Math.floor(box.x0) - margin), y0: Math.max(0, Math.floor(box.y0) - margin),
+            x1: Math.min(width, Math.ceil(box.x1) + margin), y1: Math.min(height, Math.ceil(box.y1) + margin),
+        };
+    });
 }
 
 /** 包含清字描边和整个译文区域；所有图块从最终画布截取，重叠区也不会重复擦字。 */
@@ -87,7 +109,7 @@ export function compressMangaPage(packet: MangaPatchPacket, lines: MangaCompress
     })};
 }
 
-export function createMangaLightCache(maxPages = MANGA_LIGHT_CACHE_PAGES, maxBytes = MANGA_LIGHT_CACHE_BYTES) {
+export function createMangaLightCache(maxPages = MANGA_LIGHT_CACHE_PAGES, maxBytes = MANGA_LIGHT_CACHE_BYTES, onEvict?: (key:string,page:MangaCompressedPage)=>void) {
     const entries = new Map<string, {page: MangaCompressedPage; bytes: number}>();
     let bytes = 0;
     function remove(key: string) {const entry = entries.get(key); if (entry) {bytes -= entry.bytes; entries.delete(key);}}
@@ -100,7 +122,10 @@ export function createMangaLightCache(maxPages = MANGA_LIGHT_CACHE_PAGES, maxByt
                 + page.patches.reduce((sum, patch) => sum + patch.bytes.byteLength, 0);
             if (size > maxBytes || maxPages <= 0) return false;
             entries.set(key, {page, bytes: size}); bytes += size;
-            while (entries.size > maxPages || bytes > maxBytes) remove(entries.keys().next().value!);
+            while (entries.size > maxPages || bytes > maxBytes) {
+                const oldest=entries.keys().next().value!,entry=entries.get(oldest)!;remove(oldest);
+                try{onEvict?.(oldest,entry.page);}catch{/* 缓存上限不可被观察者阻断 */}
+            }
             return true;
         },
         remove,

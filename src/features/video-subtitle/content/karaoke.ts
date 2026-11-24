@@ -51,7 +51,7 @@ export function setVideoCaptionText(element: Element, text: string, karaoke: boo
 
   const document = element.ownerDocument;
   const fragment = document.createDocumentFragment();
-  const line: VideoKaraokeLine = {units: [], ends: [], index: 0, fill: ''};
+  const line: VideoKaraokeLine = {units: [], ends: [], index: -1, fill: ''};
   let total = 0;
   for (const part of parts) {
     if (!part.weight) {
@@ -78,12 +78,16 @@ export function paintVideoKaraokeLine(element: Element, progress: number): boole
   if (!line) return false;
   const {index, fraction} = locateVideoKaraokePosition(line.ends, progress);
   const last = line.units.length - 1;
-  for (let cursor = Math.min(line.index, index, last); cursor <= Math.min(Math.max(line.index, index), last); cursor += 1) {
-    const unit = line.units[cursor];
-    if (cursor < index) unit.setAttribute(VIDEO_KARAOKE_STATE_ATTRIBUTE, 'sung');
-    else if (cursor === index) unit.setAttribute(VIDEO_KARAOKE_STATE_ATTRIBUTE, 'active');
-    else unit.removeAttribute(VIDEO_KARAOKE_STATE_ATTRIBUTE);
-    if (cursor !== index) unit.style.removeProperty(VIDEO_KARAOKE_FILL_PROPERTY);
+  if (line.index !== index) {
+    const firstChanged = Math.max(0, Math.min(line.index, index));
+    const lastChanged = Math.min(Math.max(line.index, index), last);
+    for (let cursor = firstChanged; cursor <= lastChanged; cursor += 1) {
+      const unit = line.units[cursor];
+      if (cursor < index) unit.setAttribute(VIDEO_KARAOKE_STATE_ATTRIBUTE, 'sung');
+      else if (cursor === index) unit.setAttribute(VIDEO_KARAOKE_STATE_ATTRIBUTE, 'active');
+      else unit.removeAttribute(VIDEO_KARAOKE_STATE_ATTRIBUTE);
+      if (cursor !== index) unit.style.removeProperty(VIDEO_KARAOKE_FILL_PROPERTY);
+    }
   }
   const fill = index > last ? '' : `${(fraction * 100).toFixed(1)}%`;
   if (index !== line.index || fill !== line.fill) {
@@ -98,7 +102,7 @@ interface VideoKaraokePorts {
   window: Pick<Window, 'requestAnimationFrame' | 'cancelAnimationFrame'>;
   document: Pick<Document, 'addEventListener' | 'removeEventListener'>;
   isEnabled(): boolean;
-  getVideo(): HTMLVideoElement | null;
+  getVideo(): HTMLMediaElement | null;
   /** 当前的字幕行，原文在前；第一行高亮文本决定“同一句”。 */
   getLines(): Element[];
   /** 当前句在视频时间轴上的起止；没有时间轴时返回 null，由控制器按阅读速度估算。 */

@@ -16,6 +16,7 @@ import {
 import {parseCustomBody} from '@/src/core/config/customBody';
 import {getDeepLXEndpoints} from '@/src/core/config/deeplx';
 import {
+    Config,
     DEFAULT_TRANSLATION_BACKOFF_BASE_MS,
     DEFAULT_TRANSLATION_BACKOFF_MAX_MS,
     DEFAULT_API_KEY_RECOVERY_MS,
@@ -42,12 +43,43 @@ import {
 } from '@/src/core/config/validation';
 
 describe('配置领域边界与防御分支', () => {
+    it('公开配置与历史保留合法网站正文标签，额外凭据和其他路径同名字段仍被清洗', () => {
+        const siteAdaptation = normalizeConfig({siteAdaptation: {enabled: false, disabledRuleIds: ['reddit'], custom: {
+            version: 1, rules: [{id: 'mine', name: 'My rule', match: {hosts: ['example.com']},
+                content: [{css: ['article p'], key: 'article-body'}]}],
+        }}}).siteAdaptation;
+        const source = {siteAdaptation, key: 'fixture-secret', future: {siteAdaptation, key: 'fixture-secret'}};
+        const sanitized = sanitizeConfigCredentials(source);
+        expect(sanitized.siteAdaptation).toEqual(siteAdaptation);
+        expect(sanitized.siteAdaptation).not.toBe(siteAdaptation);
+        expect(sanitized).not.toHaveProperty('key');
+        expect(sanitized).not.toHaveProperty('future.key');
+        expect(sanitized).not.toHaveProperty('future.siteAdaptation.custom.rules.0.content.0.key');
+        expect(sanitizeConfigHistoryCredentials({entries: [{config: source}]}))
+            .toMatchObject({entries: [{config: {siteAdaptation}}]});
+        const invalid = {...siteAdaptation, token: 'fixture-secret', custom: {version: 1,
+            rules: [{...siteAdaptation.custom.rules[0], content: [{css: ['p'], key: {token: 'fixture-secret'}}]}]}};
+        expect(sanitizeConfigCredentials({siteAdaptation: invalid}).siteAdaptation)
+            .toEqual({...siteAdaptation, custom: {version: 1, rules: []}});
+        expect(JSON.stringify(sanitizeConfigCredentials({siteAdaptation: invalid}))).not.toContain('fixture-secret');
+    });
     it('页面识别范围仅接受全部节点枚举，旧配置和非法值保持默认正文模式', () => {
         expect(normalizeConfig({}).translationScope).toBe('content');
         expect(normalizeConfig({translationScope: 'all'}).translationScope).toBe('all');
         for (const translationScope of ['content', undefined, null, '', 'ALL', 'future', true, 1, {}, ['all']]) {
             expect(normalizeConfig({translationScope}).translationScope).toBe('content');
         }
+    });
+    it('保留侧边栏窗口偏好，旧配置及非法范围默认仅当前标签页', () => {
+        expect(new Config().translationSidepanelScope).toBe('tab');
+        expect(normalizeConfig({}).translationSidepanelScope).toBe('tab');
+        expect(normalizeConfig({translationSidepanelScope: 'window'}).translationSidepanelScope).toBe('window');
+        expect(normalizeConfig({translationSidepanelScope: 'invalid'}).translationSidepanelScope).toBe('tab');
+    });
+
+    it('导入配置时省略空的自定义模型列表并保留有效模型', () => {
+        const config = normalizeConfig({customModels: {openai: [], gemini: ['gemini-user-model']}});
+        expect(config.customModels).toEqual({gemini: ['gemini-user-model']});
     });
 
     it('全局和工具语言按书写体系迁移历史别名并保留自定义非中文语言', () => {
@@ -113,8 +145,6 @@ describe('配置领域边界与防御分支', () => {
         expect(servicesType.isTencent(services.openai)).toBe(false);
         expect(servicesType.isAzureOpenai(services.azureOpenai)).toBe(true);
         expect(servicesType.isAzureOpenai(services.openai)).toBe(false);
-        expect(servicesType.isUseCustomUrl(services.deeplx)).toBe(true);
-        expect(servicesType.isUseCustomUrl(services.google)).toBe(false);
         expect(firstConfiguredModel([])).toBe('');
         expect(firstConfiguredModel(['model-a'])).toBe('model-a');
     });

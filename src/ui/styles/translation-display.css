@@ -1,10 +1,11 @@
 /**
  * @file src/ui/styles/translation-display.css
  * 文件职责：定义网页双语译文容器的基础排版与全部“译文样式”预设，是内容脚本注入网页和设置页实时预览共用的唯一视觉来源。
- * 主要内容：先声明 .fluent-read-bilingual-content 基础规则，再按文字、线条、标记、卡片与趣味五类定义预设；线条与底色读取
+ * 主要内容：先声明 .fluent-read-bilingual-content 基础规则，再按文字、颜色、线条、标记、卡片与趣味六类定义预设；线条与底色读取
  * --fluent-read-translation-* 自定义属性并回退到各预设原有配色，使“自定义外观”无需改写类名即可生效。29 号以后的预设
- * 不写死浅色网页的配色：线条与底色用 currentColor 调配，随网页文字颜色在浅色和深色网页上自动取得合适的深浅；
- * 自带表面的卡片则同时声明文字颜色；打印时撤下自有译文的屏外渲染隔离，确保完整正文参与分页。
+ * 阅读向线条、标记和彩色文字用 currentColor 调配，随网页文字深浅调整；卡片与趣味使用各自的彩色纸面、正文和链接配色，避免所有主题从黑灰文字生成同一片灰底。
+ * 信笺、折角、叠纸、胶带与邮票提供不同的纸页细节，纹理避开正文；支持相对色的浏览器以所在段落文字明暗配对彩色纸面与正文，保留旧浏览器的固定配色回退。
+ * 常用卡片以边框代替模糊和外扩阴影，让长文沿用已有的屏外渲染优化；强制颜色、打印、键盘与触屏均优先显示可读译文；用户外观变量仍可覆盖，不扫描宿主或添加主题监听。
  * 模块边界：只包含 fluent 前缀约束的选择器，不决定何时添加类名，也不写入用户外观；外观变量由内容脚本的样式同步器或
  * 设置页预览提供，加载、重试、图片与提示框等其他页面状态仍在 src/app/content/page.css。
  */
@@ -13,8 +14,11 @@
 .fluent-read-bilingual-content {
     display: block;
     word-break: break-word; /* 允许在单词内断行，避免超出容器边界 */
+    text-wrap: wrap; /* 译文独立换行，同时保留宿主 pre-line/pre-wrap 的空白与显式断行语义 */
     margin: 8px 0 !important; /* 统一与原文的上下间距，覆盖宿主段落样式 */
     color: inherit;
+    /* 显式自有变量保留父级文字色依赖，避开 Chromium 对 color-mix 中直接 currentColor 的失效缓存。 */
+    --fluent-read-translation-inherited-color: currentColor;
     background: transparent;
     box-sizing: border-box;
     overflow-wrap: break-word; /* 处理长单词或 URL 的断行 */
@@ -28,6 +32,54 @@
 }
 
 /* 文字效果 */
+/* 彩色文字以 60% 基色与 40% 父级文字色调配，保持色相并提高常见浅深页面上的正文对比度。
+   先写纯色作为旧浏览器回退，用户明确设置的文字颜色由自有容器的后置 !important 声明覆盖。 */
+.fluent-read-bilingual-content.fluent-display-text-green {
+    color: #15803d;
+    color: color-mix(in srgb, #15803d 60%, var(--fluent-read-translation-inherited-color));
+}
+
+.fluent-read-bilingual-content.fluent-display-text-blue {
+    color: #1d4ed8;
+    color: color-mix(in srgb, #1d4ed8 60%, var(--fluent-read-translation-inherited-color));
+}
+
+.fluent-read-bilingual-content.fluent-display-text-purple {
+    color: #6d28d9;
+    color: color-mix(in srgb, #6d28d9 60%, var(--fluent-read-translation-inherited-color));
+}
+
+.fluent-read-bilingual-content.fluent-display-text-orange {
+    color: #b45309;
+    color: color-mix(in srgb, #b45309 60%, var(--fluent-read-translation-inherited-color));
+}
+
+.fluent-read-bilingual-content.fluent-display-text-teal {
+    color: #0f766e;
+    color: color-mix(in srgb, #0f766e 60%, var(--fluent-read-translation-inherited-color));
+}
+
+/* 品牌粉以 tokens.css 的 --fr-color-brand 为源色；正文随父级文字深浅调整，不以准确源色替代可读性。 */
+.fluent-read-bilingual-content.fluent-display-text-brand {
+    color: #ad3158;
+    color: color-mix(in srgb, #ef4776 60%, var(--fluent-read-translation-inherited-color));
+}
+
+.fluent-read-bilingual-content.fluent-display-text-berry {
+    color: #be123c;
+    color: color-mix(in srgb, #be123c 60%, var(--fluent-read-translation-inherited-color));
+}
+
+.fluent-read-bilingual-content.fluent-display-text-gold {
+    color: #a16207;
+    color: color-mix(in srgb, #a16207 60%, var(--fluent-read-translation-inherited-color));
+}
+
+.fluent-read-bilingual-content.fluent-display-text-graphite {
+    color: #475569;
+    color: color-mix(in srgb, #475569 60%, var(--fluent-read-translation-inherited-color));
+}
+
 .fluent-display-bold {
     font-weight: bold;
 }
@@ -61,7 +113,8 @@
     transition: filter 0.2s ease;
 }
 
-.fluent-display-blur-reveal:hover {
+.fluent-display-blur-reveal:hover,
+.fluent-display-blur-reveal:focus-within {
     filter: none;
 }
 
@@ -190,46 +243,55 @@
     background-color: var(--fluent-read-translation-fill-faint, rgba(158, 158, 158, 0.1));
 }
 
-/* 卡片：自带浅色表面的卡片同时声明深色文字，深色网页上也保持可读。 */
+/* 固定浅色纸面与深色文字是旧浏览器回退；文末的能力检测启用局部明暗适配。 */
 .fluent-display-card-mode {
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.12);
-    padding: 4px 8px;
-    border-radius: 4px;
-    background: var(--fluent-read-translation-fill-faint, rgba(64, 158, 255, 0.1));
+    --fluent-read-preset-hue: 250;
+    --fluent-read-preset-chroma: .025;
+    border: 1px solid var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #c9e0f6));
+    padding: 6px 10px;
+    border-radius: 5px;
+    background: var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #edf6ff));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #173b58));
 }
 
 .fluent-display-modern-card {
+    --fluent-read-preset-hue: 170;
+    --fluent-read-preset-chroma: .03;
     background: linear-gradient(135deg,
-        var(--fluent-read-translation-surface, #f5f7fa) 0%,
-        var(--fluent-read-translation-surface-deep, #e4e7ed) 100%);
-    border-radius: 8px;
-    padding: 6px 12px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+        var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #def8f1)) 0%,
+        var(--fluent-read-translation-surface, var(--fluent-read-preset-paper-middle, #e6f2ff)) 48%,
+        var(--fluent-read-translation-surface-deep, var(--fluent-read-preset-paper-end, #f0e5ff)) 100%);
+    border-radius: 10px;
+    padding: 8px 12px;
+    border: 1px solid var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #d7d2ed));
     margin: 4px 0;
-    color: #1f2328;
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #342d58));
 }
 
 .fluent-display-paper {
-    background-color: #fff;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-    border: 1px solid var(--fluent-read-translation-line, #eee);
+    --fluent-read-preset-hue: 250;
+    --fluent-read-preset-chroma: 0;
+    background-color: var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #fff));
+    border: 1px solid var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #eee));
     padding: 8px 12px;
     border-radius: 6px;
-    color: #1f2328;
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #1f2328));
 }
 
 .fluent-display-tech {
+    --fluent-read-preset-hue: 265;
+    --fluent-read-preset-chroma: .03;
     font-family: "Consolas", monospace;
-    background: #f8f9fa;
-    padding: 2px 6px;
-    border-radius: 3px;
-    border: 1px solid var(--fluent-read-translation-line, #eee);
-    color: #24292f;
+    background: var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #eef2ff));
+    padding: 5px 9px;
+    border-radius: 5px;
+    border: 1px solid var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #bac9f4));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #283b65));
 }
 
 /*
- * 以下为 29 号以后的预设。译文继承网页的文字颜色，因此用 color-mix 把 currentColor 调成线条和底色：
- * 浅色网页得到浅灰，深色网页得到浅白，无需判断网页主题，也不依赖系统的深色模式。
+ * 阅读向预设继承网页文字，用 currentColor 调配线条和底色；有纸面的主题在支持时使用段落的文字明暗，
+ * 分别生成浅纸深字或深纸浅字，不依赖操作系统的深色模式，也不把主题色相变成灰色。
  */
 
 /* 文字：阅读向 */
@@ -317,36 +379,261 @@
 
 /* 卡片 */
 .fluent-display-glass {
-    background: var(--fluent-read-translation-fill-faint, color-mix(in srgb, currentColor 5%, transparent));
-    border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+    --fluent-read-preset-hue: 220;
+    --fluent-read-preset-chroma: .03;
+    background: linear-gradient(135deg,
+        var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, rgba(227, 249, 255, 0.96))),
+        var(--fluent-read-translation-surface-deep, var(--fluent-read-preset-paper-deep, rgba(213, 240, 255, 0.96))));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #12445a));
+    border: 1px solid var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #8ad6e8));
     border-radius: 12px;
     padding: 8px 14px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-    -webkit-backdrop-filter: blur(8px) saturate(1.2);
-    backdrop-filter: blur(8px) saturate(1.2);
+    /* 接近不透明的冰蓝渐变已有玻璃观感，无需对每个段落实时采样宿主背景。 */
 }
 
-/* 趣味 */
+/* 卡片保留独立色相与纸页细节；浅深纸面在支持的浏览器中跟随所在段落。 */
+.fluent-display-card-outline {
+    --fluent-read-preset-hue: 155;
+    --fluent-read-preset-chroma: .03;
+    border: 1px solid var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #6fcea7));
+    border-radius: 10px;
+    background: var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #edfcf3));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #164e38));
+    padding: 8px 12px;
+}
+
+.fluent-display-card-accent {
+    --fluent-read-preset-hue: 40;
+    --fluent-read-preset-chroma: .035;
+    border-inline-start: 4px solid var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #f07863));
+    border-radius: 2px 10px 10px 2px;
+    background: var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #fff0e9));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #6d3b30));
+    padding: 8px 12px;
+}
+
+.fluent-display-card-double {
+    --fluent-read-preset-hue: 295;
+    --fluent-read-preset-chroma: .03;
+    border: 1px solid var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #c4b5ed));
+    border-top: 3px solid var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #9c7dd8));
+    border-radius: 2px 2px 8px 8px;
+    background: var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #f5f0ff));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #493274));
+    padding: 10px 12px;
+    box-shadow: inset 0 3px var(--fluent-read-preset-paper-deep, #ffffff);
+}
+
+.fluent-display-card-folded {
+    --fluent-read-preset-hue: 90;
+    --fluent-read-preset-chroma: .045;
+    border: 1px solid var(--fluent-read-preset-edge, #efd692);
+    border-radius: 4px;
+    background: linear-gradient(225deg,
+        var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #eeb94a)) 12px, transparent 12px) top right / 18px 18px no-repeat,
+        var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #fff6ce));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #614b1c));
+    padding: 10px 22px 10px 12px;
+}
+
+.fluent-display-card-floating {
+    --fluent-read-preset-hue: 345;
+    --fluent-read-preset-chroma: .03;
+    border-radius: 14px;
+    background: var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #fff0f6));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #63364c));
+    box-shadow: 0 2px 3px rgba(190, 70, 119, 0.08), 0 8px 18px -6px rgba(190, 70, 119, 0.3);
+    padding: 10px 14px;
+}
+
+.fluent-display-card-stacked {
+    --fluent-read-preset-hue: 65;
+    --fluent-read-preset-chroma: .035;
+    width: calc(100% - 6px);
+    border: 1px solid var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #e4b98c));
+    border-radius: 4px;
+    background: var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #fff3e3));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #67492c));
+    /* 阴影错开两页纸，主表面让出 6px 空间；文字不参与位移或裁剪。 */
+    box-shadow: 3px 3px 0 -1px #fffaf2, 3px 3px 0 #e8c5a0,
+        6px 6px 0 -1px #fff3e3, 6px 6px 0 #ecd3b7;
+    padding: 8px 12px;
+}
+
+.fluent-display-card-dashed {
+    --fluent-read-preset-hue: 175;
+    --fluent-read-preset-chroma: .03;
+    border: 1px dashed var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #36b5aa));
+    border-radius: 12px;
+    background: var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #eafbf7));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #22594d));
+    padding: 8px 12px;
+}
+
+/* 趣味：纹理与装饰仅绘制在译文容器内，保留长文换行和链接交互。 */
+.fluent-display-tape-note {
+    --fluent-read-preset-hue: 85;
+    --fluent-read-preset-chroma: .035;
+    position: relative;
+    border-radius: 3px;
+    background: var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #fff8e6));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #634e2e));
+    padding: 18px 12px 10px;
+    box-shadow: 0 2px 4px rgba(153, 112, 36, 0.14);
+}
+
+.fluent-display-tape-note::before {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 50%;
+    width: 3.6em;
+    max-width: calc(100% - 24px);
+    height: 0.6em;
+    background: repeating-linear-gradient(90deg, transparent 0 6px, rgba(255, 255, 255, 0.35) 6px 8px),
+        var(--fluent-read-translation-line, #86cbe7);
+    transform: translateX(-50%) rotate(-3deg);
+    pointer-events: none;
+}
+
+.fluent-display-postage {
+    --fluent-read-preset-hue: 40;
+    --fluent-read-preset-chroma: .035;
+    position: relative;
+    background: linear-gradient(var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #fff8f0)), var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #fff8f0)))
+        center / calc(100% - 10px) calc(100% - 10px) no-repeat, var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #efa58f));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #713b32));
+    padding: 13px 16px;
+    /* 齿孔仅占外沿 4px，正文保留至少 13px 内边距，不裁切文字或链接。 */
+    -webkit-mask: linear-gradient(#000, #000) center / calc(100% - 8px) calc(100% - 8px) no-repeat,
+        radial-gradient(circle, #000 4px, transparent 4.2px) 0 0 / 10px 10px round;
+    mask: linear-gradient(#000, #000) center / calc(100% - 8px) calc(100% - 8px) no-repeat,
+        radial-gradient(circle, #000 4px, transparent 4.2px) 0 0 / 10px 10px round;
+}
+
+.fluent-display-postage::before {
+    content: "";
+    position: absolute;
+    inset: 8px;
+    border: 1px solid var(--fluent-read-translation-line, #eac6b4);
+    pointer-events: none;
+}
+
+.fluent-display-dot-note {
+    --fluent-read-preset-hue: 345;
+    --fluent-read-preset-chroma: .03;
+    border-radius: 8px;
+    background: radial-gradient(circle,
+        var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #ee94b0)) 1.2px, transparent 1.5px) right center / 20px 10px repeat-y,
+        var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #fff1f6));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #693c50));
+    padding: 10px 12px;
+    padding-inline-end: 30px;
+}
+
+.fluent-display-grid-note {
+    --fluent-read-preset-hue: 230;
+    --fluent-read-preset-chroma: .025;
+    border-radius: 4px;
+    border-inline-start: 2px solid var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #ec9aa8));
+    /* 第一层用纸色铺平正文区，方格只留在四周，避免网格穿过汉字。 */
+    background: linear-gradient(var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #eef9ff)), var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #eef9ff))) content-box,
+        linear-gradient(var(--fluent-read-preset-edge, #c5e3f2) 1px, transparent 1px) 0 0 / 12px 12px,
+        linear-gradient(90deg, var(--fluent-read-preset-edge, #c5e3f2) 1px, transparent 1px) 0 0 / 12px 12px,
+        var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #eef9ff));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #254d67));
+    padding: 12px 16px;
+}
+
+.fluent-display-spotlight {
+    position: relative;
+    border: 1px solid var(--fluent-read-translation-line, #6966b3);
+    border-radius: 8px;
+    background: radial-gradient(ellipse at 100% 0%,
+        var(--fluent-read-translation-fill-soft, rgba(157, 119, 255, 0.38)), transparent 70%),
+        var(--fluent-read-translation-surface-deep, #202747);
+    color: var(--fluent-read-translation-surface-ink, #f5f0ff);
+    padding: 10px 14px;
+    padding-inline-end: 2.7em;
+}
+
+.fluent-display-spotlight::before {
+    content: "✦";
+    position: absolute;
+    inset-inline-end: 12px;
+    top: 5px;
+    color: var(--fluent-read-translation-line, #f7d987);
+    font: 18px/1.2 Georgia, serif;
+    pointer-events: none;
+}
+
+.fluent-display-bookmark {
+    --fluent-read-preset-hue: 295;
+    --fluent-read-preset-chroma: .03;
+    position: relative;
+    border-inline-start: 3px solid var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #a18cdd));
+    border-radius: 2px 8px 8px 2px;
+    background: var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #f2edff));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #4b3973));
+    padding: 10px 12px;
+    padding-inline-end: 2.5em;
+}
+
+.fluent-display-bookmark::before {
+    content: "";
+    position: absolute;
+    inset-inline-end: 12px;
+    top: 0;
+    width: 14px;
+    height: 22px;
+    background: var(--fluent-read-translation-line, #9674da);
+    clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 74%, 0 100%);
+    pointer-events: none;
+}
+
 .fluent-display-sticky-note {
-    background: var(--fluent-read-translation-surface-deep, #fff1a3);
-    color: #3b3320;
+    --fluent-read-preset-hue: 95;
+    --fluent-read-preset-chroma: .055;
+    background: var(--fluent-read-translation-surface-deep, var(--fluent-read-preset-paper-deep, #fff1a3));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #3b3320));
     padding: 8px 12px 10px;
     border-radius: 2px 2px 16px 2px / 2px 2px 5px 2px;
     box-shadow: 0 1px 1px rgba(0, 0, 0, 0.08), 0 8px 10px -8px rgba(0, 0, 0, 0.35);
 }
 
-/* 自带浅色表面的卡片在深色网页上会继承网页的浅色链接，看不清；链接统一改用深色。 */
+/* 纸面主题的链接与正文共同配对，覆盖骨架保存的宿主链接色；下划线保留非颜色识别线索。 */
+.fluent-display-card-mode a,
 .fluent-display-modern-card a,
 .fluent-display-paper a,
 .fluent-display-tech a,
-.fluent-display-sticky-note a {
-    color: #0b57d0;
+.fluent-display-glass a,
+.fluent-display-card-outline a,
+.fluent-display-card-accent a,
+.fluent-display-card-double a,
+.fluent-display-card-folded a,
+.fluent-display-card-floating a,
+.fluent-display-card-stacked a,
+.fluent-display-card-dashed a,
+.fluent-display-hand-drawn a,
+.fluent-display-sticky-note a,
+.fluent-display-chat-bubble a,
+.fluent-display-tape-note a,
+.fluent-display-postage a,
+.fluent-display-dot-note a,
+.fluent-display-grid-note a,
+.fluent-display-bookmark a {
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-link, #175cd3)) !important;
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
 }
 
 .fluent-display-chat-bubble {
+    --fluent-read-preset-hue: 155;
+    --fluent-read-preset-chroma: .03;
     width: fit-content;
     max-width: 100%;
-    background: var(--fluent-read-translation-fill-soft, color-mix(in srgb, currentColor 9%, transparent));
+    background: var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #dcf8e9));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #22533e));
     border-radius: 4px 16px 16px 16px;
     padding: 6px 12px;
 }
@@ -357,9 +644,9 @@
     font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
     font-size: 0.94em;
     line-height: 1.6;
-    background: #10151c;
-    color: #a6e3b4;
-    border: 1px solid #263242;
+    background: var(--fluent-read-translation-surface, #102c3e);
+    color: var(--fluent-read-translation-surface-ink, #b9f3d4);
+    border: 1px solid #2d6a7c;
     border-radius: 6px;
     padding: 6px 12px 6px 2em;
 }
@@ -373,8 +660,11 @@
     text-indent: 0;
 }
 
-.fluent-display-terminal a {
-    color: #7dd3fc;
+.fluent-display-terminal a,
+.fluent-display-spotlight a {
+    color: var(--fluent-read-translation-surface-ink, #9edfff) !important;
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
 }
 
 /* 渐变色与网页文字颜色混合：浅色网页偏深、深色网页偏亮，两边都保持可读。不支持时保持普通文字，避免文字被填成透明后消失。 */
@@ -423,9 +713,21 @@
     box-decoration-break: clone;
 }
 
+/* 这两款不铺纸面；骨架保存的原网页链接色可能在网站切换主题后失配，跟随当前正文并保留下划线。 */
+.fluent-display-rainbow-underline a,
+.fluent-display-spoiler a {
+    color: inherit !important;
+    text-decoration: underline;
+    text-underline-offset: 0.15em;
+}
+
 .fluent-display-hand-drawn {
-    border: 1.5px solid var(--fluent-read-translation-line, color-mix(in srgb, currentColor 55%, transparent));
+    --fluent-read-preset-hue: 75;
+    --fluent-read-preset-chroma: .04;
+    border: 1.5px solid var(--fluent-read-translation-line, var(--fluent-read-preset-edge, #e99759));
     border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+    background: var(--fluent-read-translation-surface, var(--fluent-read-preset-paper, #fff8dd));
+    color: var(--fluent-read-translation-surface-ink, var(--fluent-read-preset-ink, #6b452a));
     padding: 4px 14px;
 }
 
@@ -438,16 +740,109 @@
     transition: background-color 0.2s ease;
 }
 
-.fluent-display-spoiler:not(:hover) > .fluent-read-translation-text {
-    background-color: currentColor;
-}
+@media (hover: hover) and (forced-colors: none) {
+    .fluent-display-spoiler:not(:hover):not(:focus-within) > .fluent-read-translation-text {
+        background-color: currentColor;
+    }
 
-.fluent-display-spoiler:not(:hover) > .fluent-read-translation-text * {
-    color: inherit !important;
+    .fluent-display-spoiler:not(:hover):not(:focus-within) > .fluent-read-translation-text * {
+        color: inherit !important;
+    }
 }
 
 @media (prefers-reduced-motion: reduce) {
     .fluent-display-spoiler > .fluent-read-translation-text {
         transition: none;
+    }
+}
+
+/*
+ * 纸面跟随所在段落，而不是系统主题或整站 class。color 属性里的 currentColor 指父色，背景里的则为配对后的正文色。
+ * 先经自有 inherited-color 变量建立依赖，避免 Chromium 缓存直接 relative-currentColor 导致网站切换主题后颜色不更新。
+ * round 离散选择浅/深，避免中间亮度产生同色文字；/ 1 不继承宿主半透明文字的 alpha。
+ * 显式背景/填色作为配对参考；显式文字色仍由用户的后置声明覆盖。无能力时完整保留前面的固定配色。
+ * terminal 与 spotlight 是用户主动选择的深色主题，不参与纸面明暗切换；这里不添加 DOM 测量、监听或动画。
+ */
+@supports (color: oklch(from currentColor clamp(0.30, round(nearest, calc(l - 0.1), 1), 0.92) 0.025 250 / 1)) {
+    .fluent-read-bilingual-content:is(
+        .fluent-display-card-mode, .fluent-display-modern-card, .fluent-display-paper, .fluent-display-tech,
+        .fluent-display-glass, .fluent-display-card-outline, .fluent-display-card-accent, .fluent-display-card-double,
+        .fluent-display-card-folded, .fluent-display-card-floating, .fluent-display-card-stacked, .fluent-display-card-dashed,
+        .fluent-display-hand-drawn, .fluent-display-sticky-note, .fluent-display-chat-bubble, .fluent-display-tape-note,
+        .fluent-display-postage, .fluent-display-dot-note, .fluent-display-grid-note, .fluent-display-bookmark
+    ) {
+        --fluent-read-preset-ink: oklch(from var(--fluent-read-translation-inherited-color)
+            clamp(0.30, round(nearest, calc(l - 0.1), 1), 0.92) 0.025 var(--fluent-read-preset-hue) / 1);
+        --fluent-read-preset-paper: oklch(from currentColor
+            clamp(0.25, calc(0.96 - round(nearest, calc(l - 0.1), 1)), 0.96) var(--fluent-read-preset-chroma) var(--fluent-read-preset-hue) / 1);
+        --fluent-read-preset-paper-deep: oklch(from currentColor
+            clamp(0.28, calc(0.93 - round(nearest, calc(l - 0.1), 1)), 0.93) var(--fluent-read-preset-chroma) var(--fluent-read-preset-hue) / 1);
+        --fluent-read-preset-paper-middle: oklch(from currentColor
+            clamp(0.25, calc(0.96 - round(nearest, calc(l - 0.1), 1)), 0.96) var(--fluent-read-preset-chroma) 250 / 1);
+        --fluent-read-preset-paper-end: oklch(from currentColor
+            clamp(0.28, calc(0.93 - round(nearest, calc(l - 0.1), 1)), 0.93) var(--fluent-read-preset-chroma) 300 / 1);
+        --fluent-read-preset-edge: oklch(from currentColor clamp(0.50, calc(1.05 - l), 0.78) 0.075 var(--fluent-read-preset-hue) / 1);
+        --fluent-read-preset-link: oklch(from currentColor l 0.10 250 / 1);
+    }
+}
+
+/* 无悬停输入不隐藏阅读内容；键盘聚焦链接也会揭开，不需要为正文增加 Tab 停靠点。 */
+@media (hover: none) {
+    .fluent-display-blur-reveal {
+        filter: none;
+    }
+    .fluent-display-spoiler > .fluent-read-translation-text {
+        background: transparent !important;
+    }
+}
+
+/* 系统高对比和打印均以正文为先，不能因渐变填字、滤镜或邮票遮罩丢失文字。 */
+@media (forced-colors: active) {
+    .fluent-read-bilingual-content,
+    .fluent-read-bilingual-content[data-fr-translation-owned="true"][translate="no"],
+    .fluent-read-bilingual-content > .fluent-read-translation-text {
+        color: CanvasText !important;
+        background: Canvas !important;
+        -webkit-text-fill-color: currentColor !important;
+        text-shadow: none !important;
+        box-shadow: none !important;
+        filter: none !important;
+        -webkit-mask: none !important;
+        mask: none !important;
+        border-color: CanvasText !important;
+        forced-color-adjust: auto;
+    }
+    .fluent-read-bilingual-content a {
+        color: LinkText !important;
+        -webkit-text-fill-color: currentColor !important;
+        text-decoration: underline !important;
+    }
+    .fluent-read-bilingual-content::before,
+    .fluent-read-bilingual-content::after {
+        display: none !important;
+    }
+}
+
+@media print {
+    .fluent-read-bilingual-content,
+    .fluent-read-bilingual-content[data-fr-translation-owned="true"][translate="no"],
+    .fluent-read-bilingual-content > .fluent-read-translation-text {
+        color: #000 !important;
+        background: transparent !important;
+        -webkit-text-fill-color: currentColor !important;
+        text-shadow: none !important;
+        box-shadow: none !important;
+        filter: none !important;
+        -webkit-mask: none !important;
+        mask: none !important;
+    }
+    .fluent-read-bilingual-content a {
+        color: #000 !important;
+        -webkit-text-fill-color: currentColor !important;
+        text-decoration: underline !important;
+    }
+    .fluent-read-bilingual-content::before,
+    .fluent-read-bilingual-content::after {
+        display: none !important;
     }
 }

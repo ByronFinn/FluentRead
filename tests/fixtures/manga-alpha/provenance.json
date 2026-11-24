@@ -1,0 +1,113 @@
+{
+  "version": 1,
+  "baseHead": "ee85d44cff562c26b3bc5e70c17daaab8f721800",
+  "designFreezeUtc": "2026-10-25 13:42:24 UTC",
+  "designSha256": "0a576bb798af2ae15632ac9a3e1576fe9dfc84c35e34756e4f01efd48afd5de7",
+  "generator": "scripts/testing/generate-manga-alpha-fixtures.py",
+  "generatorSha256": "f1674608f07460eff1f7c3c75a7bce284528328427833c0342a170241d9202a3",
+  "firstPixelFreezeManifestSha256": "d5067fdf9438ff253c2124aaf665094f67ac5361847c56ccabfe806cded10060",
+  "firstPixelFreezeEvidence": "iteration-v9-recognition/alpha-corpus/frozen-before-first-ocr/manifest.json",
+  "firstOcrStatus": "Not run at this freeze; all six images and complete truth are independent of OCR results.",
+  "sourceTruthDesignedBeforeAnyOcr": true,
+  "selectionByOcrResult": false,
+  "pixelRefinementByOcrResult": false,
+  "sourceTextOrGroupsChangedAfterDesignFreeze": false,
+  "originalArtworkAndText": true,
+  "generatedByAiImageTool": false,
+  "externalArtworkBundled": false,
+  "fontFilesBundled": false,
+  "modelWeightsBundled": false,
+  "pillowVersion": "12.3.0",
+  "fonts": [
+    {
+      "key": "bold",
+      "sha256": "d72db21f9242aedd6b917d8549ad5921766b24d5f8d0becfda2ff4c620b3c2e0"
+    },
+    {
+      "key": "regular",
+      "sha256": "525979822591a3447cfc49d943d6f7683508e25543407871c0ed8fed05fd2bd9"
+    },
+    {
+      "key": "cjk",
+      "sha256": "cf8cf2c882e1e344ac2e6207fe172657a30dc2c6e1ee65a9e29a7b582c4d4154"
+    }
+  ],
+  "fixtureObjectsSha256": "8bf003458009f9f5e646165f5df9af5ce17fb948db818a6ad0e6abf1a637f48e",
+  "manifestContentSha256": "139a41260dc69427db3fdfd20a7b5dcc053db26f28e1fc49e01c9d1951bc2788",
+  "sourceStats": {
+    "scenes": 6,
+    "anchors": 29,
+    "paragraphGroups": 20,
+    "pixels": 8160000,
+    "pngBytes": 567339
+  },
+  "images": [
+    {
+      "name": "transparent-lantern-bridge-balloons",
+      "file": "transparent-lantern-bridge-balloons.png",
+      "sha256": "fdce5d1a79f6dfe558abdbb1e3307ebcaccca09d7307a0b06a3aa6d621a4bc16",
+      "bytes": 43345,
+      "width": 1200,
+      "height": 1000,
+      "imageMode": "RGBA",
+      "decodedRgbaSha256": "37963b85b5a147cf74e770d019962de54ff675b3bb556294315b1c4b85e167eb"
+    },
+    {
+      "name": "translucent-riverside-notice",
+      "file": "translucent-riverside-notice.png",
+      "sha256": "941fe820142c24644e6d1d8a5085d38c9812c25edc85c57452cab6530360d1de",
+      "bytes": 375877,
+      "width": 1400,
+      "height": 1000,
+      "imageMode": "RGBA",
+      "decodedRgbaSha256": "6d2da96e30f7cfabc28d4558f4c0a5471a29274399e8483e9cc84412007a25f2"
+    },
+    {
+      "name": "perforated-alpha-dock-note",
+      "file": "perforated-alpha-dock-note.png",
+      "sha256": "7ee6fc9e7cb9199e33d22390780836c7203f7162067c028d9e7f0f94d0309fc9",
+      "bytes": 20962,
+      "width": 1200,
+      "height": 1000,
+      "imageMode": "RGBA",
+      "decodedRgbaSha256": "950c0fa8eee4f7ddf5246267c8a965c517254f41ba628d66cab6daa8c44b7ee3"
+    },
+    {
+      "name": "same-tone-cabin-controls",
+      "file": "same-tone-cabin-controls.png",
+      "sha256": "a936c32bd80d647928968850feec0dfaa0e3e9708633223cf325b8c5a17c9422",
+      "bytes": 28190,
+      "width": 1200,
+      "height": 1000,
+      "imageMode": "RGBA",
+      "decodedRgbaSha256": "c72a87c8184f66a22470b52882bd82feb2ad728c36e93c2a22ef4b0e619e7e29"
+    },
+    {
+      "name": "inverse-neighbor-tidal-balloons",
+      "file": "inverse-neighbor-tidal-balloons.png",
+      "sha256": "8cd55c1b36d7c92f6f8a241e64695fa455ac3289adccf379d6fce6889e227dfb",
+      "bytes": 41520,
+      "width": 1400,
+      "height": 1000,
+      "imageMode": "RGBA",
+      "decodedRgbaSha256": "e3d48a00afa9f4683d54e2e2bc97f93a550f550ac87067e283c626a08d86d2da"
+    },
+    {
+      "name": "bound-atlas-rule-and-inset-card",
+      "file": "bound-atlas-rule-and-inset-card.png",
+      "sha256": "f85c12942c8f681b03ba8e80afb6c52c373b76908d583099c30ca4cb69c39169",
+      "bytes": 57445,
+      "width": 1600,
+      "height": 1100,
+      "imageMode": "RGBA",
+      "decodedRgbaSha256": "b6e7061ea653cb11633ff995d2253093ce94c452194098d99acb903d0fe3dafe"
+    }
+  ],
+  "limitations": [
+    "This suite is not registered in the existing test matrix and has not undergone actual OCR or browser rendering.",
+    "Current shared browser-harness protectedProbes is RGB-only; protectedAlphaProbes/sourceAlphaHoles are extra source truth requiring explicit integration.",
+    "Semitransparent notice composited on an opaque market has opaque interior output alpha; cabin is deliberately opaque.",
+    "Interword holes remove no glyphs; source truth does not prove a future detected patch covers them or that masked RGB is recoverable.",
+    "No fonts, model weights or external artwork are shipped."
+  ]
+}

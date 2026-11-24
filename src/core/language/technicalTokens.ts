@@ -2,14 +2,15 @@
  * @file src/core/language/technicalTokens.ts
  *
  * 文件职责：统一识别文本中的技术标识符和名称类 Latin 词，只生成供语言识别使用的副本，避免把模型名、版本号、哈希、URL、路径和文件名当成外语正文。
- * 主要内容：按从结构最强到最弱的顺序遮蔽 URL、邮箱、@提及、行内代码、带编号的仓库引用、参数赋值、带单位数值、路径、文件名、UUID、提交哈希、版本号、带版本的产品或模型名称（可带一个首字母大写后缀及规模/变体词）、代码标识符和字母数字混合编号；URL、邮箱、域名、引用、赋值、路径和文件名按最大合法候选检查一次，名称保留超长前缀对整体匹配的拒绝语义，避免重复回溯或改变计权；把连续三个以上全大写词还原为普通词以免外语句子伪装成缩写；为非 Latin 正文中的 Latin 词给出缩写、内部大写名称、格式名、常见技术词、单字母或普通正文的角色与权重，提供通用技术缩写证据以区分大写名称与大写外语短句。可核对的公开符号包括 createLanguageDetectionCopy、classifyEmbeddedLatinWord、isAcronymWord、isMixedCaseName、isTechnicalAbbreviation、LanguageDetectionCopy、EmbeddedLatinWordRole。
+ * 主要内容：按从结构最强到最弱的顺序遮蔽 URL、邮箱、@提及、行内代码、带编号的仓库引用、参数赋值、带单位数值、明确中文读音语境的有界 IPA 注音、路径、文件名、UUID、提交哈希、版本号、带版本的产品或模型名称（可带一个首字母大写后缀及规模/变体词）、代码标识符和字母数字混合编号；URL、邮箱、域名、引用、赋值、路径和文件名按最大合法候选检查一次，名称保留超长前缀对整体匹配的拒绝语义，避免重复回溯或改变计权；把连续三个以上全大写词还原为普通词以免外语句子伪装成缩写；为非 Latin 正文中的 Latin 词给出缩写、内部大写名称、格式名、常见技术词、单字母或普通正文的角色与权重，提供通用技术缩写证据以区分大写名称与大写外语短句。可核对的公开符号包括 createLanguageDetectionCopy、classifyEmbeddedLatinWord、isAcronymWord、isMixedCaseName、isTechnicalAbbreviation、LanguageDetectionCopy、EmbeddedLatinWordRole。
+ * Markdown 链接目标另按括号层级和转义确定遮蔽边界，保留标签、标题及紧随正文；未结束的目标保留不确定内容，扫描只向前推进。
  * 模块边界：本文件属于 core 纯算法，只读字符串并返回新的识别副本，绝不修改原文、链接、代码或宿主 DOM；不判断文本属于哪种语言，也不访问配置、浏览器或检测库。
  */
 
 export interface LanguageDetectionCopy {
     /** 仅供识别：结构化标识符替换为空格，全大写短语改为小写。 */
     text: string;
-    /** 被遮蔽的结构化标识符数量（URL、路径、哈希、版本、代码等），不代表任何语言。 */
+    /** 被遮蔽的结构项数量（URL、路径、哈希、版本、代码或明确注音等），不代表任何语言。 */
     identifiers: number;
     /** 被遮蔽的带版本产品/模型名称数量，按名称计权，不能主导目标语言结论。 */
     versionedNames: number;
@@ -55,6 +56,10 @@ const REPOSITORY_CANDIDATE_PATTERN = new RegExp(`${BEFORE}[\\w.-]+`, 'gu');
 const PARAMETER_ASSIGNMENT_PATTERN = new RegExp(`${BEFORE}[A-Za-z_][\\w.-]*[ \\t]*=[ \\t]*(?:-?\\d+(?:\\.\\d+)?|true|false|null)${AFTER}`, 'yu');
 const ASSIGNMENT_CANDIDATE_PATTERN = new RegExp(`${BEFORE}[A-Za-z_][\\w.-]*`, 'gu');
 const MEASUREMENT_PATTERN = new RegExp(`${BEFORE}\\d+(?:\\.\\d+)?[ \\t]*(?:px|rem|em|vw|vh|vmin|vmax|ms|s|Hz|kHz|MHz|GHz|KB|MB|GB|TB|KiB|MiB|GiB|TiB)${AFTER}`, 'gu');
+// 只遮蔽紧邻中文读音角色、含 IPA 专用字母或重音/长音符的单词注音。
+// æ 等常用 IPA 字母也可落在 Latin-1、扩展 Latin 或 Greek 区段，但不单独充当注音证据。
+// 纯 ASCII、空格隔开的句子、路径、跨行或超过 64 字符的内容不能借斜杠成为注音；中文角色保留。
+const CHINESE_PRONUNCIATION_PATTERN = /((?:发音|發音|读音|讀音)(?:为|為|是)?[ \t]{0,8})\/(?=[A-Za-zæøðħŋœβθχ\u0250-\u02AFˈˌːˑ\u0300-\u036F.]{0,63}[\u0250-\u02AFˈˌːˑ])[A-Za-zæøðħŋœβθχ\u0250-\u02AFˈˌːˑ\u0300-\u036F.]{1,64}\//gu;
 const PATH_PATTERN = new RegExp(`${BEFORE}(?:[A-Za-z]:)?(?:~|\\.{1,2})?[\\/\\\\]?[\\w.@+-]+(?:[\\/\\\\][\\w.@+-]+)+[\\/\\\\]?${AFTER}`, 'yu');
 const PATH_CANDIDATE_PATTERN = new RegExp(`${BEFORE}(?:[A-Za-z]:)?(?:~|\\.{1,2})?[\\/\\\\]?[\\w.@+-]+(?:[\\/\\\\][\\w.@+-]+)*[\\/\\\\]?`, 'gu');
 const FILE_EXTENSION_SUFFIX_PATTERN = new RegExp(`\\.(?:${FILE_EXTENSIONS})[\\\\/]?$`, 'iu');
@@ -124,24 +129,73 @@ function isStructuredInlineCode(token: string): boolean {
     return firstWord !== undefined && isTechnicalAbbreviation(firstWord) && /(?:^|\s)--?[A-Za-z]/u.test(content);
 }
 
+interface MarkdownDestination {
+    start: number;
+    end: number;
+    bounded: boolean;
+}
+
+/**
+ * 这里只确定 ]( 后目标 token 的结束，不解释或渲染 Markdown。空白和尖括号已是 URL 边界，
+ * 裸目标中的括号须配对，反斜杠后的字符不参与配对；到文本末尾仍未结束时保留其证据。
+ * 即使标签本身不完整，限制遮蔽仍比吞掉后续正文保守。目标内不再重找起点，保证线性扫描。
+ */
+function markdownDestinations(text: string): MarkdownDestination[] {
+    const destinations: MarkdownDestination[] = [];
+    for (let index = 0; index < text.length; index += 1) {
+        if (text[index] !== ']' || text[index + 1] !== '(') continue;
+        let start = index + 2;
+        while (start < text.length && /\s/u.test(text[start]!)) start += 1;
+        let depth = 0;
+        let cursor = start;
+        for (; cursor < text.length; cursor += 1) {
+            const character = text[cursor]!;
+            if (character === '\\') { cursor += 1; continue; }
+            if (/\s/u.test(character) || character === '<' || character === '>') break;
+            if (character === '(') depth += 1;
+            else if (character === ')') {
+                if (depth === 0) break;
+                depth -= 1;
+            }
+        }
+        destinations.push({start, end: Math.min(cursor, text.length), bounded: cursor < text.length});
+        index = cursor;
+    }
+    return destinations;
+}
+
 /** 同一最大合法前缀内，后续起点的必要后缀相同；只在候选起点匹配，失败后跳过整段而不重复回溯。 */
 function maskCandidateTokens(text: string, candidates: RegExp, pattern: RegExp, accept: (token: string) => boolean, nestedCandidate?: RegExp): {text: string; count: number} {
     let output = '';
     let lastIndex = 0;
     let count = 0;
+    const destinations = pattern === URL_PATTERN || pattern === DOMAIN_PATTERN ? markdownDestinations(text) : [];
+    let destinationIndex = 0;
     candidates.lastIndex = 0;
     let candidate: RegExpExecArray | null;
     while ((candidate = candidates.exec(text)) !== null) {
-        pattern.lastIndex = candidate.index;
-        let match = pattern.exec(text);
+        while (destinationIndex < destinations.length && destinations[destinationIndex]!.end <= candidate.index) destinationIndex += 1;
+        const destination = destinations[destinationIndex];
+        const inDestination = destination && candidate.index >= destination.start;
+        if (inDestination && !destination.bounded) {
+            candidates.lastIndex = destination.end;
+            continue;
+        }
+        // 正则执行前限制输入，避免连续链接让贪婪 URL 先扫描后续全文、再截断而反复重扫。
+        // 保留候选前一个字符供边界断言使用，匹配索引随后映回原字符串。
+        const offset = inDestination ? candidate.index - 1 : 0;
+        const input = inDestination ? text.slice(offset, destination.end) : text;
+        pattern.lastIndex = candidate.index - offset;
+        let match = pattern.exec(input);
         if (!match && nestedCandidate) {
             const nested = nestedCandidate.exec(candidate[0]);
             if (nested) {
-                pattern.lastIndex = candidate.index + nested.index;
-                match = pattern.exec(text);
+                pattern.lastIndex = candidate.index + nested.index - offset;
+                match = pattern.exec(input);
             }
         }
         if (!match) continue;
+        match.index += offset;
         // 接纳回调拒绝时仍消费匹配范围，与原 replace 回调保留 token 后的全局扫描行为相同。
         candidates.lastIndex = match.index + match[0].length;
         if (!accept(match[0])) continue;
@@ -236,6 +290,10 @@ export function createLanguageDetectionCopy(value: string): LanguageDetectionCop
     if (text.includes('#')) text = mask(text, REPOSITORY_REFERENCE_PATTERN, undefined, REPOSITORY_CANDIDATE_PATTERN);
     if (text.includes('=')) text = mask(text, PARAMETER_ASSIGNMENT_PATTERN, undefined, ASSIGNMENT_CANDIDATE_PATTERN);
     if (/\d/u.test(text)) text = mask(text, MEASUREMENT_PATTERN);
+    text = text.replace(CHINESE_PRONUNCIATION_PATTERN, (_annotation, prefix: string) => {
+        identifiers += 1;
+        return `${prefix} `;
+    });
     // 单个分隔符的 ASS/SSA、and/or 仍按词处理；至少两级、以根/相对路径开头或末段带扩展名才是路径。
     if (/[\\/][\w.@+-]/u.test(text)) text = mask(text, PATH_PATTERN, (token) => /[\\/].*[\\/]/u.test(token)
         || /^(?:[A-Za-z]:|~|\.{1,2})?[\\/]/u.test(token)

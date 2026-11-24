@@ -1,25 +1,31 @@
 /**
  * @file src/features/image-translation/services/mangaRegions.ts
  * 文件职责：把漫画专用 OCR 和通用 OCR 行转换成可整段翻译与修补的气泡或旁白区域。
- * 主要内容：校验并夹紧坐标，过滤纯符号和源语言不符的短片段；神经 OCR 保留置信度策略，通用 OCR 从行框补足字号与原始修补框；按方向、字号、重叠与间距合并相邻行，仅已定位的独立气泡容许略宽行距，保持不同气泡分离。
+ * 合列输入：通用 OCR 已合并区域继续保留全部物理源框，并按各源列或源行的中位厚度估计字号，后续合段不能丢失这些擦除边界。明确附属的日文注音随正文修补，识别记录另存，避免将读音单独翻译和重复绘字。
+ * 主要内容：校验并夹紧坐标，过滤纯符号和源语言不符的短片段；神经 OCR 保留置信度策略，语言无关地保留高置信多位数字、合法时间日期、货币金额、百分数、小数、分数和温度，只为判定执行 NFKC 而保留原文；仅独立气泡容许高置信度大单字，通用 OCR 保留连续合法韩文 Jamo，并从行框补足字号与原始修补框；按方向、字号、重叠与间距合并相邻行，按有界 Unicode 码点边界连接东亚文字，不插入原文没有的空格，保留硬连字符且只移除行末软连字符；仅明确归属的气泡使用较宽横排行距，整页横排行距保持严格、竖列间距上限为字宽的1.8倍，额外续行必须来自同帧像素对空隙与遮挡的有界证明。
  * 模块边界：纯数据算法，不运行模型、不读取 DOM 或配置，也不修补图片；只输出可核对的识别原文和区域，不推测缺失文字。
  */
 import type {OcrLine} from '@/src/shared/image/types';
+import {endsEastAsianText, startsEastAsianText} from '../textBoundary';
+import type {NumericEvidenceOcrLine} from '../core';
+import {numericInformation} from './mangaNumeric';
+import type {ImageParagraphContinuations,ImageTextRegion} from '../paragraphs';
+import {attachImageRuby} from '../ruby';
 
-export interface MangaOcrItem {
+export interface MangaOcrItem extends Pick<ImageTextRegion,'quarterTurn'|'preserveSource'> {
     text: string;
     confidence: number;
     box: {x: number; y: number; width: number; height: number};
 }
-export interface MangaRegion extends OcrLine {fontSize: number; sourceBoxes?: OcrLine['bbox'][]}
+export interface MangaRegion extends ImageTextRegion {fontSize: number}
 
 function union(left: OcrLine['bbox'], right: OcrLine['bbox']): OcrLine['bbox'] {
     return {x0: Math.min(left.x0, right.x0), y0: Math.min(left.y0, right.y0),
         x1: Math.max(left.x1, right.x1), y1: Math.max(left.y1, right.y1)};
 }
 
-function adjacent(left: MangaRegion, right: MangaRegion, lineGap: number): boolean {
-    if (left.vertical !== right.vertical) return false;
+function adjacent(left: MangaRegion, right: MangaRegion, lineGap: number, columnGap: number): boolean {
+    if (left.vertical !== right.vertical || left.quarterTurn || right.quarterTurn || left.preserveSource || right.preserveSource) return false;
     const a = left.bbox, b = right.bbox;
     const [start, end, crossStart, crossEnd] = left.vertical
         ? ['x0', 'x1', 'y0', 'y1'] as const : ['y0', 'y1', 'x0', 'x1'] as const;
@@ -32,70 +38,116 @@ function adjacent(left: MangaRegion, right: MangaRegion, lineGap: number): boole
     if (centers < thickness * 0.45) {
         return gap <= 0 && -overlap <= thickness * 0.8;
     }
-    return gap <= thickness * lineGap
+    return gap <= thickness * (left.vertical ? columnGap : lineGap)
         && overlap >= Math.min(a[crossEnd] - a[crossStart], b[crossEnd] - b[crossStart]) * 0.5;
 }
 
+/** Paddle 的 spaceRecovery 可能在日文假名或汉字之间插入英文式空格；只归一化相邻日文字符，不碰拉丁词界。 */
+function removeIsolatedLowercaseLatinI(sourceText:string):string {
+    if(!/^[\x00-\x7f]+$/u.test(sourceText)||!/[A-Z]/u.test(sourceText)||![...sourceText].every(char=>char==='i'||char===char.toUpperCase()))return sourceText;
+    const index=sourceText.indexOf('i');if(index<0||sourceText.lastIndexOf('i')!==index)return sourceText;
+    const before=sourceText.slice(0,index),after=sourceText.slice(index+1),previous=before.trimEnd().split(/\s+/u).at(-1)!,next=after.trimStart().split(/\s+/u)[0]!;
+    if(before.endsWith(' ')&&new Set(['THE','AND','OF','TO','IN','ON','AT','IS','A','AN']).has(previous)&&next.length>=3)return before+after;
+    if(!before.endsWith(' ')&&previous.length>=3&&next==='A')return `${before} ${after}`;
+    return sourceText;
+}
+export function normalizeMangaSourceText(sourceText:string, sourceLanguage:string):string {
+    if(numericInformation(sourceText))return sourceText;
+    const text=removeIsolatedLowercaseLatinI(sourceText.replace(/\s+/gu,' '));
+    const japanese=/^(?:ja|jpn)(?:-|$)/iu.test(sourceLanguage)
+        ||/[\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}]/u.test(text);
+    return japanese?text.replace(/([\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}]) +(?=[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}])/gu,'$1'):text;
+}
+
 /** 源语言只用于排除明确不符的绘画噪声；自动检测保留两种书写系统。 */
-export function groupMangaText(items: MangaOcrItem[], sourceLanguage: string, width: number, height: number, context: 'page' | 'bubble' = 'page'): MangaRegion[] {
+export function groupMangaText(items: MangaOcrItem[], sourceLanguage: string, width: number, height: number, context: 'page' | 'bubble' = 'page', protectNumeric = false): MangaRegion[] {
     if (![width, height].every(value => Number.isSafeInteger(value) && value > 0)) return [];
     const english = /^en(?:-|$)/i.test(sourceLanguage);
     const japanese = /^(?:ja|jpn)(?:-|$)/i.test(sourceLanguage);
     const lines: MangaRegion[] = items.flatMap(item => {
-        const text = item.text.replace(/\s+/gu, ' ').trim();
+        const text=normalizeMangaSourceText(item.text.trim(),sourceLanguage);
         const box = item.box;
-        if (!Number.isFinite(item.confidence) || item.confidence < 0.65 || !text || !/\p{L}/u.test(text)
-            || (english && (!/[a-z]/iu.test(text) || /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/u.test(text)))
-            || (japanese && !/[\u3040-\u30ff\u3400-\u9fff]/u.test(text) && text.replace(/[^a-z]/giu,'').length < 4)
+        if (!Number.isFinite(item.confidence) || item.confidence < 0.65 || item.confidence > 1 || !text) return [];
+        const numericSyntax=numericInformation(text);
+        const numeric=item.confidence>=0.9&&numericSyntax;
+        if (numericSyntax && !numeric) return [];
+        if ((!numeric && (!/\p{L}/u.test(text)
+            || (english && (!/[a-z]/iu.test(text) || /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/u.test(text)))
+            || (japanese && !item.quarterTurn && !/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u3040-\u30ff\u3400-\u9fff]/u.test(text) && text.replace(/[^a-z]/giu,'').length < 4)))
             || ![box.x, box.y, box.width, box.height].every(Number.isFinite) || box.width <= 0 || box.height <= 0) return [];
         const bbox = {x0: Math.max(0, box.x), y0: Math.max(0, box.y),
             x1: Math.min(width, box.x + box.width), y1: Math.min(height, box.y + box.height)};
         if (bbox.x1 <= bbox.x0 || bbox.y1 <= bbox.y0) return [];
-        const vertical = !english && box.height > box.width * 1.8;
-        const fontSize = vertical ? box.width : box.height;
+        const vertical = !item.quarterTurn && !english && box.height > box.width * 1.8;
+        const fontSize = vertical || item.quarterTurn ? box.width : box.height;
         // 巨大拟声字和纹理中的孤字不作为对白；保留 I/A 等合法英语短句。
-        if (Array.from(text.replace(/[^\p{L}\p{N}]/gu, '')).length < 2
-            && (english ? !/^[IA][.!?]?$/u.test(text) : item.confidence < 0.9 || Math.max(box.width, box.height) > width * 0.12)) return [];
-        return [{text, bbox, fontSize, ...(vertical ? {vertical: true as const} : {})}];
+        if (!numeric && Array.from(text.replace(/[^\p{L}\p{N}]/gu, '')).length < 2
+            && (english ? !/^[IA][.!?]?$/u.test(text) : item.confidence < 0.9 || (context !== 'bubble' && Math.max(box.width, box.height) > width * 0.12))) return [];
+        return [{text, bbox, fontSize, ...(vertical ? {vertical: true as const} : {}),
+            ...(item.quarterTurn ? {quarterTurn:item.quarterTurn,textAlign:'center' as const} : {}),
+            ...(item.preserveSource ? {preserveSource:true as const} : {})}];
     });
-    // 小写/大写字形框较矮时，同一气泡的正常行距可略大于字形高度；整页与通用 OCR 保持原有边界。
-    return mergeMangaLines(lines, context === 'bubble' ? 1.1 : 0.8);
+    // 只有已有明确归属的独立气泡才允许较宽横排行距；整页竖列最多放宽至1.8倍字宽，
+    // 避免把邻近旁白或不同说话者误并成一句。
+    const annotated=attachImageRuby(lines).lines;
+    if (!protectNumeric) return mergeMangaLines(annotated, context === 'bubble' ? 1.5 : 0.8, context === 'bubble' ? 3.5 : 1.8);
+    const numeric = lines.filter(line => numericInformation(line.text));
+    const others = annotated.filter(line => !numericInformation(line.text));
+    return [...mergeMangaLines(others, context === 'bubble' ? 1.5 : 0.8, context === 'bubble' ? 3.5 : 1.8),
+        ...numeric.map(line => ({...line, sourceBoxes: [line.bbox]}))].sort(readingOrder);
 }
 
 /** 已规范化的 Tesseract 行不带漫画字号；从原图行框补足修补契约，再合并跨行对白，保留所有原始框。 */
-export function groupMangaOcrLines(lines: OcrLine[], sourceLanguage: string, width: number, height: number): MangaRegion[] {
+export function groupMangaOcrLines(lines: NumericEvidenceOcrLine[], sourceLanguage: string, width: number, height: number): MangaRegion[] {
     if (![width, height].every(value => Number.isSafeInteger(value) && value > 0)) return [];
     const language = sourceLanguage.trim().replace(/_/gu, '-').toLowerCase().split('-')[0];
     const regions: MangaRegion[] = lines.flatMap(line => {
-        const text = line.text.replace(/\s+/gu, ' ').trim();
+        const text=normalizeMangaSourceText(line.text.trim(),language);
         const {x0, y0, x1, y1} = line.bbox;
-        if (!text || !/\p{L}/u.test(text) || ![x0, y0, x1, y1].every(Number.isFinite)) return [];
+        const numeric = typeof line.numericConfidence === 'number' && Number.isFinite(line.numericConfidence)
+            && line.numericConfidence >= 90 && line.numericConfidence <= 100 && numericInformation(text);
+        if (numericInformation(text) && !numeric) return [];
+        if (!text || (!numeric && !/\p{L}/u.test(text)) || ![x0, y0, x1, y1].every(Number.isFinite)) return [];
         // 与日文专用模型一致，排除绘画上误识别的短拉丁碎片；合法源语言字和完整英文词仍保留。
         const native = language === 'ru' ? /\p{Script=Cyrillic}/u.test(text)
-            : language === 'ko' ? /[\uac00-\ud7a3]/u.test(text) : true;
-        if (!native && text.replace(/[^a-z]/giu, '').length < 4) return [];
+            : language === 'ko' ? /[\uac00-\ud7a3]|(?:(?![\u115f\u1160\u3164\uffa0])(?=\p{L})\p{Script=Hangul}){2}/u.test(text) : true;
+        if (!numeric && !native && text.replace(/[^a-z]/giu, '').length < 4) return [];
         const bbox = {x0: Math.max(0, x0), y0: Math.max(0, y0), x1: Math.min(width, x1), y1: Math.min(height, y1)};
         if (bbox.x1 <= bbox.x0 || bbox.y1 <= bbox.y0) return [];
-        return [{text, bbox, fontSize: line.vertical ? bbox.x1 - bbox.x0 : bbox.y1 - bbox.y0,
+        const sourceBoxes = line.sourceBoxes?.map(box => ({x0: Math.max(0, box.x0), y0: Math.max(0, box.y0),
+            x1: Math.min(width, box.x1), y1: Math.min(height, box.y1)}))
+            .filter(box => [box.x0,box.y0,box.x1,box.y1].every(Number.isFinite) && box.x1 > box.x0 && box.y1 > box.y0);
+        if (sourceBoxes && !sourceBoxes.length) return [];
+        const sizes = (sourceBoxes ?? [bbox]).map(box => line.vertical ? box.x1 - box.x0 : box.y1 - box.y0).sort((a,b)=>a-b);
+        return [{text, bbox, fontSize: sizes[Math.floor(sizes.length / 2)],
+            ...(sourceBoxes ? {sourceBoxes} : {}),
             ...(line.vertical ? {vertical: true as const} : {})}];
     });
-    return mergeMangaLines(regions);
+    const numeric = regions.filter(line => numericInformation(line.text));
+    const others = attachImageRuby(regions).lines.filter(line => !numericInformation(line.text));
+    return [...mergeMangaLines(others), ...numeric.map(line => ({...line, sourceBoxes: [line.bbox]}))].sort(readingOrder);
 }
 
-function mergeMangaLines(lines: MangaRegion[], lineGap = 0.8): MangaRegion[] {
+function readingOrder(a: MangaRegion, b: MangaRegion): number {
+    return a.bbox.y0 - b.bbox.y0 || b.bbox.x0 - a.bbox.x0;
+}
+
+function mergeMangaLines(lines: MangaRegion[], lineGap = 0.8, columnGap = 0.8): MangaRegion[] {
     const groups: MangaRegion[][] = [];
     const remaining = new Set(lines);
     for (const first of lines) {
         if (!remaining.delete(first)) continue;
         const members = [first];
         for (let cursor = 0; cursor < members.length; cursor += 1) {
-            for (const next of remaining) if (adjacent(members[cursor], next, lineGap)) {
+            for (const next of remaining) if (adjacent(members[cursor], next, lineGap, columnGap)) {
                 remaining.delete(next); members.push(next);
             }
         }
         groups.push(members);
     }
     return groups.map(members => {
+        const first=members[0];
+        if(first.quarterTurn||first.preserveSource)return {...first,sourceBoxes:[first.bbox]};
         members.sort((a, b) => {
             const near = Math.min(a.fontSize, b.fontSize) * 0.45;
             return a.vertical
@@ -103,11 +155,40 @@ function mergeMangaLines(lines: MangaRegion[], lineGap = 0.8): MangaRegion[] {
                 : Math.abs(a.bbox.y0 - b.bbox.y0) < near ? a.bbox.x0 - b.bbox.x0 : a.bbox.y0 - b.bbox.y0;
         });
         const sizes = members.map(member => member.fontSize).sort((a, b) => a - b);
-        const text=members.map(member => member.text).join(members[0].vertical ? '' : ' ')
-            .replace(/(\p{L}{2,})-\s+(\p{L})/gu,'$1$2');
+        const text=members.reduce((text, member) => {
+            if (text.endsWith('\u00ad')) return text.slice(0,-1) + member.text;
+            const endsCjk = endsEastAsianText(text), startsCjk = startsEastAsianText(member.text);
+            const hyphen = /\p{L}-$/u.test(text) && /^\p{L}/u.test(member.text);
+            const separator = !text || members[0].vertical || hyphen || ((endsCjk || /[。！？、」』】）]$/u.test(text)) && startsCjk) ? '' : ' ';
+            return text + separator + member.text;
+        }, '');
         return {text,
             bbox: members.map(member => member.bbox).reduce(union), fontSize: sizes[Math.floor(sizes.length / 2)],
-            sourceBoxes: members.map(member => ({...member.bbox})),
+            sourceBoxes: members.flatMap(member => (member.sourceBoxes ?? [member.bbox]).map(box => ({...box}))),
+            ...(members.some(member=>member.ruby)?{ruby:members.flatMap(member=>member.ruby??[])}:{}),
             ...(members[0].vertical ? {vertical: true as const} : {})};
-    }).sort((a, b) => a.bbox.y0 - b.bbox.y0 || b.bbox.x0 - a.bbox.x0);
+    }).sort(readingOrder);
+}
+
+/** 仅消费同帧像素已证明的横排后继；无证明时页面仍沿用严格行距。 */
+export function mergeMangaParagraphContinuations(lines:MangaRegion[],continuations?:ImageParagraphContinuations):MangaRegion[]{
+    if(!continuations||!lines.length)return lines;
+    const ordered=[...lines].sort(readingOrder),available=new Set(ordered),used=new Set<MangaRegion>(),result:MangaRegion[]=[];
+    for(const first of ordered){
+        if(used.has(first))continue;
+        const members=[first];let bounds=first.bbox;
+        if(!first.vertical&&!first.guardOnly&&!numericInformation(first.text)&&!first.sourceBoxes){
+            for(let count=0;count<ordered.length;count++){
+                const previous=members[members.length-1],next=continuations.successor(previous) as MangaRegion|undefined;
+                if(!next||!available.has(next)||used.has(next)||next.vertical||next.guardOnly||numericInformation(next.text)||next.sourceBoxes)break;
+                const candidate=union(bounds,next.bbox);
+                if(!continuations.permits(previous,next,members,candidate))break;
+                members.push(next);bounds=candidate;
+            }
+        }
+        const grouped=members.length>1?mergeMangaLines(members,3.5,0.8):members;
+        for(const member of members)used.add(member);
+        result.push(...grouped);
+    }
+    return result.sort(readingOrder);
 }

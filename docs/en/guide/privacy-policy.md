@@ -4,6 +4,4 @@ search: false
 
 # Privacy policy location
 
-Current information is kept in the [privacy policy](/en/guide/privacy), covering translation requests, image and document handling, local collections, reading history, Google Drive configuration sync, and deletion controls.
-
-The historical external policy archive remains in the repository’s maintainer materials and is not presented as current feature documentation.
+Read the [FluentRead privacy policy](/en/guide/privacy) for translation requests, local records, credentials, Google Drive and WebDAV backups, data protection, and deletion controls.

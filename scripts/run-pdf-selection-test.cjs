@@ -84,7 +84,8 @@ function harnessFixtureTranslation(source, expansion = 1) {
 }
 
 async function createFixture(files, {paperLayout = false, includePaperTail = false, taskInteraction = false, preserveProtectedTokens = false} = {}) {
-  const state = {requests: [], pdfRequests: [], completed: [], stalledRequests: 0, canceledDownloads: 0, paperExpansion: 1, translationDelayMs: 20};
+  const state = {requests: [], pdfRequests: [], completed: [], stalledRequests: 0, canceledDownloads: 0, paperExpansion: 1, translationDelayMs: 20,
+    transientFailures: [], transientResponses: []};
   const server = http.createServer(async (request, response) => {
     response.setHeader('Access-Control-Allow-Origin', '*');
     response.setHeader('Access-Control-Allow-Headers', '*');
@@ -109,9 +110,18 @@ async function createFixture(files, {paperLayout = false, includePaperTail = fal
       const prompt = body.messages.filter(message => message.role === 'user').map(message => typeof message.content === 'string' ? message.content : JSON.stringify(message.content)).join('\n');
       const source = /SOURCE_BEGIN([\s\S]*?)SOURCE_END/u.exec(prompt)?.[1];
       assert.equal(typeof source, 'string', '翻译夹具需要明确的 SOURCE_BEGIN/SOURCE_END 原文边界');
-      const translation = preserveProtectedTokens ? harnessFixtureTranslation(source, state.paperExpansion)
+      // 任务交互验证恢复与选择，不依赖回显英文；使用中文夹具避免错语种校验拒绝长段原文。
+      const translation = taskInteraction ? `测试译文：${harnessFixtureTranslation(source, state.paperExpansion)}`
+        : preserveProtectedTokens ? harnessFixtureTranslation(source, state.paperExpansion)
         : paperLayout ? paperFixtureTranslation(source, state.paperExpansion, includePaperTail) : `测试译文：${source}`;
       const entry = {source, model: body.model, translation, ...(paperLayout ? {expansion: state.paperExpansion, evidence: 'manually generated Chinese layout fixture; not translation quality'} : {}), startedAt: Date.now()}; state.requests.push(entry);
+      const transient = state.transientFailures.shift();
+      if (transient) {
+        entry.httpStatus = transient.status; entry.retryAfterSeconds = transient.retryAfterSeconds;
+        state.transientResponses.push({status: transient.status, retryAfterSeconds: transient.retryAfterSeconds, startedAt: entry.startedAt});
+        response.writeHead(transient.status, {'Content-Type': 'application/json', 'Retry-After': String(transient.retryAfterSeconds)});
+        response.end(JSON.stringify({error: {message: `Fixture ${transient.status}: temporarily unavailable; automatic retry expected`, type: transient.status === 429 ? 'rate_limit_error' : 'server_error'}})); return;
+      }
       if (taskInteraction && body.model === 'pdf-failing' && state.requests.filter(value => value.model === 'pdf-failing').length >= 3) {
         entry.failed = true; response.writeHead(400, {'Content-Type': 'application/json'});
         response.end(JSON.stringify({error: {message: 'Fixture model unavailable; choose another model to resume', type: 'invalid_request_error', code: 'model_not_found'}})); return;
@@ -317,6 +327,7 @@ async function main() {
   const paperLayoutFollowup = process.argv.includes('--paper-layout-followup');
   const paperLayoutCancelOnly = process.argv.includes('--paper-layout-cancel-only');
   const taskInteraction = process.argv.includes('--interaction-recovery-only') || process.argv.includes('--selection-baseline-only');
+  const retranslationOnly = process.argv.includes('--retranslation-only');
   assert(packages, '需要 --playwright-root 或 PLAYWRIGHT_ROOT');
   assert(fs.existsSync(path.join(extensionDir, 'manifest.json')), '请先生成生产扩展产物');
   if (arxivPath) assert(fs.existsSync(arxivPath), '找不到 --arxiv-pdf 指定的论文');
@@ -324,6 +335,9 @@ async function main() {
   if (harnessLayoutOnly) assert(arxivPath, '--harness-layout-only 需要真实 --arxiv-pdf 论文夹具');
   const {chromium} = createRequire(path.join(path.resolve(packages), 'pdf-selection-runner.cjs'))('playwright');
   const helper = require(path.resolve(arg('focus-safe-helper', path.join(__dirname, 'testing/focus-safe-browser.cjs'))));
+  const diagnosticsPath = arg('runtime-diagnostics-helper', process.env.FLUENTREAD_RUNTIME_DIAGNOSTICS_HELPER);
+  assert(diagnosticsPath, '需要 --runtime-diagnostics-helper 或 FLUENTREAD_RUNTIME_DIAGNOSTICS_HELPER');
+  const diagnostics = require(path.resolve(diagnosticsPath)).createRuntimeDiagnostics();
   fs.mkdirSync(artifactsDir, {recursive: true});
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fluentread-pdf-selection-'));
   // Chromium 原生键盘浏览非编辑文字需启用 caret browsing；只设置新建临时 profile，不读取用户 profile。
@@ -334,13 +348,13 @@ async function main() {
     profileMode: 'new temporary profile', nativeCaretBrowsing: {enabled: true, scope: 'new temporary test profile only', preference: 'settings.a11y.caretbrowsing.enabled'}, selectionInput: 'real Playwright mouse drag and keyboard over PDF.js TextLayer',
     selectionLimits: {paperTitle: 'Not claimed: prior isolated background Input title drags collapsed with unchanged text-node identity and user-select:text; no product cause demonstrated. This suite selects meaningful abstract source text.'}};
   if (skipRotations) report.skipped = ['rotatedPDF'];
-  let fixture, launched, page, launchAttempted = false;
+  let fixture, launched, page, launchAttempted = false, diagnosticsStarted = false;
   const record = name => {report.cases.push(name); process.stdout.write(`PASS ${name}\n`);};
   try {
-    const smallPdf = await createPdf(3, 0, taskInteraction), longPdf = await createPdf(120);
+    const smallPdf = await createPdf(retranslationOnly ? 1 : 3, 0, taskInteraction || retranslationOnly), longPdf = await createPdf(120);
     fs.writeFileSync(path.join(artifactsDir, 'selection-fixture.pdf'), smallPdf);
     fs.writeFileSync(path.join(artifactsDir, 'long-120.pdf'), longPdf);
-    fixture = await createFixture({'/selection-fixture.pdf': smallPdf}, {paperLayout: paperLayoutOnly || harnessLayoutOnly, includePaperTail: paperLayoutOnly && !paperLayoutBaseline, taskInteraction, preserveProtectedTokens: harnessLayoutOnly});
+    fixture = await createFixture({'/selection-fixture.pdf': smallPdf}, {paperLayout: paperLayoutOnly || harnessLayoutOnly, includePaperTail: paperLayoutOnly && !paperLayoutBaseline, taskInteraction, preserveProtectedTokens: harnessLayoutOnly || retranslationOnly});
     launchAttempted = true;
     launched = await helper.launchFocusSafePersistentContext({chromium, profileDir,
       browserPath: arg('browser-path', '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'), background: true, headless: false,
@@ -350,6 +364,7 @@ async function main() {
     Object.assign(report, {launchMode: launched.launchMode, focusPolicy: launched.focusPolicy, windowPlacement: launched.windowPlacement});
     assert.equal(launched.windowPlacement.browserFrontmost, false, '测试浏览器不能成为用户前台应用');
     const context = launched.context;
+    await diagnostics.start(context); diagnosticsStarted = true;
     const browserPid = await getGuardedBrowserPid(launched);
     const checkFocus = async stage => {
       if (process.platform !== 'darwin') return;
@@ -360,8 +375,10 @@ async function main() {
       assert.notEqual(frontmost.pid, browserPid, `测试 Edge 成为前台，停止 ${stage}`);
     };
     const {worker, extensionId} = await support.waitForWorker(context);
+    diagnostics.setExtensionId(extensionId);
     const origin = `chrome-extension://${extensionId}`;
     const preparePage = async next => {
+      await diagnostics.attachPage(next, 'document');
       next.setDefaultTimeout(30000);
       next.on('pageerror', error => report.consoleErrors.push({url: next.url(), error: error.message}));
       next.on('console', message => {if (message.type() === 'error') report.consoleErrors.push({url: next.url(), error: message.text()});});
@@ -378,8 +395,9 @@ async function main() {
       customOpenAIProviders: [{id: service, name: 'PDF 本机确定性测试', endpoint: `${fixture.base}/v1/chat/completions`, models: taskInteraction ? ['pdf-fixture', 'pdf-failing', 'pdf-rescue'] : ['pdf-fixture']}, ...(taskInteraction ? [{id: 'custom:pdf-rescue', name: 'PDF 备用测试服务', endpoint: `${fixture.base}/v1/chat/completions`, models: ['pdf-rescue']}] : [])],
       requireApiKey: Object.fromEntries((taskInteraction ? [[service, 'pdf-fixture'], [service, 'pdf-failing'], [service, 'pdf-rescue'], ['custom:pdf-rescue', 'pdf-rescue']] : [[service, 'pdf-fixture']]).map(pair => [`v2:${JSON.stringify(pair)}`, false])), token: {...current.token, [service]: 'fixture-token', ...(taskInteraction ? {'custom:pdf-rescue': 'fixture-token'} : {})},
       selectionTranslatorMode: 'bilingual', selectionTranslatorTrigger: 'icon', selectionTranslatorDelay: 0, selectionTranslatorAutoDismiss: false,
-      useCache: false, hotkey: 'none', floatingBallHotkey: 'none', enableAIContext: false, enableAIMultiSegment: false});
-    if (paperLayoutOnly || taskInteraction || harnessLayoutOnly) {
+      useCache: retranslationOnly, ...(retranslationOnly ? {translationMaxRetries: 0} : {}),
+      hotkey: 'none', floatingBallHotkey: 'none', enableAIContext: false, enableAIMultiSegment: false});
+    if (paperLayoutOnly || taskInteraction || harnessLayoutOnly || retranslationOnly) {
       await support.patchStoredConfig(configPage, {translationRequestsPerSecond: 0, translationRequestsPerMinute: 0});
       report.fixtureRequestLimits = {perSecond: 0, perMinute: 0, scope: 'owned isolated profile and local fixture only; product default remains unchanged'};
     }
@@ -607,6 +625,15 @@ async function main() {
       assert((await uiText()).includes(`测试译文：${requestedSource}`)); report.crossPage = {nativeSelection: selected, requestedSource, input: 'mouse down; inner viewport scrollTop; mouse move and up'};
     };
 
+    if (retranslationOnly) {
+      const {runPdfRetranslation} = require('./testing/pdf-retranslation.cjs');
+      page = await openDocument(); await load('retranslation-fixture.pdf', smallPdf);
+      assert.equal((await support.readStoredConfig(configPage)).useCache, true, '重译专项必须启用真实翻译缓存');
+      await runPdfRetranslation({page, fixture, report, shot, record, until, wait, openDocument, rowReady, checkFocus, artifactsDir});
+      await checkFocus('PDF retranslation scope complete');
+      assert.equal(report.consoleErrors.length, 0, `浏览器错误：${JSON.stringify(report.consoleErrors)}`);
+      report.ok = true; return;
+    }
     if (harnessLayoutOnly) {
       const {runPdfHarnessLayout} = require('./testing/pdf-harness-layout.cjs');
       page = await openDocument(); await load('arxiv-2609.35738.pdf', fs.readFileSync(arxivPath));
@@ -617,7 +644,7 @@ async function main() {
     if (taskInteraction) {
       const {runPdfTaskInteractions} = require('./testing/pdf-task-interactions.cjs');
       page = await openDocument(); await load('selection-fixture.pdf', smallPdf);
-      await runPdfTaskInteractions({page, fixture, report, shot, record, patch, service, until, wait, resourceState, uiNode, translateDrag,
+      await runPdfTaskInteractions({page, fixture, report, shot, record, patch, service, until, wait, resourceState, uiNode, uiText, clickNode, translateDrag,
         baseline: process.argv.includes('--selection-baseline-only')});
       await checkFocus('PDF interaction recovery complete');
       assert.equal(report.consoleErrors.length, 0, `浏览器错误：${JSON.stringify(report.consoleErrors)}`);
@@ -984,7 +1011,7 @@ async function main() {
       report.ok = true; record('actual paper Chinese layout baseline captured; readability failures recorded without claiming a layout pass'); return;
     }
 
-    page = await openDocument(); await load('sample.pdf', fs.readFileSync(path.join(__dirname, '..', 'examples/document-translation/sample.pdf'))); await resourceState('local sample'); await shot('sample-local'); record('local sample PDF retains canvas and a selectable PDF.js text layer');
+    page = await openDocument(); await load('sample.pdf', fs.readFileSync(path.join(__dirname, '..', 'tests/fixtures/document-translation/sample.pdf'))); await resourceState('local sample'); await shot('sample-local'); record('local sample PDF retains canvas and a selectable PDF.js text layer');
     if (arxivPath) {
       page = await openDocument(); await load('attention-is-all-you-need.pdf', fs.readFileSync(arxivPath));
       const text = await page.locator('[data-fluentread-pdf-text][data-pdf-page-number="1"]').innerText(); assert(/attention/iu.test(text), '论文第一页文字层必须含 Attention');
@@ -1222,6 +1249,14 @@ async function main() {
     if (!report.ok) process.exitCode = 1;
   } catch (error) {report.ok = false; report.error = error.stack || String(error); process.exitCode = 1; if (page && !page.isClosed()) {try {const file = path.join(artifactsDir, 'failure.png'); await page.screenshot({path: file}); report.screenshots.push(file);} catch {}}}
   finally {
+    if (diagnosticsStarted) {
+      try {
+        await diagnostics.flush();
+        if (report.ok) diagnostics.assertClean();
+      } catch (error) {report.ok = false; report.diagnosticsError = String(error); process.exitCode = 1;}
+      try {diagnostics.write(artifactsDir, report);} catch (error) {report.ok = false; report.diagnosticsWriteError = String(error); process.exitCode = 1;}
+      try {await diagnostics.stop();} catch (error) {report.ok = false; report.diagnosticsCleanupError = String(error); process.exitCode = 1;}
+    }
     let closed = false;
     try {if (launched) {await launched.close(); closed = true;}} catch (error) {report.ok = false; report.cleanupError = error.stack || String(error); process.exitCode = 1;}
     if (fixture) {report.fixtureRequests = fixture.state; await fixture.close();}

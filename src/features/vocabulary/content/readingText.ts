@@ -69,17 +69,6 @@ function* collectReadingGroupsWork(document: Document, onRoot?: (root: ShadowRoo
   return {groups, roots};
 }
 
-function complete<T>(work: Generator<undefined, T>): T {
-  let step = work.next();
-  while (!step.done) step = work.next();
-  return step.value;
-}
-
-/** 同步公共入口保留完整分组与原生 Text 身份；实际内容生命周期使用分帧工作入口。 */
-export function collectReadingGroups(document: Document): {groups: TextGroup[]; roots: Array<Document | ShadowRoot>} {
-  return complete(collectReadingGroupsWork(document));
-}
-
 /** 每个检查点允许调用方让出执行权；结果全部完成后才交付，关闭迭代器会释放未绘制的分组与范围。 */
 export function* scanReadingExpressionsWork(document: Document, entries: readonly ReencounterEntry[], index: ExpressionIndex, onRoot?: (root: ShadowRoot) => void): Generator<undefined, ReadingScan> {
   if (!entries.length || index.nodes.length === 1) return {occurrences: [], roots: [document]};
@@ -121,9 +110,4 @@ export function* scanReadingExpressionsWork(document: Document, entries: readonl
     if (occurrences.length >= 300) break;
   }
   return {occurrences, roots};
-}
-
-/** 同步入口复用同一工作链路；扫描器按帧执行它，不为一个段落先分配所有候选。 */
-export function scanReadingExpressions(document: Document, entries: readonly ReencounterEntry[], index: ExpressionIndex): ReadingScan {
-  return complete(scanReadingExpressionsWork(document, entries, index));
 }

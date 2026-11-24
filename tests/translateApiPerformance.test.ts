@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
     } as Record<string, string>,
     customModel: {mock: '', 'mock-ai': '', chromeTranslator: ''} as Record<string, string>,
     service: 'mock',
+    disabledTranslationServices: [] as string[],
     from: 'en',
     to: 'zh-CN',
     useCache: true,
@@ -65,14 +66,14 @@ vi.mock('@/src/core/config/catalog', async (importOriginal) => {
 vi.mock('@/src/services/translation/context', () => ({getPageTranslationContext: mocks.getPageTranslationContext}));
 vi.mock('@/src/core/config/validation', () => ({getMissingCredentialMessage: mocks.getMissingCredentialMessage}));
 
-import {cancelAllTranslations, translateText, translateTextBatch, translateVideoText} from '@/src/services/translation/client';
+import {cancelAllTranslations, getTranslationTimeout, translateText, translateTextBatch, translateVideoText} from '@/src/services/translation/client';
 import {
   createTranslationCancelHandler,
   createTranslationRequestFallback,
   createTranslationRequestRegistry,
   type TranslationRequestContext,
 } from '@/src/app/background/handlers/translation';
-import {clearTranslationQueue} from '@/src/services/translation/queue';
+import {cancelTranslationQueueSession, clearTranslationQueue, createTranslationQueueSession} from '@/src/services/translation/queue';
 import {getTranslationRequestControl} from '@/src/services/translation/requestSnapshot';
 
 const originalDocument = globalThis.document;
@@ -111,6 +112,27 @@ function enableContextGate(): void {
 }
 
 describe('translation API request lifecycle performance', () => {
+  it.each(['single', 'batch'] as const)('freezes and bounds subtitle context for %s without changing the document scope', async kind => {
+    mocks.config.service = 'mock-ai'; mocks.config.enableAIContext = true;
+    const context = deferred<string>(); mocks.getPageTranslationContext.mockReturnValue(context.promise);
+    mocks.sendMessage.mockResolvedValue(kind === 'single' ? '有效译文' : ['有效译文']);
+    const options = {subtitleContext: 'a'.repeat(1500), glossaryContext: 'document' as const, maxRetries: 0};
+    const pending = kind === 'single' ? translateText('Source', 'Document', options) : translateTextBatch(['Source'], 'Document', options);
+    await flushMicrotasks(); options.subtitleContext = 'changed after awaiting'; context.resolve('page context'); await pending;
+    expect(mocks.sendMessage).toHaveBeenCalledWith(expect.objectContaining({subtitleContext: 'a'.repeat(1200), glossaryContext: 'document'}));
+  });
+  it.each(['single', 'batch', 'video'] as const)('rejects disabled %s requests before context, credentials, transport and accounting, then allows re-enable', async kind => {
+    mocks.config.disabledTranslationServices = ['mock'];
+    const run = () => kind === 'batch' ? translateTextBatch(['Source'], 'Page')
+      : kind === 'video' ? translateVideoText('Source') : translateText('Source', 'Page');
+    await expect(run()).rejects.toMatchObject({kind: 'bad-request', retryable: false, code: 'TRANSLATION_SERVICE_DISABLED'});
+    expect(mocks.sendMessage).not.toHaveBeenCalled(); expect(mocks.getPageTranslationContext).not.toHaveBeenCalled();
+    expect(mocks.getMissingCredentialMessage).not.toHaveBeenCalled(); expect(mocks.persistCountIncrement).not.toHaveBeenCalled();
+    mocks.config.disabledTranslationServices = [];
+    mocks.sendMessage.mockResolvedValue(kind === 'batch' ? ['有效译文'] : '有效译文');
+    await expect(run()).resolves.toEqual(kind === 'batch' ? ['有效译文'] : '有效译文');
+    expect(mocks.sendMessage).toHaveBeenCalledOnce();
+  });
   beforeEach(() => {
     vi.useFakeTimers();
     mocks.sendMessage.mockReset();
@@ -128,6 +150,7 @@ describe('translation API request lifecycle performance', () => {
     mocks.config.enableAIContext = false;
     mocks.config.nativeBatchTranslationEnabled = {};
     mocks.config.service = 'mock';
+    mocks.config.disabledTranslationServices = [];
     mocks.config.videoService = 'mock';
     mocks.config.compositeTranslationProviders = [];
     mocks.config.aiRequestTimeoutMs = undefined;
@@ -153,6 +176,29 @@ describe('translation API request lifecycle performance', () => {
     vi.useRealTimers();
     Object.defineProperty(globalThis, 'document', {value: originalDocument, configurable: true});
     Object.defineProperty(globalThis, 'location', {value: originalLocation, configurable: true});
+  });
+
+  it.each([false, true])('Chrome 批量标记 %s 的公开预算与真实客户端请求保持一致，显式覆盖优先', async batch => {
+    const expected = batch ? 45_000 : 300_000;
+    expect(getTranslationTimeout('chromeTranslator', undefined, batch)).toBe(expected);
+    expect(getTranslationTimeout('chromeTranslator', 2_000, batch)).toBe(2_000);
+    mocks.config.service = 'chromeTranslator';
+    mocks.sendMessage.mockResolvedValue(batch ? ['内置译文'] : '内置译文');
+    if (batch) await translateTextBatch(['Chrome budget source'], 'Page', {maxRetries: 0});
+    else await translateText('Chrome budget source', 'Page', {maxRetries: 0});
+    expect(mocks.sendMessage.mock.calls[0][0]).toMatchObject({requestTimeoutMs: expected - 1_000});
+  });
+
+  it.each([10_000, 600_000].flatMap(timeout => [false, true].map(batch => ({timeout, batch}))))
+  ('AI $timeout 毫秒配置在批量标记 $batch 的公开预算及真实请求中保留', async ({timeout, batch}) => {
+    mocks.config.service = 'mock-ai';
+    mocks.config.aiRequestTimeoutMs = timeout;
+    expect(getTranslationTimeout('mock-ai', undefined, batch)).toBe(timeout + 1_000);
+    expect(getTranslationTimeout('mock-ai', 2_000, batch)).toBe(2_000);
+    mocks.sendMessage.mockResolvedValue(batch ? ['配置预算译文'] : '配置预算译文');
+    if (batch) await translateTextBatch(['AI budget source'], 'Page', {maxRetries: 0});
+    else await translateText('AI budget source', 'Page', {maxRetries: 0});
+    expect(mocks.sendMessage.mock.calls[0][0]).toMatchObject({requestTimeoutMs: timeout});
   });
 
   it.each(['single', 'batch', 'video'] as const)('%s AI 默认允许超过 45 秒响应，并完整提供 120 秒后台预算', async kind => {
@@ -627,6 +673,76 @@ describe('translation API request lifecycle performance', () => {
     expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
   });
 
+  it.each(['single', 'batch', 'video'] as const)('%s 退避释放客户端并发槽，并从原始预算扣除等待', async kind => {
+    mocks.config.maxConcurrentTranslations = 1;
+    const result = kind === 'batch' ? ['恢复译文'] : '恢复译文';
+    mocks.sendMessage.mockResolvedValueOnce({
+      marker: 'fluentread-translation-error-v1', message: '暂时限流',
+      kind: 'rate-limit', statusCode: 429, retryable: true, retryAfterMs: 5_000,
+    }).mockResolvedValueOnce('其他服务译文').mockResolvedValueOnce(result);
+    const request = kind === 'single' ? translateText('Cooling source', 'Page')
+      : kind === 'batch' ? translateTextBatch(['Cooling source'], 'Page') : translateVideoText('Cooling source');
+    await flushMicrotasks(30);
+    await expect(translateText('Healthy source', 'Page', {serviceOverride: 'other'})).resolves.toBe('其他服务译文');
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(request).resolves.toEqual(result);
+    expect(mocks.sendMessage.mock.calls[2][0].requestTimeoutMs)
+      .toBe(mocks.sendMessage.mock.calls[0][0].requestTimeoutMs - 5_000);
+  });
+
+  it.each(['signal', 'session', 'clear'] as const)('%s cancels a sleeping retry immediately', async mode => {
+    const controller = new AbortController();
+    const session = mode === 'session' ? createTranslationQueueSession() : undefined;
+    mocks.sendMessage.mockRejectedValueOnce(new Error('temporary failure'));
+    const request = translateText('Cooling source', 'Page', {
+      ...(mode === 'signal' ? {signal: controller.signal} : {}), queueSession: session,
+    }).catch(error => error);
+    await flushMicrotasks(30);
+    expect(mocks.sendMessage).toHaveBeenCalledOnce();
+    if (session) cancelTranslationQueueSession(session);
+    else if (mode === 'signal') controller.abort();
+    else clearTranslationQueue();
+    await expect(request).resolves.toMatchObject({name: mode === 'signal' ? 'AbortError' : 'TranslationQueueCancelledError'});
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mocks.sendMessage).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('returns the original structured rate-limit error immediately when waiting would exceed the budget', async () => {
+    mocks.sendMessage.mockResolvedValue({
+      marker: 'fluentread-translation-error-v1', message: '暂时限流',
+      kind: 'rate-limit', statusCode: 429, retryable: true, retryAfterMs: 30_000,
+    });
+    await expect(translateText('Cooling source', 'Page', {timeout: 5_000}))
+      .rejects.toMatchObject({kind: 'rate-limit', retryAfterMs: 30_000});
+    expect(mocks.sendMessage).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['timer', 'clock jump'])('expires a retry waiting on concurrency after the original deadline (%s)', async mode => {
+    mocks.config.maxConcurrentTranslations = 1;
+    const busy = deferred<string>();
+    const failure = new Error('temporary failure');
+    mocks.sendMessage.mockRejectedValueOnce(failure).mockReturnValueOnce(busy.promise);
+    const retry = translateText('Cooling source', 'Page', {timeout: 5_000}).catch(error => error);
+    await flushMicrotasks(30);
+    const other = translateText('Other source', 'Page', {timeout: 8_000});
+    if (mode === 'timer') {
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(retry).resolves.toBe(failure);
+    } else {
+      await vi.advanceTimersByTimeAsync(1_000);
+      vi.setSystemTime(Date.now() + 2_001);
+    }
+    busy.resolve('其他译文');
+    await expect(retry).resolves.toBe(failure);
+    await expect(other).resolves.toBe('其他译文');
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
+  });
+
   it('扩展上下文失效时立即失败，不进入无效的传输重试', async () => {
     mocks.sendMessage.mockRejectedValue(new Error('Extension context invalidated.'));
 
@@ -635,6 +751,29 @@ describe('translation API request lifecycle performance', () => {
 
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(['single', 'batch', 'video'] as const)('%s abort immediately rejects queued work before transport starts', async kind => {
+    mocks.config.maxConcurrentTranslations = 1;
+    const gate = deferred<string>();
+    mocks.sendMessage.mockReturnValueOnce(gate.promise);
+    const active = translateText('Active source', 'Page', {maxRetries: 0});
+    await flushMicrotasks(30);
+    expect(mocks.sendMessage).toHaveBeenCalledOnce();
+    const owner = new AbortController();
+    let failure: unknown;
+    const queued = contextGateRequest(kind, owner.signal).catch(error => {failure = error; return error;});
+    await flushMicrotasks(30);
+    owner.abort();
+    await flushMicrotasks();
+    try {
+      expect(failure).toMatchObject({name: 'AbortError'});
+      expect(mocks.sendMessage).toHaveBeenCalledOnce();
+    } finally {
+      gate.resolve('Completed active translation');
+      await Promise.all([active, queued]);
+    }
+    expect(mocks.sendMessage).toHaveBeenCalledOnce();
   });
 
   it('aborts a retry delay without sending another runtime request', async () => {
@@ -941,6 +1080,32 @@ describe('translation API request lifecycle performance', () => {
     }
   });
 
+  it.each(['single', 'batch', 'video'] as const)('%s 在本地队列等待时取消立即结束且不发送后台消息', async kind => {
+    mocks.config.maxConcurrentTranslations = 1;
+    const blocker = deferred<string>();
+    mocks.sendMessage.mockReturnValue(blocker.promise);
+    const active = translateText('Active readable source', 'Page', {maxRetries: 0, skipLanguageDetection: true});
+    await flushMicrotasks(40);
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    const controller = new AbortController();
+    const pending = kind === 'video' ? translateVideoText('Queued readable source', controller.signal)
+      : kind === 'batch' ? translateTextBatch(['Queued readable source'], 'Page', {signal: controller.signal, maxRetries: 0, skipLanguageDetection: true})
+        : translateText('Queued readable source', 'Page', {signal: controller.signal, maxRetries: 0, skipLanguageDetection: true});
+    const observed = vi.fn();
+    const outcome = pending.then(value => observed('resolved', value), error => observed('rejected', error));
+    try {
+      await flushMicrotasks(40);
+      controller.abort();
+      await flushMicrotasks(40);
+      expect(observed).toHaveBeenCalledWith('rejected', expect.objectContaining({name: 'AbortError'}));
+      expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+      expect(mocks.persistCountIncrement).not.toHaveBeenCalled();
+    } finally {
+      blocker.resolve('活动译文');
+      await Promise.all([active, outcome]);
+    }
+  });
+
   it.each(['chrome-text', 'text', 'batch', 'video'])('%s abort 发送精确 cancel，中止后台 broker signal 并及时释放前台队列', async (client) => {
     mocks.config.maxConcurrentTranslations = 1;
     const registry = createTranslationRequestRegistry();
@@ -1011,9 +1176,11 @@ describe('translation API request lifecycle performance', () => {
 
     await expect(batch).resolves.toEqual(['译:Original first', '译:Original second']);
     await expect(single).resolves.toBe('译:Original single');
-    expect(mocks.sendMessage.mock.calls[0][0]).toMatchObject({origin: ['Original first', 'Original second'], documentBatch: true, aiMultiSegment: true, enableAIContext: true});
-    expect(mocks.sendMessage.mock.calls[1][0]).toMatchObject({enableAIContext: true});
-    expect(mocks.sendMessage.mock.calls[1][0]).not.toHaveProperty('documentBatch');
+    const batchMessage = mocks.sendMessage.mock.calls.find(([message]) => Array.isArray(message.origin))?.[0];
+    const singleMessage = mocks.sendMessage.mock.calls.find(([message]) => message.origin === 'Original single')?.[0];
+    expect(batchMessage).toMatchObject({origin: ['Original first', 'Original second'], documentBatch: true, aiMultiSegment: true, enableAIContext: true});
+    expect(singleMessage).toMatchObject({enableAIContext: true});
+    expect(singleMessage).not.toHaveProperty('documentBatch');
     expect(origins).toEqual(['Original first', 'Original second', 'Added later']);
   });
 
@@ -1246,12 +1413,15 @@ describe('translation API request lifecycle performance', () => {
     remove.mockRestore();
   });
 
-  it('运行时同步取消即使取消通知抛错也只结束本调用，迟到结果结算后下一请求才启动', async () => {
+  it.each(['sync', 'async'] as const)('运行时同步取消，即使取消通知 %s 失败也只结束本调用，迟到结果结算后下一请求才启动', async failure => {
     mocks.config.maxConcurrentTranslations = 1;
     const controller = new AbortController();
     const transport = deferred<string>();
     mocks.sendMessage.mockImplementation(message => {
-      if (message.type) throw new Error('Extension context invalidated');
+      if (message.type) {
+        if (failure === 'sync') throw new Error('Extension context invalidated');
+        return Promise.reject(new Error('Extension context invalidated'));
+      }
       if (message.origin === 'Synchronous source') {
         controller.abort();
         return transport.promise;

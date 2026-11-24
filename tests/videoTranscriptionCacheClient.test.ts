@@ -1,7 +1,7 @@
 import {parseHTML} from 'linkedom';
 import {buildVideoAiSubtitleVideoKey} from '@/src/features/video-subtitle/transcriptionCache';
 import {describe, expect, it, vi} from 'vitest';
-import {getVideoTranscriptionCacheRequest, getVideoTranscriptionMediaKey, getVideoTranscriptionMediaTransition, isSameVideoTranscriptionMedia, mergeVideoTranscriptionMediaIdentity, VideoTranscriptionCacheClient} from '@/src/features/video-subtitle/content/transcriptionCacheClient';
+import {getVideoTranscriptionCacheRequest, getVideoTranscriptionMediaTransition, isSameVideoTranscriptionMedia, mergeVideoTranscriptionMediaIdentity, VideoTranscriptionCacheClient} from '@/src/features/video-subtitle/content/transcriptionCacheClient';
 
 describe('内容页完整识别缓存', () => {
   const cues = [{startMs: 200, durationMs: 1000, text: '안녕하세요.'}];
@@ -70,9 +70,6 @@ describe('内容页完整识别缓存', () => {
     expect(getVideoTranscriptionMediaTransition(null, {}, false, '', '').key).toBe('');
     expect(getVideoTranscriptionMediaTransition({directSource: 'blob:one'}, {directSource: 'blob:two'}, false, 'blob:one', 'blob:two').sameMedia).toBe(false);
     expect(getVideoTranscriptionMediaTransition({directSource: 'blob:one'}, {directSource: 'blob:two'}, false, 'blob:one', 'blob:two').key).toBe('blob:two');
-    expect(getVideoTranscriptionMediaKey(null)).toBe('');
-    expect(getVideoTranscriptionMediaKey({})).toBe('');
-    expect(getVideoTranscriptionMediaKey({directSource: 'blob:one'})).toBe('blob:one');
     expect(getVideoTranscriptionCacheRequest({} as HTMLVideoElement, 'base', 'zh', '', media)).toEqual({source: media, model: 'base', videoSourceLanguage: 'zh'});
   });
   it('已有缓存中的异常重复不会自动恢复到字幕画面', async () => {
@@ -99,4 +96,28 @@ describe('内容页完整识别缓存', () => {
     send.mockRejectedValue(new Error('quota'));
     await expect(cache.set(request, cues)).resolves.toBeUndefined();
   });
+});
+
+it('keys ordinary media by the complete source without storing signed URLs or confusing a shared poster', () => {
+  const source = {currentSrc: 'https://podcast.example/play?id=first&signature=fixture-private', poster: 'https://podcast.example/cover.jpg'} as unknown as HTMLMediaElement;
+  const first = getVideoTranscriptionCacheRequest(source, 'tiny', 'auto', 'https://podcast.example/episode')!;
+  expect(first.source).toEqual({mediaId: expect.stringMatching(/^html:[a-f0-9]{64}$/)});
+  expect(JSON.stringify(first)).not.toContain('fixture-private');
+  Object.defineProperty(source, 'currentSrc', {value: 'https://podcast.example/play?id=second&signature=fixture-private'});
+  const second = getVideoTranscriptionCacheRequest(source, 'tiny', 'auto', 'https://podcast.example/episode')!;
+  expect(second.source.mediaId).not.toBe(first.source.mediaId);
+  const media = {srcObject: {}} as unknown as HTMLMediaElement;
+  const stream = getVideoTranscriptionCacheRequest(media, 'tiny', 'auto', 'https://podcast.example/stream')!;
+  expect(getVideoTranscriptionCacheRequest(media, 'tiny', 'auto', 'https://podcast.example/stream')!.source).toEqual(stream.source);
+  Object.defineProperty(media, 'srcObject', {value: {}});
+  expect(getVideoTranscriptionCacheRequest(media, 'tiny', 'auto', 'https://podcast.example/stream')!.source).not.toEqual(stream.source);
+});
+
+it('waits for a real source and supports source-child audio before metadata loads', () => {
+  const media = {currentSrc: '', src: '', querySelector: () => null} as unknown as HTMLMediaElement;
+  expect(getVideoTranscriptionCacheRequest(media, 'tiny', 'auto', 'https://podcast.example/')).toBeNull();
+  media.querySelector = (() => ({src: 'https://podcast.example/episode.wav'})) as any;
+  expect(getVideoTranscriptionCacheRequest(media, 'tiny', 'auto', 'https://podcast.example/')!.source.mediaId).toMatch(/^html:/);
+  Object.defineProperty(media, 'src', {value: 'https://podcast.example/direct.wav'});
+  expect(getVideoTranscriptionCacheRequest(media, 'tiny', 'auto', 'https://podcast.example/')!.source.mediaId).toMatch(/^html:/);
 });

@@ -77,6 +77,161 @@ beforeEach(async () => {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('Google 批量传输与换线', () => {
+    async function imageRequest(origin: string[], options: {abortSignal?: AbortSignal; requestTimeoutMs?: number; enableNativeBatch?: boolean; labelSlots?: readonly number[]} = {}) {
+        const {markImageTextBatch} = await import('@/src/services/translation/requestSnapshot');
+        const {labelSlots, ...requestOptions} = options;
+        return api.default(withProviderSnapshot(markImageTextBatch(
+            {origin, sourceLanguage: 'en', targetLanguage: 'zh-Hans', ...requestOptions}, labelSlots,
+        ), {from: 'en', to: 'zh-Hans'}));
+    }
+    it('userscript 即使收到内部图片标记或显式邻文选项，也保留普通网页批次和原始换行', async () => {
+        vi.stubEnv('BROWSER', 'userscript');
+        try {
+            fetchMock.mockImplementation(async (url, init) => successfulResponse(url,
+                requestData(url, init).texts.map(text => text.replace('FIRST.', '第一。').replace('SECOND.', '第二。'))));
+            const sources = ['FIRST.\nSECOND.', 'SECOND.'];
+            await expect(flush(imageRequest(sources, {labelSlots: [1]}))).resolves.toEqual(['第一。\n第二。', '第二。']);
+            await expect(flush(api.translateGoogleTexts(sources, 'en', 'zh-Hans', undefined, undefined, true, undefined, [1])))
+                .resolves.toEqual(['第一。\n第二。', '第二。']);
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+            for (const [url, init] of fetchMock.mock.calls) {
+                expect(requestData(url, init).texts).toEqual(['<pre>FIRST.\nSECOND.</pre>', '<pre>SECOND.</pre>']);
+            }
+        } finally {vi.unstubAllEnvs();}
+    });
+    it('同图文字不进入收集窗，保留重复位置、标题和转义纯文本', async () => {
+        const started = Date.now();
+        fetchMock.mockImplementation(async (url, init) => {
+            const {texts} = requestData(url, init);
+            expect(Date.now()).toBe(started);
+            let position = 0;
+            return response([texts.map(html => html.replaceAll('A TITLE', '标题').replaceAll('RIGHT.', () => ++position === 1 ? '对。' : '右边。')
+                .replaceAll('TURN.', '转弯。').replaceAll('READ &lt;b&gt; &amp; GO.', '读 &lt;b&gt; 然后走。'))]);
+        });
+        await expect(flush(imageRequest(['A TITLE', 'RIGHT.', 'TURN.', 'RIGHT.', 'READ <b> & GO.'])))
+            .resolves.toEqual(['标题', '对。', '转弯。', '右边。', '读 <b> 然后走。']);
+        expect(hosts()).toEqual([HTML]);
+        expect(requestData(...fetchMock.mock.calls[0]).texts).toHaveLength(2);
+    });
+    it('短标签位置正确映射到第二个传输子批次，临时句号随译文回填去掉', async () => {
+        const sources = [...Array<string>(32).fill('Wait.'), 'Look at the notary stamp.', 'CHECK THE SEAL', 'Compare the stamp.'];
+        fetchMock.mockImplementation(async (url, init) => {
+            const {texts} = requestData(url, init);
+            return response([texts.map(html => html.replaceAll('Wait.', '等待。')
+                .replace('Look at the notary stamp.', '查看公证印章。').replace('CHECK THE SEAL.', '检查印章。')
+                .replace('Compare the stamp.', '比对印章。'))]);
+        });
+        await expect(flush(imageRequest(sources, {labelSlots: [33]}))).resolves.toEqual([
+            ...Array<string>(32).fill('等待。'), '查看公证印章。', '检查印章', '比对印章。',
+        ]);
+        expect(hosts()).toEqual([HTML, HTML]);
+        const documents = fetchMock.mock.calls.flatMap(([url, init]) => requestData(url, init).texts);
+        expect(documents.find(html => html.includes('CHECK THE SEAL'))).toBe(
+            '<p><span data-fr-slot="0">Look at the notary stamp.</span> <span data-fr-slot="1">CHECK THE SEAL.</span> <span data-fr-slot="2">Compare the stamp.</span></p>',
+        );
+    });
+    it.each(['comma', 'missing', 'stray', 'duplicate'] as const)('同图 HTML %s 异常回退普通协议，保留原始文本和顺序', async shape => {
+        fetchMock.mockImplementation(async (url, init) => {
+            if (new URL(String(url)).hostname !== HTML) {
+                expect(requestData(url, init).texts).toEqual(['STEP.', 'HOLD.']);
+                return successfulResponse(url, ['走到中间。', '我会扶稳。']);
+            }
+            if (!requestData(url, init).texts.some(text => text.includes('data-fr-slot'))) {
+                expect(requestData(url, init).texts).toEqual(['<pre>STEP.</pre>', '<pre>HOLD.</pre>']);
+                return response([['<pre>走到中间。</pre>', '<pre>我会扶稳。</pre>']]);
+            }
+            const normal = '<p><span data-fr-slot="0">走到中间。</span> <span data-fr-slot="1">我会扶稳。</span></p>';
+            const bad = shape === 'comma' ? normal.replace('中间。', '中间，') : shape === 'missing' ? '<p><span data-fr-slot="0">走。</span></p>'
+                : shape === 'stray' ? normal.replace('</p>', '多余内容</p>') : normal.replace('slot="1"', 'slot="0"');
+            return response([[bad]]);
+        });
+        await expect(flush(imageRequest(['STEP.', 'HOLD.']))).resolves.toEqual(['走到中间。', '我会扶稳。']);
+        expect(hosts()).toEqual([HTML, HTML]);
+    });
+    it('同图语境与普通 HTML 都失败后才沿原顺序换接口，仍不更改原文', async () => {
+        let htmlCalls = 0;
+        fetchMock.mockImplementation(async (url, init) => {
+            if (new URL(String(url)).hostname === HTML) {
+                if (++htmlCalls === 1) return response([['<p><span data-fr-slot="0">第一，</span></p>']]);
+                throw new TypeError('network failure');
+            }
+            expect(requestData(url, init).texts).toEqual(['FIRST.', 'SECOND.']);
+            return successfulResponse(url, ['第一。', '第二。']);
+        });
+        await expect(flush(imageRequest(['FIRST.', 'SECOND.']))).resolves.toEqual(['第一。', '第二。']);
+        expect(hosts()).toEqual([HTML, HTML, LIST]);
+    });
+    it('同时到达的两张图和普通网页请求不会共享图片邻文', async () => {
+        fetchMock.mockImplementation(async (url, init) => successfulResponse(url, requestData(url, init).texts.map(html => html
+            .replaceAll('FIRST.', '第一。').replaceAll('SECOND.', '第二。').replaceAll('THIRD.', '第三。').replaceAll('FOURTH.', '第四。')
+            .replaceAll('PAGE.', '网页。'))));
+        await expect(flush(Promise.all([
+            imageRequest(['FIRST.', 'SECOND.']), imageRequest(['THIRD.', 'FOURTH.']), api.translateGoogleText('PAGE.', 'en', 'zh-Hans'),
+        ]))).resolves.toEqual([['第一。', '第二。'], ['第三。', '第四。'], '网页。']);
+        const payloads = fetchMock.mock.calls.map(call => requestData(...call).texts.join(' '));
+        expect(payloads).toHaveLength(3);
+        expect(payloads.filter(text => text.includes('data-fr-slot'))).toHaveLength(2);
+        expect(payloads.every(text => !(text.includes('FIRST.') && text.includes('THIRD.')))).toBe(true);
+    });
+    it('同图协议尊重关闭原生合批和不可序列化的标记边界', async () => {
+        fetchMock.mockImplementation(async (url, init) => successfulResponse(url, requestData(url, init).texts.map(html => html.replace('FIRST.', '第一。').replace('SECOND.', '第二。'))));
+        await expect(flush(imageRequest(['FIRST.', 'SECOND.'], {enableNativeBatch: false}))).resolves.toEqual(['第一。', '第二。']);
+        expect(fetchMock.mock.calls.map(call => requestData(...call).texts)).toEqual([['<pre>FIRST.</pre>'], ['<pre>SECOND.</pre>']]);
+        fetchMock.mockClear();
+        const {markImageTextBatch} = await import('@/src/services/translation/requestSnapshot');
+        const publicRequest = JSON.parse(JSON.stringify(markImageTextBatch({origin: ['FIRST.', 'SECOND.'], sourceLanguage: 'en', targetLanguage: 'zh-Hans'})));
+        await expect(flush(api.default(withProviderSnapshot(publicRequest, {from: 'en', to: 'zh-Hans'})))).resolves.toEqual(['第一。', '第二。']);
+        expect(requestData(...fetchMock.mock.calls[0]).texts).toEqual(['<pre>FIRST.</pre>', '<pre>SECOND.</pre>']);
+    });
+    it('有界同图批次按项目数和转义后的字符数分组，空批次不发送请求', async () => {
+        fetchMock.mockImplementation(async (url, init) => successfulResponse(url, requestData(url, init).texts.map(html => html.replaceAll('Source', '来源'))));
+        const sources = Array.from({length: 33}, (_, index) => `Source ${index}.`);
+        await expect(flush(imageRequest(sources))).resolves.toEqual(sources.map(text => text.replace('Source', '来源')));
+        expect(fetchMock.mock.calls).toHaveLength(2);
+        fetchMock.mockClear();
+        const large = 'Source ' + '&'.repeat(1800) + '.';
+        await expect(flush(imageRequest([large, large]))).resolves.toEqual([large.replace('Source', '来源'), large.replace('Source', '来源')]);
+        expect(fetchMock.mock.calls).toHaveLength(2);
+        expect(fetchMock.mock.calls.every(call => requestData(...call).texts.join('').length <= 10_000)).toBe(true);
+        fetchMock.mockClear();
+        await expect(flush(imageRequest([]))).resolves.toEqual([]);
+        expect(fetchMock).not.toHaveBeenCalled();
+    });
+    it('同图请求提前取消不发送，开始后取消立即返回，忽略 abort 的网络仍持有租约', async () => {
+        const before = new AbortController(); before.abort();
+        await expect(flush(imageRequest(['FIRST.'], {abortSignal: before.signal}))).rejects.toMatchObject({name: 'AbortError'});
+        expect(fetchMock).not.toHaveBeenCalled();
+        const controller = new AbortController(), pending: Array<() => void> = [], held: Promise<unknown>[] = [];
+        fetchMock.mockImplementation((url, init) => new Promise(resolve => {pending.push(() => resolve(successfulResponse(url, requestData(url, init).texts)));}));
+        const request = api.translateGoogleTexts(['FIRST.'], 'en', 'zh-Hans', controller.signal, 5000, true, {holdUntil: (transport: Promise<unknown>) => held.push(transport)} as never, true);
+        void request.catch(() => undefined);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(held).toHaveLength(1);
+        let settled = false; void held[0].finally(() => {settled = true;}).catch(() => undefined);
+        controller.abort();
+        await expect(request).rejects.toMatchObject({name: 'AbortError'});
+        expect(settled).toBe(false);
+        pending[0](); await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe(true);
+    });
+    it('同图请求总预算到期立即停止等待，不发送超过剩余时间的回退', async () => {
+        fetchMock.mockImplementation(async (_url, init) => new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted')), {once: true})));
+        await expect(flush(imageRequest(['FIRST.', 'SECOND.'], {requestTimeoutMs: 50}))).rejects.toThrow('总请求时间');
+        expect(fetchMock).toHaveBeenCalledOnce();
+    });
+    it('同图 HTML 冷连接允许四秒，三秒内返回仍使用邻文且不切换独立协议', async () => {
+        fetchMock.mockImplementation(async (url, init) => {
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            return successfulResponse(url, requestData(url, init).texts.map(html => html.replaceAll('FIRST.', '第一。').replaceAll('SECOND.', '第二。')));
+        });
+        await expect(flush(imageRequest(['FIRST.', 'SECOND.']))).resolves.toEqual(['第一。', '第二。']);
+        expect(hosts()).toEqual([HTML]);
+    });
+    it.each(['constructor', '__proto__'])('未知语言 %s 原样提交，不能继承 Object 原型值', async language => {
+        fetchMock.mockImplementation(async (url, init) => successfulResponse(url, requestData(url, init).texts.map(() => 'translated')));
+        await expect(flush(api.translateGoogleTexts(['source'], language, language))).resolves.toEqual(['translated']);
+        expect(requestData(...fetchMock.mock.calls[0])).toMatchObject({from: language, to: language});
+    });
     it('关闭合批时显式数组逐条 HTTP，保留空白并跳过 120ms 收集窗', async () => {
         const starts: number[] = [];
         fetchMock.mockImplementation(async (url, init) => {
@@ -201,6 +356,12 @@ describe('Google 批量传输与换线', () => {
         expect(JSON.parse(String(init.body))).toEqual([
             [['<pre>&lt;b&gt;Hello &amp; world&lt;/b&gt;\n  Next line\n\n&amp;lt;</pre>'], 'auto', 'zh-CN'], 'wt_lib',
         ]);
+    });
+    it('还原合法 Unicode 数字实体，保留非法码点与已转义的实体字面量', async () => {
+        fetchMock.mockResolvedValue(response([['<pre>&#65; &#x1F642; &#X1F680; &#0; &#xD800; &#1114112; &amp;#65; &QUOT; &apos; &nbsp;</pre>']]));
+        await expect(flush(api.translateGoogleText('Unicode character references', 'en', 'zh')))
+            .resolves.toBe('A 🙂 🚀 &#0; &#xD800; &#1114112; &#65; " \' \u00a0');
+        expect(hosts()).toEqual([HTML]);
     });
     it('并发段落与显式数组共享一批请求，并按原调用者顺序返回', async () => {
         fetchMock.mockResolvedValue(response([['第一段', '第二段', '第三段']]));
@@ -340,6 +501,33 @@ describe('Google 端点健康与预算', () => {
         expect(failure.message).toContain('响应读取失败');
         expect(failure.message).not.toContain('private');
         expect(hosts()).toEqual([HTML, LIST, RPC, UK]);
+    });
+    it.each([true, false])('成功 headers 后慢正文遵循单次超时，再换线且不采用迟到正文（transport obeys abort=%s）', async obeysAbort => {
+        fetchMock.mockImplementationOnce(async (_url, init) => new Response(new ReadableStream<Uint8Array>({start(stream) {
+            if (obeysAbort) init!.signal!.addEventListener('abort', () => stream.error(init!.signal!.reason), {once: true});
+            else setTimeout(() => {stream.enqueue(new TextEncoder().encode(JSON.stringify([['迟到正文']])));stream.close();}, 2100);
+        }}))).mockResolvedValueOnce(response(['按时后备译文']));
+        const pending = api.translateGoogleOwnerTexts(['Slow body'], 'en', 'zh', new AbortController().signal);
+        await vi.advanceTimersByTimeAsync(1999);
+        expect(hosts()).toEqual([HTML]);
+        await vi.advanceTimersByTimeAsync(201);
+        await expect(pending).resolves.toEqual(['按时后备译文']);
+        expect(hosts()).toEqual([HTML, LIST]);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+    it('正文读取拒绝发生在取消之后时保留调用方原因，并停止后续入口', async () => {
+        const controller = new AbortController(), reason = new Error('left the document');
+        const fetched = new Promise<void>(resolve => fetchMock.mockImplementationOnce(async (_url, init) => {
+            const result = new Response(new ReadableStream({start(stream) {
+                init!.signal!.addEventListener('abort', () => stream.error(init!.signal!.reason), {once: true});
+            }}));
+            resolve();return result;
+        }));
+        const pending = api.translateGoogleOwnerTexts(['Cancelled body'], 'en', 'zh', controller.signal);
+        const rejected = expect(pending).rejects.toBe(reason);
+        await fetched;controller.abort(reason);await rejected;
+        expect(hosts()).toEqual([HTML]);
+        expect(vi.getTimerCount()).toBe(0);
     });
     it('每个接口最多两秒，四个候选共享八秒总预算', async () => {
         const signals: AbortSignal[] = [];
@@ -767,4 +955,42 @@ describe('Google owner-local native array transport', () => {
         expect(new URLSearchParams(String(fetchMock.mock.calls[1]![1]!.body)).getAll('q')).toEqual(['First prose', 'Second prose']);
         expect(vi.getTimerCount()).toBe(0);
     });
+});
+
+it('Google 错误正文以流式方式检查完整内容，不把大错误体整段转为字符串', async () => {
+    const encoder = new TextEncoder();
+    const prefix = encoder.encode('x'.repeat(65536));
+    let reads = 0;
+    const stream = new ReadableStream<Uint8Array>({pull(controller) {
+        reads++;
+        if (reads <= 64) controller.enqueue(prefix);
+        else if (reads === 65) controller.enqueue(encoder.encode('"xs'));
+        else if (reads === 66) controller.enqueue(encoder.encode('rf"'));
+        else controller.close();
+    }});
+    const rejected = new Response(stream, {status: 400});
+    const text = vi.spyOn(rejected, 'text');
+    fetchMock.mockResolvedValueOnce(rejected).mockResolvedValueOnce(response(['后备译文']));
+    await expect(flush(api.translateGoogleText('Source', 'en', 'zh'))).resolves.toBe('后备译文');
+    expect(reads).toBe(67); expect(text).not.toHaveBeenCalled();
+    expect(hosts()).toEqual([HTML, LIST]);
+});
+
+it.each(['close', 'error'] as const)('Google 错误流 owner 已取消时仍持槽直到真实 %s', async outcome => {
+    let body!: ReadableStreamDefaultController<Uint8Array>;
+    const rejected = new Response(new ReadableStream<Uint8Array>({start(controller) {body = controller;}}), {status: 500});
+    fetchMock.mockResolvedValueOnce(rejected)
+        .mockImplementation(async (url, init) => successfulResponse(url, requestData(url, init).texts.map(() => '下一条译文')));
+    const {start} = await scheduledGoogle(); const owner = new AbortController();
+    const first = start('Slow error body', owner.signal).catch(error => error);
+    await vi.advanceTimersByTimeAsync(120); expect(rejected.body?.locked).toBe(true);
+    owner.abort(); await expect(first).resolves.toMatchObject({name: 'AbortError'});
+    const next = start('Next request');
+    try {await vi.advanceTimersByTimeAsync(200); expect(fetchMock).toHaveBeenCalledOnce();}
+    finally {
+        if (outcome === 'close') {body.enqueue(new TextEncoder().encode('late error')); body.close();}
+        else body.error(new Error('late stream error'));
+        await vi.advanceTimersByTimeAsync(200); await expect(next).resolves.toBe('下一条译文');
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(2); expect(vi.getTimerCount()).toBe(0);
 });

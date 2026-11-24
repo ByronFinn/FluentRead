@@ -1,0 +1,235 @@
+name: Release packages
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/release-packages.yml'
+      - '.nvmrc'
+      - 'pnpm-workspace.yaml'
+      - 'scripts/release/**'
+      - 'tests/release*.test.mjs'
+  # Rehearse packaging on the selected ref; manual runs never publish a Release.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-packages-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FLUENTREAD_TEST_MAX_WORKERS: 1
+  FLUENTREAD_TEST_CONCURRENCY: 1
+  FLUENTREAD_DISABLE_BROWSER_RUNNER: 1
+  NODE_OPTIONS: --max-old-space-size=4096
+
+jobs:
+  plan:
+    if: github.event_name != 'push' || github.event.deleted == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      source_commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+      - name: Validate version and release source
+        id: version
+        env:
+          RELEASE_EVENT: ${{ github.event_name }}
+          RELEASE_REF: ${{ github.ref_name }}
+        run: |
+          if [ "$RELEASE_EVENT" = push ]; then
+            tag="$RELEASE_REF"
+            git merge-base --is-ancestor HEAD refs/remotes/origin/main
+          else
+            tag="v$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')"
+          fi
+          node scripts/release/manifest.mjs --check --tag "$tag"
+      - name: Record exact tested source
+        id: source
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  quality:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan.outputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Prepare locked build tools
+        run: |
+          pnpm rebuild esbuild
+          pnpm exec wxt prepare
+      - name: Install audit tools
+        run: |
+          if ! command -v rg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends ripgrep
+          fi
+          rg --version
+      - name: Audit and check types
+        run: |
+          pnpm test:audit
+          node --test tests/ciTypeBudget.test.mjs
+          node scripts/testing/run-ci-typecheck.mjs
+      - name: Test release packaging and publication contracts
+        if: github.event_name == 'pull_request'
+        run: node --test --test-concurrency=1 tests/release*.test.mjs
+      - name: Run full deterministic test and coverage gates for a release rehearsal or tag
+        if: github.event_name != 'pull_request'
+        run: pnpm test:coverage
+
+  build:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [browsers, integrations, userscripts, safari]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan.outputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Prepare locked build tools
+        run: |
+          pnpm rebuild esbuild
+          pnpm exec wxt prepare
+      - name: Build and verify distribution packages
+        env:
+          RELEASE_GROUP: ${{ matrix.group }}
+          WXT_SITE_RULES_PUBLIC_KEY: ${{ vars.WXT_SITE_RULES_PUBLIC_KEY }}
+        run: |
+          case "$RELEASE_GROUP" in
+            browsers)
+              pnpm zip
+              pnpm zip:edge
+              pnpm zip:firefox
+              node scripts/testing/verify-extension-manifests.mjs --require-chrome-archive --require-firefox-archives
+              node scripts/thunderbird/package.mjs
+              for target in chrome edge firefox thunderbird; do
+                node scripts/release/bundle.mjs --target "$target"
+              done
+              ;;
+            integrations)
+              pnpm build:zotero
+              pnpm verify:zotero
+              pnpm build:obsidian
+              node scripts/release/bundle.mjs --target zotero
+              node scripts/release/bundle.mjs --target obsidian
+              ;;
+            userscripts)
+              pnpm build:userscript
+              node scripts/verify-userscript-build.mjs
+              pnpm build:userscript:standalone
+              node scripts/verify-userscript-standalone-build.mjs
+              node scripts/release/bundle.mjs --target userscript
+              node scripts/release/bundle.mjs --target userscript-standalone
+              ;;
+            safari)
+              pnpm build:safari
+              pnpm safari:verify
+              node scripts/release/bundle.mjs --target safari
+              ;;
+            *) exit 1 ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-build-${{ matrix.group }}
+          path: reports/release/
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  assemble:
+    needs: [plan, quality, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan.outputs.source_commit }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-build-*
+          path: reports/release/
+          merge-multiple: true
+      - name: Verify complete package set and create release metadata
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.source_commit }}
+        run: node scripts/release/manifest.mjs --finalize --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-packages
+          path: reports/release/assets/
+          if-no-files-found: error
+          retention-days: 3
+          overwrite: true
+
+  publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [plan, assemble]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Only this job can write; build steps never receive a publishing token.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.plan.outputs.source_commit }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-packages
+          path: reports/release/assets/
+      - name: Confirm remote tag still identifies the tested mainline commit
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.plan.outputs.source_commit }}
+        run: |
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG" refs/heads/main:refs/remotes/origin/main
+          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$RELEASE_COMMIT"
+          git merge-base --is-ancestor "$RELEASE_COMMIT" refs/remotes/origin/main
+      - name: Upload all verified assets to a draft, then publish the complete Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+        run: node scripts/release/publish.mjs --tag "$RELEASE_TAG" --assets-dir reports/release/assets

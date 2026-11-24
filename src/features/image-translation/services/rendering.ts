@@ -1,10 +1,27 @@
 /**
  * @file src/features/image-translation/services/rendering.ts
  * 文件职责：采样 OCR 框周边背景并在有限图片区域中排版、绘制完整译文，避免混合语言空格损坏、强制横向压缩和行数截断。
- * 主要内容：按周长采样主色、依据亮度选择文字颜色、按单词与字素换行；每次排版有界复用同字号测宽和字素分割，避免字号搜索中的重复工作，保留正文对齐及字号上限并隔离 Canvas 状态。
+ * 主要内容：按周长用量化色阶聚类主色，但返回桶内真实颜色均值，避免纯色修补的固定色差；依据亮度选择文字颜色、按单词与真实字素边界换行，无字素分割器时仅在已知安全的空格边界分开复杂词组；每次排版有界复用同字号测宽和字素分割，单个源行按参考字体的宽度与墨迹高度一致性估计尺度，估计不可靠时沿用原上限；按实际回退字体的墨迹、描边和基线适配上下边界，单行不重复扣除完整行高，保留正文对齐及字号上限并隔离 Canvas 状态。
  * 模块边界：颜色和排版算法无浏览器副作用；绘制函数仅操作调用方传入的 Canvas context，不读取配置、不请求翻译、不修补背景或修改宿主图片元素。
+ * 原色与余量：接收调用方已验证的前景色与可选细对比描边，并提供局部RGB对比度与单行实际高度度量；描边仍在原布局留量之内，这些度量本身不授予新增像素或清字权限。
+ * 行缘标点：在既有词界及可证明的字素边界上绑定开闭标点与日文行首禁排字符；长词拆分后重新绑定，保留显式换行和完整正文，不以删字或越框解决孤立标点。
+ * 短末行：仅对有界短段落进行五次以内的行宽平衡，使用浏览器词边界与原字素/标点边界的交集，保留字号、行数和完整词；候选须重新通过实际墨迹高度及宽度检查，不扩大清字或绘字范围。
+ * 原字尺度与位置：优先使用同帧观察到的逐行墨迹，独立核对原文字的参考宽度与字高；多行要求独立上下排列、相近字高及宽度区间同时吻合，未知断行空格不能人为提高字号。采用实测尺度时也保留墨迹位置，按源边线和垂直中心放置完整译文并夹紧到原绘字框；不改源框、字体族、字重、裁剪或修补范围。透视和混合字号无法一致解释时沿用原路径。
+ * 倾斜译文：源方向须与原文字尺度分别核对；真实回退字形和描边旋转后仍须完整位于原框内，同行数参考源行距，只作最小整体平移。既有透明避让计划或缺失指标保持原布局，不新增清字权限。
+ * 完整字形预检：复用绘字的实际字体、对齐、源墨迹锚点及倾角变换，在共享度量预算内检查描边与抗锯齿足迹；不绘字、不授权原图修补。
+ * 照片选色：根据排版完成后的逐行字形落点采样已修补像素。样点透明、指标不可靠或预算用尽时采用既有字色和描边。
  */
 import type {OcrLine} from '@/src/shared/image/types';
+import type {ImageSourceTypographyGeometry} from './sourceTypographyGeometry';
+import {createImageTypographyPlane} from './sourceTypographyPlane';
+import type {ImageTranslationTextLayout,ImageTextLayoutConstraints} from './textLayoutTypes';
+export type {ImageTranslationTextLayout,ImageTextLayoutConstraints} from './textLayoutTypes';
+import type {ImageTextRegion} from '../paragraphs';
+import {isSpaceGraphemeExtension, isSpaceGraphemePrepend} from '../graphemeSpaceData';
+import {getImageTextDirection} from '../textBoundary';
+import {bindImageTextPunctuation} from './imageTextPunctuation';
+import {IMAGE_TEXT_FONT} from './imageTextFont';
+export {getImageTextDirection} from '../textBoundary';
 
 /** 从 OCR 框外围采样主色，忽略透明像素且不遍历框内面积。 */
 export function getImageTextBackgroundColor(
@@ -22,7 +39,7 @@ export function getImageTextBackgroundColor(
     const y0 = Math.max(0, Math.min(imageHeight, Math.floor(bbox.y0)));
     const x1 = Math.max(x0, Math.min(imageWidth, Math.ceil(bbox.x1)));
     const y1 = Math.max(y0, Math.min(imageHeight, Math.ceil(bbox.y1)));
-    const colors = new Map<string, number>();
+    const colors = new Map<string, number[]>();
     const sample = (x: number, y: number) => {
         const offset = (y * imageWidth + x) * 4;
         if (pixels[offset + 3] < 128) return;
@@ -30,7 +47,9 @@ export function getImageTextBackgroundColor(
         const green = Math.min(255, Math.round(pixels[offset + 1] / 16) * 16);
         const blue = Math.min(255, Math.round(pixels[offset + 2] / 16) * 16);
         const key = `${red},${green},${blue}`;
-        colors.set(key, (colors.get(key) || 0) + 1);
+        const group = colors.get(key) ?? [0,0,0,0];
+        for (let channel = 0; channel < 3; channel++) group[channel] += pixels[offset + channel];
+        group[3]++; colors.set(key, group);
     };
     const left = Math.max(0, x0 - 4);
     const right = Math.min(imageWidth, x1 + 4);
@@ -46,16 +65,17 @@ export function getImageTextBackgroundColor(
     }
     let best = '255,255,255';
     let bestCount = 0;
-    colors.forEach((count, color) => {
-        if (count > bestCount) {
-            best = color;
-            bestCount = count;
+    colors.forEach(group => {
+        if (group[3] > bestCount) {
+            // 色阶只负责聚类；用实际样本均值填色，纯色图片不能凭空出现 8 级色差。
+            best = group.slice(0,3).map(value => Math.round(value / group[3])).join(',');
+            bestCount = group[3];
         }
     });
     return `rgb(${best})`;
 }
 
-function relativeLuminance(channels: number[]): number {
+function relativeLuminance(channels: readonly number[]): number {
     const linear = channels.map(channel => {
         const value = Math.max(0, Math.min(255, channel)) / 255;
         return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
@@ -63,29 +83,261 @@ function relativeLuminance(channels: number[]): number {
     return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
 }
 
+/** 同一源色可预先计算亮度，避免渐变观察重复对前景执行幂运算。 */
+export {relativeLuminance as getImageRgbLuminance};
+
+/** 仅比较不透明 RGB 的相对亮度，不把这一个局部数值当作整页可访问性结论。 */
+export function getImageRgbContrast(foreground:readonly number[],background:readonly number[]):number {
+    const a=relativeLuminance(foreground),b=relativeLuminance(background);
+    return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+}
+
+const DARK_TEXT = '#111827', LIGHT_TEXT = '#ffffff';
+const DARK_TEXT_LUMINANCE = relativeLuminance([17, 24, 39]);
+
 /** 选择与背景对比度较高的深色或白色，避免饱和色被简单灰度阈值误判。 */
 export function getImageTextColor(backgroundColor: string): string {
     const channels = backgroundColor.match(/\d+(?:\.\d+)?/g)?.map(Number);
     const luminance = relativeLuminance(channels && channels.length >= 3 ? channels.slice(0, 3) : [255, 255, 255]);
-    const dark = relativeLuminance([17, 24, 39]);
-    const darkContrast = (Math.max(luminance, dark) + 0.05) / (Math.min(luminance, dark) + 0.05);
+    const darkContrast = (Math.max(luminance, DARK_TEXT_LUMINANCE) + 0.05) / (Math.min(luminance, DARK_TEXT_LUMINANCE) + 0.05);
     const lightContrast = 1.05 / (luminance + 0.05);
-    return darkContrast >= lightContrast ? '#111827' : '#ffffff';
+    return darkContrast >= lightContrast ? DARK_TEXT : LIGHT_TEXT;
 }
 
-export interface ImageTranslationTextLayout {
-    lines: string[];
-    fontSize: number;
-    lineHeight: number;
+export interface ImageTextBackground {
+    pixels: Uint8ClampedArray;
+    width: number;
+    height: number;
+    remaining: number;
 }
 
-const IMAGE_TEXT_FONT = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-const CJK_TOKENS = /\s+|[\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af]\p{Mark}*|[^\s\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af]+/gu;
-const graphemeSegmenter = typeof Intl.Segmenter === 'function'
-    ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : undefined;
+const DARK_TEXT_LIMIT = (DARK_TEXT_LUMINANCE + .05) * 3 - .05;
+const LIGHT_TEXT_LIMIT = 1.05 / 3 - .05;
+const TEXT_COLOR_COLUMNS = 8, TEXT_COLOR_ROWS = 4;
+const TEXT_COLOR_SAMPLES = TEXT_COLOR_COLUMNS * TEXT_COLOR_ROWS;
 
-function graphemes(text: string): string[] {
-    return graphemeSegmenter ? Array.from(graphemeSegmenter.segment(text), part => part.segment) : Array.from(text);
+function sampleImageTextStyle(image: ImageTextBackground, ink: OcrLine['bbox'], clip: OcrLine['bbox'],
+    transform: readonly number[] | undefined, fallback: string): {fill: string; outline?: string} | undefined {
+    const inkWidth = ink.x1 - ink.x0, inkHeight = ink.y1 - ink.y0;
+    if (!(inkWidth > 0 && inkHeight > 0) || !Number.isFinite(inkWidth + inkHeight)) return;
+    const left = Math.max(0, clip.x0), right = Math.min(image.width, clip.x1);
+    const top = Math.max(0, clip.y0), bottom = Math.min(image.height, clip.y1);
+    let darkFailures = 0, lightFailures = 0;
+    for (let row = 0; row < TEXT_COLOR_ROWS; row++) {
+        const y = ink.y0 + (row + .5) * inkHeight / TEXT_COLOR_ROWS;
+        for (let column = 0; column < TEXT_COLOR_COLUMNS; column++) {
+            const x = ink.x0 + (column + .5) * inkWidth / TEXT_COLOR_COLUMNS;
+            const px = transform ? transform[0] * x + transform[2] * y + transform[4] : x;
+            const py = transform ? transform[1] * x + transform[3] * y + transform[5] : y;
+            if (px < left || px >= right || py < top || py >= bottom) return;
+            const offset = (Math.floor(py) * image.width + Math.floor(px)) * 4;
+            if (image.pixels[offset + 3] !== 255) return;
+            const value = relativeLuminance([image.pixels[offset], image.pixels[offset + 1], image.pixels[offset + 2]]);
+            if (value < DARK_TEXT_LIMIT) darkFailures++;
+            if (value > LIGHT_TEXT_LIMIT) lightFailures++;
+        }
+    }
+    // 少量明暗像素不触发换色；横跨不同底色时整行仍使用统一字色。
+    let fill = fallback;
+    if (darkFailures + 4 <= lightFailures) fill = DARK_TEXT;
+    else if (lightFailures + 4 <= darkFailures) fill = LIGHT_TEXT;
+    const failures = fill === DARK_TEXT ? darkFailures : lightFailures;
+    if (failures < 4) return {fill};
+    return {fill, outline: fill === DARK_TEXT ? LIGHT_TEXT : DARK_TEXT};
+}
+
+interface ImageSourceInkGeometry {width:number;height:number;count:number;bounds:OcrLine['bbox']}
+export interface ImageSourceTextStyle {fontSize:number;inkBounds?:OcrLine['bbox'];orientation?:ImageSourceTypographyGeometry}
+function imageSourceInkGeometry(line:ImageTextRegion,inkBoxes:readonly OcrLine['bbox'][]|undefined):ImageSourceInkGeometry|undefined {
+    if(!inkBoxes?.length||inkBoxes.length>128||line.vertical||line.ruby?.length||line.guardOnly||line.numericUncertain
+        ||line.text.length<3||line.text.length>256||/[\r\n]/u.test(line.text))return;
+    const sources=line.sourceBoxes??[line.bbox];if(sources.length!==inkBoxes.length)return;
+    const valid=(b:OcrLine['bbox']|undefined)=>b&&[b.x0,b.y0,b.x1,b.y1].every(Number.isFinite)&&b.x0>=0&&b.y0>=0&&b.x1>b.x0&&b.y1>b.y0;
+    if(!valid(line.bbox))return;
+    for(let i=0;i<inkBoxes.length;i++){
+        const b=inkBoxes[i],s=sources[i];
+        if(!valid(b)||!valid(s)||s.x0<line.bbox.x0||s.y0<line.bbox.y0||s.x1>line.bbox.x1||s.y1>line.bbox.y1
+            ||b.x0<Math.floor(s.x0)-4||b.y0<Math.floor(s.y0)-4||b.x1>Math.ceil(s.x1)+4||b.y1>Math.ceil(s.y1)+4)return;
+    }
+    const rows=[...inkBoxes].sort((a,b)=>a.y0-b.y0||a.x0-b.x0);let width=0,height=0,small=Infinity,left=Infinity,right=0;
+    for(let i=0;i<rows.length;i++){
+        const b=rows[i],h=b.y1-b.y0;width+=b.x1-b.x0;height=Math.max(height,h);small=Math.min(small,h);left=Math.min(left,b.x0);right=Math.max(right,b.x1);
+        if(i){const a=rows[i-1];if(a.y1>b.y0||Math.min(a.x1,b.x1)-Math.max(a.x0,b.x0)<Math.min(a.x1-a.x0,b.x1-b.x0)*.5)return;}
+    }
+    if(height>small*1.35)return;
+    return {width,height,count:rows.length,bounds:{x0:left,y0:rows[0].y0,x1:right,y1:rows[rows.length-1].y1}};
+}
+function withImageSourceFontMetrics(context:CanvasRenderingContext2D,text:string,select:(metrics:TextMetrics,space:()=>number)=>number|undefined):number|undefined {
+    context.save();
+    try{
+        context.font='400 100px Arial, sans-serif';context.textAlign='left';context.textBaseline='alphabetic';context.direction=getImageTextDirection(text);
+        return select(context.measureText(text),()=>context.measureText(' ').width);
+    }finally{context.restore();}
+}
+function estimateImageInkFontSize({width,height,count}:ImageSourceInkGeometry,metric:TextMetrics,measureSpace:()=>number):number|undefined {
+    const inkWidth=metric.actualBoundingBoxLeft+metric.actualBoundingBoxRight,inkHeight=metric.actualBoundingBoxAscent+metric.actualBoundingBoxDescent;
+    if(![inkWidth,inkHeight].every(value=>Number.isFinite(value)&&value>0))return;
+    const space=count>1?measureSpace():0;if(!Number.isFinite(space)||space<0)return;
+    const minimumWidth=inkWidth-space*(count-1);if(minimumWidth<=0)return;
+    // 原合段可能插入空格或直接连接CJK；两种宽度边界都须支持同一尺度，不猜断行位置。
+    const low=width/inkWidth*100,high=width/minimumWidth*100,byHeight=height/inkHeight*100,estimate=(low+high+byHeight*2)/4;
+    if(Math.max(low,high,byHeight)<=Math.min(low,high,byHeight)*1.12&&estimate>=height*.8&&estimate<=height*2.5)return estimate;
+}
+/** 已验证源像素的字形尺度；参考字体须同时解释完整原文字的宽度和字高，不能只按空框缩放。 */
+export function getImageSourceInkFontSize(context:CanvasRenderingContext2D,line:ImageTextRegion,inkBoxes:readonly OcrLine['bbox'][]|undefined):number|undefined {
+    const geometry=imageSourceInkGeometry(line,inkBoxes);
+    return geometry?withImageSourceFontMetrics(context,line.text,(metric,space)=>estimateImageInkFontSize(geometry,metric,space)):undefined;
+}
+
+/** 方向旁证与原文字尺度分别核对；一个投影像素的量化区间只能补偿已解释框高膨胀的旋转，不能给直立字形阶梯授予角度。 */
+export function getImageSourceTypographyStyle(context:CanvasRenderingContext2D,line:ImageTextRegion,geometry:ImageSourceTypographyGeometry|undefined):ImageSourceTextStyle|undefined {
+    if(!geometry||geometry.owner!==line||geometry.sourceText!==line.text||line.vertical||line.ruby?.length||line.guardOnly||line.numericUncertain)return;
+    const b=line.bbox,g=geometry.bounds;
+    if(!b||!g||![b.x0,b.y0,b.x1,b.y1,g.x0,g.y0,g.x1,g.y1,geometry.radians,geometry.originX,geometry.originY,geometry.width,geometry.height,geometry.heightGain].every(Number.isFinite)
+        ||b.x1<=b.x0||b.y1<=b.y0||g.x1<=g.x0||g.y1<=g.y0||!Number.isInteger(geometry.count)||geometry.count<1||geometry.count>128
+        ||geometry.count!==(line.sourceBoxes?.length??1)||Math.abs(geometry.radians)<Math.PI/120||Math.abs(geometry.radians)>Math.PI*14.5/180
+        ||geometry.originX<b.x0-4||geometry.originX>b.x1+4||geometry.originY<b.y0-4||geometry.originY>b.y1+4)return;
+    const limit=Math.hypot(b.x1-b.x0,b.y1-b.y0)+12,extent=Math.abs(Math.cos(geometry.radians))+Math.abs(Math.sin(geometry.radians));
+    if(geometry.height<=extent||geometry.width<=extent*geometry.count||geometry.height>limit||geometry.width>limit*geometry.count||g.x1-g.x0>limit||g.y1-g.y0>limit
+        ||(geometry.linePitch!==undefined&&(!Number.isFinite(geometry.linePitch)||geometry.linePitch<=0||geometry.count===1||geometry.linePitch>g.y1-g.y0)))return;
+    const fontSize=withImageSourceFontMetrics(context,line.text,(metric,measureSpace)=>{
+        const refWidth=metric.actualBoundingBoxLeft+metric.actualBoundingBoxRight,refHeight=metric.actualBoundingBoxAscent+metric.actualBoundingBoxDescent;
+        if(![refWidth,refHeight].every(value=>Number.isFinite(value)&&value>0))return;
+        const space=geometry.count>1?measureSpace():0;if(!Number.isFinite(space)||space<0)return;
+        const minWidth=refWidth-space*(geometry.count-1);if(minWidth<=0)return;
+        const pointLow=geometry.width/refWidth*100,pointHigh=geometry.width/minWidth*100,pointHeight=geometry.height/refHeight*100;
+        const pointFits=Math.max(pointLow,pointHigh,pointHeight)<=Math.min(pointLow,pointHigh,pointHeight)*1.12;
+        const lowWidth=(geometry.width-extent*geometry.count)/refWidth*100,highWidth=(geometry.width-extent*geometry.count)/minWidth*100,
+            lowHeight=(geometry.height-extent)/refHeight*100;
+        if(!pointFits&&(geometry.heightGain<extent||Math.max(highWidth,lowHeight)>Math.min(pointLow,pointHeight)*1.12))return;
+        const estimate=(lowWidth+pointHigh+lowHeight+pointHeight)/4;
+        return estimate>=geometry.height*.8&&estimate<=geometry.height*2.5?estimate:undefined;
+    });
+    return fontSize===undefined?undefined:{fontSize,orientation:geometry};
+}
+
+/** 普通图优先用已观察的源字形；缺失时仍按原规则核对单个横排物理行的宽高。
+ * OCR 框不是字体行框；含下伸笔画的行不能仅因框更高就变成大字。未知字体形状、多行证据不足和长文本保留旧上限。
+ * 这里只估计尺度，不声称识别字体族；最终译文仍须用设备实际回退字体的完整墨迹适配。
+ */
+export function getImageSourceFontLimit(context:CanvasRenderingContext2D,line:ImageTextRegion,inkBoxes?:readonly OcrLine['bbox'][]):number {
+    return getImageSourceTextStyle(context,line,inkBoxes).fontSize;
+}
+/** 只有同一次字宽/字高核对采用实测尺度时，才把实测位置传给绘字；清字与裁剪仍使用原范围。 */
+export function getImageSourceTextStyle(context:CanvasRenderingContext2D,line:ImageTextRegion,inkBoxes?:readonly OcrLine['bbox'][]):ImageSourceTextStyle {
+    if(line.vertical)return {fontSize:Infinity};
+    const b=line.bbox,height=b.y1-b.y0,width=b.x1-b.x0,fallback=(line.fontSize??height)*1.2;
+    if(line.quarterTurn)return {
+        fontSize:width*1.05,
+        orientation:{owner:line,sourceText:line.text,radians:-line.quarterTurn*Math.PI/2,
+            originX:(b.x0+b.x1)/2,originY:(b.y0+b.y1)/2,
+            bounds:{x0:-height/2,y0:-width/2,x1:height/2,y1:width/2},
+            width:height,height:width,count:1,heightGain:0},
+    };
+    const geometry=imageSourceInkGeometry(line,inkBoxes);
+    const legacyEligible=!(line.sourceBoxes&&line.sourceBoxes.length!==1||line.ruby?.length||line.text.length<3||line.text.length>256||/[\r\n]/u.test(line.text)
+        ||![width,height].every(value=>Number.isFinite(value)&&value>0));
+    if(!geometry&&!legacyEligible)return {fontSize:fallback};
+    let inkBounds:OcrLine['bbox']|undefined;
+    // 新旧估计共用同一次原生指标；新证据不足时不重复measureText或改变旧路径的工作量。
+    const fontSize=withImageSourceFontMetrics(context,line.text,(metrics,space)=>{
+        if(geometry){const observed=estimateImageInkFontSize(geometry,metrics,space);if(observed!==undefined){inkBounds=geometry.bounds;return observed;}}
+        if(!legacyEligible)return;
+        const inkWidth=metrics.actualBoundingBoxLeft+metrics.actualBoundingBoxRight,
+            inkHeight=metrics.actualBoundingBoxAscent+metrics.actualBoundingBoxDescent;
+        if(![inkWidth,inkHeight].every(value=>Number.isFinite(value)&&value>0))return;
+        const byWidth=width/inkWidth*100,byHeight=height/inkHeight*100,estimate=(byWidth+byHeight)/2;
+        return Math.max(byWidth,byHeight)<=Math.min(byWidth,byHeight)*1.12&&estimate>=height*.8&&estimate<=height*2.5?estimate:undefined;
+    })??fallback;
+    return {fontSize,...(inkBounds?{inkBounds}:{})};
+}
+
+/** 只有整段可在当前宽度以源字号保持一行时，返回实际墨迹与描边所需的高度。 */
+export function getImageSingleLineHeight(context:CanvasRenderingContext2D,text:string,width:number,fontSize:number):number|undefined {
+    if(!text.trim()||text.length>256||/[\r\n]/u.test(text)||![width,fontSize].every(n=>Number.isFinite(n)&&n>0))return;
+    context.save();
+    try{
+        context.font=`400 ${fontSize}px ${IMAGE_TEXT_FONT}`;context.textAlign='left';context.textBaseline='alphabetic';context.direction=getImageTextDirection(text);
+        const m=context.measureText(text),inkWidth=m.actualBoundingBoxLeft+m.actualBoundingBoxRight,inkHeight=m.actualBoundingBoxAscent+m.actualBoundingBoxDescent;
+        if(![m.width,inkWidth,inkHeight].every(Number.isFinite)||inkWidth<=0||inkHeight<=0)return;
+        const stroke=Math.max(.35,fontSize*.06);
+        if(Math.max(m.width,inkWidth)+stroke>width-Math.min(2,width*.03)*2)return;
+        return Math.ceil(inkHeight+stroke+2);
+    }finally{context.restore();}
+}
+// 补充平面汉字、假名与韩文 Jamo 要与英文分词，附着的组合标记和连接符仍属于前一字素。
+const CJK_TOKENS = /\s+|[\uFF66-\uFF9D][\uFF9E\uFF9F](?:\p{Mark}|[\u200c\u200d])*|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\uff66-\uff9d\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af](?:\p{Mark}|[\u200c\u200d])*|[^\s\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\uff66-\uff9d\u2e80-\u9fff\u3040-\u30ff\uac00-\ud7af]+/gu;
+// 这些字符各自是完整字素：不含组合标记、连接符、韩文 Jamo、表情修饰符或 Prepend。
+const SIMPLE_IMAGE_TEXT = /^[\s\x20-\x7e\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\u2e80-\u9fff\uac00-\ud7a3\uff01-\uff9d]*$/u;
+const IMAGE_TEXT_EXTEND = /[\p{Mark}\p{Grapheme_Extend}]/u;
+const ImageSegmenter = Intl.Segmenter;
+const graphemeSegmenter = typeof ImageSegmenter === 'function'
+    ? new ImageSegmenter(undefined, { granularity: 'grapheme' }) : undefined;
+let wordSegmenter: Intl.Segmenter | undefined;
+
+function isSimpleImageText(text: string): boolean {
+    return SIMPLE_IMAGE_TEXT.test(text) && !IMAGE_TEXT_EXTEND.test(text);
+}
+
+/** 缺少 Segmenter 时按固定 Unicode 17 属性，只在 ASCII 空格的安全两侧分开词组。 */
+function fallbackTokens(paragraph: string): Array<string | null> {
+    const words = paragraph.replace(/\s+/gu, ' ').split(' ');
+    const result: Array<string | null> = [];
+    let pending = words[0];
+    for (let index = 1; index < words.length; index += 1) {
+        const next = words[index];
+        if (!isSpaceGraphemeExtension(next.codePointAt(0)!)) {
+            // 只读末尾两个 UTF-16 单元，避免为查询 Prepend 展开整个词组。
+            const last = pending.charCodeAt(pending.length - 1), before = pending.charCodeAt(pending.length - 2);
+            const paired = last >= 0xDC00 && last <= 0xDFFF && before >= 0xD800 && before <= 0xDBFF;
+            const previous = pending.codePointAt(pending.length - (paired ? 2 : 1))!;
+            if (!isSpaceGraphemePrepend(previous)) {
+                if (isSimpleImageText(pending)) {
+                    for (const token of pending.match(CJK_TOKENS)!) result.push(token);
+                } else result.push(pending);
+                result.push(null);
+            } else {
+                // Prepend 与空格同属字素，保留在左词组；空格之后的真实边界仍可换行。
+                result.push(pending + ' ');
+            }
+            pending = next;
+        } else {
+            // 例如泰/老挝语 SpacingMark 不是 GC=Mark，不能用“非 Mark”推断空格后可断。
+            pending += ' ' + next;
+        }
+    }
+    if (isSimpleImageText(pending)) {
+        for (const token of pending.match(CJK_TOKENS)!) result.push(token);
+    } else {
+        result.push(pending);
+    }
+    return result;
+}
+
+function tokenize(paragraph: string): Array<string | null> {
+    if (!graphemeSegmenter && !isSimpleImageText(paragraph)) return fallbackTokens(paragraph);
+    const tokens = paragraph.match(CJK_TOKENS) || [];
+    // 正则词界（包括空白两侧）可能位于字素内，使用分割器的实际边界合并；空白仍按原规则归一化。
+    const mayCrossBoundary = tokens.length > 1 && graphemeSegmenter
+        && !isSimpleImageText(paragraph);
+    if (mayCrossBoundary && graphemeSegmenter) {
+        const iterator = graphemeSegmenter.segment(paragraph)[Symbol.iterator]();
+        const merged: string[] = [];
+        let offset = 0;
+        let end = 0;
+        let pending = '';
+        for (const token of tokens) {
+            offset += token.length;
+            while (end < offset) end += iterator.next().value!.segment.length;
+            pending += token;
+            if (offset === end) {
+                merged.push(pending);
+                pending = '';
+            }
+        }
+        return merged.map(token => /^\s+$/u.test(token) ? null : token);
+    }
+    return tokens.map(token => /^\s+$/u.test(token) ? null : token);
 }
 
 /** 保留单词、显式换行和混排空格；过长单词才按字素拆分，不截断译文。 */
@@ -95,13 +347,26 @@ export function layoutImageTranslationText(
     height: number,
     measure: (text: string, fontSize: number) => number,
     maxFontSize = Infinity,
+    measureInk?: (text: string, fontSize: number) => {ascent: number; descent: number},
+    constraints?:ImageTextLayoutConstraints,
 ): ImageTranslationTextLayout {
     const normalized = text.replace(/\r\n?/g, '\n').trim();
     if (!normalized || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
         return { lines: [], fontSize: 0, lineHeight: 0 };
     }
     const paragraphs = normalized.split('\n').map(paragraph => paragraph.trim());
-    const tokens = paragraphs.map(paragraph => paragraph.match(CJK_TOKENS) || []);
+    const rawSegments = new Map<string, string[]>();
+    const split = (token:string):string[]|undefined => {
+        // 不模拟不完整的UAX29；缺少分割器时只拆已证明安全的简单文本。
+        if(!graphemeSegmenter&&!isSimpleImageText(token))return;
+        let parts=rawSegments.get(token);
+        if(!parts){
+            parts=graphemeSegmenter?Array.from(graphemeSegmenter.segment(token),part=>part.segment):Array.from(token);
+            rawSegments.set(token,parts);
+        }
+        return parts;
+    };
+    const tokens = paragraphs.map(paragraph=>bindImageTextPunctuation(tokenize(paragraph),split));
     const segments = new Map<string, string[]>();
     let measuredSize = 0;
     const widths = new Map<string, number>();
@@ -119,19 +384,19 @@ export function layoutImageTranslationText(
         return result;
     };
     const lineSpacing = 1.18;
-    const wrap = (fontSize: number): ImageTranslationTextLayout => {
+    const wrap = (fontSize: number, limit = width, sourceTokens = tokens): ImageTranslationTextLayout => {
         const lines: string[] = [];
-        for (const paragraph of tokens) {
+        for (const paragraph of sourceTokens) {
             let current = '';
             let space = '';
             for (const token of paragraph) {
-                if (/^\s+$/u.test(token)) {
+                if (token === ' ') {
                     space = ' ';
                     continue;
                 }
                 const candidate = current + space + token;
                 space = '';
-                if (textWidth(candidate, fontSize) <= width) {
+                if (textWidth(candidate, fontSize) <= limit) {
                     current = candidate;
                     continue;
                 }
@@ -145,7 +410,8 @@ export function layoutImageTranslationText(
                 }
                 let parts = segments.get(token);
                 if (!parts) {
-                    parts = graphemes(token);
+                    const raw=split(token);
+                    parts = raw?bindImageTextPunctuation(raw.map(part=>/^\s+$/u.test(part)?null:part),()=>undefined):[token];
                     segments.set(token, parts);
                 }
                 for (const part of parts) {
@@ -158,14 +424,66 @@ export function layoutImageTranslationText(
             }
             lines.push(current);
         }
-        return { lines, fontSize, lineHeight: fontSize * lineSpacing };
+        const layout: ImageTranslationTextLayout = { lines, fontSize, lineHeight: fontSize * lineSpacing };
+        if (measureInk) {
+            const metrics = lines.map(line => line ? measureInk(line, fontSize) : {ascent: fontSize / 2, descent: fontSize / 2});
+            if (metrics.every(metric => Number.isFinite(metric.ascent) && Number.isFinite(metric.descent)
+                && metric.ascent + metric.descent > 0 && Number.isFinite(metric.ascent + metric.descent))) {
+                let top = Infinity, bottom = -Infinity;
+                for (const metric of metrics) layout.lineHeight = Math.max(layout.lineHeight, metric.ascent + metric.descent);
+                if(lines.length===constraints?.sourceLineCount&&Number.isFinite(constraints.sourceLinePitch))layout.lineHeight=Math.max(layout.lineHeight,constraints.sourceLinePitch!);
+                const baselines = metrics.map((metric, index) => {
+                    const baseline = index * layout.lineHeight;
+                    top = Math.min(top, baseline - metric.ascent);
+                    bottom = Math.max(bottom, baseline + metric.descent);
+                    return baseline;
+                });
+                layout.ink = {height: bottom - top, baselines: baselines.map(baseline => baseline - top)};
+            }
+        }
+        return layout;
     };
-    const fits = (layout: ImageTranslationTextLayout) => layout.lines.length * layout.lineHeight <= height
-        && layout.lines.every(line => textWidth(line, layout.fontSize) <= width);
+    const fits = (layout: ImageTranslationTextLayout) => (layout.ink?.height ?? layout.lines.length * layout.lineHeight) <= height
+        && layout.lines.every(line => textWidth(line, layout.fontSize) <= width)&&(!constraints?.accept||constraints.accept(layout));
 
-    let high = Math.min(height / lineSpacing, maxFontSize);
-    const largest = wrap(high);
-    if (fits(largest)) return largest;
+    // 短段落末行过短时只收拢可用行宽，字号、行数、词和标点绑定保持不变。
+    // 不平衡作者换行、长正文或已经需要拆词的段落；最多五次候选，复用当前字号测宽缓存。
+    const balance = (layout: ImageTranslationTextLayout): ImageTranslationTextLayout => {
+        const count = layout.lines.length;
+        if (paragraphs.length !== 1 || count < 2 || count > 4 || normalized.length > 1024 || tokens[0].length > 128 || !graphemeSegmenter) return layout;
+        const lineWidths = layout.lines.map(line => textWidth(line, layout.fontSize));
+        const maximum = Math.max(...lineWidths);
+        if (lineWidths[count - 1] >= maximum * .55 || !lineWidths.every(value => Number.isFinite(value) && value > 0)
+            || tokens[0].some(token => textWidth(token, layout.fontSize) > width)) return layout;
+        // 只合并原安全token，不采用落在字素或已绑定标点内部的词界。
+        const boundaries = new Set<number>();
+        wordSegmenter ??= new ImageSegmenter(undefined, {granularity: 'word'});
+        for (const part of wordSegmenter.segment(tokens[0].join(''))) boundaries.add(part.index + part.segment.length);
+        const words: string[] = [];
+        let pending = '', offset = 0;
+        for (let index = 0; index < tokens[0].length; index++) {
+            const token = tokens[0][index]; pending += token; offset += token.length;
+            if (index === tokens[0].length - 1 || boundaries.has(offset)) {words.push(pending); pending = '';}
+        }
+        if (words.some(word => textWidth(word, layout.fontSize) > width)) return layout;
+        let low = 0, high = width, best = layout, spread = maximum - Math.min(...lineWidths);
+        for (let iteration = 0; iteration < 5; iteration++) {
+            const limit = (low + high) / 2, candidate = wrap(layout.fontSize, limit, [words]);
+            const lengths = candidate.lines.map(line => textWidth(line, layout.fontSize));
+            if (candidate.lines.length !== count || !lengths.every(value => Number.isFinite(value) && value > 0 && value <= limit)
+                || (layout.ink && !candidate.ink) || !fits(candidate)) { low = limit; continue; }
+            high = limit;
+            const difference = Math.max(...lengths) - Math.min(...lengths);
+            if (difference < spread) { best = candidate; spread = difference; }
+        }
+        return best;
+    };
+
+    // 有真实墨迹时，外侧不需要额外占一个完整 CSS 行高；行距只用于多行之间。
+    let high = Math.min(measureInk?Math.min(Number.MAX_VALUE,height*2):height/lineSpacing, maxFontSize);
+    let largest = wrap(high);
+    if(measureInk&&!largest.ink){high=Math.min(height/lineSpacing,maxFontSize);largest=wrap(high);}
+    if (fits(largest)) return balance(largest);
     // 根据完整段落在 1px 字号的宽度推导可容纳下限；极长译文可缩小但始终保留全部文字。
     // 行数来自完整译文，不展开成函数参数，也不为取最大值另建宽度数组。
     let paragraphWidth = 1;
@@ -181,7 +499,7 @@ export function layoutImageTranslationText(
             high = candidate.fontSize;
         }
     }
-    return best;
+    return balance(best);
 }
 
 /** 在原区域内绘制完整译文；使用真实字号适配而非 Canvas maxWidth 横向压扁。 */
@@ -195,38 +513,167 @@ export function drawTranslatedImageText(
     backgroundColor: string,
     maxFontSize = Infinity,
     textAlign: 'left' | 'center' | 'right' = 'center',
+    prepared?: ImageTranslationTextLayout,
+    foregroundColor?: string,
+    outlineColor?: string,
+    sourceInkBounds?: OcrLine['bbox'],
+    orientation?:ImageSourceTypographyGeometry,
+    background?:ImageTextBackground,
 ): void {
+    renderTranslatedImageText([context,text,left,top,width,height,backgroundColor,maxFontSize,textAlign,
+        prepared,foregroundColor,outlineColor,sourceInkBounds,orientation,background]);
+}
+
+type ImageTextDrawing=Parameters<typeof drawTranslatedImageText>;
+export interface ImageTextMeasureBudget {remaining:number;characters:number}
+const IMAGE_TEXT_PREFLIGHT_LIMIT=Symbol('image-text-preflight-limit');
+
+/** 复用实际排版、描边和倾角坐标；只度量，不裁剪或绘字。共享预算不能被多段译文重置。 */
+export function canDrawTranslatedImageText(budget:ImageTextMeasureBudget,...args:ImageTextDrawing):boolean {
+    try {return renderTranslatedImageText(args,budget);}
+    catch(error){if(error===IMAGE_TEXT_PREFLIGHT_LIMIT)return false;throw error;}
+}
+
+function renderTranslatedImageText(args:ImageTextDrawing,preflight?:ImageTextMeasureBudget):boolean {
+    const [context,text,left,top,width,height,backgroundColor,maxFontSize=Infinity,textAlign='center',
+        prepared,foregroundColor,outlineColor,sourceInkBounds,orientation,background]=args;
+    const rotated=orientation?.owner.quarterTurn;
+    if(rotated&&(text.length>256||/[\r\n]/u.test(text)))return false;
+    const charge=(value:string)=>{
+        if(preflight&&(--preflight.remaining<0||(preflight.characters-=value.length)<0))throw IMAGE_TEXT_PREFLIGHT_LIMIT;
+    };
+    charge(text);
     const paddingX = Math.min(2, width * 0.03);
     const paddingY = Math.min(1, height * 0.05);
     context.save();
     try {
+        // 离屏文档通常是LTR，不能把这个默认方向施加到阿拉伯文、希伯来文及其数字/标点。
+        context.direction = getImageTextDirection(text);
         let measuredFont = 0;
-        const layout = layoutImageTranslationText(text, width - paddingX * 2, height - paddingY * 2, (line, fontSize) => {
+        const metrics = new Map<string, TextMetrics>();
+        context.textAlign = 'left';
+        context.textBaseline = 'alphabetic';
+        const measure = (line: string, fontSize: number) => {
             if (fontSize !== measuredFont) {
                 context.font = `400 ${fontSize}px ${IMAGE_TEXT_FONT}`;
                 measuredFont = fontSize;
+                metrics.clear();
             }
-            return context.measureText(line).width;
-        }, maxFontSize);
-        if (layout.lines.length === 0) return;
-        context.beginPath();
-        context.rect(left, top, width, height);
-        context.clip();
+            let result = metrics.get(line);
+            if (!result) {
+                charge(line);
+                result = context.measureText(line);
+                if (metrics.size >= 512) metrics.clear();
+                metrics.set(line, result);
+            }
+            return result;
+        };
+        const bleed = (size: number) => Math.max(0.35, size * 0.06) / 2;
+        const textWidth=(line:string,size:number)=>{
+                const metric = measure(line, size);
+                const inkWidth = metric.actualBoundingBoxLeft + metric.actualBoundingBoxRight;
+                return Number.isFinite(inkWidth) ? Math.max(metric.width, inkWidth) + bleed(size) * 2 : metric.width;
+            },textInk=(line:string,size:number)=>{
+                const metric = measure(line, size);
+                const valid = metric.actualBoundingBoxAscent + metric.actualBoundingBoxDescent > 0;
+                return {ascent: valid ? metric.actualBoundingBoxAscent + bleed(size) : NaN,
+                    descent: valid ? metric.actualBoundingBoxDescent + bleed(size) : NaN};
+            };
+        const plane=!prepared&&orientation&&text.length<=4096?createImageTypographyPlane({x0:left,y0:top,x1:left+width,y1:top+height},orientation,textAlign,(line,size)=>{
+            const metric=measure(line,size);return {left:metric.actualBoundingBoxLeft,right:metric.actualBoundingBoxRight,ascent:metric.actualBoundingBoxAscent,descent:metric.actualBoundingBoxDescent};
+        },bleed):undefined;
+        const labelMinimum=rotated?Math.max(7,maxFontSize*.5):0;
+        if(rotated&&plane){
+            // 标签必须保留单行和最低字号，先按同一词界度量完整行，避免为必然超宽的译文尝试拆字与缩小。
+            const fullLine=tokenize(text.trim()).map(token=>token??' ').join('');
+            if(textWidth(fullLine,labelMinimum)>plane.width)return false;
+        }
+        const constraints=rotated&&plane?{...plane.constraints,accept:(layout:ImageTranslationTextLayout)=>layout.lines.length===1&&!!plane.plan(layout)}:plane?.constraints;
+        const tilted=plane?layoutImageTranslationText(text,plane.width,plane.height,textWidth,maxFontSize,textInk,constraints):undefined;
+        const placement=tilted&&plane!.plan(tilted);
+        if(rotated&&(!placement||tilted!.lines.length!==1||tilted!.fontSize<labelMinimum))return false;
+        const layout = placement?tilted!:prepared ?? layoutImageTranslationText(text,width-paddingX*2,height-paddingY*2,textWidth,maxFontSize,textInk);
+        if (layout.lines.length === 0) return false;
+        if(!preflight){
+            context.beginPath();
+            context.rect(left, top, width, height);
+            context.clip();
+        }
         context.font = `400 ${layout.fontSize}px ${IMAGE_TEXT_FONT}`;
-        context.textAlign = textAlign;
-        context.textBaseline = 'middle';
-        context.fillStyle = getImageTextColor(backgroundColor);
-        context.strokeStyle = backgroundColor;
-        context.lineWidth = Math.max(0.35, layout.fontSize * 0.06);
+        context.textAlign = layout.ink ? 'left' : textAlign;
+        context.textBaseline = layout.ink ? 'alphabetic' : 'middle';
+        const fill = foregroundColor ?? getImageTextColor(backgroundColor), stroke = outlineColor ?? backgroundColor;
+        const sample = background && !foregroundColor && !outlineColor;
+        const clip = {x0:left,y0:top,x1:left+width,y1:top+height};
+        context.fillStyle = fill;
+        context.strokeStyle = stroke;
+        context.lineWidth = Math.max(0.35, layout.fontSize * (outlineColor ? 0.025 : 0.06));
         context.lineJoin = 'round';
+        const paint=(line:string,x:number,y:number):boolean=>{
+            if(!preflight){
+                if (sample) {
+                    let style: ReturnType<typeof sampleImageTextStyle>;
+                    if (background.remaining >= TEXT_COLOR_SAMPLES && line.length <= 4096) {
+                        background.remaining -= TEXT_COLOR_SAMPLES;
+                        const m = layout.ink ? measure(line, layout.fontSize) : context.measureText(line);
+                        style = sampleImageTextStyle(background,
+                            {x0:x-m.actualBoundingBoxLeft,y0:y-m.actualBoundingBoxAscent,
+                                x1:x+m.actualBoundingBoxRight,y1:y+m.actualBoundingBoxDescent},
+                            clip, placement?.transform, fill);
+                    }
+                    context.fillStyle = style?.fill ?? fill;
+                    context.strokeStyle = style?.outline ?? stroke;
+                }
+                context.strokeText(line,x,y);context.fillText(line,x,y);return true;
+            }
+            if(!line.trim())return true;
+            charge(line);
+            // measure 的缓存采用 alphabetic/left；预排版也可能使用 middle/right，必须读取当前真实基线与对齐。
+            const m=context.measureText(line),radius=context.lineWidth/2+1;
+            if(![m.width,m.actualBoundingBoxLeft,m.actualBoundingBoxRight,m.actualBoundingBoxAscent,m.actualBoundingBoxDescent].every(Number.isFinite)
+                ||m.actualBoundingBoxLeft+m.actualBoundingBoxRight<=0||m.actualBoundingBoxAscent+m.actualBoundingBoxDescent<=0)return false;
+            const xs=[x-m.actualBoundingBoxLeft-radius,x+m.actualBoundingBoxRight+radius];
+            const ys=[y-m.actualBoundingBoxAscent-radius,y+m.actualBoundingBoxDescent+radius];
+            // 原生描边宽度往返可能量化为float32；只容忍万分之一像素的数值误差。
+            const epsilon=1e-4;
+            for(const px of xs)for(const py of ys){
+                const t=placement?.transform;
+                const dx=t?t[0]*px+t[2]*py+t[4]:px,dy=t?t[1]*px+t[3]*py+t[5]:py;
+                if(!Number.isFinite(dx)||!Number.isFinite(dy)||dx<left-epsilon||dy<top-epsilon||dx>left+width+epsilon||dy>top+height+epsilon)return false;
+            }
+            return true;
+        };
+        if(placement){
+            if(!preflight)context.transform(...placement.transform);
+            return layout.lines.every((line,index)=>{const {x,y}=placement.points[index];return paint(line,x,y);});
+        }
         const firstLine = textAlign === 'center'
             ? top + (height - layout.lineHeight * layout.lines.length) / 2 + layout.lineHeight / 2
             : top + paddingY + layout.lineHeight / 2;
         const x = textAlign === 'left' ? left + paddingX : textAlign === 'right' ? left + width - paddingX : left + width / 2;
-        layout.lines.forEach((line, index) => {
-            const y = firstLine + index * layout.lineHeight;
-            context.strokeText(line, x, y);
-            context.fillText(line, x, y);
+        const anchor=layout.ink&&sourceInkBounds&&[sourceInkBounds.x0,sourceInkBounds.y0,sourceInkBounds.x1,sourceInkBounds.y1].every(Number.isFinite)
+            &&sourceInkBounds.x1>sourceInkBounds.x0&&sourceInkBounds.y1>sourceInkBounds.y0?sourceInkBounds:undefined;
+        const inkTop=layout.ink?(anchor
+            ?Math.max(top+paddingY,Math.min(top+height-paddingY-layout.ink.height,(anchor.y0+anchor.y1-layout.ink.height)/2))
+            :top+(textAlign==='center'?(height-layout.ink.height)/2:paddingY)):0;
+        return layout.lines.every((line, index) => {
+            const y = layout.ink
+                ? inkTop + layout.ink.baselines[index]
+                : firstLine + index * layout.lineHeight;
+            const metric = layout.ink ? measure(line, layout.fontSize) : undefined;
+            let inkX = metric && Number.isFinite(metric.actualBoundingBoxLeft + metric.actualBoundingBoxRight)
+                ? textAlign === 'left' ? left + paddingX + metric.actualBoundingBoxLeft + bleed(layout.fontSize)
+                    : textAlign === 'right' ? left + width - paddingX - metric.actualBoundingBoxRight - bleed(layout.fontSize)
+                        : left + (width + metric.actualBoundingBoxLeft - metric.actualBoundingBoxRight) / 2
+                : x;
+            if(anchor){
+                const span=metric!.actualBoundingBoxLeft+metric!.actualBoundingBoxRight+bleed(layout.fontSize)*2;
+                if(Number.isFinite(span)&&span>0){
+                    const start=textAlign==='left'?anchor.x0:textAlign==='right'?anchor.x1-span:(anchor.x0+anchor.x1-span)/2;
+                    inkX=Math.max(left+paddingX,Math.min(left+width-paddingX-span,start))+metric!.actualBoundingBoxLeft+bleed(layout.fontSize);
+                }
+            }
+            return paint(line,inkX,y);
         });
     } finally {
         context.restore();

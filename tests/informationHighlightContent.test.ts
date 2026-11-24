@@ -1,17 +1,17 @@
 /**
  * @file tests/informationHighlightContent.test.ts
  * 文件职责：验证信息高亮的文本算法、只读收集及页内会话的实际行为和所有权。
- * 主要内容：使用真实 DOM Text 身份与可控原生绘制端口，覆盖模型切换隔离、内联链接、保护区域、开放及闭合译文、分帧/稳定窗口、异步取消与同文本替换，断言原文和宿主节点不变。
+ * 主要内容：使用真实 DOM Text 身份与可控原生绘制端口，覆盖旧模型配置迁移和通用模型切换隔离、内联链接、保护区域、开放及闭合译文、分帧/稳定窗口、异步取消与同文本替换，断言原文和宿主节点不变。
  * 模块边界：模型端口为可控响应，测试不声称真实模型速度或用户理解收益；真实浏览器 CSS 绘制由独立回归验证。
  */
 import {informationHighlightOpacity} from '@/src/features/information-highlight/domain/presentation';
 import {parseHTML} from 'linkedom';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {scoreInformationKeywords, selectInformationSpans} from '@/src/features/information-highlight/domain/keywords';
+import {alignInformationWordSpans, scoreInformationKeywords, selectInformationSpans} from '@/src/features/information-highlight/domain/keywords';
 import {informationGraphemeBoundaries, informationSliceEnd} from '@/src/features/information-highlight/domain/textBoundaries';
 import {collectInformationParagraphs, informationRanges, isInformationParagraphCurrent} from '@/src/features/information-highlight/content/readingText';
 import {installInformationHighlight, INFORMATION_HIGHLIGHT_NAME} from '@/src/features/information-highlight/public';
-import {DEFAULT_INFORMATION_HIGHLIGHT_PREFERENCES as defaultPreferences} from '@/src/core/config/informationHighlight';
+import {DEFAULT_INFORMATION_HIGHLIGHT_PREFERENCES as defaultPreferences, normalizeInformationHighlightPreferences} from '@/src/core/config/informationHighlight';
 import {registerVisibleTranslationRoot, readVisibleTranslationRoot} from '@/src/features/full-page-translation/content/visibleTranslation';
 import {createInformationHighlightContentRuntime, createInformationHighlightScorePort, createPageInformationHighlightRuntime, handleInformationHighlightMessage} from '@/src/app/content/informationHighlight';
 import type {InformationHighlightResult} from '@/src/features/information-highlight/protocol';
@@ -49,8 +49,10 @@ function fixture(html = '<article><p id="paragraph">The extraordinary algorithm 
     Object.defineProperty(window.HTMLElement.prototype, 'getBoundingClientRect', {configurable: true, value() {
         const top = Number(this.getAttribute('data-top') || 20); return {top, bottom: top + Number(this.getAttribute('data-height') || 40)};
     }});
-    document.createRange = () => {let node: Text, start = 0, end = 0; return {
-        setStart(n: Text, s: number) {node = n; start = s;}, setEnd(_n: Text, e: number) {end = e;},
+    document.createRange = () => {let node: Text, endNode: Text, start = 0, end = 0; return {
+        setStart(n: Text, s: number) {node = n; start = s;}, setEnd(n: Text, e: number) {endNode = n; end = e;},
+        get startContainer() {return node;}, get endContainer() {return endNode;},
+        get startOffset() {return start;}, get endOffset() {return end;},
         toString() {return node.data.slice(start, end);},
         getBoundingClientRect() {const top = Number(node.parentElement!.getAttribute('data-text-top') ?? 20); return {top, bottom: top + 20};},
     } as unknown as Range;};
@@ -91,17 +93,30 @@ describe('local keyword and Unicode coordinates', () => {
         const mixed = '预测意外度 predicts 阅读';
         expect(score(mixed, '阅读')).toBeGreaterThan(Math.log2(6)); expect(scoreInformationKeywords('我们已经可以通过这个').spans).toEqual([]);
     });
+    it.each([true, false])('keeps emoji modifiers, flag pairs and CRLF intact and always advances (native segmentation: %s)', native => {
+        if (!native) vi.stubGlobal('Intl', {...Intl, Segmenter: undefined});
+        for (const cluster of ['😀', '👍🏽', '🇨🇳', '👩‍💻', 'a\u0301', '\r\n']) {
+            const boundaries = informationGraphemeBoundaries(cluster + 'z');
+            for (let offset = 1; offset < cluster.length; offset++) {
+                expect(boundaries.has(offset), `${cluster} offset ${offset}`).toBe(false);
+                expect(informationSliceEnd(cluster + 'z', 0, offset)).toBe(cluster.length);
+                expect(informationSliceEnd('x' + cluster + 'z', 0, offset + 1)).toBe(1);
+            }
+        }
+    });
     it('fallback preserves composed accents and CJK units without Intl.Segmenter', () => {
         vi.stubGlobal('Intl', {...Intl, Segmenter: undefined});
         const text = 'cafe\u0301 中文阅读 学习测试 ab-cd';
         expect(scoreInformationKeywords(text).spans.map(span => text.slice(span.start, span.end))).toEqual(['cafe\u0301', '中文', '阅读', '学习', '测试', 'ab-cd']);
         expect([...informationGraphemeBoundaries('a\u0301👩‍💻x')]).toEqual(expect.arrayContaining([0, 2, 7, 8]));
         expect(informationSliceEnd('a\u0301👩‍💻x', 0, 1)).toBe(2);
-        expect(informationSliceEnd('a👩‍💻x', 0, 3)).toBe(6);
+        expect(informationSliceEnd('a👩‍💻x', 0, 3)).toBe(1);
         expect(informationSliceEnd('a😀b', 0, 2)).toBe(1);
         const join = 'ab‍cd'; expect(selectInformationSpans(join, [{start: 0, end: 5, score: 1}], 'high')).toEqual([]);
     });
     it('aggregates model pieces into whole words, rejects bad boundaries, and makes density a bounded paint budget', () => {
+        expect(alignInformationWordSpans('Alpha beta.', [{start: 0, end: 10, score: 1}, {start: 1, end: 2, score: 3}]))
+            .toEqual([{start: 0, end: 5, score: 4}, {start: 6, end: 10, score: 1}]);
         const text = 'extraordinary algorithms preserve cafe\u0301 and emoji 👩‍💻 safely';
         const spans = [...scoreInformationKeywords(text).spans, {start: 0, end: 5, score: 5}, {start: 5, end: 13, score: 5},
             {start: -1, end: 3, score: 10}, {start: 0.5, end: 3, score: 10}, {start: 0, end: 0, score: 2},
@@ -144,6 +159,15 @@ describe('read-only body collection and native mapping', () => {
         const inline = fixture('<span>A readable standalone inline scope.</span>');
         Object.defineProperty(inline.document, 'body', {value: inline.document.querySelector('span')});
         expect(collect(inline).paragraphs[0].text).toBe('A readable standalone inline scope.');
+    });
+    it('deduplicates discovered root handles when the translation resolver reuses a root during handoff', () => {
+        const f=fixture('<article><span id="first"></span><span id="alias"></span></article>');
+        const host=f.document.querySelector('#first')!,root=host.attachShadow({mode:'closed'});
+        root.innerHTML='<p>Shared translated readable paragraph contents.</p>';
+        const scan=collect(f,element=>element.id==='first'||element.id==='alias'?root:undefined);
+        expect(scan.roots).toEqual([f.document,root]);
+        expect(scan.paragraphs.every(paragraph=>paragraph.root===root&&paragraph.text==='Shared translated readable paragraph contents.')).toBe(true);
+        expect(scan.paragraphs.length).toBeGreaterThan(0);
     });
     it('reads registered closed translation text only while attached, and discovers open roots and slot projection', () => {
         const f = fixture('<article><span id="closed" class="fluent-read-single-slot" data-fr-translation-owned="true" translate="no">Original preserved hidden text.</span><span id="open"></span><span id="projection"></span></article>');
@@ -198,6 +222,19 @@ describe('read-only body collection and native mapping', () => {
 });
 
 describe('page-owned scoring, paint and cancellation', () => {
+    it('redraws split paragraphs sharing one Text node without retaining ranges from another slice',async()=>{
+        const text='Extraordinary scientific vocabulary preserves algorithmic information. '.repeat(80),f=fixture(`<p>${text}</p>`);
+        const controller=installInformationHighlight(f.document,{...defaults,density:'low'},{scoreLocal:vi.fn()});controller.setEnabled(true);await f.settle();expect(controller.getState().processedParagraphs).toBeGreaterThan(1);
+        controller.updatePreferences({...defaults,density:'high'});await f.settle();
+        const fresh=fixture(`<p>${text}</p>`),expected=installInformationHighlight(fresh.document,{...defaults,density:'high'},{scoreLocal:vi.fn()});expected.setEnabled(true);await fresh.settle();
+        expect(f.painted().sort()).toEqual(fresh.painted().sort());controller.dispose();expected.dispose();
+    });
+    it('does not finish the last paragraph as active after cancellation during its rendering-budget yield',async()=>{
+        const f=fixture();f.slow();const controller=installInformationHighlight(f.document,{...defaults},{scoreLocal:vi.fn()});controller.setEnabled(true);vi.advanceTimersByTime(180);
+        for(let i=0;i<200&&controller.getState().processedParagraphs===0;i++)await f.flush();
+        expect(controller.getState().processedParagraphs).toBe(1);expect(f.frames.size).toBe(1);controller.dispose();await f.flush();
+        expect(controller.getState().enabled).toBe(false);expect(f.painted()).toEqual([]);expect(f.frames.size).toBe(0);
+    });
     it('paints score levels with monotonic density, reuses model scores and keeps legacy styles compatible', async () => {
         const terms = Array.from({length: 30}, (_, index) => `term${String(index).padStart(2, '0')}`);
         const f = fixture(`<article><p>${terms.join(' ')}</p></article>`), before = f.document.body.innerHTML;
@@ -329,7 +366,27 @@ describe('page-owned scoring, paint and cancellation', () => {
         controller.updatePreferences({...defaults, mode: 'surprisal-local'}); await f.settle(); expect(segment).toHaveBeenCalledTimes(5);
         controller.dispose(); register.mockRestore(); segment.mockRestore();
     });
-    it('isolates same-text model caches and aborts stale scores when the selected model changes', async () => {
+    it('migrates a retired model preference before scoring and reuses the Base same-text cache', async () => {
+        const f = fixture('<article><p>alpha bravo charlie delta echo foxtrot</p></article>');
+        const late = deferred<InformationHighlightResult>();
+        const score = vi.fn((_text: string, _signal: AbortSignal, _modelId?: string) => late.promise);
+        const legacy = {...defaults, mode: 'surprisal-local' as const, model: 'qwen3-0.6b'};
+        const preferences = normalizeInformationHighlightPreferences(legacy);
+        const controller = installInformationHighlight(f.document, preferences, {scoreLocal: score});
+        controller.setEnabled(true); await f.settle(); expect(score).toHaveBeenCalledOnce();
+        expect(score.mock.calls[0][2]).toBe('qwen2.5-0.5b');
+        expect(legacy.model).toBe('qwen3-0.6b');
+        late.resolve({engine: 'Qwen2.5 0.5B Base', spans: [{start: 0, end: 5, score: 10}]});
+        await f.settle(); expect(f.painted()).toEqual(['alpha']);
+        controller.updatePreferences(normalizeInformationHighlightPreferences(legacy)); await f.settle();
+        expect(f.painted()).toEqual(['alpha']); expect(score).toHaveBeenCalledOnce();
+        controller.setEnabled(false); expect(f.painted()).toEqual([]);
+        controller.setEnabled(true); await f.settle(); expect(f.painted()).toEqual(['alpha']);
+        expect(score).toHaveBeenCalledOnce(); controller.dispose();
+    });
+    it('isolates generic model caches and aborts stale scores when a test-only Base choice changes', async () => {
+        // 只向通用控制器注入未来 Base 选项夹具，不通过生产配置归一化或模型清单启用额外模型。
+        const alternativeId = 'test-only-base' as never;
         const f = fixture('<article><p>alpha bravo charlie delta echo foxtrot</p></article>');
         const late = deferred<InformationHighlightResult>();
         const signals: AbortSignal[] = [];
@@ -337,21 +394,21 @@ describe('page-owned scoring, paint and cancellation', () => {
         const score = vi.fn((_text: string, signal: AbortSignal, modelId?: string) => {
             signals.push(signal);
             if (first) {first = false; return late.promise;}
-            return Promise.resolve({engine: modelId!, spans: [{start: modelId === 'qwen3-0.6b' ? 6 : 0, end: modelId === 'qwen3-0.6b' ? 11 : 5, score: 10}]});
+            return Promise.resolve({engine: modelId!, spans: [{start: modelId === alternativeId ? 6 : 0, end: modelId === alternativeId ? 11 : 5, score: 10}]});
         });
         const preferences = {...defaults, mode: 'surprisal-local' as const};
         const controller = installInformationHighlight(f.document, preferences, {scoreLocal: score});
         controller.setEnabled(true); await f.settle(); expect(score).toHaveBeenCalledOnce();
         expect(score.mock.calls[0][2]).toBe('qwen2.5-0.5b');
-        controller.updatePreferences({...preferences, model: 'qwen3-0.6b'});
+        controller.updatePreferences({...preferences, model: alternativeId});
         expect(signals[0].aborted).toBe(true);
         await f.settle(); expect(f.painted()).toEqual(['bravo']);
-        expect(score.mock.calls[1][2]).toBe('qwen3-0.6b');
+        expect(score.mock.calls[1][2]).toBe(alternativeId);
         late.resolve({engine: 'late-old-model', spans: [{start: 0, end: 5, score: 10}]});
         await f.settle(); expect(f.painted()).toEqual(['bravo']);
         controller.updatePreferences(preferences); await f.settle(); expect(f.painted()).toEqual(['alpha']);
         expect(score.mock.calls[2][2]).toBe('qwen2.5-0.5b');
-        controller.updatePreferences({...preferences, model: 'qwen3-0.6b'}); await f.settle();
+        controller.updatePreferences({...preferences, model: alternativeId}); await f.settle();
         expect(f.painted()).toEqual(['bravo']); expect(score).toHaveBeenCalledTimes(3);
         controller.dispose();
     });
@@ -438,6 +495,32 @@ describe('page-owned scoring, paint and cancellation', () => {
         controller.setEnabled(true); await f.settle(); expect(f.document.querySelectorAll('[data-fr-information-highlight-style]')).toHaveLength(1); expect(f.document.querySelector('[data-fr-information-highlight-style]')).toBe(style);
         controller.dispose(); expect(style.isConnected).toBe(false); controller.dispose(); controller.refresh(); controller.retry(); controller.setEnabled(true);
         expect(controller.getState()).toMatchObject({enabled: false, phase: 'idle'}); expect(f.frames.size).toBe(0); expect(vi.getTimerCount()).toBe(0);
+    });
+    it.each(['background', 'heatmap'] as const)('rebuilds %s paint when the same text moves between existing Text nodes without rescoring', async style => {
+        const f = fixture('<p>Hello extraordinary <em>scientific vocabulary preserves original paragraphs.</em></p>');
+        const paragraph = f.document.querySelector('p')!, first = paragraph.firstChild as Text, second = paragraph.querySelector('em')!.firstChild as Text;
+        const text = paragraph.textContent, score = vi.fn(async (source: string) => scoreInformationKeywords(source));
+        const controller = installInformationHighlight(f.document, {...defaults, style, mode: 'surprisal-local'}, {scoreLocal: score});
+        controller.setEnabled(true); await f.settle(); const words = f.painted();
+        const ranges = () => [...f.registry.values()].flatMap(paint => [...paint]); const old = ranges(); expect(words.length).toBeGreaterThan(0);
+        first.data = 'Hello '; second.data = 'extraordinary scientific vocabulary preserves original paragraphs.';
+        expect(paragraph.textContent).toBe(text); expect(paragraph.firstChild).toBe(first); expect(paragraph.querySelector('em')!.firstChild).toBe(second);
+        f.mutate(first); await f.settle(); expect(f.painted()).toEqual(words); expect(ranges().some(range => old.includes(range))).toBe(false); expect(score).toHaveBeenCalledOnce();
+        const restored = ranges(); f.document.dispatchEvent(new f.window.Event('scroll')); f.window.dispatchEvent(new f.window.Event('resize')); await f.settle();
+        expect(ranges()).toEqual(restored); expect(score).toHaveBeenCalledOnce(); controller.dispose();
+    });
+    it.each(['startContainer', 'endContainer', 'startOffset', 'endOffset'] as const)('rebuilds paint after the existing Range %s changes while Text snapshots stay identical', async endpoint => {
+        const f = fixture(), score = vi.fn(async (source: string) => scoreInformationKeywords(source));
+        const controller = installInformationHighlight(f.document, {...defaults, mode: 'surprisal-local'}, {scoreLocal: score});
+        controller.setEnabled(true); await f.settle(); const words = f.painted(), old = [...f.registry.get(INFORMATION_HIGHLIGHT_NAME)!];
+        const range = old[0], node = range.startContainer as Text;
+        // 受控 Range 端口模拟原生 Text.data 同值重写后的端点失效；真实 DOM 语义另由浏览器对照验证。
+        if (endpoint === 'startContainer') range.setStart(f.document.createTextNode(node.data), range.startOffset);
+        else if (endpoint === 'endContainer') range.setEnd(f.document.createTextNode(node.data), range.endOffset);
+        else if (endpoint === 'startOffset') range.setStart(node, 0);
+        else range.setEnd(node, 0);
+        f.mutate(node); await f.settle(); const restored = [...f.registry.get(INFORMATION_HIGHLIGHT_NAME)!];
+        expect(restored.some(item => old.includes(item))).toBe(false); expect(f.painted()).toEqual(words); expect(score).toHaveBeenCalledOnce(); controller.dispose();
     });
     it('reports missing native paint and refuses invalid owners without observers, requests or DOM fallback', async () => {
         const f = fixture(undefined, false), before = f.document.body.innerHTML;
@@ -786,6 +869,17 @@ describe('content composition and runtime score messages', () => {
         const silent = fixture(), quiet = createInformationHighlightContentRuntime({document: silent.document, preferences: {...defaults, mode: 'surprisal-local'}, send: vi.fn(async () => ({success: false}))});
         quiet.mount(new AbortController().signal, () => true); press(silent); await silent.settle(); expect(quiet.getState().phase).toBe('error'); quiet.unmount();
     });
+    it.each(['unmount', 'disable'] as const)('does not revive a model fallback after a notice handler requests %s', async action => {
+        const f = fixture();
+        const runtime = createInformationHighlightContentRuntime({document: f.document, preferences: {...defaults, mode: 'surprisal-local'},
+            send: vi.fn(async () => ({success: false, error: 'INFORMATION_HIGHLIGHT_NOT_DOWNLOADED'})),
+            notice: message => {if (message === 'modelNotReady') {if (action === 'unmount') runtime.unmount(); else runtime.setEnabled(false);}}});
+        runtime.mount(new AbortController().signal, () => true);
+        const event = new f.window.Event('keydown', {bubbles: true, cancelable: true}) as KeyboardEvent;
+        Object.assign(event, {key: 'h', code: 'KeyH', altKey: true, ctrlKey: false, shiftKey: false, metaKey: false, repeat: false});
+        Object.defineProperty(event, 'isTrusted', {value: true}); f.document.dispatchEvent(event); await f.settle();
+        expect(runtime.getState()).toMatchObject({enabled: false, mode: 'surprisal-local'}); expect(f.painted()).toEqual([]); runtime.unmount();
+    });
     it('mounts only current activation, owns abort, maps score messages and returns idle after route change', async () => {
         const f = fixture(), activation = new AbortController();
         const send = vi.fn(async (message: {type: string; text?: string}) => ({success: true, result: scoreInformationKeywords(message.text || '')}));
@@ -811,6 +905,24 @@ describe('content composition and runtime score messages', () => {
         send.mockImplementation(async () => undefined); runtime.retry(); await f.settle(); expect(runtime.getState().errorCode).toBe('INFORMATION_HIGHLIGHT_SCORE_FAILED');
         send.mockImplementation(async () => {throw new Error('NETWORK');}); runtime.retry(); await f.settle(); expect(runtime.getState().errorCode).toBe('NETWORK');
         activation.abort(); expect(runtime.getState().phase).toBe('idle');
+    });
+    it('rejects cancellation locally even when the extension transport throws synchronously', async () => {
+        const listeners = new Set<() => void>();
+        const signal = {aborted: false, addEventListener: (_type: string, callback: () => void) => listeners.add(callback),
+            removeEventListener: (_type: string, callback: () => void) => listeners.delete(callback)};
+        const pending = deferred<unknown>();
+        const send = vi.fn((message: {type: string}) => {
+            if (message.type === 'CANCEL_INFORMATION_HIGHLIGHT') throw new Error('Extension context invalidated');
+            return pending.promise;
+        });
+        const score = createInformationHighlightScorePort(send);
+        const task = score('text', signal as unknown as AbortSignal);
+        const outcome = task.then(() => 'resolved', error => error.message);
+        signal.aborted = true;
+        expect(() => [...listeners].forEach(listener => listener())).not.toThrow();
+        await expect(outcome).resolves.toBe('INFORMATION_HIGHLIGHT_CANCELLED');
+        expect(listeners.size).toBe(0);
+        pending.resolve({success: true, result: {spans: [], engine: 'late'}});
     });
     it('generates secure UUID identities on HTTP pages, refuses an already aborted request and cancels a same-turn response', async () => {
         const realCrypto = crypto; vi.stubGlobal('crypto', {getRandomValues: realCrypto.getRandomValues.bind(realCrypto)});

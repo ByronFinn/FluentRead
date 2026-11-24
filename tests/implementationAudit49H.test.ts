@@ -40,13 +40,24 @@ const dom = await vi.hoisted(async () => {
     deliver(visible = true, ratio = 1) {this.callback([{target: this.target, isIntersecting: visible, intersectionRatio: ratio}]);}
   }
   Object.defineProperty(globalThis, 'IntersectionObserver', {configurable: true, writable: true, value: Observer});
+  // Only viewport measurement and observer delivery are controlled; the screenshot crop stays real.
+  Object.defineProperty(window.HTMLElement.prototype, 'clientWidth', {configurable: true, get: () => 1024});
+  const resizeObservers: any[] = [];
+  class ResizeObserverPort {
+    target: any; disconnected = false; targets = new Set<any>(); observeCalls = 0;
+    constructor(public callback: (entries: any[]) => void) {resizeObservers.push(this);}
+    observe(target: any) {this.target = target; this.targets.add(target); this.observeCalls++;}
+    disconnect() {this.disconnected = true; this.targets.clear();}
+    deliver(width: number) {this.callback([...this.targets].map(target => ({target, contentRect: {width}})));}
+  }
+  Object.defineProperty(globalThis, 'ResizeObserver', {configurable: true, writable: true, value: ResizeObserverPort});
   const loads: any[] = [], pauses: any[] = [];
   Object.assign(window.HTMLElement.prototype, {HAVE_FUTURE_DATA: 3, NETWORK_LOADING: 2, readyState: 0, networkState: 0,
     load() {loads.push(this);}, pause() {pauses.push(this);}});
-  return {document: document as unknown as Document, observers, media, loads, pauses, scrolls, location, window: windowPort,
+  return {document: document as unknown as Document, observers, resizeObservers, media, loads, pauses, scrolls, location, window: windowPort,
     visible(value: boolean) {hidden = !value; document.dispatchEvent(new window.Event('visibilitychange'));},
     motion(value: boolean) {reduced = value; for (const fn of [...media]) fn();},
-    reset() {document.body.innerHTML = ''; observers.length = loads.length = pauses.length = scrolls.length = 0; location.hash = ''; hidden = reduced = false; active = null;}};
+    reset() {document.body.innerHTML = ''; observers.length = resizeObservers.length = loads.length = pauses.length = scrolls.length = 0; location.hash = ''; hidden = reduced = false; active = null;}};
 });
 const site = vi.hoisted(() => ({lang: null as any, page: null as any, route: null as any}));
 vi.mock('vitepress', async () => {
@@ -102,7 +113,7 @@ function button(root: Element, selector: string, index = 0): HTMLElement {
 }
 async function click(root: Element, selector: string, index = 0) {button(root, selector, index).click(); await settle();}
 beforeEach(() => {dom.reset(); vi.useFakeTimers(); site.lang.value = 'zh-CN'; site.page.value = {relativePath: 'guide/getting-started.md', isNotFound: false};});
-afterEach(() => {for (const app of apps) app.unmount(); apps.clear(); expect(dom.media.size).toBe(0); vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();});
+afterEach(() => {for (const app of apps) app.unmount(); apps.clear(); expect(dom.media.size).toBe(0); expect(dom.resizeObservers.every(observer => observer.disconnected)).toBe(true); vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();});
 
 describe('public docs client lifecycle', () => {
   it('plays only while visible; pause, stage selection, replay and reduced-motion preserve article text', async () => {
@@ -208,16 +219,66 @@ describe('public docs client lifecycle', () => {
     await click(root, '.ds button', 1);
     expect(root.querySelector('[data-step]')?.getAttribute('data-step')).toBe(kind === 'first-translation' ? '4' : ['hover', 'selection'].includes(kind) ? '2' : '1');
     await click(root, '.bg-controls button', 1); expect(root.querySelector('[data-step]')?.getAttribute('data-step')).toBe('0');
-    await vi.advanceTimersByTimeAsync(2400); await settle(); expect(root.querySelector('[data-step]')?.getAttribute('data-step')).toBe('1');
+    await vi.advanceTimersByTimeAsync(3999); await settle(); expect(root.querySelector('[data-step]')?.getAttribute('data-step')).toBe('0');
+    await vi.advanceTimersByTimeAsync(1); await settle(); expect(root.querySelector('[data-step]')?.getAttribute('data-step')).toBe('1');
   });
 
-  it.each(['settings', 'provider', 'appearance', 'compare', 'backup', 'glossary', 'rules', 'stats', 'learning'])('settings %s capture follows selected hotspot and language', async (kind) => {
+  it.each(['settings', 'provider', 'appearance', 'compare', 'backup', 'glossary', 'rules', 'stats', 'learning', 'webdav'])('settings %s capture follows selected hotspot and language', async (kind) => {
     const {root} = await mount(SettingsGuide, {kind, en: true});
-    const before = root.querySelector('.sg-overlay circle')?.outerHTML;
+    const before = root.querySelector('.sg-zoom circle')!.outerHTML;
+    const source = root.querySelector('.sg-zoom image')!.getAttribute('href');
+    expect(source).toContain('/fixture/screenshots/ui/en-US/');
     await click(root, '.ds button', 2);
     expect(root.querySelector('[data-step]')?.getAttribute('data-step')).toBe('2');
-    expect(root.querySelector('img')?.getAttribute('src')).toContain('/fixture/');
-    expect(root.querySelector('.sg-overlay circle')?.outerHTML).not.toBe(before);
+    expect(root.querySelector('.sg-zoom image')!.getAttribute('href')).toBe(source);
+    expect(root.querySelector('.sg-zoom circle')!.outerHTML).not.toBe(before);
+    expect(root.querySelector('.sg-description')?.getAttribute('data-callout-step')).toBe('3');
+    const selectedCrop = root.querySelector('.sg-zoom')!.getAttribute('viewBox');
+    await click(root, '.sg-view');
+    expect(root.querySelector('.sg-view')?.getAttribute('aria-pressed')).toBe('true');
+    expect(root.querySelector('.sg-frame img')!.getAttribute('src')).toBe(source);
+    expect(root.querySelector('.sg-frame')!.getAttribute('href')).toBe(source);
+    expect(root.querySelector('.sg-full-ring')).toBeTruthy();
+    await click(root, '.sg-view');
+    expect(root.querySelector('.sg-view')?.getAttribute('aria-pressed')).toBe('false');
+    expect(root.querySelector('.sg-zoom')!.getAttribute('viewBox')).toBe(selectedCrop);
+  });
+
+  it('settings crop responds to the measured viewport and disconnects its resize observer', async () => {
+    const view = await mount(SettingsGuide, {kind: 'settings'});
+    const observer = dom.resizeObservers.at(-1);
+    expect(observer.target).toBe(view.root.querySelector('.sg'));
+    const crop = () => view.root.querySelector('.sg-zoom')!.getAttribute('viewBox')!.split(' ').map(Number);
+    expect(crop()[2]).toBe(1080);
+    observer.deliver(390); await settle();
+    const [x, y, width, height] = crop();
+    expect(width).toBe(640);
+    expect(height).toBeCloseTo(640 * .46);
+    const ring = view.root.querySelector('.sg-zoom circle')!;
+    expect(Number(ring.getAttribute('cx'))).toBeGreaterThanOrEqual(x);
+    expect(Number(ring.getAttribute('cx'))).toBeLessThanOrEqual(x + width);
+    expect(Number(ring.getAttribute('cy'))).toBeGreaterThanOrEqual(y);
+    expect(Number(ring.getAttribute('cy'))).toBeLessThanOrEqual(y + height);
+    observer.deliver(1024); await settle(); expect(crop()[2]).toBe(1080);
+    view.unmount(); expect(observer.disconnected).toBe(true);
+    expect(observer.targets.size).toBe(0);
+    const observations = observer.observeCalls;
+    observer.callback([{target: observer.target, contentRect: {width: 390}}]); await settle();
+    expect(observer.observeCalls).toBe(observations); expect(observer.targets.size).toBe(0);
+    expect(view.root.innerHTML).toBe(''); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('highlight guide renders the real example, changes style and releases playback on unmount', async () => {
+    const view = await mount(GuideVisual, {kind: 'highlight', en: true});
+    const original = view.root.querySelector('.hg article')!.textContent;
+    await click(view.root, '.hg .ds button', 2);
+    expect(view.root.querySelector('.hg')?.getAttribute('data-step')).toBe('2');
+    expect(view.root.querySelector('.hg article')?.classList.contains('highlighted')).toBe(true);
+    await click(view.root, '.hg-style button', 1);
+    expect(view.root.querySelector('.hg article')?.classList.contains('underline')).toBe(true);
+    expect(view.root.querySelectorAll('.hg-style button')[1].getAttribute('aria-pressed')).toBe('true');
+    expect(view.root.querySelector('.hg article')!.textContent).toBe(original);
+    view.unmount(); expect(vi.getTimerCount()).toBe(0);
   });
 
   it('guide layout opens nested anchors, handles malformed hashes and cancels stale reveal on unmount', async () => {

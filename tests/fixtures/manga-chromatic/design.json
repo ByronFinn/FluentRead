@@ -1,0 +1,690 @@
+{
+  "version": 1,
+  "frozenAtUtc": "2026-10-25T10:04:02.866672+00:00",
+  "base": "43f99105bcb7d573df65a85494acb38312a447d8",
+  "pillowVersion": "12.3.0",
+  "size": [
+    900,
+    900
+  ],
+  "fontFiles": [
+    {
+      "key": "bold",
+      "path": "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+      "sha256": "d72db21f9242aedd6b917d8549ad5921766b24d5f8d0becfda2ff4c620b3c2e0"
+    },
+    {
+      "key": "regular",
+      "path": "/System/Library/Fonts/Supplemental/Arial.ttf",
+      "sha256": "525979822591a3447cfc49d943d6f7683508e25543407871c0ed8fed05fd2bd9"
+    },
+    {
+      "key": "cjk",
+      "path": "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
+      "sha256": "cf8cf2c882e1e344ac2e6207fe172657a30dc2c6e1ee65a9e29a7b582c4d4154"
+    }
+  ],
+  "fontFilesBundled": false,
+  "generationParametersChosenBeforeAnyOcr": true,
+  "ocrRunBeforeFreeze": false,
+  "selectionFromOcrResult": false,
+  "coordination": "Recognition-only candidate may preserve red/white and cyan/black contrasts using edge-gated chromatic adaptation; equal-luma colored-background, mixed-border, alpha, fine-AA, gray and wordless controls are independent required countercases. Actual model crop edges are not supplied or forced.",
+  "resourceBounds": {
+    "scenes": 8,
+    "completeSourceAnchors": 23,
+    "totalSourcePixels": 6480000,
+    "maximumPagePixels": 810000,
+    "maximumSupersampledGlyphPixels": 2000000,
+    "modelsBrowsersDownloads": 0
+  },
+  "scenes": [
+    {
+      "name": "white-red-magenta-independent-labels",
+      "mode": "RGB",
+      "sourceLanguage": "en",
+      "category": "Opaque pure red and magenta on white; independent full labels and neutral gray control",
+      "regions": [
+        {
+          "id": "red-valve",
+          "text": "CLOSE THE RED VALVE",
+          "x": 95,
+          "y": 150,
+          "fontSize": 40,
+          "fill": [
+            255,
+            0,
+            0
+          ],
+          "alpha": 255,
+          "fontKey": "bold",
+          "paragraphId": "red-valve"
+        },
+        {
+          "id": "pink-tag",
+          "text": "KEEP THE PINK TAG",
+          "x": 95,
+          "y": 285,
+          "fontSize": 40,
+          "fill": [
+            255,
+            0,
+            255
+          ],
+          "alpha": 255,
+          "fontKey": "bold",
+          "paragraphId": "pink-tag"
+        },
+        {
+          "id": "gray-control",
+          "text": "GRAY CONTROL LINE",
+          "x": 95,
+          "y": 435,
+          "fontSize": 32,
+          "fill": [
+            80,
+            80,
+            80
+          ],
+          "alpha": 255,
+          "fontKey": "bold",
+          "paragraphId": "gray-control"
+        }
+      ],
+      "negativeRegions": [
+        [
+          75,
+          590,
+          825,
+          845
+        ]
+      ],
+      "protectedPoints": [
+        [
+          240,
+          720
+        ],
+        [
+          450,
+          720
+        ],
+        [
+          660,
+          720
+        ]
+      ]
+    },
+    {
+      "name": "black-cyan-oxygen-hud",
+      "mode": "RGB",
+      "sourceLanguage": "en",
+      "category": "Cyan two-line instrument instruction on exact black; amber numeric time remains independent",
+      "regions": [
+        {
+          "id": "oxygen-first",
+          "text": "CHECK THE OXYGEN",
+          "x": 90,
+          "y": 150,
+          "fontSize": 40,
+          "fill": [
+            0,
+            255,
+            255
+          ],
+          "alpha": 255,
+          "fontKey": "bold",
+          "paragraphId": "oxygen"
+        },
+        {
+          "id": "oxygen-second",
+          "text": "BEFORE OPENING",
+          "x": 90,
+          "y": 200,
+          "fontSize": 40,
+          "fill": [
+            0,
+            255,
+            255
+          ],
+          "alpha": 255,
+          "fontKey": "bold",
+          "paragraphId": "oxygen"
+        },
+        {
+          "id": "clock",
+          "text": "08:45",
+          "x": 95,
+          "y": 380,
+          "fontSize": 34,
+          "fill": [
+            255,
+            190,
+            0
+          ],
+          "alpha": 255,
+          "fontKey": "regular",
+          "paragraphId": "clock"
+        }
+      ],
+      "negativeRegions": [
+        [
+          70,
+          510,
+          830,
+          845
+        ]
+      ],
+      "protectedPoints": [
+        [
+          200,
+          710
+        ],
+        [
+          450,
+          710
+        ],
+        [
+          700,
+          710
+        ]
+      ]
+    },
+    {
+      "name": "equal-luma-red-green-cards",
+      "mode": "RGB",
+      "sourceLanguage": "en",
+      "category": "Two colored cards reverse red and green with equal rounded BT601 luma; global luminance conversion is a negative control",
+      "regions": [
+        {
+          "id": "red-on-green",
+          "text": "RED INK ON GREEN",
+          "x": 85,
+          "y": 165,
+          "fontSize": 38,
+          "fill": [
+            255,
+            0,
+            0
+          ],
+          "alpha": 255,
+          "fontKey": "bold",
+          "paragraphId": "red-on-green"
+        },
+        {
+          "id": "green-on-red",
+          "text": "GREEN INK ON RED",
+          "x": 85,
+          "y": 405,
+          "fontSize": 38,
+          "fill": [
+            0,
+            130,
+            0
+          ],
+          "alpha": 255,
+          "fontKey": "bold",
+          "paragraphId": "green-on-red"
+        },
+        {
+          "id": "neutral-control",
+          "text": "KEEP COLOR CONTRAST",
+          "x": 85,
+          "y": 625,
+          "fontSize": 32,
+          "fill": [
+            45,
+            45,
+            45
+          ],
+          "alpha": 255,
+          "fontKey": "bold",
+          "paragraphId": "neutral-control"
+        }
+      ],
+      "negativeRegions": [
+        [
+          70,
+          730,
+          830,
+          850
+        ]
+      ],
+      "protectedPoints": [
+        [
+          160,
+          790
+        ],
+        [
+          450,
+          790
+        ],
+        [
+          740,
+          790
+        ]
+      ],
+      "lumaPair": {
+        "colors": [
+          [
+            255,
+            0,
+            0
+          ],
+          [
+            0,
+            130,
+            0
+          ]
+        ],
+        "formula": "(299R+587G+114B)/1000",
+        "values": [
+          76.245,
+          76.31
+        ],
+        "rounded8Bit": [
+          76,
+          76
+        ],
+        "absoluteDifference": 0.065,
+        "scope": "Base opaque colors, not a claim that every antialiased sample is identical"
+      }
+    },
+    {
+      "name": "translucent-red-dialogue-overlay",
+      "mode": "RGBA",
+      "sourceLanguage": "en",
+      "category": "True alpha red speech overlays and low-brightness original artwork; gray reference separate",
+      "regions": [
+        {
+          "id": "glass-dialogue",
+          "text": "SPEAK THROUGH THE GLASS",
+          "x": 125,
+          "y": 160,
+          "fontSize": 38,
+          "fill": [
+            255,
+            0,
+            0
+          ],
+          "alpha": 200,
+          "fontKey": "bold",
+          "paragraphId": "glass-dialogue"
+        },
+        {
+          "id": "red-signal",
+          "text": "KEEP THE SIGNAL CLEAR",
+          "x": 165,
+          "y": 430,
+          "fontSize": 36,
+          "fill": [
+            255,
+            0,
+            0
+          ],
+          "alpha": 160,
+          "fontKey": "bold",
+          "paragraphId": "red-signal"
+        },
+        {
+          "id": "gray-reference",
+          "text": "GRAY REFERENCE LINE",
+          "x": 95,
+          "y": 650,
+          "fontSize": 28,
+          "fill": [
+            70,
+            70,
+            70
+          ],
+          "alpha": 210,
+          "fontKey": "regular",
+          "paragraphId": "gray-reference"
+        }
+      ],
+      "negativeRegions": [
+        [
+          90,
+          730,
+          810,
+          850
+        ]
+      ],
+      "protectedPoints": [
+        [
+          250,
+          800
+        ],
+        [
+          450,
+          800
+        ],
+        [
+          650,
+          800
+        ]
+      ],
+      "rgbaProbePoints": [
+        [
+          0,
+          0
+        ],
+        [
+          450,
+          400
+        ],
+        [
+          450,
+          800
+        ]
+      ]
+    },
+    {
+      "name": "translucent-cyan-night-hud",
+      "mode": "RGBA",
+      "sourceLanguage": "en",
+      "category": "High-brightness cyan translucent HUD and wordless icons; white reference and retained source alpha",
+      "regions": [
+        {
+          "id": "cyan-light",
+          "text": "STAY INSIDE THE LIGHT",
+          "x": 100,
+          "y": 160,
+          "fontSize": 38,
+          "fill": [
+            0,
+            255,
+            255
+          ],
+          "alpha": 190,
+          "fontKey": "bold",
+          "paragraphId": "cyan-light"
+        },
+        {
+          "id": "cyan-signal",
+          "text": "WAIT FOR MY SIGNAL",
+          "x": 100,
+          "y": 330,
+          "fontSize": 36,
+          "fill": [
+            0,
+            255,
+            255
+          ],
+          "alpha": 150,
+          "fontKey": "bold",
+          "paragraphId": "cyan-signal"
+        },
+        {
+          "id": "white-reference",
+          "text": "WHITE REFERENCE LINE",
+          "x": 100,
+          "y": 490,
+          "fontSize": 30,
+          "fill": [
+            255,
+            255,
+            255
+          ],
+          "alpha": 210,
+          "fontKey": "regular",
+          "paragraphId": "white-reference"
+        }
+      ],
+      "negativeRegions": [
+        [
+          80,
+          620,
+          820,
+          850
+        ]
+      ],
+      "protectedPoints": [
+        [
+          200,
+          750
+        ],
+        [
+          450,
+          750
+        ],
+        [
+          700,
+          750
+        ]
+      ],
+      "rgbaProbePoints": [
+        [
+          0,
+          0
+        ],
+        [
+          450,
+          400
+        ],
+        [
+          450,
+          750
+        ]
+      ]
+    },
+    {
+      "name": "thin-aa-gray-and-chromatic-tail",
+      "mode": "RGB",
+      "sourceLanguage": "ja",
+      "category": "Four-times sampled thin Latin/CJK text, near-white gray, real gray descenders and complete black-prefix/pink-tail source",
+      "regions": [
+        {
+          "id": "soft-gray",
+          "text": "FOLLOW THE SOFT LIGHT",
+          "x": 80,
+          "y": 100,
+          "fontSize": 30,
+          "fill": [
+            225,
+            225,
+            225
+          ],
+          "alpha": 255,
+          "fontKey": "regular",
+          "paragraphId": "soft-gray",
+          "supersample": 4
+        },
+        {
+          "id": "color-tail",
+          "text": "KEEP THE LAST LIGHT",
+          "x": 80,
+          "y": 240,
+          "fontSize": 34,
+          "fill": [
+            255,
+            170,
+            210
+          ],
+          "alpha": 255,
+          "fontKey": "regular",
+          "paragraphId": "color-tail",
+          "supersample": 4,
+          "prefix": "KEEP ",
+          "prefixFill": [
+            40,
+            40,
+            40
+          ]
+        },
+        {
+          "id": "gray-descenders",
+          "text": "gray gypq 107",
+          "x": 80,
+          "y": 390,
+          "fontSize": 22,
+          "fill": [
+            110,
+            110,
+            110
+          ],
+          "alpha": 255,
+          "fontKey": "regular",
+          "paragraphId": "gray-descenders",
+          "supersample": 4
+        },
+        {
+          "id": "thin-cjk",
+          "text": "細い光をたどる",
+          "x": 80,
+          "y": 500,
+          "fontSize": 30,
+          "fill": [
+            35,
+            100,
+            220
+          ],
+          "alpha": 255,
+          "fontKey": "cjk",
+          "paragraphId": "thin-cjk",
+          "supersample": 4
+        }
+      ],
+      "negativeRegions": [
+        [
+          60,
+          620,
+          840,
+          845
+        ]
+      ],
+      "protectedPoints": [
+        [
+          120,
+          720
+        ],
+        [
+          450,
+          740
+        ],
+        [
+          780,
+          760
+        ]
+      ]
+    },
+    {
+      "name": "mixed-color-edge-screenshot",
+      "mode": "RGB",
+      "sourceLanguage": "en",
+      "category": "Nonuniform painted screenshot with separate opposing-color door tags and a gray control over a mixed border",
+      "regions": [
+        {
+          "id": "edge-heading",
+          "text": "COLOR ON THE EDGE",
+          "x": 70,
+          "y": 105,
+          "fontSize": 42,
+          "fill": [
+            255,
+            240,
+            130
+          ],
+          "alpha": 255,
+          "fontKey": "bold",
+          "paragraphId": "edge-heading"
+        },
+        {
+          "id": "north-tag",
+          "text": "NORTH DOOR",
+          "x": 105,
+          "y": 350,
+          "fontSize": 28,
+          "fill": [
+            255,
+            110,
+            80
+          ],
+          "alpha": 255,
+          "fontKey": "bold",
+          "paragraphId": "north-tag"
+        },
+        {
+          "id": "south-tag",
+          "text": "SOUTH DOOR",
+          "x": 505,
+          "y": 350,
+          "fontSize": 28,
+          "fill": [
+            30,
+            240,
+            255
+          ],
+          "alpha": 255,
+          "fontKey": "bold",
+          "paragraphId": "south-tag"
+        },
+        {
+          "id": "mixed-control",
+          "text": "MIXED BORDER CONTROL",
+          "x": 80,
+          "y": 510,
+          "fontSize": 30,
+          "fill": [
+            215,
+            215,
+            215
+          ],
+          "alpha": 255,
+          "fontKey": "regular",
+          "paragraphId": "mixed-control"
+        }
+      ],
+      "negativeRegions": [
+        [
+          50,
+          650,
+          850,
+          850
+        ]
+      ],
+      "protectedPoints": [
+        [
+          150,
+          750
+        ],
+        [
+          450,
+          750
+        ],
+        [
+          750,
+          750
+        ]
+      ]
+    },
+    {
+      "name": "wordless-chromatic-diagram",
+      "mode": "RGB",
+      "sourceLanguage": "auto",
+      "category": "Entirely wordless red/magenta/cyan/color-pair geometric artwork with no hidden letter or digit source",
+      "regions": [],
+      "negativeRegions": [
+        [
+          0,
+          0,
+          900,
+          900
+        ]
+      ],
+      "protectedPoints": [
+        [
+          100,
+          100
+        ],
+        [
+          700,
+          100
+        ],
+        [
+          450,
+          750
+        ]
+      ],
+      "expectedNoText": true
+    }
+  ]
+}

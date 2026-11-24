@@ -1,9 +1,12 @@
 /**
  * @file src/app/offscreen/runtime.ts
- * 文件职责：作为 Chrome Offscreen 与 Firefox 后台 iframe 共用 DOM 页面的组合根，创建独占 TTS 播放器并安装一次 runtime 消息监听，把浏览器资源适配给各离屏用例。
- * 主要内容：智能高亮消息携带所选模型，模型下载与状态互相独立、推理共用单 Worker 预算；将 base64 音频解码为 Uint8Array，注入 Audio、Blob URL 创建/释放和带 frame/page 路由的状态回传，向播放控制入口注入扩展 ID 校验，组合 Chrome Translation、OCR、图片/区域翻译与语言包下载依赖，把朗读模型、字幕模型和语言包的下载进度发布给后台；同时装配 Harness 模型调用执行宿主（直连工厂 + chrome.runtime 事件推送 + 心跳定时器），注册 message listener。
+ * 文件职责：作为 Chrome Offscreen 与 Firefox/Safari MV2 后台 iframe 共用 DOM 页面的组合根，创建独占 TTS 播放器并安装一次 runtime 消息监听，把浏览器资源适配给各离屏用例。
+ * 主要内容：装配按需创建、空闲释放的字幕读音 Worker；智能高亮消息携带所选模型，模型下载与状态互相独立、推理共用单 Worker 预算；将 base64 音频解码为 Uint8Array，注入 Audio、Blob URL 创建/释放和带 frame/page 路由的状态回传，向播放控制入口注入扩展 ID 校验，组合 Chrome Translation、OCR、图片/区域翻译与语言包下载依赖，把朗读模型、字幕模型和语言包的下载进度发布给后台；同时装配 Harness 模型调用执行宿主（直连工厂 + chrome.runtime 事件推送 + 心跳定时器），注册 message listener。
  * 模块边界：本文件只负责 Web API 资源与用例装配，不解析业务消息、不实现 OCR/翻译，也不创建 Offscreen document；两种浏览器容器的文档生命周期均由 platform/offscreen client 和 WXT 入口管理。
  */
+import {asArrayBufferBytes} from '@/src/shared/function/arrayBufferBytes';
+import {browserCapabilities} from '@/src/platform/browser/capabilities';
+import {createExtensionPageRuntime, installExtensionPageMessageListener, type ExtensionPageMessageTarget} from '@/src/platform/offscreen/extensionPageMessaging';
 import {
     downloadImageOcrLanguages,
     removeImageOcrLanguages,
@@ -13,21 +16,24 @@ import {
     cropAreaInOffscreen,
     translateImageInOffscreen,
     mangaOcrModelStatus,
+    mangaInferenceClient,
     removeMangaModels,
     disposeMangaModels,
 } from './imageTranslation';
 import {createOffscreenMessageListener} from './messageRouter';
+import {createReadingAnnotationRuntime} from '@/src/features/video-subtitle/offscreen/readingAnnotation';
 import {createInformationHighlightModelsRuntime, probeInformationHighlightWebGpu} from '@/src/features/information-highlight/offscreen/runtime';
 import {DEFAULT_INFORMATION_HIGHLIGHT_MODEL_ID} from '@/src/core/config/informationHighlightModel';
 import {INFORMATION_HIGHLIGHT_DOWNLOAD_ID} from '@/src/features/information-highlight/protocol';
 import {withLocalInferenceBudget} from '@/src/shared/onnx/resources';
 import {parseSelectionTtsRoute} from '@/src/features/selection-translation/protocol';
-import {createDownloadProgressPublisher, LOCAL_TTS_DOWNLOAD_ID, ocrLanguageDownloadId, videoModelDownloadId} from '@/src/core/download/progress';
+import {createCoalescedDownloadNotifier, createDownloadProgressPublisher, LOCAL_TTS_DOWNLOAD_ID, ocrLanguageDownloadId, videoModelDownloadId} from '@/src/core/download/progress';
 import {normalizeVideoLocalTranscriptionModel} from '@/src/features/video-subtitle/transcription';
 import {createSelectionTtsPlayer} from './ttsPlayback';
 import {disposeChromeTranslationModels, translateWithChromeApi, type ChromeTranslationEnvironment} from './translation';
 import {createModelExecutorHost} from './modelExecutorHost';
 import {createHarnessLanguageModelDirect} from '@/src/services/harness/modelGateway';
+import {moveVideoAiModelToSharedDirectory} from '@/src/features/video-subtitle/offscreen/modelCache';
 import {removeLocalVideoTranscriptionModel, cancelLocalVideoTranscription, prepareLocalVideoTranscriptionModel, transcribeLocalVideoAudio} from '@/src/features/video-subtitle/offscreen/transcription';
 import {
     disposeLocalTtsWorker,
@@ -55,15 +61,22 @@ function decodeAudioBase64(audioBase64: string): Uint8Array {
 
 /** 组装 Offscreen 的实验 API、Audio/Blob 和图片 OCR 浏览器能力。 */
 export function startOffscreenApp(): void {
-    configureLocalTranslationDownloadNotifications((snapshot) => new Promise<void>((resolve) => {
-        chrome.runtime.sendMessage({type: 'fluentReadLocalTranslationDownloadProgress', snapshot}, () => {
-            void chrome.runtime.lastError;
-            resolve();
-        });
+    const runtime = browserCapabilities.browser === 'safari'
+        ? createExtensionPageRuntime(() => chrome.runtime, () => window.parent === window ? undefined : window.parent as unknown as ExtensionPageMessageTarget, () => window.location.href)
+        : chrome.runtime;
+    const readingAnnotation = createReadingAnnotationRuntime({createWorker: () => new Worker(chrome.runtime.getURL('readingAnnotationWorker.js'), {type: 'module'})});
+    const downloadNotifications = createCoalescedDownloadNotifier((snapshot) => new Promise<void>((resolve) => {
+        try {
+            runtime.sendMessage({type: 'fluentReadLocalTranslationDownloadProgress', snapshot}, () => {
+                try {void runtime.lastError;} catch { /* 已失效的 runtime 无需再次通知。 */ }
+                resolve();
+            });
+        } catch {resolve();}
     }));
+    configureLocalTranslationDownloadNotifications(downloadNotifications.notify);
     // 离屏页面不能直接写扩展存储；进度交给后台转存，设置页与网页内界面再从存储变化事件读取。
     const downloads = createDownloadProgressPublisher((message) => {
-        chrome.runtime.sendMessage(message, () => void chrome.runtime.lastError);
+        runtime.sendMessage(message, () => void runtime.lastError);
     });
     const informationHighlight = createInformationHighlightModelsRuntime({
         createWorker: () => new Worker(chrome.runtime.getURL('informationHighlightWorker.js'), {type: 'module'}),
@@ -77,20 +90,20 @@ export function startOffscreenApp(): void {
     const ttsPlayer = createSelectionTtsPlayer({
         createAudio: () => new Audio(),
         decodeBase64: decodeAudioBase64,
-        createObjectUrl: (bytes, contentType) => URL.createObjectURL(new Blob([bytes], {type: contentType})),
+        createObjectUrl: (bytes, contentType) => URL.createObjectURL(new Blob([asArrayBufferBytes(bytes)], {type: contentType})),
         revokeObjectUrl: (url) => URL.revokeObjectURL(url),
         notifyProgress: (request, progress, position) => {
-            void chrome.runtime.sendMessage({type: 'selectionTtsPlaybackState', ...parseSelectionTtsRoute(request), state: 'progress', progress, position}, () => {void chrome.runtime.lastError;});
+            void runtime.sendMessage({type: 'selectionTtsPlaybackState', ...parseSelectionTtsRoute(request), state: 'progress', progress, position}, () => {void runtime.lastError;});
         },
         notify: (request, state, error) => {
-            void chrome.runtime.sendMessage({
+            void runtime.sendMessage({
                 type: 'selectionTtsPlaybackState',
                 ...parseSelectionTtsRoute(request),
                 state,
                 error: error instanceof Error ? error.message : error ? String(error) : undefined,
             }, () => {
                 // Firefox 的 chrome 命名空间只提供 callback；两种容器共用此通知路径。
-                void chrome.runtime.lastError;
+                void runtime.lastError;
             });
         },
     });
@@ -99,6 +112,7 @@ export function startOffscreenApp(): void {
     const modelCall = createModelExecutorHost({createModel: createHarnessLanguageModelDirect});
     const listener = createOffscreenMessageListener({
         runtimeId: chrome.runtime.id,
+        readingAnnotation,
         informationHighlight,
         translate: (data, signal) => translateWithChromeApi(data, self as ChromeTranslationEnvironment, signal),
         ttsPlayer,
@@ -112,10 +126,10 @@ export function startOffscreenApp(): void {
             onProgress => downloadImageOcrLanguages(languages, undefined, onProgress),
         ),
         removeOcrLanguages: removeImageOcrLanguages,
-        mangaModelStatus:mangaOcrModelStatus,
+        mangaModelStatus:async () => ({...await mangaOcrModelStatus(), inference:mangaInferenceClient.getDiagnostics()}),
         removeMangaModels,
         videoAi: {
-            transcribe: (request) => transcribeLocalVideoAudio(request as any),
+            transcribe: (request) => transcribeLocalVideoAudio(request),
             // 预热只加载已缓存的模型；只有预下载才有网络进度可发布。
             prepare: (request) => request.keepWarm === true
                 ? prepareLocalVideoTranscriptionModel(request.model, {keepWarm: true, streamId: request.streamId})
@@ -125,9 +139,13 @@ export function startOffscreenApp(): void {
                 ),
             cancel: cancelLocalVideoTranscription,
             removeModel: request => removeLocalVideoTranscriptionModel(request.model),
+            shareModel: request => downloads.track(
+                videoModelDownloadId(normalizeVideoLocalTranscriptionModel(request.model)),
+                onProgress => moveVideoAiModelToSharedDirectory(request.model, onProgress, removeLocalVideoTranscriptionModel),
+            ),
         },
         localTranslation: {
-            translate: (request, signal) => translateLocalText(request as any, signal),
+            translate: (request, signal) => translateLocalText(request, signal),
             prepare: (request) => prepareLocalTranslationModel(request.model),
             pause: (request) => pauseLocalTranslationModelDownload(request.model),
             status: getLocalTranslationModelStatus,
@@ -136,8 +154,8 @@ export function startOffscreenApp(): void {
         },
         localTts: {
             synthesize: (request, signal) => synthesizeLocalTts(
-                String(request.text || ''),
-                String(request.language || ''),
+                request.text,
+                request.language,
                 request.voice,
                 signal,
             ),
@@ -150,7 +168,13 @@ export function startOffscreenApp(): void {
     });
 
     chrome.runtime.onMessage.addListener(listener);
+    const removePageListener = browserCapabilities.browser === 'safari'
+        ? installExtensionPageMessageListener(window as unknown as ExtensionPageMessageTarget, listener)
+        : undefined;
     window.addEventListener('pagehide', () => {
+        removePageListener?.();
+        downloadNotifications.dispose();
+        readingAnnotation.dispose();
         ttsPlayer.dispose();
         disposeChromeTranslationModels(self as ChromeTranslationEnvironment);
         disposeImageOcrWorker();

@@ -1,6 +1,8 @@
 import {describe, expect, it} from 'vitest';
-import {buildVideoSentenceTimeline, createVideoSentenceTimeIndex, findVideoSentenceAtTime} from '@/src/features/video-subtitle/content/sentenceTimeline';
+import {buildVideoSentenceTimeline, createVideoSentenceTimeIndex, type VideoSentence} from '@/src/features/video-subtitle/content/sentenceTimeline';
 import type {VideoSubtitleCue} from '@/src/features/video-subtitle/content/youtubeSubtitleData';
+
+const findVideoSentenceAtTime = (sentences: readonly VideoSentence[], time: number) => createVideoSentenceTimeIndex(sentences).findAtTime(time);
 
 const cue = (text: string, startMs: number, durationMs = 1000): VideoSubtitleCue => ({text, startMs, durationMs});
 
@@ -117,7 +119,7 @@ describe('原字幕完整句学习时间轴', () => {
     expect(createVideoSentenceTimeIndex([]).findIndexAtTime(0)).toBe(-1);
   });
 
-  it('重叠查句快照在复杂范围和回退时钟下与现有公开查询保持一致', () => {
+  it('重叠查句快照在复杂范围和回退时钟下与独立线性 oracle 保持一致', () => {
     const template = buildVideoSentenceTimeline([cue('Template.', 0)])[0];
     const sentences = Array.from({length: 137}, (_, i) => ({
       ...template, id: String(i), startMs: (i * 47 % 31) * 100,
@@ -127,13 +129,15 @@ describe('原字幕完整句学习时间轴', () => {
     const index = createVideoSentenceTimeIndex(sentences);
     for (let i = 0; i < 750; i += 1) {
       const clock = (i * 7919 % 8500) - 250;
-      const expected = findVideoSentenceAtTime(sentences, clock);
+      // 独立线性 oracle 只留在测试，避免让已退役算法继续进入生产模块。
+      const expected = sentences.reduce<VideoSentence | null>((active, sentence) => clock >= sentence.startMs && clock < sentence.endMs
+        && (!active || sentence.startMs >= active.startMs) ? sentence : active, null);
       expect(index.findAtTime(clock)).toBe(expected);
       expect(index.findIndexAtTime(clock)).toBe(expected ? sentences.indexOf(expected) : -1);
     }
   });
 
-  it('快照不跟踪原地编辑；公开数组查询仍立即反映编辑且可显式重建', () => {
+  it('快照不跟踪原地编辑；显式重建后反映编辑', () => {
     const sentences = buildVideoSentenceTimeline([cue('First.', 0), cue('Second.', 2000)]);
     const first = sentences[0];
     const index = createVideoSentenceTimeIndex(sentences);

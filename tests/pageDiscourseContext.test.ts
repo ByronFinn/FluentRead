@@ -50,6 +50,107 @@ const context = (doc: Document, selector = '#later', language = 'en:zh', signal?
 afterEach(resetPageDiscourseContext);
 
 describe('有界网页篇章适配', () => {
+    it.each(['article', 'main', 'div role="main"'])('材料根自身为纯正文候选时不采集相邻材料（%s）', opening => {
+        const tag = opening.split(' ')[0];
+        const doc = article('');
+        doc.body.innerHTML = '<section><h2>Unrelated chapter</h2><p>AP means unrelated alien protocol.</p></section>'
+            + `<${opening} id="later">AP connects devices.</${tag}>`
+            + '<section><p>AP means unrelated future definition.</p></section>';
+        const ticket = context(doc);
+        expect(ticket.context).not.toContain('Unrelated chapter');
+        expect(ticket.context).not.toContain('unrelated alien protocol');
+        expect(ticket.context).not.toContain('unrelated future definition');
+        expect(JSON.parse(ticket.context).position).toBeTruthy();
+        ticket.commit(['本材料的接入点译法']);
+        expect(context(doc).context).toContain('本材料的接入点译法');
+    });
+
+    it.each(['article', 'main', 'div role="main"'])('唯一材料根的窗口不上移到body/html或head（%s）', opening => {
+        const tag = opening.split(' ')[0];
+        const doc = article('');
+        doc.head.innerHTML = '<title>AP means unrelated head definition.</title>';
+        doc.body.innerHTML = `<${opening} id="later">AP connects devices.</${tag}>`;
+        const ticket = context(doc);
+        expect(ticket.context).not.toContain('unrelated head definition');
+        expect(JSON.parse(ticket.context).evidence).toEqual([]);
+        ticket.commit(['唯一材料的接入点译法']);
+        expect(context(doc).context).toContain('唯一材料的接入点译法');
+    });
+
+    it.each(['blockquote', 'li'])('材料根外的%s不作为当前段落或遍历根，根自身正文仍可提交', wrapper => {
+        const doc = article('');
+        doc.body.innerHTML = `<${wrapper}><h2>Unrelated ancestor</h2><p>AP means unrelated ancestor definition.</p>`
+            + '<article id="later">AP connects devices.</article>' + `</${wrapper}>`;
+        const root = doc.querySelector('article')!;
+        const walked: Node[] = [];
+        const createTreeWalker = doc.createTreeWalker.bind(doc);
+        vi.spyOn(doc, 'createTreeWalker').mockImplementation((...args) => {
+            walked.push(args[0]);
+            return createTreeWalker(...args);
+        });
+        const ticket = context(doc);
+        ticket.commit(['祖先容器内本材料的接入点译法']);
+        expect(context(doc).context).toContain('祖先容器内本材料的接入点译法');
+        expect(walked.every(node => root.contains(node))).toBe(true);
+    });
+
+    it.each(['article', 'main', 'div role="main"'])('段落候选保留同%s内的标题、定义和已译依据', opening => {
+        const tag = opening.split(' ')[0];
+        const doc = article('');
+        doc.body.innerHTML = '<h2>External heading</h2><p>AP means unrelated external definition.</p>'
+            + `<${opening}><h2>Local chapter</h2><p id="previous">AP means local access point.</p>`
+            + `<section><div><p id="later">AP connects devices.</p></div></section></${tag}>`;
+        context(doc, '#previous').commit(['本章接入点译法']);
+        const reference = JSON.parse(context(doc).context);
+        expect(reference.section).toContain('Local chapter');
+        expect(reference.evidence).toEqual(expect.arrayContaining([
+            expect.objectContaining({kind: 'definition', source: 'AP means local access point.'}),
+            expect.objectContaining({kind: 'previous_machine', translation: '本章接入点译法'}),
+        ]));
+        expect(JSON.stringify(reference)).not.toContain('unrelated external definition');
+        expect(JSON.stringify(reference)).not.toContain('External heading');
+    });
+
+    it.each(['sibling article', 'nested article', 'body to main'])('候选原文不变但移入%s时拒绝旧材料的迟到提交', movement => {
+        const doc = article('<h2>Network</h2><div id="wrapper"><p id="previous">AP means access point.</p></div><p id="later">AP connects devices.</p>');
+        if (movement === 'body to main') doc.querySelector('article')!.replaceWith(...Array.from(doc.querySelector('article')!.childNodes));
+        const owner = doc.querySelector('#previous')!;
+        const oldParent = owner.parentElement!;
+        const ticket = context(doc, '#previous');
+        const nextRoot = doc.createElement(movement === 'body to main' ? 'main' : 'article');
+        (movement === 'sibling article' ? doc.body : oldParent).append(nextRoot);
+        nextRoot.append(owner);
+        ticket.commit(['跨材料移动后不应提交的接入点译法']);
+        oldParent.append(owner);
+        nextRoot.remove();
+        expect(context(doc).context).not.toContain('跨材料移动后不应提交');
+    });
+
+    it('同材料内移动段落包装仍可提交原文未改写的译法', () => {
+        const doc = article('<h2>Network</h2><div id="wrapper"><p id="previous">AP means access point.</p></div><div id="next"></div><p id="later">AP connects devices.</p>');
+        const owner = doc.querySelector('#previous')!;
+        const ticket = context(doc, '#previous');
+        doc.querySelector('#next')!.append(owner);
+        ticket.commit(['同材料移动保留的接入点译法']);
+        expect(context(doc).context).toContain('同材料移动保留的接入点译法');
+    });
+
+    it('ShadowRoot直属材料根无parentElement时仍保留自身作用域和可提交正文', () => {
+        const doc = article('Unrelated outer material.');
+        const host = doc.createElement('div');
+        doc.body.append(host);
+        const shadow = host.attachShadow({mode: 'open'});
+        const root = doc.createElement('article');
+        root.innerHTML = '<h2>Local chapter</h2>AP connects devices.';
+        shadow.append(root);
+        const prepare = () => preparePageDiscourseContext(root, ['AP connects devices.'], 'en:zh');
+        const ticket = prepare();
+        expect(JSON.parse(ticket.context).position).toBeTruthy();
+        expect(ticket.context).not.toContain('Unrelated outer material');
+        ticket.commit(['独立影子材料的接入点译法']);
+        expect(prepare().context).toContain('独立影子材料的接入点译法');
+    });
+
     it('无章节标题的相邻段落移动焦点时保留人物原文与既有译法，不把窗口移动当正文改写', () => {
         const doc = article('<p id="previous">Aurora is the lead scientist.</p><p id="later">Aurora returned to the laboratory.</p>');
         const previous = context(doc, '#previous'); previous.commit(['曙光是首席科学家。']);

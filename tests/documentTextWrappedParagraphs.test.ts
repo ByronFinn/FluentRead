@@ -14,14 +14,13 @@ describe('hard-wrapped plain-text paragraphs', () => {
     const notes = ['MEETING NOTES FOR THE ORCHARD PROJECT AND ITS PARTNERS', '', 'Attendees: Dana, Luis, Mei', 'Date: 12 March', '', ...wrapped, '',
         '- Design freeze moves to the end of April and', '- Testing starts one week after the freeze has', '', 'Action items for everyone attending the meeting', '* Dana sends the plan', '', '---', 'Next meeting: 26 March'];
 
-    it('translates a wrapped paragraph as one segment and leaves headings, short lines and lists alone', () => {
-        expect(sources(notes.join('\n'))).toEqual([
+    it.each(['\n', '\r\n', '\r'])('translates a wrapped paragraph with %j line endings as one segment and preserves original bytes', ending => {
+        expect(sources(notes.join(ending))).toEqual([
             'MEETING NOTES FOR THE ORCHARD PROJECT AND ITS PARTNERS', 'Attendees: Dana, Luis, Mei', 'Date: 12 March', wrapped.join(' '),
             '- Design freeze moves to the end of April and', '- Testing starts one week after the freeze has', 'Action items for everyone attending the meeting', '* Dana sends the plan', '---', 'Next meeting: 26 March',
         ]);
-        // 没有译文时原样导出；Windows 换行同样合并，换行符留在原处。
-        expect(renderDocument(parseDocument('notes.txt', notes.join('\r\n')), [], 'translated')).toBe(notes.join('\r\n'));
-        expect(sources(notes.join('\r\n'))[3]).toBe(wrapped.join(' '));
+        expect(renderDocument(parseDocument('notes.txt', notes.join(ending)), [], 'translated')).toBe(notes.join(ending));
+        expect(sources(notes.join(ending))[3]).toBe(wrapped.join(' '));
     });
 
     it('writes the translation as one line and keeps the original lines in bilingual output', () => {
@@ -41,6 +40,32 @@ describe('hard-wrapped plain-text paragraphs', () => {
         expect(sources('第二季度的预算没有改动就通过了，负责人是\nLuis 并且他要求在夏天到来之前复核一次差旅费用')).toEqual(['第二季度的预算没有改动就通过了，负责人是 Luis 并且他要求在夏天到来之前复核一次差旅费用']);
         // 缩进不同的下一行是另一块内容（引文、代码、署名），不并进来。
         expect(sources(`${wrapped[0]}\n    ${wrapped[1]}`)).toEqual([wrapped[0], wrapped[1]]);
+    });
+
+    it.each(['\n', '\r\n', '\r'].flatMap(ending => [
+        ['中', '文'], ['𠀀', '𠀁'], ['𠀀', '文'], ['中', '𠀁'],
+    ].map(([left, right]) => ({ending, left, right}))))('joins complete CJK code points at $left/$right boundaries with $ending line endings', ({ending, left, right}) => {
+        const first = left.repeat(40), second = right.repeat(40), input = first + ending + second;
+        const parsed = parseDocument('code-points.txt', input);
+        expect(parsed.segments.map(segment => segment.source)).toEqual([first + second]);
+        expect(renderDocument(parsed, [], 'translated')).toBe(input);
+    });
+
+    it.each(['\n', '\r\n', '\r'])('removes soft-wrap whitespace beside supplementary Han with %j line endings and preserves the source bytes', ending => {
+        const first = '𠀀'.repeat(40), second = '𠀁'.repeat(40);
+        const input = `  ${first} \t${ending}  ${second}\n`;
+        const parsed = parseDocument('indented-han.txt', input);
+        expect(parsed.segments.map(segment => segment.source)).toEqual([first + second]);
+        expect(renderDocument(parsed, [], 'translated')).toBe(input);
+    });
+
+    it.each([
+        ['中'.repeat(39) + 'a', '𠀁'.repeat(40)],
+        ['𠀀'.repeat(40), 'a' + '中'.repeat(39)],
+        ['中'.repeat(39) + '😀', '𠀁'.repeat(40)],
+        ['𠀀'.repeat(40), '😀' + '中'.repeat(39)],
+    ])('keeps a separator when either immediate boundary code point requires one', (first, second) => {
+        expect(sources(`${first}\n${second}`)).toEqual([`${first} ${second}`]);
     });
 
     it('does not merge lines that end a sentence, numbered items or anything in Markdown', () => {

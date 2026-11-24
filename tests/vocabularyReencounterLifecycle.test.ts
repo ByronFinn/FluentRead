@@ -12,6 +12,7 @@ vi.mock('@/src/features/vocabulary/ui/ReencounterPanel.vue', () => ({default: {n
 import {mountVocabularyReencounter, unmountVocabularyReencounter} from '@/src/features/vocabulary/content/reencounter';
 import type {ReencounterOccurrence} from '@/src/features/vocabulary/content/readingText';
 import type {ContentScriptContext} from 'wxt/utils/content-script-context';
+import {createContentFeatureRegistry} from '@/src/app/content/featureRegistry';
 
 const term = {id: 'art', term: 'art', sourceLanguage: 'en', reference: '', savedSentence: '', savedTitle: ''};
 const hit = (): ReencounterOccurrence => ({entry: term, sentence: 'Art matters.', root: {} as Document,
@@ -27,6 +28,7 @@ function mount() {
 }
 beforeEach(() => {
   vi.clearAllMocks(); mocks.config.vocabularyReencounterEnabled = true; mocks.extension.inIncognitoContext = false;
+  mocks.add.mockReset();
   mocks.ui.shadowHost.isConnected = true;
   mocks.install.mockReturnValue(mocks.scanner); mocks.shadow.mockResolvedValue(mocks.ui); mocks.patch.mockResolvedValue(undefined);
   mocks.send.mockImplementation(async (message: {action: string}) => ({success: true, data: message.action === 'reencounterList' ? [term] : {...term, savedSentence: 'Old art sentence.'}}));
@@ -35,6 +37,53 @@ beforeEach(() => {
 afterEach(() => {mocks.remove.mockReset(); unmountVocabularyReencounter(); vi.unstubAllGlobals();});
 
 describe('reencounter content ownership and selective reads', () => {
+  it('keeps a successor mounted if host cleanup synchronously starts the next activation',async()=>{
+    const old=mount();await flush();old.callbacks().changed([hit()]);await flush();let successor:ReturnType<typeof mount>|undefined;
+    mocks.ui.remove.mockImplementationOnce(()=>{unmountVocabularyReencounter();successor=mount();});
+    old.controller.abort();await flush();mount();expect(mocks.install).toHaveBeenCalledTimes(2);
+    successor!.controller.abort();mount();expect(mocks.install).toHaveBeenCalledTimes(3);
+  });
+  it('does not clear a newer list when the previous list rejects late',async()=>{
+    const pending=deferred<unknown>();mocks.send.mockReturnValueOnce(pending.promise);mount();
+    mocks.add.mock.calls[0][0]({type:'fluentReadVocabularyBookChanged'});await flush();
+    pending.reject(Error('old list failed'));await flush();expect(mocks.scanner.setEntries).toHaveBeenCalledTimes(1);expect(mocks.scanner.setEntries).toHaveBeenLastCalledWith([term]);
+  });
+  it('ignores a queued collection notification after ordinary disposal', async () => {
+    mount(); await flush();
+    const listener = mocks.add.mock.calls[0][0];
+    unmountVocabularyReencounter();
+    const calls = mocks.send.mock.calls.length;
+    listener({type: 'fluentReadVocabularyBookChanged'}); await flush();
+    expect(mocks.send).toHaveBeenCalledTimes(calls);
+    expect(mocks.scanner.dispose).toHaveBeenCalledTimes(1);
+  });
+  it('rolls back partial listener registration so the actual registry can retry', async () => {
+    const listeners = new Set<unknown>();
+    mocks.add.mockImplementationOnce(listener => {listeners.add(listener); throw new Error('revoked');})
+      .mockImplementation(listener => {listeners.add(listener);});
+    mocks.remove.mockImplementation(listener => {listeners.delete(listener);});
+    const controller = new AbortController();
+    const ctx = {isInvalid: false} as ContentScriptContext;
+    const registry = createContentFeatureRegistry([{id: 'reencounter', isEnabled: () => true,
+      mount: runtime => mountVocabularyReencounter(runtime.ctx, runtime.signal), unmount: unmountVocabularyReencounter}]);
+    const runtime = {ctx, signal: controller.signal, isCurrent: () => true};
+    expect((await registry.mountEnabled(runtime))[0].status).toBe('failed');
+    expect(mocks.scanner.dispose).toHaveBeenCalledTimes(1);
+    expect(listeners.size).toBe(0); expect(mocks.send).not.toHaveBeenCalled();
+    expect((await registry.reconcileEnabled())[0].status).toBe('mounted'); await flush();
+    expect(mocks.install).toHaveBeenCalledTimes(2); expect(listeners.size).toBe(1);
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+    controller.abort(); registry.unmountAll();
+    expect(mocks.scanner.dispose).toHaveBeenCalledTimes(2); expect(listeners.size).toBe(0);
+  });
+  it.each(['abort', 'invalid'] as const)('releases an activation invalidated during message registration: %s', async reason => {
+    const controller = new AbortController(); const ctx = {isInvalid: false} as ContentScriptContext;
+    mocks.add.mockImplementationOnce(() => {if (reason === 'abort') controller.abort(); else Object.assign(ctx, {isInvalid: true});});
+    mountVocabularyReencounter(ctx, controller.signal); await flush();
+    expect(mocks.scanner.dispose).toHaveBeenCalledTimes(1);
+    expect(mocks.remove).toHaveBeenCalledTimes(1); expect(mocks.send).not.toHaveBeenCalled();
+    mount(); await flush(); expect(mocks.install).toHaveBeenCalledTimes(2); expect(mocks.send).toHaveBeenCalledTimes(1);
+  });
   it('does not mount in private, invalid, aborted or disabled contexts, and mounts only once', () => {
     mocks.extension.inIncognitoContext = true; mount(); mocks.extension.inIncognitoContext = false;
     mountVocabularyReencounter({isInvalid: true} as ContentScriptContext, new AbortController().signal);

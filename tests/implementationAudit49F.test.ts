@@ -1,9 +1,10 @@
-import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import './helpers/vueDomFixture';
+import {afterEach, beforeEach, describe, expect, it, vi, type Mock} from 'vitest';
 import {createHash} from 'node:crypto';
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {createContext, runInContext} from 'node:vm';
-import {compileVueInlineFixture} from './helpers/compiledVueFixture';
+import type {Config} from '@/src/core/config/model';
 
 // 使用真实 Vue runtime-dom 和 SFC；linkedom 只提供受控 DOM 外部端口。
 const dom = await vi.hoisted(async () => {
@@ -12,7 +13,7 @@ const dom = await vi.hoisted(async () => {
     Object.defineProperty(parsed.window.Node.prototype, Symbol.toStringTag, {
         configurable: true, get() { return this.constructor.name; },
     });
-    for (const key of ['document', 'Node', 'Element', 'HTMLElement', 'SVGElement', 'ShadowRoot', 'Event', 'CustomEvent']) {
+    for (const key of ['document', 'Document', 'Node', 'Element', 'HTMLElement', 'SVGElement', 'ShadowRoot', 'Event', 'CustomEvent']) {
         Object.defineProperty(globalThis, key, {configurable: true, writable: true, value: (parsed.window as any)[key]});
     }
     Object.defineProperty(parsed.document, 'contentType', {configurable: true, value: 'text/html'});
@@ -121,6 +122,59 @@ function trackWindowListeners(): () => void {
 }
 
 describe('49F storage observation through the real browser adapter', () => {
+    it('keeps stored null and falsy values distinct from missing-key defaults across batch reads', async () => {
+        const releaseEvents = trackWindowListeners(), values = new Map<string, unknown>();
+        vi.stubGlobal('GM', {getValue: (key: string, fallback: unknown) => values.has(key) ? values.get(key) : fallback,
+            setValue: (key: string, value: unknown) => {values.set(key, value);}, listValues: () => [...values.keys()]});
+        const {default: adapter} = await import('@/userscript/browser');
+        const observed = vi.fn();adapter.storage.onChanged.addListener(observed);
+        try {
+            expect(adapter.storage.onChanged.hasListener(observed)).toBe(true);
+            const stored = {'local:null': null, 'local:false': false, 'local:zero': 0, 'local:empty': ''};
+            await adapter.storage.local.set(stored);
+            expect(await adapter.storage.local.get({...Object.fromEntries(Object.keys(stored).map(key => [key, 'fallback'])), 'local:missing': 'null'}))
+                .toEqual({...stored, 'local:missing': 'null'});
+            expect(await adapter.storage.local.get(Object.keys(stored))).toEqual(stored);
+            expect(await adapter.storage.local.get()).toEqual(stored);
+            expect(observed).toHaveBeenCalledTimes(4);
+        } finally {adapter.storage.onChanged.removeListener(observed);expect(adapter.storage.onChanged.hasListener(observed)).toBe(false);releaseEvents();}
+    });
+
+    it('opens settings through its owned DOM event and maps tab/icon adapters without extension privileges', async () => {
+        const {default: adapter, chrome} = await import('@/userscript/browser');
+        const settings = vi.fn(), open = vi.fn();window.addEventListener('fluentread-userscript-open-settings', settings);
+        vi.stubGlobal('window', {...window, open});vi.stubGlobal('__FLUENTREAD_ICON_DATA__', 'data:image/png;base64,fixture');
+        try {
+            await adapter.runtime.openOptionsPage();expect(settings).toHaveBeenCalledOnce();
+            expect(chrome.runtime).toBe(adapter.runtime);expect(chrome.storage).toBe(adapter.storage);
+            expect(await adapter.tabs.query()).toEqual([{id:1,windowId:1,active:true}]);
+            await adapter.tabs.create({});expect(open).not.toHaveBeenCalled();await adapter.tabs.create({url:'https://fixture.test/new'});
+            expect(open).toHaveBeenCalledWith('https://fixture.test/new','_blank','noopener,noreferrer');
+            expect(adapter.runtime.getURL('icon/64.png')).toBe('data:image/png;base64,fixture');expect(adapter.runtime.getURL('other/file.wasm')).toBe('');
+            vi.stubGlobal('__FLUENTREAD_ICON_DATA__', undefined);expect(adapter.runtime.getURL('icon/32.png')).toBe('');
+        } finally {window.removeEventListener('fluentread-userscript-open-settings', settings);}
+    });
+
+    it('keeps later browser storage observers running when an earlier observer throws after a committed write', async () => {
+        const releaseEvents = trackWindowListeners();
+        const values = new Map<string, unknown>();
+        vi.stubGlobal('GM', {getValue: (key: string, fallback: unknown) => values.has(key) ? values.get(key) : fallback, setValue: (key: string, value: unknown) => {values.set(key, value);}});
+        const {default: adapter} = await import('@/userscript/browser');
+        const failed = vi.fn(() => {throw new Error('observer unavailable');});
+        const observed = vi.fn();
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        adapter.storage.onChanged.addListener(failed);adapter.storage.onChanged.addListener(observed);
+        try {
+            await adapter.storage.local.set({'local:release-observer': {version: 1}});
+            expect(await adapter.storage.local.get('local:release-observer')).toEqual({'local:release-observer': {version: 1}});
+            expect(observed).toHaveBeenCalledWith({'local:release-observer': {oldValue: null, newValue: {version: 1}}}, 'local');
+            expect(failed).toHaveBeenCalledOnce();expect(warn).toHaveBeenCalledOnce();
+        } finally {
+            adapter.storage.onChanged.removeListener(failed);adapter.storage.onChanged.removeListener(observed);
+            releaseEvents();warn.mockRestore();
+        }
+    });
+
     it.each(['initial', 'focus'] as const)('does not publish a stale %s read after a committed local write', async phase => {
         const releaseEvents = trackWindowListeners();
         const key = `local:audit49f-${phase}`;
@@ -189,6 +243,25 @@ describe('49F storage observation through the real browser adapter', () => {
 });
 
 describe('49F actual invalidation consumers', () => {
+    it('returns WXT-compatible invalidation unsubscribe and a safe handle after synchronous expiry', async () => {
+        const {createUserscriptContentContext} = await import('@/userscript/context');
+        const context = createUserscriptContentContext();
+        const removed = vi.fn(), retained = vi.fn();
+        const unsubscribe = context.onInvalidated(removed);
+        context.onInvalidated(retained);
+        expect(typeof unsubscribe).toBe('function');
+        unsubscribe(); unsubscribe();
+        context.invalidate();
+        expect(removed).not.toHaveBeenCalled();
+        expect(retained).toHaveBeenCalledOnce();
+        const late = vi.fn();
+        const unsubscribeLate = context.onInvalidated(late);
+        expect(late).toHaveBeenCalledOnce();
+        expect(typeof unsubscribeLate).toBe('function');
+        unsubscribeLate(); context.invalidate();
+        expect(late).toHaveBeenCalledOnce();
+    });
+
     it('still disposes installed page styles and all callbacks after an earlier cleanup throws', async () => {
         const {createUserscriptContentContext} = await import('@/userscript/context');
         const {installPageStyles} = await import('@/src/app/content/pageStyles');
@@ -213,6 +286,19 @@ describe('49F actual invalidation consumers', () => {
 });
 
 describe('49F asynchronous responses from the actual content message consumer', () => {
+    it('retains an immediate callback response when the listener also returns a Promise without a value', async () => {
+        const {default: adapter} = await import('@/userscript/browser');
+        const listener = (_message: unknown, _sender: unknown, send: (value: unknown) => void) => {
+            send({status: 'callback accepted'});
+            return Promise.resolve();
+        };
+        adapter.runtime.onMessage.addListener(listener);
+        try {
+            expect(await adapter.tabs.sendMessage(1, {type: 'controlled-callback-and-promise'}))
+                .toEqual({status: 'callback accepted'});
+        } finally {adapter.runtime.onMessage.removeListener(listener);}
+    });
+
     it.each(['resolved', 'rejected'] as const)('retains an accepted Promise response after removal, matching the installed polyfill (%s)', async outcome => {
         const nativeListeners = new Set<(...args: any[]) => unknown>();
         const native = {runtime: {id: 'controlled-extension', onMessage: {
@@ -565,20 +651,27 @@ describe('49F malformed resource boundaries through real loaders', () => {
 describe('49F actual settings client template', () => {
     it('hydrates, edits a native control, saves normalized config, and applies the current-page messages', async () => {
         ports.config.on = true;
+        const subscribers = new Set<(snapshot: Config) => void>();
+        ports.subscribe.mockImplementation(callback => {subscribers.add(callback);return () => subscribers.delete(callback);});
+        // ACK 前发布已接受的权威快照，与真实 store 的 patch/订阅契约一致。
+        ports.patch.mockImplementation(async (snapshot: Config) => {
+            Object.assign(ports.config, snapshot);
+            for (const subscriber of subscribers) subscriber(ports.config);
+        });
         const root = document.createElement('div'); document.body.append(root);
         app = createApp(SettingsPanel); app.mount(root);
         await nextTick(); await nextTick();
+        ports.send.mockResolvedValue({status: 'success'});
         const input = root.querySelector<HTMLInputElement>('.toggle input')!;
         expect(input.checked).toBe(true);
         input.checked = false; input.dispatchEvent(new Event('change', {bubbles: true}));
         await nextTick();
         const save = root.querySelector<HTMLButtonElement>('button.primary')!;
         save.dispatchEvent(Object.assign(new Event('click', {bubbles: true}), {_vts: Date.now() + 1}));
-        await vi.waitFor(() => expect(root.querySelector('.status')!.textContent).toContain('设置已保存'));
-        expect(ports.save.mock.calls[0][0]).toMatchObject({on: false, contextMenuEnabled: false, disableImageTranslator: true});
-        expect(ports.send.mock.calls.map(call => call[1])).toEqual([
-            {type: 'toggleFloatingBall', isEnabled: false}, {type: 'updateSelectionTranslatorMode', mode: 'disabled'}, {type: 'toggleTranslationProgressPanel', isEnabled: false},
-        ]);
+        await vi.waitFor(() => expect(root.querySelector('.status')!.textContent).toBe('本次提交已保存，并已应用到当前页面。'));
+        expect(ports.patch).toHaveBeenCalledOnce();
+        expect(ports.patch.mock.calls[0][0]).toMatchObject({on: false, contextMenuEnabled: false, disableImageTranslator: true});
+        expect(ports.send.mock.calls.map(call => call[1])).toEqual([{type: 'reconcileUserscriptPage'}]);
     });
 });
 
@@ -641,14 +734,14 @@ describe('49F real config-store ownership through the full platform public handl
         // 这些未执行的供应商/数据库端口隔离真实账户和 IndexedDB；实际 store、协议 handler 和 GM adapter 不替换。
         vi.doMock('@/src/app/translation/visionProbeRuntime', () => ({modelVisionProbe: {resolve: vi.fn()}}));
         vi.doMock('@/src/app/translation/runtime', () => ({cleanupTranslationCache: vi.fn(), clearTranslationCache: vi.fn(), translateWithCache: vi.fn()}));
-        vi.doMock('@/src/platform/storage/modelUsageRepository', () => ({modelUsageRepository: {}}));
-        vi.doMock('@/src/features/vocabulary/repository', () => ({vocabularyBook: {}}));
+        vi.doMock('@/src/platform/storage/modelUsageRepository', () => ({getModelUsageRepository: () => ({})}));
+        vi.doMock('@/src/features/vocabulary/repository', () => ({vocabularyBook: {pruneUndo: async () => undefined}}));
         const {default: adapter, setPlatformMessageHandler, resetPlatformMessageHandler} = await import('@/userscript/browser');
         let ready = false;
         try {
             storageModule.completeUserscriptConfigPreparation(); await store.configReady; ready = true;
             const {createPlatformMessageHandler} = await import('@/userscript/platformFull');
-            const stops: ReturnType<typeof vi.fn>[] = [];
+            const stops: Mock<() => void>[] = [];
             const watch = storageModule.configStorage.watch.bind(storageModule.configStorage);
             vi.spyOn(storageModule.configStorage, 'watch').mockImplementation((key, callback) => {
                 const stop = vi.fn(watch(key, callback)); stops.push(stop); return stop;
@@ -715,11 +808,11 @@ describe('49F full platform cleanup through the public browser owner', () => {
         vi.doMock('@/src/services/config/store', () => ({...store, saveConfig: ports.save}));
         vi.doMock('@/src/app/translation/visionProbeRuntime', () => ({modelVisionProbe: {resolve: vi.fn()}}));
         vi.doMock('@/src/app/translation/runtime', () => ({cleanupTranslationCache: vi.fn(), clearTranslationCache: vi.fn(), translateWithCache: vi.fn()}));
-        vi.doMock('@/src/platform/storage/modelUsageRepository', () => ({modelUsageRepository: {}}));
-        vi.doMock('@/src/features/vocabulary/repository', () => ({vocabularyBook: {}}));
+        vi.doMock('@/src/platform/storage/modelUsageRepository', () => ({getModelUsageRepository: () => ({})}));
+        vi.doMock('@/src/features/vocabulary/repository', () => ({vocabularyBook: {pruneUndo: async () => undefined}}));
         const browser = await import('@/userscript/browser');
         const platform = await import('@/userscript/platformFull');
-        type OwnedWatch = {key: string; callback: (value: any) => void; stop: ReturnType<typeof vi.fn>; release(): void; error?: Error; onStop?: () => void};
+        type OwnedWatch = {key: string; callback: (value: any) => void; stop: Mock<() => void>; release(): void; error?: Error; onStop?: () => void};
         const owned: OwnedWatch[] = [];
         let acquiring = false;
         const watch = storage.configStorage.watch.bind(storage.configStorage);
@@ -858,10 +951,10 @@ describe('49F concrete Vue mount-failure ownership boundary', () => {
                 .rejects.toThrow('controlled client DOM insertion failure');
             expect(failedUi.shadowHost.isConnected).toBe(false); expect(failedUi.mounted).toBeUndefined();
             expect(failedUi.uiContainer.querySelector('[role="dialog"]')).toBeNull();
-            expect(stops).toHaveLength(1); expect(subscribed.size).toBe(0);
-            expect(stops[0]).toHaveBeenCalledOnce();
+            expect(stops).toHaveLength(2); expect(subscribed.size).toBe(0);
+            for (const stop of stops) expect(stop).toHaveBeenCalledOnce();
             failedUi.remove(); expect(subscribed.size).toBe(0);
-            expect(stops[0]).toHaveBeenCalledOnce();
+            for (const stop of stops) expect(stop).toHaveBeenCalledOnce();
         } finally {
             for (const stop of stops) stop(); failedUi?.uiContainer.replaceChildren(); failedUi?.remove();
             vi.doUnmock('wxt/utils/content-script-ui/shadow-root');
@@ -879,14 +972,14 @@ describe('49F real Vue partial construction disposal and retry', () => {
         vi.doMock('@/src/platform/i18n/uiLanguageBundles', () => ({ensureUiLanguageBundle: () => bundle.promise}));
         const callbacks: Array<(config: any) => void> = [];
         const subscribed = new Set<unknown>();
-        const stops: ReturnType<typeof vi.fn>[] = [];
+        const stops: Mock<() => void>[] = [];
         let cleanupError: Error | undefined;
         ports.subscribe.mockImplementation(callback => {
             callbacks.push(callback); subscribed.add(callback);
             const stop = vi.fn(() => {subscribed.delete(callback); if (cleanupError) throw cleanupError;});
             stops.push(stop); return stop;
         });
-        const observers: Array<{callback: MutationCallback; active: boolean; observe: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>}> = [];
+        const observers: Array<{callback: MutationCallback; active: boolean; observe: Mock; disconnect: Mock}> = [];
         vi.stubGlobal('MutationObserver', class {
             active = false;
             observe = vi.fn(() => {this.active = true; if (observeFailure) throw observeFailure;});
@@ -945,7 +1038,8 @@ describe('49F real Vue partial construction disposal and retry', () => {
             expect(ui.shadowHost.isConnected).toBe(true); expect(ui.uiContainer.querySelector('[role="dialog"]')).not.toBeNull();
             ui.uiContainer.querySelector<HTMLButtonElement>('button.close')!.click(); expect(close).toHaveBeenCalledOnce();
             ui.remove(); expect(unmounts[1]).toHaveBeenCalledOnce();
-            expect(client.stops).toHaveLength(1); expect(client.stops[0]).toHaveBeenCalledOnce();
+            // 正常重试各自拥有一个 i18n 与一个 editor 订阅，均只能释放一次。
+            expect(client.stops).toHaveLength(2); for (const stop of client.stops) expect(stop).toHaveBeenCalledOnce();
             await client.deliverLateWork();
         } finally {ui?.remove();}
     });
@@ -1080,10 +1174,12 @@ describe('49F real Vue partial construction disposal and retry', () => {
         try {
             await expect((await import('@/src/platform/shadow-ui')).createVueShadowUi({isInvalid:false} as never,{name:'audit49f-new-owner',hostId:'audit49f-new-owner',component:client.Panel,props:{onClose:close}})).rejects.toBe(first);
             await nextTick(); await nextTick();
-            expect(ui.mounted).toBe(newer); expect(ui.shadowHost.isConnected).toBe(true); expect(client.subscribed.size).toBe(1);
-            expect(client.stops).toHaveLength(2); expect(client.stops[0]).toHaveBeenCalledOnce(); expect(client.stops[1]).not.toHaveBeenCalled();
+            expect(ui.mounted).toBe(newer); expect(ui.shadowHost.isConnected).toBe(true); expect(client.subscribed.size).toBe(2);
+            expect(client.stops).toHaveLength(4);
+            for (const stop of client.stops.slice(0, 2)) expect(stop).toHaveBeenCalledOnce();
+            for (const stop of client.stops.slice(2)) expect(stop).not.toHaveBeenCalled();
             ui.uiContainer.querySelector<HTMLButtonElement>('button.close')!.click(); expect(close).toHaveBeenCalledOnce();
-            ui.remove(); expect(client.stops[1]).toHaveBeenCalledOnce(); await client.deliverLateWork();
+            ui.remove(); for (const stop of client.stops) expect(stop).toHaveBeenCalledOnce(); await client.deliverLateWork();
         } finally {ui?.remove();}
     });
 
@@ -1100,9 +1196,11 @@ describe('49F real Vue partial construction disposal and retry', () => {
                 if (++configuring === 1) {ui.remove(); ui.mount(); newer = ui.mounted; throw first;}
             }})).rejects.toBe(first);
             await nextTick(); await nextTick();
-            expect(ui.mounted).toBe(newer); expect(ui.shadowHost.isConnected).toBe(true); expect(client.subscribed.size).toBe(1);
+            expect(ui.mounted).toBe(newer); expect(ui.shadowHost.isConnected).toBe(true); expect(client.subscribed.size).toBe(2);
+            expect(client.stops).toHaveLength(3);
             expect(ui.uiContainer.querySelectorAll('[role="dialog"]')).toHaveLength(1); expect(client.stops[0]).toHaveBeenCalledOnce();
-            ui.remove(); expect(client.stops[1]).toHaveBeenCalledOnce(); await client.deliverLateWork();
+            for (const stop of client.stops.slice(1)) expect(stop).not.toHaveBeenCalled();
+            ui.remove(); for (const stop of client.stops) expect(stop).toHaveBeenCalledOnce(); await client.deliverLateWork();
         } finally {ui?.remove();}
     });
 
@@ -1127,14 +1225,14 @@ describe('49F real Vue partial construction disposal and retry', () => {
         try {
             await expect((await import('@/src/platform/shadow-ui')).createVueShadowUi({isInvalid:false} as never,{name:'audit49f-late-directive',hostId:'audit49f-late-directive',component:Panel})).rejects.toBe(first);
             expect(ui.shadowHost.isConnected).toBe(false); expect(ui.uiContainer.childNodes.length).toBe(0);
-            expect(client.subscribed.size).toBe(0); expect(client.stops[0]).toHaveBeenCalledOnce();
+            expect(client.subscribed.size).toBe(0); for (const stop of client.stops) expect(stop).toHaveBeenCalledOnce();
             expect(client.observers).toHaveLength(0);
             ui.mount(); await nextTick(); await nextTick();
             // 重试的真实 Vue render 会 flush 旧 fragment 已排队的 mounted hook；旧插件不能再获取资源。
-            expect(client.observers).toHaveLength(1); expect(client.subscribed.size).toBe(1);
+            expect(client.observers).toHaveLength(1); expect(client.subscribed.size).toBe(2);
             expect(ui.uiContainer.querySelectorAll('[role="dialog"]')).toHaveLength(1);
             ui.uiContainer.querySelector<HTMLButtonElement>('button.close')!.click(); expect(close).toHaveBeenCalledOnce();
-            ui.remove(); expect(client.stops[1]).toHaveBeenCalledOnce(); await client.deliverLateWork();
+            ui.remove(); for (const stop of client.stops) expect(stop).toHaveBeenCalledOnce(); await client.deliverLateWork();
         } finally {ui?.remove();}
     });
 
@@ -1153,7 +1251,7 @@ describe('49F real Vue partial construction disposal and retry', () => {
             }});
             expect(handled).toHaveBeenCalledOnce(); expect(handled.mock.calls[0][0]).toBe(first);
             expect(ui.shadowHost.isConnected).toBe(true); expect(ui.uiContainer.querySelector('[role="dialog"]')).not.toBeNull();
-            expect(client.subscribed.size).toBe(1);
+            expect(client.subscribed.size).toBe(2);
             expect(client.observers).toHaveLength(1); expect(client.observers[0].active).toBe(false); expect(client.observers[0].disconnect).toHaveBeenCalledOnce();
             ui.remove(); expect(ui.shadowHost.isConnected).toBe(false); expect(ui.uiContainer.childNodes.length).toBe(0);
             expect(client.stops[0]).toHaveBeenCalledOnce(); await client.deliverLateWork();
@@ -1187,7 +1285,7 @@ describe('49F real Vue partial construction disposal and retry', () => {
 
 describe('49F bounded legacy text through real language bundles', () => {
     it.each(['en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as const)('preserves all 512 nested causes in %s without growing the JS call stack', async language => {
-        const {registerAllUiLanguageBundles} = await import('@/src/core/i18n/bundles');
+        const {registerAllUiLanguageBundles} = await import('./helpers/uiLanguageBundles');
         const {translateLegacyText} = await import('@/src/core/i18n');
         registerAllUiLanguageBundles();
         const cause = translateLegacyText('未知原因', language);
@@ -1231,10 +1329,10 @@ describe('49F actual pinned-data virtual catalog consumer', () => {
 
     afterEach(() => vi.unstubAllEnvs());
 
-    it('reconciles all 19 authoritative established rules without mutating pinned data and reuses every unchanged rule', async () => {
+    it('reconciles authoritative established rules without mutating pinned data and reuses every unchanged rule', async () => {
         const {catalogs, original, originalSnapshot} = await loadCatalogs();
-        expect(original.established).toHaveLength(17);
-        expect(catalogs.established).toHaveLength(19);
+        const originalLength = original.established.length;
+        expect(originalLength).toBeGreaterThan(0);
         for (const name of ['established', 'websites', 'profiles']) {
             const authoritative = JSON.parse(readFileSync(resolve(process.cwd(), `src/core/site-adaptation/catalog/${name}.json`), 'utf8'));
             expect(catalogs[name]).toEqual(authoritative);
@@ -1252,9 +1350,9 @@ describe('49F actual pinned-data virtual catalog consumer', () => {
         expect(github.content.flatMap((entry: any) => entry.css)).toContain('a[data-testid="issue-listitem-title-link"]');
         expect(github.protect).toContain('[data-testid="issues-list-surface"] [class*="Description-module__container"]');
         expect(original.established.find((rule: any) => rule.id === 'github').protect)
-            .not.toContain('[data-testid="issues-list-surface"] [class*="Description-module__container"]');
+            .toContain('[data-testid="issues-list-surface"] [class*="Description-module__container"]');
         expect(JSON.stringify(original)).toBe(originalSnapshot);
-        expect(original.established).toHaveLength(17);
+        expect(original.established).toHaveLength(originalLength);
     });
 
     it.each(['https://meet.google.com/fixture', 'https://github.com/fixture'] as const)('excludes native captions or code through the actual virtual catalog and real engine at %s', async url => {
@@ -1271,7 +1369,7 @@ describe('49F actual pinned-data virtual catalog consumer', () => {
 });
 
 describe('49F actual userscript main module lifecycle ownership', () => {
-    async function mainFixture(startFailure?: Error, cleanupFailure?: Error) {
+    async function mainFixture(startFailure?: Error, cleanupFailure?: Error, contentMessages = false) {
         delete globalThis.__fluentReadUserscriptBootstrapped;
         vi.stubGlobal('__FLUENTREAD_FULL_OPTIONS__', false);
         vi.stubGlobal('defineContentScript', (entry: unknown) => entry);
@@ -1281,6 +1379,30 @@ describe('49F actual userscript main module lifecycle ownership', () => {
         const originalPush = historyPort.pushState;
         const originalReplace = historyPort.replaceState;
         const menus = new Map<string, () => void>();
+        let realApp: Awaited<ReturnType<typeof import('@/src/services/config/application')['createConfigApplication']>> | undefined;
+        let storedConfig: () => unknown = () => undefined;
+        let pendingConfigWrite: {gate: Promise<void>; entered: () => void} | undefined;
+        const blockNextConfigWrite = () => {const gate = deferred<void>(), started = deferred<void>(); pendingConfigWrite = {gate: gate.promise, entered: started.resolve}; return {...gate, entered: started.promise};};
+        if (contentMessages) {
+            const {createConfigApplication} = await import('@/src/services/config/application');
+            const {sanitizeConfigCredentials, extractConfigCredentials} = await import('@/src/core/config/credentials');
+            const records = new Map<string, unknown>([['local:config', {...sanitizeConfigCredentials(ports.config), __fluentConfigRevision: 1}], ['local:credentials', extractConfigCredentials(ports.config)]]);
+            const watchers = new Map<string, Set<(value: unknown) => void>>();
+            const notify = (key: string) => {for (const callback of watchers.get(key) ?? []) callback(structuredClone(records.get(key) ?? null));};
+            const storage = {
+                writeOwner: true,
+                getItem: async <T>(key: string) => structuredClone(records.get(key) ?? null) as T | null,
+                setItem: async <T>(key: string, value: T) => {records.set(key, structuredClone(value)); notify(key);},
+                setItems: async (entries: Map<string, unknown>, removeKeys: string[] = []) => {if (entries.has('local:config') && pendingConfigWrite) {const wait = pendingConfigWrite; pendingConfigWrite = undefined; wait.entered(); await wait.gate;} for (const [key, value] of entries) records.set(key, structuredClone(value)); for (const key of removeKeys) records.delete(key); for (const key of [...entries.keys(), ...removeKeys]) notify(key);},
+                removeItem: async (key: string) => {records.delete(key); notify(key);},
+                watch: (key: string, callback: (value: any) => void) => {const set = watchers.get(key) ?? new Set(); set.add(callback); watchers.set(key, set); return () => set.delete(callback);},
+            };
+            realApp = createConfigApplication({storage, trustedContext: true}); await realApp.start();
+            ports.config = realApp.config;
+            const app = realApp;
+            vi.doMock('@/src/services/config/store', () => app);
+            storedConfig = () => records.get('local:config');
+        }
         const values = new Map<string, unknown>([['local:config', JSON.stringify(ports.config)]]);
         vi.stubGlobal('GM', {
             getValue: (key: string, fallback: unknown) => values.has(key) ? values.get(key) : fallback,
@@ -1296,12 +1418,15 @@ describe('49F actual userscript main module lifecycle ownership', () => {
         });
         vi.spyOn(window, 'removeEventListener').mockImplementation((type, listener, options) => {events.get(type)?.delete(listener); nativeRemove(type, listener, options);});
         const closes = vi.fn();
+        const notice = vi.fn();
+        if (contentMessages) vi.doMock('@/src/features/page-notice/public', () => ({showPageNotice: notice, dismissPageNotice: vi.fn(), sendErrorMessage: vi.fn()}));
         const opens = vi.fn().mockResolvedValue(undefined);
         vi.doMock('@/userscript/settings', () => ({openUserscriptSettings:opens,closeUserscriptSettings:closes}));
         const sentinel = (await import('@/userscript/browser')).UNHANDLED_RUNTIME_MESSAGE;
         const platform = vi.fn(async (message: any) => message?.type === 'audit49f-platform-owned' ? {success:true} : sentinel);
         vi.doMock('@/userscript/platform', () => ({createPlatformMessageHandler: () => platform}));
-        vi.doMock('@/src/app/content/features', () => ({isFullPageTranslationActive: () => false,restoreOriginalContent:vi.fn(),autoTranslateEnglishPage:vi.fn()}));
+        const contentActions = {mountFloatingBall: vi.fn(), unmountFloatingBall: vi.fn(), mountSelectionTranslator: vi.fn(), unmountSelectionTranslator: vi.fn()};
+        vi.doMock('@/src/app/content/features', () => ({isFullPageTranslationActive: () => false,restoreOriginalContent:vi.fn(),autoTranslateEnglishPage:vi.fn(), ...contentActions}));
         const cleanup = vi.fn(() => {if (cleanupFailure) throw cleanupFailure;});
         const laterCleanup = vi.fn();
         let context!: import('@/userscript/context').UserscriptContentContext;
@@ -1309,6 +1434,12 @@ describe('49F actual userscript main module lifecycle ownership', () => {
         const start = vi.fn(async (ctx: typeof context) => {
             loaded = true; context = ctx;
             ctx.onInvalidated(cleanup); ctx.onInvalidated(laterCleanup);
+            if (contentMessages) {
+                const {createContentRuntimeMessageHandler} = await import('@/src/app/content/messageRuntime');
+                const handler = createContentRuntimeMessageHandler(ctx as never, {isSiteDisabled: () => false, updateSiteDisabled: async () => undefined});
+                adapter.runtime.onMessage.addListener(handler as never);
+                ctx.onInvalidated(() => adapter.runtime.onMessage.removeListener(handler as never));
+            }
             if (startFailure) throw startFailure;
         });
         // 真实 entrypoints/content 仍经 defineContentScript 加载；只控制它调用的内容应用启动端口。
@@ -1318,9 +1449,10 @@ describe('49F actual userscript main module lifecycle ownership', () => {
         await import('@/userscript/main');
         try { await vi.waitFor(() => expect(start).toHaveBeenCalledOnce(), {timeout:1500}); } catch { throw new Error(`main entry not loaded: ${errors.mock.calls.map(call => call.map(value => value instanceof Error ? value.stack : String(value)).join(' ')).join(' | ')}`); }
         expect(loaded).toBe(true); // 明确区分入口加载成功与 runtime 故障。
+        if (contentMessages) await start.mock.results[0]?.value;
         await new Promise(resolve => setTimeout(resolve, 0));
         const bridge = await import('@/src/platform/shadow-ui/pageBridgeCore');
-        return {context, loaded, start, cleanup, laterCleanup, errors, adapter, closes, opens, events, bridge, platform,
+        return {context, loaded, start, cleanup, laterCleanup, errors, adapter, closes, opens, events, bridge, platform, menus, contentActions, realApp, storedConfig, blockNextConfigWrite, notice,
             pagehide(persisted: boolean, isTrusted = true) {
                 const listeners = [...(events.get('pagehide') ?? [])];
                 for (const listener of listeners) {
@@ -1345,7 +1477,74 @@ describe('49F actual userscript main module lifecycle ownership', () => {
         };
     }
     afterEach(() => {
-        for (const path of ['@/userscript/settings','@/userscript/platform','@/src/app/content/features','@/src/app/content/runtime']) vi.doUnmock(path);
+        for (const path of ['@/userscript/settings','@/userscript/platform','@/src/app/content/features','@/src/app/content/runtime','@/src/features/page-notice/public']) vi.doUnmock(path);
+        vi.doMock('@/src/services/config/store', () => ({config: ports.config, configReady: ports.ready, saveConfig: ports.save, subscribeConfig: ports.subscribe, requestConfigPatch: ports.patch, getConfigRevision: () => 0}));
+    });
+
+    it('userscript 菜单暂停再启用，真实配置权威通知并持久化且不改变功能偏好', async () => {
+        const fixture = await mainFixture(undefined, undefined, true);
+        const app = fixture.realApp!;
+        try {
+            await app.requestConfigPatch({on: true, disableFloatingBall: false, selectionTranslatorMode: 'bilingual', translationProgressPanelEnabled: true});
+            const observed: boolean[] = [];
+            const unsubscribe = app.subscribeConfig(next => {observed.push(next.on);});
+            const menu = fixture.menus.get('流畅阅读：启用 / 暂停')!;
+            expect(menu).toBeTypeOf('function');
+            menu();
+            await vi.waitFor(() => expect(fixture.storedConfig()).toMatchObject({on: false}));
+            expect(app.config).toMatchObject({on: false, disableFloatingBall: false, selectionTranslatorMode: 'bilingual', disableSelectionTranslator: false, translationProgressPanelEnabled: true});
+            menu();
+            await vi.waitFor(() => expect(fixture.storedConfig()).toMatchObject({on: true}));
+            expect(fixture.storedConfig()).toMatchObject({on: true, disableFloatingBall: false, selectionTranslatorMode: 'bilingual', translationProgressPanelEnabled: true});
+            expect(observed).toContain(false); expect(observed.at(-1)).toBe(true);
+            unsubscribe();
+        } finally {await app.flushConfigHistory(); fixture.disposeFixture();}
+    });
+
+    it('userscript 菜单快速暂停再启用，迟到保存不覆盖新状态或功能偏好', async () => {
+        const fixture = await mainFixture(undefined, undefined, true); const app = fixture.realApp!;
+        try {
+            await app.requestConfigPatch({on: true, disableFloatingBall: false, selectionTranslatorMode: 'bilingual'});
+            const gate = fixture.blockNextConfigWrite(), menu = fixture.menus.get('流畅阅读：启用 / 暂停')!;
+            menu(); await gate.entered; expect(app.config.on).toBe(false);
+            menu(); expect(app.config.on).toBe(true);
+            gate.resolve(); await app.waitForConfigPersistenceQueue();
+            await vi.waitFor(() => expect(fixture.storedConfig()).toMatchObject({on: true, disableFloatingBall: false, selectionTranslatorMode: 'bilingual'}));
+            expect(app.config).toMatchObject({on: true, disableFloatingBall: false, selectionTranslatorMode: 'bilingual'});
+        } finally {await app.flushConfigHistory(); fixture.disposeFixture();}
+    });
+
+    it('旧暂停请求迟到失败时不覆盖或误报之后的启用', async () => {
+        const fixture = await mainFixture(undefined, undefined, true); const app = fixture.realApp!;
+        try {
+            await app.requestConfigPatch({on: true, disableFloatingBall: false, selectionTranslatorMode: 'bilingual'});
+            const priorRevision = (fixture.storedConfig() as {__fluentConfigRevision: number}).__fluentConfigRevision;
+            const gate = fixture.blockNextConfigWrite(), menu = fixture.menus.get('流畅阅读：启用 / 暂停')!;
+            menu(); await gate.entered; menu(); expect(app.config.on).toBe(true);
+            gate.reject(new Error('obsolete-private-error'));
+            await app.waitForConfigPersistenceQueue().catch(() => undefined);
+            await vi.waitFor(() => {
+                expect(fixture.storedConfig()).toMatchObject({on: true});
+                expect((fixture.storedConfig() as {__fluentConfigRevision: number}).__fluentConfigRevision).toBeGreaterThan(priorRevision);
+            });
+            expect(app.config.on).toBe(true); expect(fixture.notice).not.toHaveBeenCalled();
+            expect(fixture.errors).not.toHaveBeenCalledWith('[FluentRead userscript] 启停设置结果未确认，请检查设置。');
+        } finally {await app.flushConfigHistory(); fixture.disposeFixture();}
+    });
+
+    it('userscript 菜单保存失败后回读权威状态并给出不含原始异常的错误', async () => {
+        const fixture = await mainFixture(undefined, undefined, true); const app = fixture.realApp!;
+        try {
+            await app.requestConfigPatch({on: true, disableFloatingBall: false, selectionTranslatorMode: 'bilingual'});
+            const gate = fixture.blockNextConfigWrite(); fixture.menus.get('流畅阅读：启用 / 暂停')!();
+            await gate.entered; expect(app.config.on).toBe(false);
+            gate.reject(new Error('private-storage-detail'));
+            await vi.waitFor(() => expect(fixture.errors).toHaveBeenCalledWith('[FluentRead userscript] 启停设置结果未确认，请检查设置。'));
+            expect(app.config).toMatchObject({on: true, disableFloatingBall: false, selectionTranslatorMode: 'bilingual'});
+            expect(fixture.storedConfig()).toMatchObject({on: true});
+            expect(fixture.notice).toHaveBeenCalledWith(expect.any(String), 'error', {key: 'userscript-toggle'});
+            expect(JSON.stringify(fixture.errors.mock.calls)).not.toContain('private-storage-detail');
+        } finally {await app.flushConfigHistory(); fixture.disposeFixture();}
     });
 
     it.each([false, true])('cleans the actual main bridge and listeners on trusted non-BFcache pagehide with invalidation failure=%s', async throws => {
@@ -1398,20 +1597,19 @@ describe('49F actual userscript main module lifecycle ownership', () => {
 // 独立的 owned-root 准入夹具。实际 Vue 客户端模板、配置模型、i18n context 和扫描器保持真实；
 // 存储传输、MutationObserver delivery 及无关颜色控件是外部端口，不代替用户名称保存/选择算法。
 describe('49F owned settings i18n client admission', () => {
-    async function ownedStyleClient() {
+    async function ownedStyleClient(initialStyle?: number) {
         vi.doUnmock('@/src/ui/i18n');
         const bundleGates = new Map<string, ReturnType<typeof deferred<boolean>>>();
         vi.doMock('@/src/platform/i18n/uiLanguageBundles', () => ({ensureUiLanguageBundle: (language: string) => bundleGates.get(language)?.promise ?? Promise.resolve(true)}));
         const Vue = await import('vue');
         const {Config} = await import('@/src/core/config/model');
         const appearance = await import('@/src/core/config/translationAppearance');
-        const highlight = await import('@/src/core/config/sentenceHighlight');
         const core = await import('@/src/core/i18n');
-        const {registerAllUiLanguageBundles} = await import('@/src/core/i18n/bundles');
+        const {registerAllUiLanguageBundles} = await import('./helpers/uiLanguageBundles');
         registerAllUiLanguageBundles();
         const i18n = await import('@/src/ui/i18n');
         ports.config.uiLanguage = 'zh-CN';
-        const subscriptions = new Set<(config: any) => void>(), callbacks: Array<(config: any) => void> = [], stops: ReturnType<typeof vi.fn>[] = [];
+        const subscriptions = new Set<(config: any) => void>(), callbacks: Array<(config: any) => void> = [], stops: Mock<() => boolean>[] = [];
         ports.subscribe.mockImplementation(callback => {
             subscriptions.add(callback);callbacks.push(callback);
             const stop = vi.fn(() => subscriptions.delete(callback));stops.push(stop);return stop;
@@ -1420,32 +1618,18 @@ describe('49F owned settings i18n client admission', () => {
             Object.assign(ports.config, value);
             for (const callback of subscriptions) callback(ports.config);
         });
-        const observers: Array<{callback: MutationCallback; root?: Node; active: boolean; observe: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn>}> = [];
+        const observers: Array<{callback: MutationCallback; root?: Node; active: boolean; observe: Mock; disconnect: Mock}> = [];
         vi.stubGlobal('MutationObserver', class {
             root?: Node;active = false;
             observe = vi.fn((root: Node) => {this.root = root;this.active = true;});
             disconnect = vi.fn(() => {this.active = false;});
             constructor(public callback: MutationCallback) {observers.push(this);}
         });
-        const compiled = new Map<string, import('vue').Component>();
-        const colorPort = Vue.defineComponent({props: ['modelValue', 'fieldId', 'label'], setup: props => () => Vue.h('span', {'data-color-port': props.fieldId}, props.label)});
-        function client(relative: string): import('vue').Component {
-            const filename = resolve(relative);if (compiled.has(filename)) return compiled.get(filename)!;
-            const compilation = compileVueInlineFixture(filename, {id: `owned-style-${compiled.size}`});expect(compilation.parseErrors).toEqual([]);
-            const module = {exports: {} as {default: import('vue').Component}};
-            new Function('require', 'exports', 'module', compilation.code)((id: string) => {
-                if (id === 'vue') return Vue;
-                if (id === '@/src/ui/i18n') return i18n;
-                if (id === '@/src/core/config/translationAppearance') return appearance;
-                if (id === '@/src/core/config/sentenceHighlight') return highlight;
-                if (id.endsWith('/TranslationColorField.vue')) return {default: colorPort};
-                if (id.endsWith('.css')) return {};
-                if (id.endsWith('.vue')) return {default: client(resolve(filename, '..', id))};
-                throw new Error(`Unexpected owned style client dependency ${id}`);
-            }, module.exports, module);
-            compiled.set(filename, module.exports.default);return module.exports.default;
-        }
-        const Style = client('src/features/settings/ui/TranslationStyleSettings.vue'), config = Vue.reactive(new Config());
+        const colorPort = Vue.defineComponent({props: ['modelValue', 'fieldId', 'label'], emits:['update:modelValue'], setup: (props,{emit}) => () => Vue.h('input', {'data-color-port': props.fieldId, 'aria-label':props.label, value:props.modelValue, onInput:(event:Event)=>emit('update:modelValue',(event.target as HTMLInputElement).value)})});
+        vi.doMock('@/src/features/settings/ui/components/TranslationColorField.vue', () => ({default: colorPort}));
+        const {default: Style} = await import('@/src/features/settings/ui/TranslationStyleSettings.vue');
+        const config = Vue.reactive(new Config());
+        if (initialStyle !== undefined) config.style = initialStyle;
         const beforeMetadata = {lang: document.documentElement.getAttribute('lang'), title: document.title};
         document.documentElement.lang = 'fixture-host-language';document.title = 'Synthetic host title';
         const outside = document.createElement('aside');outside.innerHTML = '<p title="设置" aria-label="设置">设置</p>';document.body.append(outside);
@@ -1466,7 +1650,11 @@ describe('49F owned settings i18n client admission', () => {
                     const name = key.slice(2).toLowerCase(), previous = target.__ownedEvents.get(name);if (previous) element.removeEventListener(name, previous);
                     if (value) {const listener: EventListener = event => {for (const handler of Array.isArray(value) ? value : [value]) handler(event);};target.__ownedEvents.set(name, listener);element.addEventListener(name, listener);}
                 } else if (key === 'value') (element as HTMLInputElement).value = value ?? '';
-                else if (key === 'style' && value && typeof value === 'object') Object.assign((element as HTMLElement).style, value);
+                else if (key === 'style' && value && typeof value === 'object') {
+                    const style = (element as HTMLElement).style;
+                    for (const property of Object.keys(_before ?? {})) if (!(property in value)) style.removeProperty(property);
+                    Object.assign(style, value);
+                }
                 else if (key.startsWith('aria-') && value != null) element.setAttribute(key, String(value));
                 else if (value == null || value === false) element.removeAttribute(key);
                 else element.setAttribute(key, value === true ? '' : String(value));
@@ -1501,11 +1689,121 @@ describe('49F owned settings i18n client admission', () => {
             async close() {
                 unmount();for (const gate of bundleGates.values()) gate.resolve(true);await settle();shadowHost.remove();outside.remove();
                 if (beforeMetadata.lang == null) document.documentElement.removeAttribute('lang');else document.documentElement.setAttribute('lang', beforeMetadata.lang);
-                document.title = beforeMetadata.title;vi.useRealTimers();vi.doUnmock('@/src/platform/i18n/uiLanguageBundles');
+                document.title = beforeMetadata.title;vi.useRealTimers();vi.doUnmock('@/src/platform/i18n/uiLanguageBundles');vi.doUnmock('@/src/features/settings/ui/components/TranslationColorField.vue');
                 vi.doMock('@/src/ui/i18n', () => ({useUiI18n: () => ({translateLegacy: (text: string) => text,t:(key:string)=>key}),createUiI18nPlugin:()=>({install(){}})}));
             },
         };
     }
+
+    it('keeps colored styles in a separate category between Text and Lines and restores their selection', async () => {
+        const client = await ownedStyleClient(54);
+        let savedStyle: number;
+        try {
+            expect([...client.root.querySelectorAll('.translation-style-categories button')].map(button => button.textContent!.trim()))
+                .toEqual(['文字', '颜色', '线条', '标记', '卡片', '趣味']);
+            expect(client.root.querySelector('.translation-style-categories button[aria-checked="true"]')!.textContent!.trim()).toBe('颜色');
+            expect([...client.root.querySelectorAll('.translation-style-card')].map(card => Number(card.getAttribute('data-style-value'))))
+                .toEqual([49, 50, 51, 52, 53, 54, 55, 56, 57, 40, 41, 42]);
+            expect(client.root.querySelector('[data-style-value="54"]')!.getAttribute('aria-checked')).toBe('true');
+            await client.click('.translation-style-categories button[data-option-index="0"]');
+            expect(client.root.querySelectorAll('.translation-style-card')).toHaveLength(12);
+            expect(client.root.querySelector('[data-style-value="49"]')).toBeNull();
+            expect(client.config.style).toBe(54);
+            await client.click('.translation-style-categories button[data-option-index="1"]');
+            await client.click('[data-style-value="49"]');
+            expect(client.config.style).toBe(49);
+            await client.click('.translation-style-categories button[data-option-index="2"]');
+            expect(client.root.querySelectorAll('.translation-style-card')).toHaveLength(14);
+            expect(client.config.style).toBe(49);
+            savedStyle = JSON.parse(JSON.stringify(client.config)).style;
+            expect(client.errors).toEqual([]);
+        } finally {await client.close();}
+        const restored = await ownedStyleClient(savedStyle!);
+        try {
+            expect(restored.root.querySelector('.translation-style-categories button[aria-checked="true"]')!.textContent!.trim()).toBe('颜色');
+            expect(restored.root.querySelectorAll('.translation-style-card')).toHaveLength(12);
+            expect(restored.root.querySelector('[data-style-value="49"]')!.getAttribute('aria-checked')).toBe('true');
+            expect(restored.errors).toEqual([]);
+        } finally {await restored.close();}
+    });
+
+    it('shows native color cards despite old pink overrides and applies a selected hue without losing font tweaks', async () => {
+        const client = await ownedStyleClient(54);
+        try {
+            client.config.translationAppearance = {...client.config.translationAppearance, textColor: '#ef4776', fontScale: 117,
+                fontWeight: 'bold', fontFamily: 'serif', customCss: 'color: pink; -webkit-text-fill-color: pink; font-size: 123%; border-radius: 6px'};
+            await client.settle();
+            const nativeCards = () => {
+                const samples = [...client.root.querySelectorAll<HTMLElement>('.translation-style-card .fluent-read-bilingual-content')];
+                expect(samples).toHaveLength(12);
+                for (const sample of samples) {
+                    expect(sample.style.getPropertyValue('color')).toBeFalsy();
+                    expect(sample.style.getPropertyValue('-webkit-text-fill-color')).toBeFalsy();
+                    expect(sample.style.getPropertyValue('font-family')).toContain('serif');
+                    expect(sample.style.getPropertyValue('font-size')).toBe('123%');
+                }
+            };
+            nativeCards();
+            const preview = () => client.root.querySelector<HTMLElement>('[data-testid="bilingual-highlight-preview-translation"]')!;
+            expect(preview().style.getPropertyValue('color')).toBe('pink');
+            await client.click('[data-style-value="49"]');
+            expect(client.config.style).toBe(49);
+            expect(client.config.translationAppearance).toMatchObject({textColor: '', fontScale: 117, fontWeight: 'bold', fontFamily: 'serif',
+                customCss: ' font-size: 123%; border-radius: 6px'});
+            expect(preview().classList.contains(client.preset(49)!.className)).toBe(true);
+            expect(preview().style.getPropertyValue('color')).toBeFalsy();
+            nativeCards();
+            await client.click('.translation-appearance-disclosure');
+            await client.input('[data-color-port="translation-text-color"]', '#1d4ed8');
+            expect(client.config.translationAppearance.textColor).toBe('#1d4ed8');
+            expect(preview().style.getPropertyValue('color')).toBe('#1d4ed8');
+            expect(preview().style.getPropertyValue('-webkit-text-fill-color')).toBe('currentColor');
+            nativeCards();
+            await client.click('.translation-style-categories button[data-option-index="0"]');
+            expect(client.root.querySelector<HTMLElement>('.translation-style-card .fluent-read-bilingual-content')!.style.getPropertyValue('color')).toBe('#1d4ed8');
+            expect(client.errors).toEqual([]);
+        } finally {await client.close();}
+    });
+
+    it('applies native appearance controls, category and preview choices, then restores appearance defaults',async()=>{
+        const client=await ownedStyleClient();
+        try{
+            const defaults={...client.config.translationAppearance};client.config.display=0;await client.settle();await client.click('.translation-style-mode-note button');expect(client.config.display).toBe(1);
+            await client.click('.translation-style-preview-theme button:last-child');expect(client.root.querySelector('.translation-style-preview')!.getAttribute('data-page-theme')).toBe('dark');expect(client.config.theme).toBe('auto');
+            for (const [categoryIndex, newestStyle] of [[4, 64], [5, 70]] as const) {
+                const oldStyle = client.config.style;
+                await client.click(`.translation-style-categories button[data-option-index="${categoryIndex}"]`);
+                expect(client.root.querySelectorAll('.translation-style-card')).toHaveLength(12);
+                expect(client.config.style).toBe(oldStyle);
+                await client.click(`[data-style-value="${newestStyle}"]`);
+                expect(client.config.style).toBe(newestStyle);
+                expect(client.root.querySelector(`[data-style-value="${newestStyle}"]`)!.getAttribute('aria-checked')).toBe('true');
+                expect(client.root.querySelector('[data-testid="bilingual-highlight-preview-translation"]')!.classList.contains(client.preset(newestStyle)!.className)).toBe(true);
+            }
+            await client.click('.translation-appearance-disclosure');
+            for(const [field,color] of [['textColor','#123456'],['backgroundColor','#ffffcc'],['lineColor','#654321'],['fillColor','#e0e0e0']] as const){const id=field.replace(/[A-Z]/g,letter=>`-${letter.toLowerCase()}`);await client.input(`[data-color-port="translation-${id}"]`,color);expect(client.config.translationAppearance[field]).toBe(color);}
+            await client.click('.translation-appearance-choice:nth-of-type(2) button:last-child');expect(client.config.translationAppearance.fontWeight).not.toBe('default');
+            await client.click('.translation-appearance-choice:nth-of-type(3) button:last-child');expect(client.config.translationAppearance.fontFamily).not.toBe('default');
+            const scale=client.root.querySelector<HTMLInputElement>('[data-testid="translation-font-scale-value"]')!;
+            for(const [raw,expected] of [['117',117],['999',250],['',250],['-10',50]] as const){scale.value=raw;scale.dispatchEvent(new Event('change',{bubbles:true}));await client.settle();expect(client.config.translationAppearance.fontScale).toBe(expected);expect(scale.value).toBe(String(expected));}
+            await client.input('#translation-custom-css','position: fixed; color: red');expect(client.root.querySelector('[role="alert"]')).not.toBeNull();
+            await client.click('.translation-appearance-reset');expect(client.config.translationAppearance).toEqual(defaults);expect(client.root.querySelector('[role="alert"]')).toBeNull();expect(client.errors).toEqual([]);
+        }finally{await client.close()}
+    });
+
+    it('saves independent style snapshots, updates only the active profile, and deletes it without changing the others',async()=>{
+        const client=await ownedStyleClient();
+        try{
+            await client.saveName('First style');const first=JSON.parse(JSON.stringify(client.config.translationStyleProfiles[0]));
+            await client.input('[data-color-port="translation-text-color"]','#123456');await client.input('#translation-profile-name','Second style');await client.click('.translation-profile-save');
+            expect(client.config.translationStyleProfiles).toHaveLength(2);expect(client.config.translationStyleProfiles[0]).toEqual(first);const secondId=client.config.activeTranslationStyleProfileId;
+            await client.input('[data-color-port="translation-text-color"]','#654321');await client.input('#translation-profile-name','Updated style');expect(client.root.querySelector('.translation-appearance-status')!.textContent).toBe(client.core.translate('settings.translationStyle.unsavedChanges','zh-CN'));
+            await client.click('.translation-profile-actions button:first-child');expect(client.config.translationStyleProfiles[0]).toEqual(first);expect(client.config.translationStyleProfiles[1]).toMatchObject({id:secondId,name:'Updated style',appearance:{textColor:'#654321'}});
+            await client.click('.translation-profile-delete');expect(client.config.activeTranslationStyleProfileId).toBe('');expect(client.config.translationStyleProfiles).toEqual([first]);
+            await client.click('.translation-style-saved-card');expect(client.config.translationAppearance).toEqual(first.appearance);expect(client.config.translationAppearance).not.toBe(client.config.translationStyleProfiles[0].appearance);
+            await client.input('#translation-profile-name','   ');expect(client.root.querySelector('.translation-profile-save')!.hasAttribute('disabled')).toBe(true);expect(client.root.querySelector('.translation-profile-actions button')!.hasAttribute('disabled')).toBe(true);expect(client.errors).toEqual([]);
+        }finally{await client.close()}
+    });
 
     it.each(['设置', '设置 · 设置'])('keeps the actual saved user name %s in text, attributes and preview across seven UI languages', async name => {
         const client = await ownedStyleClient();

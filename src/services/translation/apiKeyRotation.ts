@@ -1,7 +1,7 @@
 /**
  * @file src/services/translation/apiKeyRotation.ts
  * 文件职责：把服务凭据快照接入动态 Key 轮询，统一翻译和模型调用的失败切换与单 Key 检测。
- * 主要内容：使用摘要隔离服务及端点状态，逐次绑定不可变凭据，共享总预算，限制每次请求每个 Key 只尝试一次并清理错误中的凭据。
+ * 主要内容：使用摘要隔离服务及端点状态，逐次绑定不可变凭据，共享总预算，限制每次请求每个 Key 只尝试一次；单次快捷路径同样拒绝取消后的迟到结果并清理错误中的凭据。
  * 模块边界：本服务不读取全局配置、不保存密钥或执行 HTTP；调度、取消与实际请求由调用方提供，健康权重仅存于当前运行进程。
  */
 import {sha256Hex} from '@/src/shared/function/sha256';
@@ -104,7 +104,22 @@ export async function runWithApiKeyRotation<T extends KeyConfig, R>(
     // 单项检测仍必须进入健康状态路径，不能被此快捷路径绕过。
     const rotationEnabled = source.apiKeyRotationEnabled?.[service] !== false && keys.length > 1;
     if (options.keyIndex === undefined && !rotationEnabled) {
-        return operation(withServiceApiKey(source, service, keys[0] ?? ''), {attempt: 0});
+        try {
+            const result = await operation(withServiceApiKey(source, service, keys[0] ?? ''), {attempt: 0});
+            cancelled(options.signal);
+            return result;
+        } catch (error) {
+            cancelled(options.signal);
+            if (keys.length === 0) throw error;
+            const safeError = redactApiKeyError(error, keys);
+            const original = serializeTranslationError(error);
+            // 本地 deadline 等错误使用类身份触发恢复；没有凭据回显时保留原对象。
+            if (safeError.message === original.message && safeError.code === original.code
+                && safeError.requestId === original.requestId) throw error;
+            // provider 的本地取消仍须被上层识别，不能因脱敏变成普通可重试失败。
+            if (error instanceof Error && error.name === 'AbortError') safeError.name = 'AbortError';
+            throw safeError;
+        }
     }
     const now = options.now ?? Date.now;
     const rotation = getRotation(source);

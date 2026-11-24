@@ -7,8 +7,36 @@
  */
 import type {LegacyPatternEntry, LegacyPatternSet, LocalizedLegacyPattern, RegisteredUiLanguage} from '../types';
 import {runtimeFeedbackPatterns} from './runtime-feedback-patterns';
+import {learningMaterialPatterns} from './learningMaterials';
 
 export const localizedLegacyPatterns: readonly LocalizedLegacyPattern[] = [
+    ...learningMaterialPatterns,
+    // 两点选取将起点、终点或拒绝原因与取消提示组成一个文本节点，捕获前缀继续按当前语言翻译。
+    {pattern: "^(.+) · Esc 取消$", localizedCaptures: [1], messages: {
+        'en-US': "{1} · Esc to cancel",
+        'ja-JP': "{1} · Esc でキャンセル",
+        'ko-KR': "{1} · Esc로 취소",
+        'fr-FR': "{1} · Échap pour annuler",
+        'ru-RU': "{1} · Esc — отмена",
+        'es-ES': "{1} · Esc para cancelar",
+    }},
+    // 两点选取会嵌入当前占用快捷键的功能名；保留整句边界，并让捕获继续使用现有功能名称译文。
+    {pattern: '^快捷键已用于(.+)，请点击快捷键更换后使用$', localizedCaptures: [1], messages: {
+        'en-US': 'This shortcut is used for {1}. Click the shortcut to change it before use.',
+        'ja-JP': 'このショートカットは「{1}」で使用されています。クリックして変更してから使用してください。',
+        'ko-KR': '이 단축키는 {1}에 사용 중입니다. 단축키를 클릭해 변경한 후 사용하세요.',
+        'fr-FR': 'Ce raccourci est utilisé pour {1}. Cliquez dessus pour le modifier avant de l’utiliser.',
+        'ru-RU': 'Это сочетание используется для «{1}». Нажмите на него и измените перед использованием.',
+        'es-ES': 'Este atajo se usa para {1}. Haz clic en él y cámbialo antes de usarlo.',
+    }},
+    {pattern: '^此快捷键已用于(.+)，请更换组合键$', localizedCaptures: [1], messages: {
+        'en-US': 'This shortcut is already used for {1}. Choose another combination.',
+        'ja-JP': 'このショートカットは「{1}」で使用されています。別のキーの組み合わせを選んでください。',
+        'ko-KR': '이 단축키는 {1}에 이미 사용 중입니다. 다른 키 조합을 선택하세요.',
+        'fr-FR': 'Ce raccourci est déjà utilisé pour {1}. Choisissez une autre combinaison.',
+        'ru-RU': 'Это сочетание уже используется для «{1}». Выберите другое сочетание.',
+        'es-ES': 'Este atajo ya se usa para {1}. Elige otra combinación.',
+    }},
     {pattern: "^当前网页有 (\\d+) 处相同原句。出现不同的已保存译法时，不会自动采用。$", localizedCaptures: [], messages: {
         'en-US': "This page contains {1} instances of the same source sentence. Conflicting saved translations are not applied automatically.",
         'ja-JP': "現在のページには同じ原文が {1} か所あります。異なる訳文が保存されている場合は、自動で採用しません。",

@@ -38,11 +38,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
       - name: Set up Node.js and dependency cache
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version-file: .nvmrc
           cache: pnpm
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
@@ -50,15 +50,38 @@ jobs:
         run: |
           pnpm rebuild esbuild
           pnpm exec wxt prepare
+      - name: Restore verified build caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            .wxt/cache/extension.tsbuildinfo
+            .wxt/cache/userscript-gzip
+          key: fluentread-build-${{ runner.os }}-${{ hashFiles('.nvmrc', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'tsconfig.json') }}-${{ github.sha }}
+          restore-keys: |
+            fluentread-build-${{ runner.os }}-${{ hashFiles('.nvmrc', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'package.json', 'tsconfig.json') }}-
       - name: Install audit tools
         run: |
           if ! command -v rg >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends ripgrep
+            # 固定上游版本并校验归档，避免 Ubuntu 软件源 DNS 故障阻断后续审计。
+            rg_version=14.1.1
+            rg_archive="ripgrep-${rg_version}-x86_64-unknown-linux-musl"
+            rg_directory="$(mktemp -d "${RUNNER_TEMP}/fluentread-ripgrep.XXXXXX")"
+            curl --fail --location --retry 3 --connect-timeout 15 --max-time 120 \
+              --output "${rg_directory}/${rg_archive}.tar.gz" \
+              "https://github.com/BurntSushi/ripgrep/releases/download/${rg_version}/${rg_archive}.tar.gz"
+            printf '%s  %s\n' '4cf9f2741e6c465ffdb7c26f38056a59e2a2544b51f7cc128ef28337eeae4d8e' \
+              "${rg_directory}/${rg_archive}.tar.gz" | sha256sum --check --strict
+            tar -xzf "${rg_directory}/${rg_archive}.tar.gz" -C "${rg_directory}"
+            sudo install --mode=0755 "${rg_directory}/${rg_archive}/rg" /usr/local/bin/rg
           fi
           rg --version
       - name: Audit test registration
         run: pnpm test:audit
+      - name: Test, build and verify the Zotero integration
+        run: |
+          pnpm test:zotero
+          pnpm build:zotero
+          pnpm verify:zotero
       - name: Check native bridge and verification fixture contracts
         run: node scripts/testing/run-resource-safe.mjs -- node --test --test-concurrency=1 tests/*.test.mjs
       - name: Run architecture gates, affected behavior and changed strict coverage once
@@ -66,18 +89,32 @@ jobs:
         run: node scripts/testing/run-resource-safe.mjs -- node scripts/testing/run-affected-tests.mjs --report coverage/affected-plan/plan.json
       - name: Check extension and shared Vue types
         if: steps.affected.outputs.extension_changed == 'true'
-        run: pnpm compile
-      - name: Build Chrome and Firefox and verify generated manifests
+        run: node scripts/testing/run-ci-typecheck.mjs
+      - name: Build Chrome and Firefox archives and verify generated manifests
         if: steps.affected.outputs.extension_changed == 'true'
         run: |
-          pnpm build
-          pnpm build:firefox
-          pnpm verify:extension-manifests
+          pnpm zip
+          pnpm zip:firefox
+          pnpm verify:extension-manifests --require-chrome-archive --require-firefox-archives
       - name: Build and verify the userscript
         if: steps.affected.outputs.extension_changed == 'true'
         run: |
           pnpm build:userscript
           node scripts/verify-userscript-build.mjs
+      - name: Build and verify the standalone userscript
+        if: steps.affected.outputs.extension_changed == 'true'
+        run: |
+          pnpm build:userscript:standalone
+          node scripts/verify-userscript-standalone-build.mjs
+      - name: Preserve verified extension archives
+        if: success() && steps.affected.outputs.extension_changed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-extension-archives
+          path: .output/*.zip
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
       - name: Preserve affected test plan and coverage evidence
         if: always()
         uses: actions/upload-artifact@v4

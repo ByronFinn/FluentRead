@@ -1,7 +1,7 @@
 /**
  * @file src/services/model-usage/aggregation.ts
  * 文件职责：把本地大模型调用事件按本地日界线聚合成设置页可直接消费的统计快照。
- * 主要内容：规范化筛选条件，计算成功调用的输出速度与可计算样本数、今日、七日和三十日汇总、缓存可计算请求的三段 Token 构成，生成逐小时或逐日时间线，并按服务与模型分组。
+ * 主要内容：规范化筛选条件，计算成功调用的输出速度与可计算样本数、今日、七日和三十日汇总、缓存可计算请求的三段 Token 构成，生成逐小时或逐日时间线，并按服务与模型分组；已有记录起点直接复用，缺省时逐项归约，不额外分配起点数组或展开无界实参。
  * 模块边界：本文件只执行确定性的内存计算，不访问 IndexedDB、浏览器 runtime、供应商响应或 Vue 组件。
  */
 
@@ -334,15 +334,13 @@ export function buildModelUsageDashboard(
     const dimensionEvents = events.filter((event) => matchesDimensions(event, filter));
     const selectedStart = getModelUsageRangeStart(filter.range, generatedAt);
     const selectedEvents = eventsWithin(dimensionEvents, selectedStart, generatedAt);
-    const derivedRecordingStartedAt = events.length > 0
-        ? Math.min(...events.map((event) => event.startedAt))
-        : null;
+    const recordingStartedAt = options.recordingStartedAt === undefined
+        ? events.reduce<number | null>((start, event) => start === null ? event.startedAt : Math.min(start, event.startedAt), null)
+        : options.recordingStartedAt;
 
     return {
         generatedAt,
-        recordingStartedAt: options.recordingStartedAt === undefined
-            ? derivedRecordingStartedAt
-            : options.recordingStartedAt,
+        recordingStartedAt,
         dimensions: (options.dimensions ?? collectModelUsageDimensions(events)).map((dimension) => ({
             serviceId: dimension.serviceId,
             models: [...dimension.models],

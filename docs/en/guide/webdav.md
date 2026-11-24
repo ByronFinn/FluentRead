@@ -1,98 +1,115 @@
 # WebDAV cloud configuration backup
 
-Updated: October 5, 2026.
+Use your own cloud storage to save FluentRead settings and restore them in another browser or device. This example uses **Nutstore**, also known as Jianguoyun. Backups run only when you start an operation; changing settings does not upload them automatically.
 
-Google Drive and WebDAV share **Settings → Backup and restore → Cloud backup**. WebDAV stores your configuration on the cloud drive, NAS, or server you choose. Saving, restoring, and merging are manual operations. Each method keeps its own comparison baseline; selecting WebDAV does not transfer a Google Drive backup.
+<GuideVisual kind="webdav" en />
 
-Backups sync only general settings by default. Sensitive connections can be included only with explicit consent to enable sensitive settings. Wordbooks, chat history, and usage statistics are excluded. The WebDAV URL, username, and app password used to access the backup server always stay on this device and are excluded from backups. This feature requires the browser extension background; use local backup files in the userscript.
+## Create a Nutstore app password
 
-<GuideVisual kind="sync" en />
+1. Sign in to the [Nutstore website](https://www.jianguoyun.com/).
+2. Open **Account information → Security options → Third-party application management** from your account menu.
+3. Add an app password, name it `FluentRead`, then generate and copy it.
 
-## Scope of this operation
-
-The default scope includes general settings such as language, appearance, shortcuts, and website rules. It excludes the entire sensitive connection configuration: API keys, configured OAuth tokens, authentication information, translation service selections and models, service URLs, custom request bodies, and authentication parameters in URLs. Private prompts and unrecognized fields are also excluded. Restoring or merging general settings keeps this device’s keys, translation services, URLs, and custom connections unchanged.
-
-To migrate sensitive connections, enable **Sensitive settings**, read the risks, check the acknowledgement, then choose **Agree and enable**. Saving or merging includes this device’s sensitive information. Restoring applies only what the cloud backup actually contains; a general-settings backup still preserves this device’s keys and connections. The choice is saved in this browser until you turn it off. It remains enabled after completion, failure, cancellation, reopening settings, or switching providers or accounts. Other browsers and devices need their own confirmation.
-
-The current extension still reads older complete v1 backups and applies only their general settings by default. Complete sensitive backups saved with consent keep the original v1 format, which older extensions can still read. New general-settings backups use v2; older extensions safely reject them and must be upgraded. Unconfirmed transactions from before the upgrade expire and require a new preview.
-
-Turning the option off or restoring only general settings does not change an older complete backup. Sensitive information is removed from the current cloud file only after you confirm saving or merging general settings. This does not delete old files or versions retained by the provider; manage those copies separately.
+Use this app password rather than your Nutstore sign-in password. See [Nutstore’s official instructions](https://help.jianguoyun.com/?p=2064).
 
 ## Prepare a connection
 
-The server must support Basic authentication, `PROPFIND`, `GET`, `MKCOL`, and `PUT`. When strong ETags are available, updates use `If-Match` and initial creation uses `If-None-Match` to protect other devices’ changes. The extension checks the download response header, the file's [`DAV:getetag` property](https://datatracker.ietf.org/doc/html/rfc4918#section-15.6), then the `HEAD` response header. Property and HEAD lookup are followed by a conditional read and an exact ciphertext check to avoid pairing old content with a new version. Use HTTPS with a valid certificate and a dedicated app password. Property responses are parsed using XML namespaces and the requested resource, including local prefixes, CDATA and character references. Versions from other files or failed properties are never used for replacement.
+Open **Settings → Backup and restore → Cloud backup**, select **WebDAV**, then **Set up WebDAV**.
 
-Enter the **WebDAV URL of an existing directory**, not the website homepage, a sharing link, or the backup file URL. Do not put credentials or query parameters in the URL.
+| Field | Nutstore value |
+| --- | --- |
+| WebDAV directory URL | `https://dav.jianguoyun.com/dav/` |
+| Backup subdirectory | Keep the default `FluentRead/` to use the existing backup location |
+| Username | Your Nutstore account email, such as `yourname@example.com` |
+| App password | The app password generated above |
 
-For Nextcloud, a typical URL is:
+Copy the full URL rather than a homepage, sharing link, or file URL. Do not append `FluentRead/` or create that folder in advance. See the [official connection parameters](https://help.jianguoyun.com/?p=5677).
 
-```text
-https://cloud.example.com/remote.php/dav/files/USERNAME/
-```
+Choose **Test connection**, then **Test and save**. Neither uploads a backup. Testing checks directory access and does not prove write permission. The saved connection stays on this device.
 
-Copy the personal WebDAV URL from Files settings and create an app password under your account’s security settings. See the [official Nextcloud guide](https://docs.nextcloud.com/server/latest/user_manual/en/files/access_webdav.html). Other services and NAS devices provide their own directory URLs. Your account needs read, directory-creation, and write permission.
+## Synology NAS and custom directories
 
-For Nutstore, use `https://dav.jianguoyun.com/dav/`, your account email, and a [dedicated app password](https://help.jianguoyun.com/?p=2064). You do not need to create the `FluentRead` folder in advance. The first sync checks for a backup and only creates the folder and file after you confirm saving. A 409 caused by a missing backup parent directory is treated as a first backup only after the entry directory is verified; invalid entry URLs and permission errors still stop the operation.
+Enable WebDAV Server on your NAS and grant the account read and write access to the shared folder. Enter the final WebDAV directory URL, such as `https://nas.example.com:5006/shared-folder/`, using your configured port and reverse-proxy path. Do not use the DSM sign-in page or a sharing link.
+
+- The **WebDAV directory URL** can include a shared folder and existing subdirectories. This directory must already exist. If the service root does not allow folder creation, enter a shared-folder URL that the account can access.
+- **Backup subdirectory** defaults to `FluentRead/`. You can enter a nested path such as `Backups/FluentRead`. Its folders are created within the directory above only after you confirm the first save.
+- If the URL already points to the final backup directory, **leave the backup subdirectory blank**. FluentRead saves `fluentread-config.encrypted.json` directly there, without appending `FluentRead/` or attempting to create the service root or shared folder.
+
+For example, the URL `https://nas.example.com:5006/shared-folder/backups/` with a blank subdirectory stores the file at `https://nas.example.com:5006/shared-folder/backups/fluentread-config.encrypted.json`. Use the same URL and backup subdirectory on other devices.
+
+Changing the subdirectory invalidates old previews and does not move or delete the previous backup. Existing connections without this setting continue to use `FluentRead/`.
 
 ## Save your first backup
 
-1. Select **WebDAV** in cloud configuration backup, then click the primary **Set up WebDAV** button at the left below the basic and sensitive settings options.
-2. Enter the directory URL, username, and app password. HTTP requires acknowledging unencrypted transport; prefer HTTPS.
-3. Choose **Test connection**. This only checks directory access, changes no cloud files, and does not prove write permission.
-4. Choose **Test and save** to store the connection on this device. This still creates no cloud backup.
-5. Check this operation’s scope and choose **Sync with WebDAV now**. If no backup exists, review saving this device’s configuration, with general settings only by default, and confirm.
+1. Check the scope: **Basic settings** are always enabled; **Sensitive settings** are off by default.
+2. To migrate API keys, service and model choices, or private prompts, enable sensitive settings, read and acknowledge the risk, and confirm. This choice stays enabled until you turn it off.
+3. Choose **Sync with WebDAV now**, check the account, scope, and preview, then **Save to cloud**.
+4. After completion, check the account, server URL, and last-sync time.
 
-The file is stored under your chosen directory at:
+With the default subdirectory, confirming the first save creates:
 
 ```text
 FluentRead/fluentread-config.encrypted.json
 ```
 
-Previews expire after 10 minutes. **Cancel** or leaving settings ends the preview without deleting an existing backup. There is no automatic background sync or persistent connected state.
+Later saves update this file. If a backup already exists, choose restoration, saving, or merging deliberately so that a new device does not overwrite it.
+
+The backup is encrypted locally without a separate backup password, using a fixed public application passphrase. **Anyone obtaining the file can decrypt it.** Protect your account, directory permissions, and device. Do not share the file. The Nutstore app password authenticates storage access; it is not the encryption password.
 
 ## Restore or merge on another device
 
-Configure the same directory and account on the other device. Read the backup, choose **Restore cloud configuration** or **Save device configuration**, then continue to review and confirm.
+1. Install FluentRead on the new device, preferably updating both devices first.
+2. Enter the same WebDAV directory URL, backup subdirectory, and account. You can generate a separate app password for this device. Choose **Test and save**; connection credentials are not migrated in backups.
+3. To restore backed-up keys, enable sensitive settings on this device and acknowledge the risk.
+4. Start sync, choose **Restore cloud configuration → Continue**, review the changes, then **Restore to device**.
 
-General-settings mode restores or merges only general settings, preserving this device’s keys, translation services, URLs, and custom connections. Saving replaces the current cloud file within this operation’s scope. With consent to include sensitive information, saving or merging can include all sensitive connections; restoring still depends on the backup’s actual content. If both sides contain changes you want to keep, use the secondary **Review and merge** action and resolve conflicts. In sensitive-information mode, credentials, services, models, and custom connections are masked and selected as a group.
+If both sides are identical, choose **Finish sync**. Choose **Save device configuration** to update the cloud copy, or **Merge individually** to keep changes from both sides and resolve conflicts before **Confirm and sync**.
 
-Before committing, the extension rechecks both configurations. A change on either side requires a fresh preview. Updates use ETag conditions to reject stale writes. A successful operation records the account and time locally.
+Basic-scope restoration or merging preserves local keys and connections. Enabling sensitive settings cannot recover keys missing from the backup. Cloud backups exclude wordbooks, conversations, and usage statistics; use a [local full backup](/en/config/backup-sync#local-full-backup) for learning data.
 
-The current account, server URL, and last backup time for that connection appear beside the sync button. Use **Edit connection** beside the sync button in the left action area to change accounts or servers. The confirmation screen lists changed settings and their device and cloud values. Connection changes show categories while keys, addresses, and custom content stay hidden. Merge conflicts appear before automatically retained changes. Identical configuration only updates the local sync record without uploading again.
-
-If none of these methods provides a strong ETag, the preview still offers saving, restoring, and merging. Compatibility mode downloads the backup again before saving, merging, or deleting and compares its ciphertext SHA-256 digest. Changes since the preview stop the operation. Uploads are read back and checked; deletion verifies that the file is absent. `If-Match: *` checks existence only, and content checks cannot atomically prevent changes after verification. The confirmation screen asks you to avoid syncing other devices at the same time. Authentication, network, corrupt-file, and conditional-request failures still stop the operation without retrying an unconditional write.
-
-<details class="guide-details">
-<summary>Change accounts or delete data</summary>
-
-## Change accounts or delete data
-
-Use **Edit connection** to change the server, account, or password. Changing the URL or username requires entering the password again. Old previews and baselines cannot apply to a new connection. Saved passwords are not returned to the form.
-
-Click **Delete cloud backup**, check the account and server address, then confirm. The extension deletes only the fixed backup file, using a strong ETag and `If-Match` when available or the content-check compatibility mode above; an updated file requires a new preview. Old-format or unreadable backups can also be deleted. Canceling or closing confirmation keeps the file. Successful deletion clears local sync records while keeping local settings, API keys, the connection password and other files in the directory. Manual sync can create a new backup later.
-
-Deletion requires `DELETE`; version protection depends on the server honoring `If-Match`. Avoid simultaneous syncs in compatibility mode. If the server does not support deletion, use its management interface. Manage provider trash, retained versions and copies on other devices separately.
-
-**Clear connection settings** removes this device’s WebDAV connection, app password, and sync record, while keeping device configuration and cloud files. Revoke an app password with the service to stop its authorization. Uninstalling the extension does not delete server files.
-
-</details>
-
-<details class="guide-details">
-<summary>Protection and troubleshooting</summary>
+Previews last ten minutes. Cancel or leave settings to end a preview. Local or cloud changes require a new one. Operate devices one at a time to avoid overwriting the backup.
 
 ## Protection and troubleshooting
 
-Backups use AES-GCM encryption before upload with the same fixed public application passphrase as Google Drive. No additional encryption password is required. **Anyone who obtains the file can decrypt it using the public passphrase.** A compromised third-party account, access to a shared directory, or a leaked backup could expose API keys and other sensitive information in that backup. Protection primarily depends on the server account, directory permissions, HTTPS, and device security. We recommend syncing only general settings. When migrating keys, protect your account and directory permissions and avoid sharing backup files. See the [privacy policy](./privacy).
-
-| Message | What to check |
+| Problem | What to check |
 | --- | --- |
-| Incorrect username or password | Account, app password, and Basic authentication support |
-| Missing or invalid WebDAV directory | The full directory URL and whether WebDAV is enabled |
-| Cannot connect | Network, certificate, and final URL; credentials are never forwarded through redirects |
-| Provider cannot prevent concurrent writes | Saving, restoring, merging, and deleting remain available. Review the preview and avoid simultaneous syncs. Use strong ETags and conditional writes when concurrent version protection is required |
-| Cloud backup changed | Generate a new preview and check other devices’ changes |
-| Storage full or backup too large | Free server space or use a local backup; JSON is limited to 20 MiB and encrypted files to 32 MiB |
+| Incorrect username or password | Use your account email and app password; regenerate a revoked password and update the connection |
+| Missing or invalid directory | For Nutstore, check `https://dav.jianguoyun.com/dav/`. For a NAS, enter an existing shared directory with account access, not a homepage or sharing link |
+| Test passed but no file appeared | Start sync, review, and confirm a save |
+| Keys or translation services are missing | Check whether the file contains sensitive settings and whether they are enabled on this device |
+| Cloud backup changed | Check other devices and generate a new preview |
+| Connection failure or too many requests | Check the URL and network, wait, and avoid repeatedly testing |
+| Full storage or oversized file | Free space or use local backup; configuration JSON is limited to 20 MiB and encrypted files to 32 MiB |
 
-See [RFC 4918](https://www.rfc-editor.org/rfc/rfc4918) for the WebDAV protocol. Server permissions, certificates, and conditional-write behavior vary. After connection testing, perform a real save and restore to confirm compatibility with your service.
+Nutstore’s access limits follow its [official policy](https://help.jianguoyun.com/?p=2064).
+
+## Change accounts or delete data
+
+**Edit connection** changes the URL, username, or password. With the same URL and username, leave the password blank to retain it. Changing either requires entering the password again and invalidates the old preview.
+
+**Clear connection settings** removes only this device’s connection, app password, and sync records. Local settings and cloud files remain. Revoke the app password in Nutstore’s third-party application settings to remove access.
+
+**Delete cloud backup** asks you to check the account and server, type **DELETE**, and confirm. It deletes only the fixed backup file, keeps local settings, API keys, connection details, and other directory files, and clears local sync records. Cancel keeps the file; if it is already absent, finish the operation.
+
+Manage trash, retained versions, and other-device copies separately. Uninstalling, revoking the password, or clearing the connection does not delete server files. Later sync can create a backup again.
+
+<details class="guide-details">
+<summary>Backup scope and other servers</summary>
+
+## Scope of this operation
+
+Basic backups exclude sensitive connections, private prompts, and unknown fields. Sensitive-settings consent persists in this browser through cancellation, failure, and account changes until turned off. Restoration still applies only the file’s actual contents. Turning the option off or restoring basic settings does not remove sensitive data from an older file. A confirmed basic-settings save or merge updates only the current file, not retained versions.
+
+New basic backups use v2 and need an updated extension to read; complete sensitive backups retain v1. See the [privacy policy](/en/guide/privacy#webdav-cloud-configuration-backup).
+
+## Other WebDAV services
+
+For another cloud drive or NAS, use its existing-directory URL. The account needs Basic authentication and permission to read, create directories, and write; deletion also needs `DELETE`. A common [Nextcloud](https://docs.nextcloud.com/server/latest/user_manual/en/files/access_webdav.html) URL is `https://cloud.example.com/remote.php/dav/files/your-username/`.
+
+Prefer HTTPS with a valid certificate and an app password. HTTP leaves the username, password, and file unprotected in transit and requires acknowledgement. Do not include credentials or query parameters in the URL. Requests do not forward passwords through redirects; use the final directory URL. After testing, perform a real save and restore to confirm compatibility.
+
+## Cloud version protection
+
+Strong ETags support conditional writes. Without them, FluentRead checks file content and uses an available server version or an existence condition, then reads back a saved file to verify it. Detected changes stop the operation. Content checking cannot fully prevent concurrent writes; do not operate several devices at once. If deletion cannot be safely verified, remove the fixed file through your provider’s interface.
 
 </details>

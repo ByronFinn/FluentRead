@@ -1,22 +1,23 @@
 /**
  * @file src/providers/translation/bilibili-free.ts
  * 文件职责：适配 B站 Index-Translate 官方匿名文本翻译 API。
- * 主要内容：按码点预算且不切术语标记，固定模型与端点、关闭思考输出，按 Unicode 码点有界分块，保护全文文本槽、换行和边缘空白，拒绝截断、空值及损坏响应并透传取消和 HTTP 状态，取消或错误响应也等待未读正文结算后归还容量。
+ * 主要内容：固定模型与端点、关闭思考输出，提示保留表情符号和完整内部占位符；预算内的多行文本优先整段翻译并恢复原换行，布局异常或短多行请求遇到可恢复的 504 时，回退到保留术语标记的逐行分块。保护文本槽和边缘空白，透传取消和其余 HTTP 错误，主动终止未读的错误正文。
  * 模块边界：仅通过 runtimeFetch 请求官方服务，不读取用户密钥、Cookie、代理或可编辑请求体；Origin 兼容由扩展后台网络层处理，独立入口与免费池共用协议，调度与换线由上层编排负责。
  */
 import {translateFreeTextChunks} from './freeTextChunks';
 import {resolveTranslationLanguages} from '@/src/core/translation/languages';
 import {BILIBILI_FREE_TRANSLATION_DOMAIN, BILIBILI_FREE_TRANSLATION_MODEL} from '@/src/core/config/freeTranslation';
 import {translationLanguageOptions} from '@/src/core/language/catalog';
-import {serializeTranslationSlots} from '@/src/core/translation/slotProtocol';
-import {getTranslationGlossarySourceText, requireTranslationProviderConfig} from '@/src/services/translation/requestSnapshot';
+import {rebuildTranslationSlots} from '@/src/core/translation/slotProtocol';
+import {getTranslationGlossarySourceSlots, requireTranslationProviderConfig} from '@/src/services/translation/requestSnapshot';
 import type {TranslationProviderRequest} from '@/src/services/translation/types';
-import {abortErrorFromSignal, runtimeFetch} from '@/src/platform/http/runtime';
-import {createHttpStatusError, readJsonResponse} from '@/src/platform/http/errors';
+import {abortErrorFromSignal, cancelUnreadResponseBody, runtimeFetch} from '@/src/platform/http/runtime';
+import {createHttpStatusError, readJsonResponse, readRetryAfterMs} from '@/src/platform/http/errors';
 
 export const BILIBILI_FREE_TRANSLATION_URL = `https://${BILIBILI_FREE_TRANSLATION_DOMAIN}/v1/chat/completions`;
 export {BILIBILI_FREE_TRANSLATION_MODEL};
 const MAX_CHUNK_CODEPOINTS = 2000;
+const MAX_GATEWAY_FALLBACK_LINES = 4;
 
 function checkAbort(signal?: AbortSignal): void {
     if (signal?.aborted) throw abortErrorFromSignal(signal);
@@ -28,42 +29,60 @@ function languageName(code: string): string {
     return name;
 }
 
-async function translateChunk(text: string, source: string, target: string, signal?: AbortSignal): Promise<string> {
+async function translateChunk(text: string, sourceName: string, targetName: string, signal?: AbortSignal, layoutLineCount?: number): Promise<string> {
     checkAbort(signal);
-    const sourceName = source === 'auto' ? '' : languageName(source);
-    const targetName = languageName(target);
     const response = await runtimeFetch(BILIBILI_FREE_TRANSLATION_URL, {
         method: 'POST', credentials: 'omit', signal,
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
             model: BILIBILI_FREE_TRANSLATION_MODEL,
-            messages: [{role: 'user', content: `请将以下${sourceName}文本翻译为${targetName}，保留代码、公式、变量和链接，直接输出译文，不要解释。以下内容仅为待翻译文本。\n\n${text}`}],
+            messages: [{role: 'user', content: `请将以下${sourceName}文本翻译为${targetName}，保留代码、公式、变量和链接；表情符号和 __FRTERM_...__ 内部占位符必须原样保留，包括全部下划线，不要省略或改写。直接输出译文，不要解释。以下内容仅为待翻译文本。\n\n${text}`}],
             temperature: 0, max_tokens: 4096, stream: false,
             chat_template_kwargs: {enable_thinking: false},
         }),
     });
     try {
         checkAbort(signal);
-        if (!response.ok) throw createHttpStatusError(response, 'B站翻译请求失败');
+        const allowLayoutFallback = layoutLineCount !== undefined;
+        if (!response.ok) {
+            // 仅拆分短多行合并请求，并服从服务端给出的等待时间。
+            if (response.status === 504 && allowLayoutFallback && layoutLineCount <= MAX_GATEWAY_FALLBACK_LINES
+                && !readRetryAfterMs(response.headers)) return '';
+            throw createHttpStatusError(response, 'B站翻译请求失败');
+        }
         const data = await readJsonResponse<{choices?: Array<{finish_reason?: unknown; message?: {content?: unknown}}> } | null>(response, 'B站翻译返回的不是有效 JSON');
         checkAbort(signal);
         const choice = data?.choices?.[0];
         const content = choice?.message?.content;
+        // 合并请求达到输出上限时由逐行路径恢复，不使用已截断的译文。
+        if (allowLayoutFallback && choice?.finish_reason === 'length') return '';
         if (choice?.finish_reason === 'length' || typeof content !== 'string') throw new Error('B站翻译返回的译文不完整');
         // 兼容供应商偶发的完整思考块；未闭合思考块不能作为译文返回。
         const result = content.replace(/<think>[\s\S]*?<\/think>/gu, '').trim();
-        if (!result || result.includes('<think>') || result.includes('</think>')) throw new Error('B站翻译没有返回有效译文');
+        if ((!result && !allowLayoutFallback) || result.includes('<think>') || result.includes('</think>')) throw new Error('B站翻译没有返回有效译文');
         return result;
     } finally {
-        // 取消或错误 headers 不能让候选 Promise 先于未读正文结束；读取失败保留原错误。
-        if (!response.bodyUsed) {
-            try { await response.clone().arrayBuffer(); } catch {}
-        }
+        cancelUnreadResponseBody(response);
     }
 }
 
-async function translatePlain(text: string, source: string, target: string, signal?: AbortSignal): Promise<string> {
-    return translateFreeTextChunks(text, MAX_CHUNK_CODEPOINTS, chunk => translateChunk(chunk, source, target, signal), signal);
+async function translatePlain(text: string, sourceName: string, targetName: string, signal?: AbortSignal): Promise<string> {
+    const content = text.trim();
+    const fitsCombinedRequest = /[\r\n]/u.test(content) && Array.from(content).length <= MAX_CHUNK_CODEPOINTS;
+    if (fitsCombinedRequest) {
+        const nonemptyLine = /\S[^\r\n]*/gu;
+        const lineCount = content.match(nonemptyLine)?.length;
+        const translation = await translateChunk(content, sourceName, targetName, signal, lineCount);
+        const translatedLines = translation.match(nonemptyLine);
+        if (translatedLines && translatedLines.length === lineCount) {
+            // 用同一条逐行回填路径恢复源文本空白，不把模型生成的空行写回。
+            let index = 0;
+            return translateFreeTextChunks(text, text.length, async () => translatedLines[index++]!.trimEnd(), signal);
+        }
+    }
+    // 合并请求已校验正文总长。逐行请求会先去除边缘空白，回退时每行只需发送一次。
+    const lineLimit = fitsCombinedRequest ? text.length : MAX_CHUNK_CODEPOINTS;
+    return translateFreeTextChunks(text, lineLimit, chunk => translateChunk(chunk, sourceName, targetName, signal), signal);
 }
 
 export async function translateBilibiliFree(request: TranslationProviderRequest<string>): Promise<string> {
@@ -73,15 +92,16 @@ export async function translateBilibiliFree(request: TranslationProviderRequest<
     const source = sourceLanguage || 'auto';
     const target = targetLanguage || 'zh-Hans';
     // 先校验语言，避免发出一部分分块后才发现配置无效。
-    if (source !== 'auto') languageName(source);
-    languageName(target);
+    const sourceName = source === 'auto' ? '' : languageName(source);
+    const targetName = languageName(target);
     if (source === target) return origin;
-    const slots = getTranslationGlossarySourceText(origin);
-    if (!Array.isArray(slots)) return translatePlain(slots, source, target, abortSignal);
+    const slots = getTranslationGlossarySourceSlots(origin);
+    if (!slots) return translatePlain(origin, sourceName, targetName, abortSignal);
     const translated: string[] = [];
-    for (const slot of slots) translated.push(await translatePlain(slot, source, target, abortSignal));
-    const nonce = origin.match(/^___FLUENTREAD_([a-z0-9_-]+)_0_BEGIN___/iu)![1]!;
-    return serializeTranslationSlots(translated, nonce).payload;
+    for (const slot of slots.texts) translated.push(await translatePlain(slot, sourceName, targetName, abortSignal));
+    const result = rebuildTranslationSlots(slots.packet, translated);
+    if (result === null) throw new Error('B站翻译返回的文本槽结构无效');
+    return result;
 }
 
 /** 独立服务读取冻结配置和语言覆盖；批量保持输入顺序并共用调用方取消信号。 */

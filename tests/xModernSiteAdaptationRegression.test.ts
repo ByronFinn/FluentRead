@@ -13,12 +13,14 @@ import {describe, expect, it} from 'vitest';
 import {builtinSiteRulePack} from '@/src/core/site-adaptation/catalog';
 import {compileSiteRulePack, getSiteAdapterAttributeFilter} from '@/src/core/site-adaptation/compiler';
 import {validateSelectors} from '@/src/core/site-adaptation/schema';
+import {createTranslationMutationObserverOptions} from '@/src/features/full-page-translation/content/mutationObservation';
 import {shouldSkipTranslationForTarget} from '@/src/core/language/detect';
 import {
-    applyTranslationsToSnapshot, createTranslationCore, createTranslationSourceSnapshot,
+    applyTranslationsToSnapshot, createTranslationSourceSnapshot,
     extractTranslationText, extractTranslationTextFromNodes, getTranslationCandidateKey,
     hasDistinctTranslation, normalizeTranslationText,
 } from '@/src/core/translation/public';
+import {createTranslationCore} from './helpers/translationCore';
 import type {SiteRulePack} from '@/src/core/site-adaptation/types';
 import type {TranslationCandidate, TranslationScope} from '@/src/core/translation/public';
 
@@ -351,9 +353,12 @@ describe('X modern public DOM functional regression', () => {
         const quoteBody = quoteShell.querySelector('div[dir="auto"]')!;
         const negatives = [main, main.closest('article')!, quoteShell, quoteShell.querySelector('article')!, quoteBody,
             ...document.querySelectorAll('button, [role="button"], article a, aside a, aside h2, aside p')];
+        const engagementControls = [...document.querySelectorAll('article .x-engagement-button')];
         expect(quoteShell).toBeTruthy();
+        expect(engagementControls.length).toBeGreaterThan(0);
         for (const element of negatives) {
-            expect(adapter.decide(element, context).kind, element.outerHTML.slice(0,150)).toBe('pass');
+            expect(adapter.decide(element, context).kind, element.outerHTML.slice(0,150))
+                .toBe(engagementControls.includes(element) ? 'prune-subtree' : 'pass');
             expect(adapted().resolve(element)?.element).not.toBe(bio);
         }
         const before = document.documentElement.outerHTML;
@@ -515,10 +520,16 @@ describe('X modern public DOM functional regression', () => {
         expect(hasDistinctTranslation(english, undefined)).toBe(false);
     });
 
-    it('uses valid bounded selectors without widening the observed attribute filter', () => {
+    it('keeps valid selectors and the conservative observer fallback for relational author protection', () => {
         const document = publicPage();
         expect(validateSelectors(xPack, document)).toEqual([]);
         expect(getSiteAdapterAttributeFilter(xAdapters)).toEqual(getSiteAdapterAttributeFilter(legacyAdapters));
-        expect(getSiteAdapterAttributeFilter(xAdapters)).not.toBeNull();
+        // Both content variants retain the current :has() author protection. The
+        // compiler conservatively observes all attributes for relational selectors.
+        expect(getSiteAdapterAttributeFilter(xAdapters)).toBeNull();
+        expect(createTranslationMutationObserverOptions(xAdapters)).toEqual({
+            childList: true, subtree: true, characterData: true, characterDataOldValue: true,
+            attributes: true, attributeOldValue: true,
+        });
     });
 });

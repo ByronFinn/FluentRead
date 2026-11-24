@@ -333,6 +333,12 @@ exports.launchFocusSafePersistentContext = async options => {
   };
 };
 exports.activateExtensionTabWithoutForeground = async () => { throw Error('UNEXPECTED_ACTIVATION'); };
+let foregroundQueries = 0;
+exports.queryMacFrontmostApplication = async () => {
+  log('helper-foreground-query', {attempt: ++foregroundQueries});
+  if (process.env.AUDIT_FAULT === 'focus-after' && foregroundQueries === 2) throw Error('CONTROLLED_FOREGROUND_QUERY_FAILURE');
+  return {pid: 999999, name: 'controlled foreground port'};
+};
 exports.newPageWithoutForeground = async () => ({
   on() {}, setDefaultTimeout() {}, async setViewportSize() {},
   isClosed: () => false,
@@ -379,8 +385,20 @@ const cdp = () => {const id=++sessionCount;log('cdp-created',{id}); return {
   return {};
  }
 };};
-const mangaTabs=new Map();let tabSequence=0;
+const mangaTabs=new Map();let tabSequence=0,mangaApiProbe=0;
 const context={on(){},route:async()=>{},newCDPSession:async()=>cdp(),browser:()=>({newBrowserCDPSession:async()=>cdp()}),serviceWorkers:()=>[{on(){},url:()=> 'chrome-extension://audit-fixture/background.js',evaluate:async(callback,value)=>{
+ if(process.env.AUDIT_LIFECYCLE_FILE==='manga'&&callback.name==='readMangaBackgroundApiState'){
+  const attempt=++mangaApiProbe,delayed=process.env.AUDIT_MANGA_API_DELAY==='1',unavailable=process.env.AUDIT_MANGA_API_NEVER_READY==='1'||delayed&&attempt===1;
+  const previous={tabs:global.chrome.tabs,storage:global.chrome.storage,id:global.chrome.runtime.id};
+  // Execute the public CLI's actual readiness callback against controlled external APIs.
+  // No tab/storage method is invoked by a capability probe, and no browser/model starts.
+  const unused=()=>{throw Error('UNEXPECTED_READINESS_API_INVOCATION');};
+  global.chrome.tabs=unavailable?{}:{get:unused};
+  global.chrome.storage=unavailable?{}:{local:{get:unused}};
+  global.chrome.runtime.id=unavailable?undefined:delayed&&attempt===2?'foreign-fixture':'audit-fixture';
+  try{const state=await callback(value);log('manga-api-readiness-port',{attempt,state});return state;}
+  finally{global.chrome.tabs=previous.tabs;global.chrome.storage=previous.storage;global.chrome.runtime.id=previous.id;}
+ }
  if(process.env.AUDIT_LIFECYCLE_FILE==='manga'&&value?.url){
   const tab=value.tabId?mangaTabs.get(value.tabId):[...mangaTabs.values()].find(tab=>tab.url===value.url);
   log('manga-tab-state-port',{url:value.url,tabId:value.tabId,found:!!tab});
@@ -494,11 +512,33 @@ global.chrome={runtime:{sendMessage:async message=>{if(message.type==='persistCo
 let serial=0;
 const locator={first(){return this;},waitFor:async()=>{},click:async()=>{},count:async()=>0,getAttribute:async()=> 'true'};
 const makePage=()=>{
- let ownWindow,currentUrl='about:blank';
- const use=()=>{global.window=ownWindow;global.document=ownWindow.document;global.HTMLElement=ownWindow.HTMLElement;};
- return {on(){},locator:()=>locator,getByRole:()=>locator,getByText:()=>locator,screenshot:async()=>{},close:async()=>{},waitForTimeout:async()=>{},waitForLoadState:async()=>{},url:()=>currentUrl,
-  goto:async url=>{currentUrl=url;const html=url.includes('/popup.html')?'<div data-feature="video-subtitle" class="feature-card"></div><div class="feature-card">图片翻译</div>'+ '<div class="feature-card"></div>'.repeat(4):url.includes('/options.html')?'<div class="sidebar"><button class="active">视频字幕翻译</button></div><section id="settings-video"><select aria-label="视频字幕翻译服务"></select></section>':'<div class="ytp-right-controls"><button id="fluent-read-video-subtitle-button" aria-pressed="true"></button></div>'+fs.readFileSync(process.env.AUDIT_VIDEO_MENU,'utf8');ownWindow=parseHTML('<html><body>'+html+'</body></html>').window;ownWindow.location={origin:'https://controlled.invalid'};ownWindow.postMessage=()=>{};use();},
-  reload:async()=>{},evaluate:async(callback,value)=>{use();const result=await callback(value);if(result?.modeCount!==undefined)log('actual-client-menu-consumed',result);return result;},
+ let ownWindow,currentUrl='about:blank',closed=false;
+ const use=()=>{if(closed)throw Error('CONTROLLED_CLOSED_PAGE');global.window=ownWindow;global.document=ownWindow.document;global.HTMLElement=ownWindow.HTMLElement;};
+ const resolveLocator=selector=>{
+   if(selector==='.popup-shell[data-config-ready="true"]')return {...locator,waitFor:async()=>{
+     use();if(!document.querySelector(selector))throw Error('CONTROLLED_POPUP_NOT_READY');log('public-popup-ready');
+   }};
+   if(selector==='[data-testid="popup-feature-services"]')return {...locator,click:async()=>{
+     // 仅模拟公开 locator 输入端口，不在 runner 中合成 DOM click 或实现业务保存。
+     use();if(!document.querySelector(selector))throw Error('CONTROLLED_SERVICES_ENTRY_MISSING');
+     const panel=document.querySelector('.popup-service-panel');if(!panel)throw Error('CONTROLLED_SERVICE_PANEL_MISSING');
+     panel.hidden=false;log('public-services-entry-click');
+   }};
+   if(selector==='.popup-service-panel')return {...locator,locator:child=>({...locator,waitFor:async()=>{
+     use();const panel=document.querySelector(selector),row=panel?.querySelector(child);
+     if(!panel||panel.hidden||!row)throw Error('CONTROLLED_VIDEO_ASSIGNMENT_UNAVAILABLE');
+     log('public-video-assignment-wait',{selector:child,summary:row.querySelector('.assignment-value')?.textContent});
+   }})};
+   if(selector==='#fluent-read-video-subtitle-button')return {...locator,click:async()=>{
+     // 受控浏览器端口模拟公开 locator.click 激活；这不代替真实浏览器事件验收。
+     use();const button=document.getElementById('fluent-read-video-subtitle-button'),menu=document.getElementById('fluent-read-video-subtitle-menu');
+     menu.hidden=!menu.hidden;button.setAttribute('aria-expanded',String(!menu.hidden));log('public-menu-entry-click');
+   }};
+   return locator;
+ };
+ return {on(){},locator:resolveLocator,getByRole:()=>locator,getByText:()=>locator,screenshot:async()=>{},close:async()=>{closed=true;},waitForTimeout:async()=>{},waitForLoadState:async()=>{},url:()=>currentUrl,
+  goto:async url=>{currentUrl=url;const html=url.includes('/popup.html')?'<section class="popup-shell" data-config-ready="true"><button data-testid="popup-feature-services">翻译服务</button><section class="popup-service-panel" hidden><button data-feature-service="video"><span class="assignment-value">微软翻译</span></button></section></section>':url.includes('/options.html')?'<h1>视频字幕翻译</h1><div class="sidebar"><button class="active">视频字幕翻译</button></div><section id="settings-video"><div class="feature-enable-card"><button role="switch" aria-label="视频字幕翻译" aria-checked="true">视频字幕翻译</button></div><select aria-label="视频字幕翻译服务"></select></section>':'<div class="ytp-right-controls"><button id="fluent-read-video-subtitle-button" class="fluent-read-video-subtitle-active" role="button" aria-haspopup="menu" aria-expanded="false" aria-controls="fluent-read-video-subtitle-menu"></button></div>'+fs.readFileSync(process.env.AUDIT_VIDEO_MENU,'utf8');ownWindow=parseHTML('<html><body>'+html+'</body></html>').window;ownWindow.location={origin:'https://controlled.invalid'};ownWindow.postMessage=()=>{};use();},
+  reload:async()=>{use();},evaluate:async(callback,value)=>{use();const result=await callback(value);if(result?.modeCount!==undefined)log('actual-client-menu-consumed',result);if(result?.videoServiceAssignmentPresent!==undefined)log('actual-popup-assignment-consumed',{present:result.videoServiceAssignmentPresent,summary:result.videoServiceAssignmentSummary,betaMarkers:result.betaMarkers,obsoleteVideoCard:Boolean(document.querySelector('[data-feature="video-subtitle"]'))});return result;},
   waitForSelector:async()=>{},waitForFunction:async(callback,value,options)=>{use();const result=await callback(value);log('public-wait-function-port',{value,options,result});if(!result)throw Error('CONTROLLED_OVERLAY_TIMEOUT');},
   waitForEvent:async()=>{const file=path.join(process.env.TMPDIR,'controlled.srt');fs.writeFileSync(file,'1\n00:00:00,000 --> 00:00:01,200\nDownload test subtitle.\n');return {path:async()=>file,suggestedFilename:()=> 'fixture.srt'};}
  };
@@ -533,7 +573,7 @@ async function ownerDeadline<T>(operation: Promise<T>): Promise<T> {
     } finally {if (timer) clearTimeout(timer);}
 }
 
-async function invoke(file: string, fault: string, extra: string[] = []): Promise<Result> {
+async function invoke(file: string, fault: string, extra: string[] = [], childEnv: NodeJS.ProcessEnv = {}): Promise<Result> {
     const fixture = path.join(suiteRoot, String(++invocation));
     const runtime = path.join(fixture, 'runtime/node_modules');
     const artifacts = path.join(fixture, 'artifacts/screenshots');
@@ -639,11 +679,11 @@ async function invoke(file: string, fault: string, extra: string[] = []): Promis
     if (file === group && fault !== 'missing-pnpm' && !extra.includes('--dry-run')) {
         commandPath = path.join(fixture, 'bin');
         mkdirSync(commandPath);
-        writeFileSync(path.join(commandPath, 'pnpm'), `#!${process.execPath}\nrequire('node:fs').appendFileSync(process.env.AUDIT_EVENTS, JSON.stringify({kind:'pnpm',args:process.argv.slice(2)})+'\\n');process.exit(${fault === 'child-exit' ? 7 : 0});\n`, {mode: 0o755});
+        writeFileSync(path.join(commandPath, 'pnpm'), `#!${process.execPath}\nrequire('node:fs').appendFileSync(process.env.AUDIT_EVENTS, JSON.stringify({kind:'pnpm',args:process.argv.slice(2),ci:process.env.CI})+'\\n');process.exit(${fault === 'child-exit' ? 7 : 0});\n`, {mode: 0o755});
     }
     const child = spawn(process.execPath, ['--require', preload, script, ...args, ...extra], {
         cwd: project, detached: process.platform !== 'win32', stdio: acquiredOwner ? ['ignore', 'pipe', 'pipe', 'ipc'] : ['ignore', 'pipe', 'pipe'],
-        env: {...process.env, NODE_PATH: path.join(project, 'node_modules'), TMPDIR: fixture + '/temp', AUDIT_EVENTS: eventsFile, AUDIT_FAULT: fault, AUDIT_SCRIPT: sourceModule, AUDIT_SOURCE_MODULE: sourceModule,
+        env: {...process.env, ...childEnv, NODE_PATH: path.join(project, 'node_modules'), TMPDIR: fixture + '/temp', AUDIT_EVENTS: eventsFile, AUDIT_FAULT: fault, AUDIT_SCRIPT: sourceModule, AUDIT_SOURCE_MODULE: sourceModule,
             AUDIT_PLAYWRIGHT_PORT: runtime + '/playwright/index.js', AUDIT_HELPER_PORT: helper,
             AUDIT_BASE_HELPER: helper, AUDIT_VIDEO_MENU: path.join(fixture,'client-menu.html'), AUDIT_INTERVAL_PORT: file === selectionTrigger ? '1' : '0',
             AUDIT_PARTIAL_OWNER: partialOwner ? '1' : '0', AUDIT_OWNER_ROOT: fixture,
@@ -711,7 +751,7 @@ async function invoke(file: string, fault: string, extra: string[] = []): Promis
         try {process.kill(process.platform === 'win32' ? child.pid : -child.pid, signal);} catch {}
     };
     let forceTimer: ReturnType<typeof setTimeout> | undefined;
-    const deadline = setTimeout(() => {timedOut = true; kill('SIGTERM'); forceTimer = setTimeout(() => kill('SIGKILL'), 5000);}, 7000);
+    const deadline = setTimeout(() => {timedOut = true; kill('SIGTERM'); forceTimer = setTimeout(() => kill('SIGKILL'), 5000);}, childEnv.AUDIT_MANGA_API_NEVER_READY==='1'?15000:7000);
     let result: Result | undefined;
     let primaryError: unknown;
     try {
@@ -916,10 +956,12 @@ describe('test group real CLI and controlled pnpm process', () => {
         expect(result.code).toBe(1); expect(result.stderr).toContain('[test-group] spawn pnpm ENOENT');
         expect(result.stderr).not.toContain("Unhandled 'error' event");
     });
-    it('passes the complete group and coverage flag to the child without filtering cases', async () => {
-        const result = await invoke(group, 'success', ['--coverage']);
+    it.each(['', 'true'])('passes the compact reporter, complete group and coverage flag to the child without filtering cases with CI=%j', async ci => {
+        const result = await invoke(group, 'success', ['--coverage'], {CI: ci});
         const matrix = JSON.parse(readFileSync(path.join(project, 'tests/test-matrix.json'), 'utf8'));
-        expect(result.code).toBe(0); expect(result.events.find(e => e.kind === 'pnpm')?.args).toEqual(['exec', 'vitest', 'run', '--coverage', ...matrix.groups.unit]);
+        const pnpm = result.events.find(e => e.kind === 'pnpm');
+        expect(result.code).toBe(0); expect(pnpm?.ci).toBe(ci);
+        expect(pnpm?.args).toEqual(['exec', 'vitest', 'run', '--reporter=dot', '--coverage', ...matrix.groups.unit]);
     });
     it('preserves the actual child exit status instead of converting failed tests to success', async () => {
         const result = await invoke(group, 'child-exit'); expect(result.code).toBe(7);
@@ -1027,6 +1069,19 @@ for (const file of cleanupTools.filter(file => file !== kofi)) {
         expect(count(result, 'report-write-failed')).toBe(1);
     }, 12000);
 }
+it('run-translation-style-ui-test.cjs preserves its primary failure and releases resources when the final foreground query rejects', async () => {
+    const result = await invoke(translationStyle, 'focus-after');
+    expect(result.code).toBe(1);
+    expect(result.report.error).toContain('CONTROLLED_PAGE_FAILURE');
+    expect(result.report.cleanupErrors).toContain('foreground observation: CONTROLLED_FOREGROUND_QUERY_FAILURE');
+    expect(count(result, 'helper-foreground-query')).toBe(2);
+    expect(count(result, 'session-close')).toBe(1);
+    expect(count(result, 'server-closed')).toBe(count(result, 'server-created'));
+    expect(result.report.browserClosed).toBe(true);
+    expect(result.report.profileRemoved).toBe(true);
+    expect(result.directories).toHaveLength(1);
+    expect(result.directories.every(directory => !directory.exists)).toBe(true);
+}, 12000);
 for (const file of cleanupTools) {
     it(`${path.basename(file)} keeps primary failure and continues independent cleanup after close rejection`, async () => {
         const result = await invoke(file, 'close');
@@ -1191,6 +1246,8 @@ for (const fault of ['ws-open-error','ws-close-pending','ws-error-pending','ws-s
     it(`manga public CLI settles raw CDP ownership on ${fault} without native/model activity`,async()=>{
         const result=await invoke(manga,fault);
         expect(result.code).toBe(1);expect(count(result,'websocket-created')).toBe(1);expect(count(result,'websocket-close')).toBe(1);
+        expect(result.report.backgroundApiReadiness.map((receipt:any)=>receipt.state)).toEqual([{tabsGet:true,storageGet:true,runtimeId:'audit-fixture'}]);
+        expect(count(result,'manga-api-readiness-port')).toBe(1);
         expect(result.events.find(event=>event.kind==='manga-tab-state-port')).toMatchObject({found:true,url:'chrome-extension://audit-fixture/popup.html'});
         expect(result.report.tabVisibility[0]).toMatchObject({active:true,windowState:'normal',windowFocused:false,documentVisibility:'visible'});
         const attachments=result.events.filter(event=>event.kind==='websocket-command'&&event.method==='Target.attachToTarget');
@@ -1204,6 +1261,26 @@ for (const fault of ['ws-open-error','ws-close-pending','ws-error-pending','ws-s
         expect(JSON.stringify(result.report)).toContain(fault==='ws-normal'?'CONTROLLED_PAGE_FAILURE':fault==='ws-missing-target'?'Offscreen':fault==='ws-send-error'?'CONTROLLED_SOCKET_SEND_FAILURE':fault==='ws-malformed'?'JSON':'CDP');
     },12000);
 }
+it('manga public CLI waits for APIs and its own background identity before tab navigation',async()=>{
+    const result=await invoke(manga,'ws-normal',[],{AUDIT_MANGA_API_DELAY:'1'});
+    const expected=[{tabsGet:false,storageGet:false,runtimeId:null},{tabsGet:true,storageGet:true,runtimeId:'foreign-fixture'},{tabsGet:true,storageGet:true,runtimeId:'audit-fixture'}];
+    expect(result.report.backgroundApiReadiness.map((receipt:any)=>receipt.state)).toEqual(expected);
+    expect(result.events.filter(event=>event.kind==='manga-api-readiness-port').map(event=>event.state)).toEqual(expected);
+    const ready=result.events.findIndex(event=>event.kind==='manga-api-readiness-port'&&event.state.runtimeId==='audit-fixture');
+    expect(ready).toBeGreaterThanOrEqual(0);
+    expect(result.events.findIndex(event=>event.kind==='lifecycle-page-navigation')).toBeGreaterThan(ready);
+    expect(result.events.findIndex(event=>event.kind==='websocket-created')).toBeGreaterThan(ready);
+    expect(result.code).toBe(1);expect(count(result,'websocket-created')).toBe(1);expect(count(result,'websocket-close')).toBe(1);
+    expect(count(result,'session-close')).toBe(1);expect(result.report.profileRemoved).toBe(true);expect(result.report.modelRequests).toEqual([]);
+},12000);
+it('manga public CLI times out missing background APIs and cleans up before any tab or raw CDP use',async()=>{
+    const result=await invoke(manga,'ws-normal',[],{AUDIT_MANGA_API_NEVER_READY:'1'});
+    expect(result.code).toBe(1);expect(result.report.failure).toContain('Extension background APIs did not become ready before the startup deadline');
+    expect(result.report.backgroundApiReadiness.map((receipt:any)=>receipt.state)).toEqual([{tabsGet:false,storageGet:false,runtimeId:null}]);
+    expect(count(result,'manga-api-readiness-port')).toBeGreaterThan(1);
+    expect(count(result,'lifecycle-page-navigation')).toBe(0);expect(count(result,'websocket-created')).toBe(0);expect(count(result,'websocket-close')).toBe(0);
+    expect(count(result,'session-close')).toBe(1);expect(result.report.profileRemoved).toBe(true);expect(result.report.modelRequests).toEqual([]);
+},20000);
 
 it('selection public CLI clears its actual 25ms tracker after the next external interaction rejects',async()=>{
     const result=await invoke(selectionTrigger,'interval-interaction');
@@ -1228,9 +1305,19 @@ it('selection public CLI clears its actual 25ms tracker after the next external 
     expect(result.directories.every(directory=>!directory.exists)).toBe(true);
 },12000);
 
+it('video fixture rejects an unknown suite before native or browser allocation',async()=>{
+    const result=await invoke(videoFixture,'launch',['--suite','unknown-suite']);
+    expect(result.code).toBe(1);expect(result.stderr).toContain('未知视频 fixture suite');
+    expect(count(result,'native-command-port')).toBe(0);expect(count(result,'launch')).toBe(0);
+},12000);
+
 it('video subtitle public CLI accepts all four actual client menu modes and passes the overlay timeout in the options position',async()=>{
     const result=await invoke(videoContract,'client-contract');
     expect(result.code).toBe(1);expect(result.stderr).toContain('CONTROLLED_OVERLAY_TIMEOUT');
+    expect(count(result,'public-popup-ready')).toBe(2);
+    expect(count(result,'public-services-entry-click')).toBe(1);
+    expect(result.events.find(event=>event.kind==='public-video-assignment-wait')).toMatchObject({selector:'[data-feature-service="video"]',summary:'微软翻译'});
+    expect(result.events.find(event=>event.kind==='actual-popup-assignment-consumed')).toMatchObject({present:true,summary:'微软翻译',betaMarkers:0,obsoleteVideoCard:false});
     const menu=result.events.find(event=>event.kind==='actual-client-menu-consumed')!;
     expect(menu.modeCount).toBe(4);expect(menu.bilingualSelected).toBe(true);expect(menu.downloadPresent).toBe(true);
     const wait=result.events.filter(event=>event.kind==='public-wait-function-port').at(-1)!;
@@ -1249,7 +1336,7 @@ it('full-page public provider preserves bounded normal, empty and fallback respo
     expect(result.code).toBe(0);const output=JSON.parse(result.stdout);
     expect(output.requests).toBe(3);expect(output.items).toBe(2);expect(output.payloads).toEqual([[' A little curiosity goes a long way. ','unmatched'],[],[]]);
     expect(output.responses.map((response:any)=>response.status)).toEqual([200,200,200]);
-    const translated=JSON.parse(output.responses[0].body);expect(translated).toHaveLength(2);expect(translated[1].translations[0].text).toBe('测试译文：unmatched');
+    const translated=JSON.parse(output.responses[0].body);expect(translated).toHaveLength(2);expect(translated[1].translations[0].text).toBe(require('../scripts/site-translation/controlled-provider.cjs').encodeControlledTranslation('unmatched', 'microsoft-escaped-text'));
     expect(JSON.parse(output.responses[1].body)).toEqual([]);expect(JSON.parse(output.responses[2].body)).toEqual([]);
     expect(count(result,'server-closed')).toBe(1);expect(count(result,'launch')).toBe(0);
 },12000);

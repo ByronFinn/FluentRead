@@ -2,7 +2,7 @@ import {readFileSync, realpathSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {describe, expect, it} from 'vitest';
 import base from '../vitest.config';
-import strict from '../vitest.coverage.config';
+import strict from './config/vitest.coverage.config';
 
 describe('shared Vitest regression configuration', () => {
     it('uses identical plugins, resolution and isolated execution settings for regular and coverage tests', () => {
@@ -11,11 +11,11 @@ describe('shared Vitest regression configuration', () => {
         expect(strict.server).toBe(base.server);
         expect(base.server?.fs?.allow).toContain(realpathSync(resolve(__dirname, '../node_modules')));
         expect(base.server?.fs?.strict).not.toBe(false);
-        const {coverage, ...execution} = strict.test!;
+        const {coverage, testTimeout, ...execution} = strict.test!;
         expect(execution).toEqual(base.test);
+        expect(testTimeout).toBe(30_000);
         expect(execution.environment).toBe('node');
         expect(execution.isolate).not.toBe(false);
-        expect(execution.testTransformMode?.web).toContain('**/tests/mangaEntryComponentLifecycle.test.ts');
         expect(coverage).toBeDefined();
     });
 
@@ -33,7 +33,7 @@ describe('shared Vitest regression configuration', () => {
     it('keeps all-file instrumentation and the four strict 100 percent coverage gates', () => {
         const coverage = strict.test?.coverage;
         expect(coverage).toMatchObject({
-            provider: 'v8', enabled: true, all: true, clean: true,
+            provider: 'v8', enabled: true, clean: true,
             exclude: ['**/*.d.ts'],
             thresholds: {statements: 100, branches: 100, functions: 100, lines: 100},
         });

@@ -1,85 +1,64 @@
 # Settings
 
-Open full settings from the gear in the extension menu. Search for a setting when you can’t find it, such as language, shortcuts, or menu layout. Changes normally save automatically.
+Open full settings with the gear in the extension menu. Use search when you cannot find an option, such as target language, shortcuts, or menu layout. Most changes save automatically.
+
+Desktop settings open with all sidebar groups expanded. Scroll within the sidebar in a short window. On narrow screens, use the category menu at the top.
 
 <GuideVisual kind="settings" en />
 
 ## Start with these
 
-| Setting | When to change it |
+| What you want | Where to start |
 | --- | --- |
-| Target language | You want to read another language |
-| Translation service | The free service is busy, or you have a preferred provider |
-| Translation style and colors | You want the original and translation easier to tell apart, or translation colors that suit the page |
-| Hover and selection triggers | You want quicker access or fewer accidental popups |
-| Automatic translation and site rules | Some sites should always translate; others should stay as they are |
+| Change the target language or default service | General settings |
+| Adjust translation colors, font size, and display | [Interface style](/en/config/appearance) |
+| Reduce accidental hover or selection popups | The relevant feature in Translation settings |
+| Always translate a website or leave it alone | [Website rules](/en/config/site-adaptation) |
+| Change browsers, back up data, or undo settings changes | [Backup and restore](/en/config/backup-sync) |
 
-<figure class="doc-figure"><a href="/screenshots/ui/en-US/settings-general.webp" target="_blank" rel="noopener"><img class="doc-screenshot" src="/screenshots/ui/en-US/settings-general.webp" width="2560" height="1600" alt="FluentRead settings for language, theme, service, and bilingual display" loading="lazy" /></a><figcaption>Start with your reading habits, then adjust the extras.</figcaption></figure>
+<figure class="doc-figure"><a href="/screenshots/ui/en-US/settings-general.webp" target="_blank" rel="noopener"><img class="doc-screenshot" src="/screenshots/ui/en-US/settings-general.webp" width="2560" height="1600" alt="FluentRead general settings for language, service, and translation mode" loading="lazy" /></a><figcaption>Choose your target language and default service, then adjust the other tools.</figcaption></figure>
 
-<details class="guide-details">
-<summary>Languages to skip</summary>
-
-## Languages to skip
-
-Open **Translation settings → Languages to skip** and select one or more languages. Click a selected language again to remove it. Simplified and Traditional Chinese are separate choices: select Traditional Chinese to keep that text unchanged instead of converting it to Simplified Chinese.
-
-Common languages appear first. Expand “More languages” for the full list; selected languages stay visible when collapsed. “Clear selection” restores the default with no additional exclusions. Changes save automatically and apply to the next translation session. Restore an active full-page translation before starting again.
-
-The setting applies to automatic and manual full-page translation, hover translation and page titles. It checks individual text rather than excluding an entire multilingual page. Other languages remain translatable; short or uncertain text may still be translated. Selection, input, document, image and subtitle translation keep their existing behavior.
-
-</details>
-
-<details class="guide-details">
-<summary>Appearance and menu layout</summary>
-
-## Appearance and menu layout
-
-The first section of **Interface style** is [Translation style](/en/guide/features#translation-style): pick how bilingual translations look, customize text and independent background colors and exact font size, or enter CSS declarations and preview and save your own style. Then choose a light or dark theme and an interface style. Press Tab to focus the selected style, use arrow keys to change it, or Home and End to select the first and last styles. Your selection saves automatically; press Tab again to leave the group. In menu layout, drag sections or shortcut cards in the preview, hide unused entries, and add them back later. The list also offers ordering controls.
-
-The menu shows the default translation service and its configured model. Select the service summary to inspect and change assignments for individual features. Configuration reminders keep a direct settings action.
-
-Hiding an entry only changes the menu. Turn off the corresponding feature in its own settings if you want to disable it.
-
-</details>
-
-<details class="guide-details">
-<summary>Different tools, different services</summary>
+The main switch in **General settings** stops new requests from webpages, video tools, documents, Translation Center, and the writing assistant, and cancels active requests. Completed document translations remain available for editing, copying, and export. Turning it on again keeps your preferences; resume unfinished tasks manually.
 
 ## Different tools, different services
 
-Webpages, documents, subtitles, and the reading card can use different services. If a result is unexpected, check the service and model for that particular feature. See [Translation services](/en/config/translation-engines).
+Select **Translation service** in the extension menu to see the webpage default and the choices for hover, selection, documents, subtitles, and the reading card. Supported features can follow the default or use their own service. Changes save automatically.
 
-</details>
+General settings also offers feature assignments. The **Translation services** page configures keys, URLs, and models. Selecting a directory entry only opens its settings; choose **Set as default translation service** to change the webpage default. See [Translation services](/en/config/translation-engines).
+
+## Languages to skip
+
+Under **Translation settings → Languages to skip**, select a language to exclude it; select it again to remove it. Simplified and Traditional Chinese are separate choices. **More languages** opens the full list, and **Clear selection** removes extra exclusions.
+
+This checks individual text in automatic and manual page translation, hover translation, and page titles. Other languages on a mixed page remain translatable; short or uncertain text may still be translated. Selection, input, document, image, and subtitle translation are not controlled by this option. Restore the original and translate again after changing it.
+
+## Appearance and menu layout
+
+Choose a light or dark theme under **Interface style**, adjust [translation styles](/en/config/appearance), or use **Menu layout** to drag sections and shortcut cards. The list also has ordering buttons. Hide unused entries and add them back later.
+
+Hiding an entry changes only the menu. Disable the feature itself to stop image, area, subtitle, or reading-card tools.
+
+**Interface font** uses the system font by default. Choosing an uncached font downloads it for later offline use without installing it on your system. Failed downloads can be retried. **Clear** removes the resources that can be released for that font; clearing the active font returns to the system font.
 
 ## Sites and shortcuts
 
-- [Website reading area](/en/config/site-adaptation): missing content, automatic translation, and exclusions.
-- [Shortcuts & triggers](/en/guide/custom-hotkey): page, hover, selection, and area controls.
+- [Website reading area](/en/config/site-adaptation): missing text, automatic translation, and site exclusions.
+- [Shortcuts and triggers](/en/guide/custom-hotkey): page, hover, selection, and area controls.
 - [Glossaries](/en/guide/glossary): preferred terms for AI translation.
-
-<details class="guide-details">
-<summary>Backups, cache, and usage</summary>
-
-## Backups, cache, and usage
-
-Before changing browsers or uninstalling, save the configuration and learning data you want through backup and restore. Backups may contain credentials and saved text.
-
-Translation cache settings let you view and clear recent results. Clearing that cache does not delete learning collections. See [Translation statistics](/en/guide/translation-stats) for request size, duration, and service performance, and [AI usage](/en/guide/model-usage) for token use.
-
-</details>
 
 ## Reading aids
 
-Enable bilingual sentence highlighting under **Translation → Reading aids**, then adjust its appearance under **Interface style → Translation style**. See [appearance and reading aids](/en/config/appearance).
+Enable bilingual sentence highlighting under **Translation settings → Reading assistance**. Hover over a sentence to see its counterpart. Use the style shortcut to adjust its appearance; see [Appearance and reading aids](/en/config/appearance).
 
-<details class="guide-details">
-<summary>Request limits</summary>
+## Backups, cache, and usage
+
+[Export a backup](/en/config/backup-sync) before changing browsers or uninstalling. Backups can contain credentials and saved source text.
+
+Translation cache reuses completed results. Clearing it does not delete learning collections. If the result is not yet confirmed, refresh usage later; leaving the page does not cancel a cleanup already started in the background. See [Translation statistics](/en/guide/translation-stats) for duration and service performance, and [AI usage](/en/guide/model-usage) for model usage.
 
 ## Request limits
 
-If a provider reports too many requests, or your API has a quota, adjust concurrency and request rates under **Advanced settings → Request limits**.
-
-Concurrency counts translation tasks. A task that combines multiple texts still uses the provider's own batch scheduling internally. Its slot remains occupied until the associated network requests and response bodies have finished. Tasks that are still finishing after cancellation or timeout continue to count. Changing the limit mode or scope also counts existing tasks toward the new limit; new tasks wait while the active count meets or exceeds it.
+If a service reports too many requests, lower concurrency and request rates under **Advanced settings → Request limits**.
 
 | Limit | Default |
 | --- | --- |
@@ -88,19 +67,15 @@ Concurrency counts translation tasks. A task that combines multiple texts still 
 | Requests per minute | 250 |
 | AI translation request timeout | 120 seconds |
 
-Set a per-second or per-minute limit to **0** to remove that limit. Requests wait in a queue when a limit is reached. Existing custom values are preserved.
+Set a per-second or per-minute limit to **0** to remove it. Requests above the limit wait in a queue. A cancelled or timed-out request retains its slot until the underlying request finishes.
 
-- **Per model**: in **Translation services**, open **Request limits**, set **Apply to** to **Current model**, switch **Limits** to **Custom**, then fill in the three values below. The current model is the model actually sent in the request. If custom JSON parameters override it, this panel displays and saves limits for the overriding model. Saved limits for other models are preserved.
-- **Per service**: when models share one provider quota, switch **Apply to** to **Entire service** and set the service-wide limit. A model's own limit also remains subject to the service-wide limit; unconfigured models inherit the service limit.
-- **Restore inheritance**: switch **Limits** back to **Use global settings** or **Use service settings**. Previously entered values stay available for later use.
+For separate limits, open **Translation services → Request limits**:
 
-Retry count and intervals are configured globally in advanced settings.
+- **Entire service → Custom** limits all models together, useful for a shared account quota.
+- **Current model → Custom** limits the model actually sent. If custom JSON overrides the model, limits apply to that model. Model limits still obey the service total.
+- Return to **Use global settings** or **Use service settings** to restore inheritance. Your entered values are retained.
 
-Set **AI translation request timeout** to **10–600 seconds**. This global setting applies to AI text, batch, input box, video subtitle, and Translation Center requests. Increase it for slower models or longer texts, or lower it to detect unresponsive requests sooner. Changes apply to new requests; active requests keep the value captured when they started and can still be cancelled. Tasks such as image recognition and area translation remain subject to their own total deadlines. Connection checks also keep a shorter dedicated timeout.
-
-Free translation fallback routes and Google batches also retain slots while requests are still finishing. Free translation can try another route when capacity is available. When capacity is full, it waits for existing requests to finish within the translation's total timeout budget.
-
-</details>
+Set **AI translation request timeout** to 10–600 seconds for new AI text, batch, input, subtitle, and Translation Center requests. Slower models may need longer. Image recognition, area translation, and connection checks retain their own deadlines. Retry count and intervals are configured globally.
 
 ## Related guides
 

@@ -1,5 +1,90 @@
 [
   {
+    "id": "inco-blog",
+    "name": "Inco 博客文章摘要",
+    "match": {
+      "hosts": ["inco.ai"],
+      "paths": ["/blog/*"],
+      "excludePaths": ["/blog/"]
+    },
+    "mode": "augment",
+    "content": [
+      {
+        "css": ["main#content > .post-page > header.post-head > p.post-dek"],
+        "resolve": "closest"
+      }
+    ],
+    "protect": ["code", "pre", "input", "textarea"]
+  },
+  {
+    "id": "llamaperf-mac",
+    "name": "Llamaperf Mac 基准测试",
+    "match": {
+      "hosts": ["llamaperf.com"],
+      "paths": ["/mac/*"]
+    },
+    "mode": "augment",
+    "content": [
+      {
+        "css": [
+          "#main-content > div > header:has(> h1) > p",
+          "#main-content > div > header:has(> h1) > div > p"
+        ],
+        "resolve": "closest"
+      }
+    ],
+    "protect": ["code", "pre", "input", "textarea"]
+  },
+  {
+    "id": "englio-article",
+    "name": "Englio 英语分级阅读",
+    "match": {
+      "hosts": ["englio.ai"],
+      "paths": ["/article/*"]
+    },
+    "mode": "augment",
+    "content": [
+      {
+        "css": ["main p[data-article-start]:has(> span[data-word-pos])"],
+        "resolve": "closest",
+        "atomic": true
+      }
+    ],
+    "protect": ["code", "pre", "input", "textarea"],
+    "exclude": ["nav"]
+  },
+  {
+    "id": "jetbrains-idea-whatsnew",
+    "name": "JetBrains IntelliJ IDEA 更新说明",
+    "match": {
+      "hosts": ["www.jetbrains.com"],
+      "paths": ["/idea/whatsnew", "/idea/whatsnew/*"]
+    },
+    "mode": "augment",
+    "content": [
+      {
+        "css": ["main.whatsnew-page-content article.whatsnew-feature-block > header > .whatsnew-feature-block__content p"],
+        "resolve": "closest"
+      }
+    ],
+    "protect": ["code", "pre", "input", "textarea"]
+  },
+  {
+    "id": "dart",
+    "name": "Dart 文档导语",
+    "match": {
+      "hosts": ["dart.dev"]
+    },
+    "mode": "augment",
+    "content": [
+      {
+        "css": ["#page-content article > .content > #site-content-title > p.page-description"]
+      }
+    ],
+    "protect": ["code", "pre", "input", "textarea"],
+    "exclude": ["nav"]
+  },
+  {
     "id": "mdn",
     "name": "MDN Web Docs",
     "match": {
@@ -652,7 +737,27 @@
         "/auth/*"
       ]
     },
-    "profile": "documentation"
+    "profile": "documentation",
+    "exclude": [
+      "main [data-code-block-header] > span.code-block-header-language"
+    ]
+  },
+  {
+    "id": "microsoft-learn-translator-v3-parameters",
+    "name": "Microsoft Learn Translator v3 参数",
+    "match": {
+      "hosts": ["learn.microsoft.com"],
+      "paths": [
+        "/en-us/azure/ai-services/translator/text-translation/reference/v3/translate",
+        "/en-us/azure/ai-services/translator/text-translation/reference/v3/translate/"
+      ]
+    },
+    "literalTokens": [
+      "main table[aria-label=\"Required parameters\"] tbody tr > td:first-child",
+      "main table[aria-label=\"Optional parameters\"] tbody tr > td:first-child",
+      "main table[aria-label=\"Response headers\"] tbody tr > td:first-child",
+      "main table[aria-label=\"Handle profanity\"] tbody tr > td:nth-child(-n+2)"
+    ]
   },
   {
     "id": "apple-docs",
@@ -2168,7 +2273,17 @@
         "/auth/*"
       ]
     },
-    "profile": "article"
+    "profile": "article",
+    "exclude": [
+      "article [data-testid=\"byline\"]",
+      "article [data-testid=\"image\"] > span",
+      "article [data-testid=\"hero-image\"] > span"
+    ],
+    "watchIgnore": [
+      "article [data-testid=\"byline\"]",
+      "article [data-testid=\"image\"] > span",
+      "article [data-testid=\"hero-image\"] > span"
+    ]
   },
   {
     "id": "guardian",
@@ -2441,7 +2556,13 @@
         "/auth/*"
       ]
     },
-    "profile": "article"
+    "profile": "article",
+    "protect": [
+      ".byline__name",
+      ".timestamp__time-since",
+      "figcaption.image_large-elevate__credit",
+      "figcaption.image-elevate__credit"
+    ]
   },
   {
     "id": "npr-news",
@@ -2893,6 +3014,12 @@
           ".mw-parser-output h2"
         ],
         "atomic": false
+      },
+      {
+        "css": [
+          ".mw-parser-output ol.references > li > span.mw-reference-text:has(> ul)"
+        ],
+        "atomic": false
       }
     ],
     "protect": [
@@ -3080,6 +3207,13 @@
     "content": [
       {
         "css": [
+          ".ltx_authors .ltx_note_frontmatter.ltx_thanks_contribution .ltx_note_content"
+        ],
+        "resolve": "closest",
+        "atomic": true
+      },
+      {
+        "css": [
           "h1.title",
           "blockquote.abstract",
           ".ltx_para > p",
@@ -3087,6 +3221,23 @@
         ],
         "atomic": false
       }
+    ],
+    "exclude": [
+      "#announcement-banner.ds-announcement",
+      "#infobox.infobox",
+      ".arxiv-html-header",
+      ".ltx_page_navbar",
+      ".ltx_authors > :not(.ltx_creator)",
+      ".ltx_authors > .ltx_creator > :not(.ltx_note_frontmatter.ltx_thanks_contribution)",
+      ".ltx_authors .ltx_thanks_contribution > :not(.ltx_note_outer)",
+      ".ltx_authors .ltx_thanks_contribution .ltx_note_outer > :not(.ltx_note_content)",
+      ".ltx_bibliography"
+    ],
+    "protect": [
+      ".ltx_cite"
+    ],
+    "omit": [
+      ".ltx_authors .ltx_thanks_contribution .ltx_note_content :is(.ltx_note_mark, .ltx_note_type)"
     ]
   },
   {
@@ -3191,10 +3342,22 @@
       {
         "css": [
           ".abstract p",
-          "article p"
+          "article p",
+          ".front-matter h1",
+          ".main-article-body :is(h2, h3, h4, p, figcaption)"
         ],
         "atomic": false
       }
+    ],
+    "exclude": [
+      ".usa-banner",
+      ".pmc-header",
+      ".pmc-sidenav__container",
+      ".front-matter .ameta > :not(hgroup, h1)",
+      ".main-article-body .ref-list"
+    ],
+    "protect": [
+      ".main-article-body sup > a[href^=\"#\"][aria-describedby]"
     ]
   },
   {
@@ -4417,7 +4580,8 @@
       }
     ],
     "protect": [
-      ".a-price"
+      ".a-price",
+      "#acrPopover"
     ]
   },
   {
@@ -4567,6 +4731,13 @@
     "content": [
       {
         "css": [
+          "#app_reviews_hash a[href*=\"/recommended/\"] + div > div:nth-child(2) > div > div:nth-child(1)"
+        ],
+        "resolve": "self",
+        "atomic": true
+      },
+      {
+        "css": [
           "#game_area_description p",
           "#game_area_description li",
           ".game_description_snippet"
@@ -4576,7 +4747,9 @@
     ],
     "protect": [
       ".game_purchase_price",
-      ".discount_final_price"
+      ".discount_final_price",
+      "#freeGameBtn",
+      "#app_reviews_hash a[data-miniprofile]"
     ]
   },
   {
@@ -4603,11 +4776,15 @@
       ]
     },
     "profile": "product",
+    "forceTranslate": ["div[id^='game_comments_react_'][id*='_Game-Comments_']"],
     "content": [
       {
         "css": [
           ".formatted_description p",
-          ".formatted_description li"
+          ".formatted_description li",
+          ".post_body",
+          ".post_body p",
+          ".post_body li"
         ],
         "atomic": false
       }
@@ -4800,6 +4977,7 @@
       ],
       "paths": [
         "/*/-/issues/*",
+        "/*/-/work_items/*",
         "/*/-/merge_requests/*",
         "/*/-/blob/*",
         "/*/-/wikis/*",
@@ -4840,6 +5018,7 @@
     ],
     "protect": [
       ".gl-label-text",
+      ".gl-label-text-scoped",
       ".author-link"
     ],
     "exclude": [
@@ -5267,7 +5446,10 @@
       {
         "css": [
           "#search h3",
-          "#search .VwiC3b"
+          "#search .VwiC3b",
+          "#m-x-content :is(p, li, [role=\"listitem\"])",
+          "[data-attrid=\"VisualDigestGeneratedDescription\"]",
+          "[data-attrid=\"VisualDigestGeneratedDescription\"] :is(p, li, [role=\"listitem\"])"
         ],
         "atomic": false
       }
@@ -5469,7 +5651,22 @@
         "/auth/*"
       ]
     },
-    "profile": "article"
+    "profile": "article",
+    "exclude": [
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__title",
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__metadata",
+      "article.article-main .inline-articles .inline-article-meta",
+      "main .right-rail .aside-article-card .base-aside-card__metadata",
+      "main .article-social-activity a.social-action-bar__button",
+      "main .comments section.comment .comment__actions a.comment__reply[data-feed-action=\"replyToComment\"]:not(.comment__text *)"
+    ],
+    "watchIgnore": [
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__title",
+      "article.article-main > header .publisher-author-card > .base-main-card__info > .base-main-card__metadata",
+      "article.article-main .inline-articles .inline-article-meta",
+      "main .right-rail .aside-article-card .base-aside-card__metadata",
+      "main .article-social-activity a.social-action-bar__button"
+    ]
   },
   {
     "id": "seekingalpha",
@@ -5849,6 +6046,14 @@
         "resolve": "self",
         "atomic": false,
         "key": "google-news-home-read-headline"
+      },
+      {
+        "css": [
+          "main h1"
+        ],
+        "resolve": "self",
+        "atomic": false,
+        "key": "google-news-home-page-heading"
       }
     ],
     "exclude": [
@@ -6084,6 +6289,59 @@
       "[contenteditable=\"true\"]",
       "time",
       "[role=\"menuitem\"]"
+    ]
+  },
+  {
+    "id": "bluesky-profile-metadata",
+    "name": "Bluesky 公开资料与帖子元数据",
+    "match": {
+      "hosts": [
+        "bsky.app"
+      ],
+      "paths": [
+        "/profile/*"
+      ]
+    },
+    "mode": "augment",
+    "exclude": [
+      "[data-testid=\"profileHeaderDisplayName\"]",
+      "[data-testid^=\"feedItem-by-\"] a[aria-label][dir=\"auto\"][href^=\"/profile/\"]:not([href*=\"/post/\"]):not([data-testid=\"postText\"] a):not(div[role=\"link\"][aria-label] a)",
+      "[data-testid^=\"feedItem-by-\"] > div > div:nth-child(2) > div:nth-child(2) > a[role=\"link\"][aria-label][aria-pressed][data-no-underline][href^=\"/profile/\"]:not([href*=\"/post/\"]):has(> svg):has(> div > div > div[dir=\"auto\"]):not([data-testid=\"postText\"] a):not(div[role=\"link\"][aria-label] a)",
+      "[data-testid^=\"feedItem-by-\"] a[data-tooltip][href*=\"/post/\"]",
+      "[data-testid^=\"feedItem-by-\"] div:has(> div > [data-testid=\"replyBtn\"]):has([data-testid=\"likeCount\"])",
+      "div:has(> [data-testid=\"profileHeaderDisplayName\"]) + div > div[dir=\"auto\"]:not([data-testid=\"profileHeaderDescription\"]):only-child",
+      "div:has(> a[data-testid=\"profileHeaderFollowersButton\"]):has(> a[data-testid=\"profileHeaderFollowsButton\"])",
+      "[data-testid^=\"feedItem-by-\"] div[role=\"link\"][aria-label] > div:nth-child(1):has([data-testid=\"userAvatarImage\"]):has([data-tooltip])"
+    ],
+    "watchIgnore": [
+      "[data-testid=\"profileHeaderDisplayName\"]",
+      "[data-testid^=\"feedItem-by-\"] a[aria-label][dir=\"auto\"][href^=\"/profile/\"]:not([href*=\"/post/\"]):not([data-testid=\"postText\"] a):not(div[role=\"link\"][aria-label] a)",
+      "[data-testid^=\"feedItem-by-\"] a[data-tooltip][href*=\"/post/\"]",
+      "[data-testid^=\"feedItem-by-\"] div:has(> div > [data-testid=\"replyBtn\"]):has([data-testid=\"likeCount\"])",
+      "div:has(> [data-testid=\"profileHeaderDisplayName\"]) + div > div[dir=\"auto\"]:not([data-testid=\"profileHeaderDescription\"]):only-child",
+      "div:has(> a[data-testid=\"profileHeaderFollowersButton\"]):has(> a[data-testid=\"profileHeaderFollowsButton\"])",
+      "[data-testid^=\"feedItem-by-\"] div[role=\"link\"][aria-label] > div:nth-child(1):has([data-testid=\"userAvatarImage\"]):has([data-tooltip])"
+    ]
+  },
+  {
+    "id": "facebook-public-post",
+    "name": "Facebook 公开帖子作者",
+    "match": {
+      "hosts": [
+        "www.facebook.com"
+      ],
+      "paths": [
+        "/*/posts/*"
+      ]
+    },
+    "mode": "augment",
+    "protect": [
+      "[role=\"article\"][aria-posinset=\"1\"] [data-ad-rendering-role=\"profile_name\"]:not([data-ad-preview=\"message\"] *)",
+      "[role=\"article\"][aria-label] span:has(+ div > span[dir=\"auto\"][lang]):not(span[dir=\"auto\"][lang] *):not([data-ad-preview=\"message\"] *)"
+    ],
+    "watchIgnore": [
+      "[role=\"article\"][aria-posinset=\"1\"] [data-ad-rendering-role=\"profile_name\"]:not([data-ad-preview=\"message\"] *)",
+      "[role=\"article\"][aria-label] span:has(+ div > span[dir=\"auto\"][lang]):not(span[dir=\"auto\"][lang] *):not([data-ad-preview=\"message\"] *)"
     ]
   }
 ]

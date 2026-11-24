@@ -1,18 +1,119 @@
 import {describe, expect, it} from 'vitest';
 import {groupImageParagraphs, type ImageTextRegion} from '@/src/features/image-translation/paragraphs';
+import {endsEastAsianText, startsEastAsianText} from '@/src/features/image-translation/textBoundary';
 import bambuLines from './fixtures/image-translation/bambu-ocr-lines.json';
 import {
     getOcrImageSize,
     getAreaOcrImageSize,
     normalizeOcrLines,
+    normalizeOcrLineViews,
+    collectRawNumericGuards,
     restoreOcrLineCoordinates,
     selectChangedTranslations,
 } from '@/src/features/image-translation/core';
-import {getMangaOcrEngine, getRequiredImageOcrLanguages} from '@/src/features/image-translation/ocrLanguages';
+import {getMangaOcrEngine, getRequiredImageOcrLanguages, IMAGE_OCR_LANGUAGE_PACKS, IMAGE_OCR_SOURCE_LANGUAGES, normalizeImageOcrLanguageCodes} from '@/src/features/image-translation/ocrLanguages';
+import {inpaintTextRegions} from '@/src/features/image-translation/services/inpainting';
+import {groupMangaOcrLines} from '@/src/features/image-translation/services/mangaRegions';
+
+it('坐标回映同时保留物理清字框、扫描文档基线和字号，不丢失任一用途的元数据',()=>{
+    const line={text:'SOURCE',bbox:{x0:20,y0:20,x1:80,y1:40},sourceBoxes:[{x0:20,y0:20,x1:35,y1:40},{x0:55,y0:20,x1:80,y1:40}],baseline:35,fontSize:15,documentReview:true as const};
+    const before=structuredClone(line),result=restoreOcrLineCoordinates([line],200,300,100,100,10);
+    expect(result).toEqual([{text:'SOURCE',bbox:{x0:20,y0:30,x1:140,y1:90},sourceBoxes:[{x0:20,y0:30,x1:50,y1:90},{x0:90,y0:30,x1:140,y1:90}],baseline:75,fontSize:45,documentReview:true}]);
+    expect(line).toEqual(before);expect(result[0].sourceBoxes).not.toBe(line.sourceBoxes);
+});
+
+it('Tesseract竖排合段保留各列清字范围，缩放后不擦除列间图案或放大漫画字号',()=>{
+    const boxes=[{x0:54,y0:20,x1:68,y1:80},{x0:28,y0:20,x1:42,y1:80}];
+    const recognized=normalizeOcrLines([{paragraphs:[{lines:boxes.map((bbox,i)=>({text:i?'左列':'右列',bbox,
+        baseline:{x0:bbox.x0,y0:bbox.y0,x1:bbox.x0,y1:bbox.y1}}))}]}]);
+    expect(recognized).toHaveLength(1);expect(recognized[0].sourceBoxes).toEqual(boxes);
+    const restored=restoreOcrLineCoordinates(recognized,200,200,100,100);
+    const expected=boxes.map(b=>({x0:b.x0*2,y0:b.y0*2,x1:b.x1*2,y1:b.y1*2}));
+    expect(restored[0].sourceBoxes).toEqual(expected);
+    const region=groupImageParagraphs(restored)[0];
+    const manga=groupMangaOcrLines(restored,'ja',200,200)[0];
+    expect(manga.sourceBoxes).toEqual(expected);expect(manga.fontSize).toBe(28);
+    const pixels=new Uint8ClampedArray(200*200*4).fill(255);
+    const artwork=(90*200+96)*4;pixels.set([230,40,80,255],artwork);
+    for(const bbox of expected)for(let y=bbox.y0;y<bbox.y1;y++)for(let x=bbox.x0;x<bbox.x1;x++)pixels.set([0,0,0,255],(y*200+x)*4);
+    const result=inpaintTextRegions(pixels,200,200,[region]);
+    expect([...result.subarray(artwork,artwork+4)]).toEqual([230,40,80,255]);
+    expect([...result.subarray((90*200+65)*4,(90*200+65)*4+4)]).toEqual([255,255,255,255]);
+    for(const sourceBoxes of [[],[{x0:NaN,y0:1,x1:2,y1:2}],[{x0:-5,y0:-5,x1:-1,y1:-1}]]){
+        const bad=[{...restored[0],sourceBoxes}];
+        expect(restoreOcrLineCoordinates(bad,200,200,200,200)).toEqual([]);
+        expect(groupMangaOcrLines(bad,'ja',200,200)).toEqual([]);
+    }
+});
+
+describe('OCR 横排右到左词序',()=>{
+    const box=(x0:number,x1:number)=>({x0,y0:20,x1,y1:44});
+    const word=(text:string,x0:number,x1:number)=>({text,bbox:box(x0,x1),confidence:92});
+    const views=(text:string,words:ReturnType<typeof word>[])=>normalizeOcrLineViews([{
+        paragraphs:[{lines:[{text,bbox:box(10,340),words}]}],
+    }]);
+
+    it.each([
+        ['اتجه نحو اليمين', ['اتجه','نحو','اليمين']],
+        ['פנה ימינה עכשיו', ['פנה','ימינה','עכשיו']],
+    ] as const)('保留识别器给出的 %s 词序与原框', (text,words)=>{
+        const input=words.map((value,index)=>word(value,190-index*60,230-index*60));
+        const snapshot=structuredClone(input);
+        const {ordinary,manga}=views(text,input);
+        expect(ordinary).toEqual([{text,bbox:box(70,230)}]);
+        expect(manga).toHaveLength(1);
+        expect(manga[0]).toMatchObject(ordinary[0]);
+        expect(input).toEqual(snapshot);
+    });
+
+    it('混合英文数字按原顺序保留，跨大片空白的区域仍独立',()=>{
+        const {ordinary}=views('باب A 12 פנה ימינה',[
+            word('باب',300,340),word('A',242,258),word('12',266,282),
+            word('פנה',66,98),word('ימינה',10,57),
+        ]);
+        expect(ordinary).toEqual([
+            {text:'باب A 12',bbox:box(242,340)},
+            {text:'פנה ימינה',bbox:box(10,98)},
+        ]);
+    });
+
+    it.each([
+        ['A12 לכיוון צפון', ['A12', 'לכיוון', 'צפון']],
+        ['A12 إلى اليمين', ['A12', 'إلى', 'اليمين']],
+    ] as const)('包含拉丁编号开头的横排行按识别器核对后的词序恢复 %s', (text, input) => {
+        const words = input.map((value,index)=>word(value,234-index*62,280-index*62));
+        const {ordinary,manga} = views(text, words);
+        expect(ordinary).toEqual([{text, bbox:box(110,280)}]);
+        expect(manga).toHaveLength(1);
+        expect(manga[0]).toMatchObject(ordinary[0]);
+    });
+
+    it('只含拉丁文字的行依照物理顺序，即使识别器词数组顺序相反', () => {
+        const {ordinary} = views('Gate A12', [word('Gate', 178, 224), word('A12', 121, 160)]);
+        expect(ordinary).toEqual([{text:'A12 Gate', bbox:box(121,224)}]);
+    });
+
+    it('识别词组无法与整行核对时继续按位置恢复已有分组',()=>{
+        const {ordinary}=views('باب صحيح', [word('باب',140,180),word('فرعي',75,125)]);
+        expect(ordinary).toEqual([{text:'فرعي باب',bbox:box(75,180)}]);
+    });
+});
 
 describe('普通图片按完整段落翻译', () => {
     const line = (text: string, x0: number, y0: number, width = 200, h = 12): ImageTextRegion =>
         ({text, bbox: {x0, y0, x1: x0 + width, y1: y0 + h}});
+
+    it('东亚边界只逆向读取完整码点及选择符，不把孤立标记或 emoji 当作续行文字', () => {
+        for (const text of ['漢', '𠀀\u{E0100}', 'あ\uFE0E', 'ｶﾞ', 'ｶﾞ\uFE0F', '。', '한국어', '가', 'ㅋㅋ', '\uA960\uD7B0', 'ｶｰ', 'ｰ', '字'+'\u{E0100}'.repeat(32)])
+            expect(endsEastAsianText(text), text).toBe(true);
+        for (const text of ['', '\uFE0F', '\u{E0100}', '\uFE0F\u{E0100}', '\u115F', '\u1160', '\u3164', '\uFFA0', 'ᄀ\uFE0F', 'A', '😀\uFE0F', '㊙\uFE0F', '〽\uFE0E', '。\uFE0E', '字'+'\u{E0100}'.repeat(33), 'ﾞ', 'Aﾞ', '\uD800', '\uDC00'])
+            expect(endsEastAsianText(text), text).toBe(false);
+        expect(endsEastAsianText('。\uFE00')).toBe(true);
+        expect(endsEastAsianText('、\uFE01')).toBe(true);
+        expect(endsEastAsianText('字'+'\u{E0100}'.repeat(1024))).toBe(false);
+        for (const text of ['字', '𠀀', '𛀁', 'ｶ', 'ｰ', '한글', '가', 'ㅋㅋ', '\uA960\uD7B0']) expect(startsEastAsianText(text), text).toBe(true);
+        for (const text of ['', 'word', '😀', '\u115F', '\u1160', '\u3164', '\uFFA0', '\uD800', '\uDC00']) expect(startsEastAsianText(text), text).toBe(false);
+    });
 
     it('Bambu 原图的真实稀疏 OCR：两段三行说明合为整段，标题和底部链接分离', () => {
         const regions = groupImageParagraphs(bambuLines);
@@ -25,6 +126,44 @@ describe('普通图片按完整段落翻译', () => {
         ]);
         expect(regions.some(region => region.text === 'Convenient Mode')).toBe(true);
         expect(regions.some(region => region.text === 'Video tutorial')).toBe(true);
+    });
+
+    it.each([
+        ["two supplementary Han", "𠀀", "𠀁", "𠀀𠀁"],
+        ["BMP then supplementary", "汉", "𠀁", "汉𠀁"],
+        ["supplementary then BMP", "𠀀", "字", "𠀀字"],
+        ["extended G Han", "𰀀", "𠀁", "𰀀𠀁"],
+        ["supplementary Han with IVS", "第一𠀀\u{E0100}", "𠀁世界", "第一𠀀\u{E0100}𠀁世界"],
+        ["BMP Han with variation selector", "漢\uFE00", "字", "漢\uFE00字"],
+        ["halfwidth kana with voiced mark", "こんにちはｶﾞ", "ｷﾞ世界", "こんにちはｶﾞｷﾞ世界"],
+        ["supplementary kana", "古い𛀁", "𛀂文字", "古い𛀁𛀂文字"],
+        ["halfwidth kana without voiced mark", "あｶ", "ﾅ文字", "あｶﾅ文字"],
+        ["halfwidth prolonged sound mark", "ｶｰ", "ﾄﾞ文字", "ｶｰﾄﾞ文字"],
+        ["decomposed Korean", "가", "나", "가나"],
+        ["compatibility Korean", "ㅋㅋ", "ㅇㅋ", "ㅋㅋㅇㅋ"],
+        ["Latin", "alpha", "beta", "alpha beta"],
+        ["Korean then Latin", "한국어 단어", "words", "한국어 단어 words"],
+        ["Latin then Korean", "word", "한글 문장", "word 한글 문장"],
+        ["emoji variation then Han", "😀\uFE0F", "字", "😀\uFE0F 字"],
+        ["CJK-range emoji presentation then Han", "秘密㊙\uFE0F", "文字", "秘密㊙\uFE0F 文字"],
+        ["CJK-range text presentation then Han", "案内〽\uFE0E", "文字", "案内〽\uFE0E 文字"],
+        ["kana text presentation", "あ\uFE0E", "文字", "あ\uFE0E文字"],
+        ["halfwidth voiced kana with variation selector", "ｶﾞ\uFE0F", "文字", "ｶﾞ\uFE0F文字"],
+        ["CJK punctuation with text selector retains prior boundary", "案内。\uFE0E", "文字", "案内。\uFE0E 文字"],
+        ["standardized Japanese full stop variation", "案内。\uFE00", "文字", "案内。\uFE00文字"],
+        ["standardized Japanese comma variation", "案内、\uFE01", "文字", "案内、\uFE01文字"],
+        ["Japanese punctuation before supplementary kana", "日本語。", "𛀂文字", "日本語。𛀂文字"],
+        ["Korean continuation keeps existing boundary", "한국어", "문장", "한국어문장"],
+        ["Han with IVS then emoji", "𠀀\u{E0100}", "😀", "𠀀\u{E0100} 😀"],
+        ["emoji", "😀", "😁", "😀 😁"],
+        ["closing punctuation", "hello", ")", "hello)"],
+        ["opening punctuation", "(", "world", "(world"],
+        ["astral then Latin", "𠀀", "word", "𠀀 word"],
+        ["Latin then astral", "word", "𠀀", "word 𠀀"],
+        ["astral then emoji", "𠀀", "😀", "𠀀 😀"],
+        ["emoji then astral", "😀", "𠀀", "😀 𠀀"]
+    ])('OCR 续行保留完整码点和两侧 CJK 边界连接策略：%s', (_name, left, right, expected) => {
+        expect(groupImageParagraphs([line(left, 0, 0), line(right, 0, 14)])[0].text).toBe(expected);
     });
 
     it('中文换行不加入空格，英文续行、标点与断词恢复为完整句子', () => {
@@ -67,6 +206,59 @@ describe('普通图片按完整段落翻译', () => {
         const input = [line('First', 0, 0), line('label', 50, 12, 50, 1), line('Second', 0, 14)];
         expect(groupImageParagraphs(input)).toHaveLength(3);
         expect(groupImageParagraphs([])).toEqual([]);
+    });
+
+    it('单图竖排列按右到左合为完整日文，保留逐列擦除框和字形宽度', () => {
+        const right = {...line('今日は', 90, 20, 12, 100), vertical: true as const};
+        const left = {...line('楽しかった。', 76, 21, 12, 99), vertical: true as const, fontSize: 12};
+        const input = [left, right];
+        const before = structuredClone(input);
+        expect(groupImageParagraphs(input)).toEqual([{
+            text: '今日は楽しかった。', bbox: {x0: 76, y0: 20, x1: 102, y1: 120},
+            vertical: true, fontSize: 12, sourceBoxes: [right.bbox, left.bbox], textAlign: 'center',
+        }]);
+        expect(input).toEqual(before);
+    });
+
+    it('竖排续列保留扩展字符和逐列来源框，不改变输入或列序', () => {
+        const right = {...line('𠀀\u{E0100}', 90, 20, 12, 100), vertical: true as const};
+        const left = {...line('ｶﾞ𛀁', 76, 21, 12, 99), vertical: true as const};
+        const input = [left, right], before = structuredClone(input);
+        expect(groupImageParagraphs(input)).toEqual([{
+            text: '𠀀\u{E0100}ｶﾞ𛀁', bbox: {x0: 76, y0: 20, x1: 102, y1: 120},
+            vertical: true, fontSize: 12, sourceBoxes: [right.bbox, left.bbox], textAlign: 'center',
+        }]);
+        expect(input).toEqual(before);
+    });
+
+    it('竖排保留独立气泡、不同字号和横排遮挡边界，预合并区域原样返回', () => {
+        const column = (text: string, x: number, y = 20, width = 12) =>
+            ({...line(text, x, y, width, 100), vertical: true as const});
+        for (const input of [
+            [column('右列', 90), column('左列', 60)],
+            [column('右列', 90), column('左列', 76, 180)],
+            [column('右列', 90), column('小字', 80, 20, 5)],
+            [column('右列', 90), line('横排标签', 89, 50, 1, 12), column('左列', 76)],
+            [column('右列', 90), {...column('已有段落', 76), sourceBoxes: [column('', 76).bbox]}, column('左列', 62)],
+        ]) {
+            const output = groupImageParagraphs(input);
+            expect(output).toHaveLength(input.length);
+            for (const original of input) expect(output).toContain(original);
+        }
+    });
+
+    it('大图竖排复用遮挡索引，横排标签仍阻止跨列合并且输入不变', () => {
+        const column = (text: string, x: number, y = 20) => ({...line(text, x, y, 12, 100), vertical: true as const});
+        const right = column('今天', 190), next = column('很开心。', 176);
+        const blockedRight = column('右列', 90), blockedLeft = column('左列', 76);
+        const label = line('标签', 89, 50, 1);
+        const input = [blockedLeft, right, label, next, blockedRight,
+            ...Array.from({length: 80}, (_, index) => column(`独立${index}`, 200 + index * 40, 300))];
+        const before = structuredClone(input);
+        const output = groupImageParagraphs(input);
+        expect(output.find(region => region.text === '今天很开心。')?.sourceBoxes).toEqual([right.bbox, next.bbox]);
+        expect(output).toContain(blockedRight);expect(output).toContain(blockedLeft);expect(output).toContain(label);
+        expect(output).toHaveLength(input.length - 1);expect(input).toEqual(before);
     });
 
     it('两千条连续正文的遮挡查找不反复读取后续整图横坐标', () => {
@@ -147,6 +339,249 @@ describe('普通图片按完整段落翻译', () => {
     });
 });
 
+describe('多词独立数值恢复',()=>{
+    const raw=(text:string,parts:string[],confidence:number|undefined=99,lineConfidence:number|undefined=99)=>{
+        let x=0;const words=parts.map(part=>{const bbox={x0:x,y0:0,x1:x+12,y1:10};x+=14;return {text:part,bbox,confidence};});
+        return [{paragraphs:[{lines:[{text,bbox:{x0:0,y0:0,x1:x-2,y1:10},confidence:lineConfidence,words}]}]}];
+    };
+    it.each([['12:30 PM',['12',':','30','PM']],['31/12/2026',['31','/','12','/','2026']],['2026年10月28日',['2026','年','10','月','28','日']],['USD 10',['USD','10']]])('可信完整分词恢复 %s 原行而普通视图仍保留原分词语义',(text,parts)=>{
+        const blocks=raw(text,parts),views=normalizeOcrLineViews(blocks);
+        expect(views.manga).toMatchObject([{text,numericConfidence:99}]);
+        expect(views.ordinary).toEqual(normalizeOcrLines(blocks,false));
+        expect(normalizeOcrLines(blocks,true)).toEqual(views.manga);
+        const guards=collectRawNumericGuards(blocks,views.manga);expect(guards.every(g=>g.guardOnly&&g.bbox.x0>=0&&g.bbox.x1<=views.manga[0].bbox.x1)).toBe(true);
+    });
+    it('只从数值证据视图移除能严格关联的低置信残片，保留圈选视图和原始保护框',()=>{
+        const blocks=raw('12:30 PM',['12',':','30','PM'],89),views=normalizeOcrLineViews(blocks);
+        expect(views.ordinary[0].text).toBe('12: 30 PM');expect(views.manga).toEqual([]);
+        expect(collectRawNumericGuards(blocks,views.manga)).toContainEqual(expect.objectContaining({text:'',bbox:blocks[0].paragraphs[0].lines[0].bbox,guardOnly:true}));
+    });
+    it('原行与词不一致时保留相邻正文；非法词框无法安全消除且数值守卫明确报错',()=>{
+        const mismatch=raw('12:30 PM',['12',':','30','PM','SALE'],89),views=normalizeOcrLineViews(mismatch);
+        expect(views.manga.map(line=>line.text).join(' ')).toContain('SALE');
+        const bad=raw('12:30 PM',['12',':','30','PM'],89),word=bad[0].paragraphs[0].lines[0].words[0];word.bbox.x1=word.bbox.x0;
+        const parsed=normalizeOcrLineViews(bad);expect(parsed.manga.length).toBeGreaterThan(0);
+        expect(()=>collectRawNumericGuards(bad,parsed.manga)).toThrow('保护位置无效');
+    });
+    it.each(['low','missing','invalid','all-low','all-invalid'] as const)('同框可信和 %s 拆词结果合并时不可升级，顺序不影响',kind=>{
+        const high=raw('12:30 PM',['12',':','30','PM'],99)[0].paragraphs[0].lines[0];
+        const low=structuredClone(high);low.confidence=kind==='low'?89:99;
+        if(kind==='low')for(const word of low.words)word.confidence=89;
+        if(kind==='missing')delete (low.words[2] as {confidence?:number}).confidence;
+        if(kind==='invalid')low.words[2].confidence=NaN;
+        if(kind==='all-low')for(const word of low.words)word.confidence=20;
+        if(kind==='all-invalid')for(const word of low.words)word.confidence=NaN;
+        for(const lines of [[high,low],[low,high]]){
+            const blocks=[{paragraphs:[{lines}]}],views=normalizeOcrLineViews(blocks);
+            expect(views.manga.some(line=>line.text==='12:30 PM')).toBe(false);
+            expect(collectRawNumericGuards(blocks,views.manga)).toContainEqual(expect.objectContaining({text:'',bbox:high.bbox,guardOnly:true}));
+        }
+    });
+    it('已有合行允许的中间间距不会泄漏低置信数值，也不移除不匹配的相邻正文',()=>{
+        const blocks=raw('12:30 PM',['12',':','30','PM'],89),line=blocks[0].paragraphs[0].lines[0];
+        line.words[3].bbox.x0+=18;line.words[3].bbox.x1+=18;line.bbox.x1+=18;
+        const ordinary=normalizeOcrLineViews(blocks).ordinary;expect(ordinary[0].text).toBe('12: 30 PM');
+        const parsed=normalizeOcrLineViews(blocks).manga;expect(parsed).toEqual([]);
+        expect(collectRawNumericGuards(blocks,parsed)).toContainEqual(expect.objectContaining({text:'',bbox:line.bbox,guardOnly:true}));
+        line.words.push({text:'SALE',confidence:89,bbox:{x0:line.bbox.x1+1,y0:0,x1:line.bbox.x1+13,y1:10}});line.bbox.x1+=13;
+        expect(normalizeOcrLineViews(blocks).manga.map(value=>value.text).join(' ')).toContain('SALE');
+    });
+    it.each(['12:30 PM','₩12,000'] as const)('同框分词一致而原始数值字符串 %s 不一致时不提升可信结果',text=>{
+        const parts=text.startsWith('₩')?['₩','12,000']:['12',':','30','PM'];
+        const first=raw(text,parts,99)[0].paragraphs[0].lines[0],second=structuredClone(first);
+        second.text=text.startsWith('₩')?'₩ 12,000':'12 :30 PM';
+        for(const lines of [[first,second],[second,first]]){
+            const blocks=[{paragraphs:[{lines}]}],views=normalizeOcrLineViews(blocks);
+            expect(views.manga.every(line=>line.numericConfidence===undefined)).toBe(true);
+            expect(collectRawNumericGuards(blocks,views.manga)).toContainEqual(expect.objectContaining({text:'',bbox:first.bbox,guardOnly:true}));
+        }
+    });
+    it.each(['far','outside','other-line'] as const)('%s 时不能静默删除不确定的相邻内容',kind=>{
+        const blocks=raw('12:30 PM',['12',':','30','PM'],89),line=blocks[0].paragraphs[0].lines[0],last=line.words[3];
+        if(kind==='far'){last.bbox.x0=700;last.bbox.x1=712;line.bbox.x1=712;}
+        if(kind==='outside'){line.bbox.x1=last.bbox.x0+1;}
+        if(kind==='other-line'){last.bbox.y0=50;last.bbox.y1=60;line.bbox.y1=60;}
+        const views=normalizeOcrLineViews(blocks);expect(views.manga.map(value=>value.text).join(' ')).toContain('PM');
+    });
+    it.each(['low','missing','all-low','all-invalid'] as const)('同一原框有词/无词 %s 置信合并不因输入顺序升级',kind=>{
+        const low=raw('12:30 PM',['12',':','30','PM'],kind==='low'?89:99)[0].paragraphs[0].lines[0];
+        if(kind==='missing')delete (low.words[2] as {confidence?:number}).confidence;
+        if(kind==='all-low')for(const word of low.words)word.confidence=20;
+        if(kind==='all-invalid')for(const word of low.words)word.confidence=NaN;
+        const high={text:low.text,bbox:{...low.bbox},confidence:99,words:[]};
+        for(const lines of [[high,low],[low,high]]){
+            const blocks=[{paragraphs:[{lines}]}],views=normalizeOcrLineViews(blocks);
+            expect(views.manga.every(line=>line.numericConfidence===undefined||line.numericConfidence<90)).toBe(true);
+            expect(collectRawNumericGuards(blocks,views.manga)).toContainEqual(expect.objectContaining({text:'',bbox:high.bbox,guardOnly:true}));
+            expect(views.ordinary).toEqual(normalizeOcrLines(blocks,false));
+        }
+    });
+    it('同一原框出现不同可信数值时均不猜测，保留物理保护',()=>{
+        const first=raw('12:30 PM',['12',':','30','PM'],99)[0].paragraphs[0].lines[0];
+        const second=structuredClone(first);second.text='12:31 PM';second.words[2].text='31';
+        for(const lines of [[first,second],[second,first],[first,second,structuredClone(first)]]){
+            const blocks=[{paragraphs:[{lines}]}],views=normalizeOcrLineViews(blocks);
+            expect(views.manga.every(line=>line.numericConfidence===undefined)).toBe(true);
+            expect(collectRawNumericGuards(blocks,views.manga)).toContainEqual(expect.objectContaining({text:'',bbox:first.bbox,guardOnly:true}));
+        }
+    });
+    it('轻微越界扩张整行守卫覆盖全部词；明显越界时保守报错',()=>{
+        const blocks=raw('12:30 PM',['12',':','30','PM'],89),line=blocks[0].paragraphs[0].lines[0];
+        line.bbox.x1-=1;const parsed=normalizeOcrLineViews(blocks).manga,guards=collectRawNumericGuards(blocks,parsed);
+        expect(guards).toContainEqual(expect.objectContaining({text:'',bbox:{...line.bbox,x1:line.bbox.x1+1},guardOnly:true}));
+        line.bbox.x1-=3;expect(()=>collectRawNumericGuards(blocks,normalizeOcrLineViews(blocks).manga)).toThrow('保护位置无效');
+    });
+    it.each(['same','different'] as const)('超宽原框中 %s 数值的独立词位置不合并，不可靠防擦报错',kind=>{
+        const bbox={x0:0,y0:0,x1:200,y1:10},left={text:'90%',bbox,confidence:99,words:[{text:'90%',bbox:{x0:0,y0:0,x1:20,y1:10},confidence:99}]};
+        const value=kind==='same'?'90%':'80%',right={text:value,bbox,confidence:99,words:[{text:value,bbox:{x0:180,y0:0,x1:200,y1:10},confidence:99}]};
+        const center={text:'HELLO',bbox:{x0:80,y0:0,x1:120,y1:10},confidence:99};
+        for(const lines of [[left,right,center],[right,left,center]]){
+            const blocks=[{paragraphs:[{lines}]}],views=normalizeOcrLineViews(blocks);
+            expect(views.manga.filter(line=>line.text==='90%'||line.text==='80%')).toHaveLength(2);
+            expect(views.manga.some(line=>line.text==='HELLO')).toBe(true);
+            expect(()=>collectRawNumericGuards(blocks,views.manga)).toThrow('保护位置无效');
+        }
+    });
+    it('同框有词和无词结果无法对应物理范围时保守失败',()=>{
+        const bbox={x0:0,y0:0,x1:40,y1:10},without={text:'90%',bbox,confidence:99,words:[]};
+        const withWords={text:'90%',bbox,confidence:89,words:[{text:'90%',bbox:{x0:0,y0:0,x1:20,y1:10},confidence:89}]};
+        for(const lines of [[without,withWords],[withWords,without]]){
+            const blocks=[{paragraphs:[{lines}]}],views=normalizeOcrLineViews(blocks);
+            expect(()=>collectRawNumericGuards(blocks,views.manga)).toThrow('保护位置无效');
+        }
+    });
+    it('无词、窄词、整行词的六种顺序一致失败，不漏掉较早的矛盾框',()=>{
+        const bbox={x0:0,y0:0,x1:40,y1:10},make=(wordBox:typeof bbox|undefined)=>({text:'90%',bbox,confidence:99,
+            words:wordBox?[{text:'90%',bbox:wordBox,confidence:99}]:[]});
+        const narrow=make({x0:0,y0:0,x1:10,y1:10}),full=make(bbox),empty=make(undefined);
+        const center={text:'HELLO',bbox:{x0:16,y0:20,x1:40,y1:30},confidence:99};
+        for(const lines of [[narrow,full,empty],[narrow,empty,full],[full,narrow,empty],[full,empty,narrow],[empty,full,narrow],[empty,narrow,full]]){
+            const blocks=[{paragraphs:[{lines:[...lines,center]}]}],views=normalizeOcrLineViews(blocks);
+            expect(views.ordinary.some(line=>line.text==='HELLO')).toBe(true);
+            expect(()=>collectRawNumericGuards(blocks,views.manga)).toThrow('保护位置无效');
+        }
+    });
+    it('原文两侧空白忽略用于同框身份；内部空白不同不误认同一原值',()=>{
+        const bbox={x0:0,y0:0,x1:40,y1:10},plain={text:'90%',bbox,confidence:99,words:[]},
+            spaced={text:' 90% ',bbox,confidence:89,words:[{text:'90%',bbox:{x0:0,y0:0,x1:10,y1:10},confidence:89}]};
+        for(const lines of [[plain,spaced],[spaced,plain]]){
+            const blocks=[{paragraphs:[{lines}]}],views=normalizeOcrLineViews(blocks);
+            expect(()=>collectRawNumericGuards(blocks,views.manga)).toThrow('保护位置无效');
+        }
+        const interior={...spaced,text:'90 %',words:[{...spaced.words[0],text:'90 %'}]};
+        const blocks=[{paragraphs:[{lines:[plain,interior]}]}];
+        expect(()=>collectRawNumericGuards(blocks,normalizeOcrLineViews(blocks).manga)).not.toThrow();
+    });
+    it('面积恰为 4 倍时允许独立词框，超过时保护失败',()=>{
+        const bbox={x0:0,y0:0,x1:40,y1:10},wordBox={x0:0,y0:0,x1:10,y1:10};
+        const line={text:'90%',bbox,confidence:99,words:[{text:'90%',bbox:wordBox,confidence:99}]},blocks=[{paragraphs:[{lines:[line]}]}];
+        expect(()=>collectRawNumericGuards(blocks,normalizeOcrLineViews(blocks).manga)).not.toThrow();
+        wordBox.x1=9.9;expect(()=>collectRawNumericGuards(blocks,normalizeOcrLineViews(blocks).manga)).toThrow('保护位置无效');
+    });
+    it('同框的原始数字行与分词不一致行不得相互抬高置信度',()=>{
+        const high=raw('12:30 PM',['12',':','30','PM'],99)[0].paragraphs[0].lines[0];
+        const other={text:'NOT THAT',bbox:{...high.bbox},confidence:99,words:[{text:'12:30 PM',bbox:{...high.bbox},confidence:99}]};
+        for(const lines of [[high,other],[other,high]]){
+            const blocks=[{paragraphs:[{lines}]}],views=normalizeOcrLineViews(blocks);
+            expect(views.manga.every(line=>line.numericConfidence===undefined)).toBe(true);
+            expect(collectRawNumericGuards(blocks,views.manga)).toContainEqual(expect.objectContaining({text:'',bbox:high.bbox,guardOnly:true}));
+        }
+    });
+    it('部分重叠但不满足去重阈值时保留低置信独立物理框',()=>{
+        const high=raw('12:30 PM',['12',':','30','PM'],99)[0].paragraphs[0].lines[0],low=structuredClone(high);
+        low.confidence=89;low.bbox.x0+=8;low.bbox.x1+=8;for(const word of low.words){word.confidence=89;word.bbox.x0+=8;word.bbox.x1+=8;}
+        const blocks=[{paragraphs:[{lines:[high,low]}]}],views=normalizeOcrLineViews(blocks);
+        expect(views.manga).toMatchObject([{text:'12:30 PM',numericConfidence:99}]);
+        expect(collectRawNumericGuards(blocks,views.manga)).toContainEqual(expect.objectContaining({text:'',bbox:low.bbox,guardOnly:true}));
+    });
+    it('缺词、不一致或缺失/低置信时不复活原行，原始完整数值框仍可保护',()=>{
+        const variants=[raw('12:30 PM',['12',':','30','PM'],89),raw('12:30 PM',['12',':','30','PM'],undefined),
+            raw('12:30 PM',['12',':','31','PM']),raw('12:30 PM',['12',':','30','PM'],99,89),raw('12:30 PM',['12',':','30','PM'],20)];
+        // undefined 默认参数无法表达缺失置信度，单独删除源字段。
+        for(const word of variants[1][0].paragraphs[0].lines[0].words) delete (word as {confidence?:number}).confidence;
+        for(const blocks of variants){const views=normalizeOcrLineViews(blocks);expect(views.manga.some(line=>line.text==='12:30 PM'&&line.numericConfidence===99)).toBe(false);
+            expect(collectRawNumericGuards(blocks,views.manga)).toContainEqual(expect.objectContaining({text:'',bbox:blocks[0].paragraphs[0].lines[0].bbox,guardOnly:true}));}
+    });
+});
+
+describe('原始数值证据的有界保护',()=>{
+    it('空识别块或不完整层级不会产生保护框',()=>{
+        expect(collectRawNumericGuards(undefined)).toEqual([]);
+        expect(collectRawNumericGuards([{}])).toEqual([]);
+        expect(collectRawNumericGuards([{paragraphs:[{}]}])).toEqual([]);
+    });
+    it('一千个相同文本、不同物理框直接匹配，不应因重复比较导致整图失败',()=>{
+        const lines=Array.from({length:1000},(_,i)=>{const bbox={x0:i*2,y0:0,x1:i*2+1,y1:1};
+            return {text:'90%',bbox,confidence:99,words:[{text:'90%',bbox,confidence:99}]};});
+        const blocks=[{paragraphs:[{lines}]}],views=normalizeOcrLineViews(blocks);
+        expect(views.manga).toHaveLength(1000);expect(collectRawNumericGuards(blocks,views.manga,{trustedWorkerData:true})).toEqual([]);
+    });
+    it('只有完整覆盖的可信框可去掉保护；部分覆盖仍保留原物理框',()=>{
+        const bbox={x0:2,y0:2,x1:20,y1:10},blocks=[{paragraphs:[{lines:[{text:'90%',bbox,confidence:20}]}]}];
+        const candidate={text:'90%',bbox:{x0:0,y0:0,x1:21,y1:11},numericConfidence:99};
+        expect(collectRawNumericGuards(blocks,[candidate],{trustedWorkerData:true})).toEqual([]);
+        expect(collectRawNumericGuards(blocks,[{...candidate,bbox:{...candidate.bbox,x1:19}}]))
+            .toEqual([{text:'',bbox,guardOnly:true,numericGuardText:'90%'}]);
+    });
+    it('访问器和无法反射的对象不走几何快路径，仍按实际边界判断',()=>{
+        const bbox={get x0(){return 2;},y0:2,x1:20,y1:10};
+        const blocks=[{paragraphs:[{lines:[{text:'90%',bbox,confidence:20}]}]}];
+        const candidate=new Proxy({text:'90%',numericConfidence:99,bbox:{x0:0,y0:0,x1:21,y1:11}},
+            {getOwnPropertyDescriptor(){throw new Error('unavailable');}});
+        expect(collectRawNumericGuards(blocks,[candidate])).toEqual([]);
+        expect(collectRawNumericGuards(blocks,[])).toEqual([expect.objectContaining({text:'',bbox:{x0:2,y0:2,x1:20,y1:10},guardOnly:true})]);
+    });
+    it('整行和词框依次校验，保留行框及前一数值词的原始首因',()=>{
+        const lineError=Error('line first'),wordError=Error('word second');
+        const line={text:'12:30 PM',get bbox():any {throw lineError;},words:[{text:'12',get bbox():any {throw wordError;}}]};
+        expect(()=>collectRawNumericGuards([{paragraphs:[{lines:[line]}]}])).toThrow(lineError);
+        const word={text:'12',get bbox():any {throw wordError;}},punctuation={text:':',get bbox():any {throw Error('later punctuation');}};
+        const raw={text:'12:30 PM',bbox:{x0:0,y0:0,x1:30,y1:10},words:[word,punctuation]};
+        expect(()=>collectRawNumericGuards([{paragraphs:[{lines:[raw]}]}])).toThrow(wordError);
+    });
+    it('原始 bbox 无法反射时保守回退，不吞掉本可证明覆盖的结果',()=>{
+        const bbox=new Proxy({x0:2,y0:2,x1:20,y1:10},{getOwnPropertyDescriptor(){throw new Error('unavailable');}});
+        const candidate={text:'90%',numericConfidence:99,bbox:{x0:2,y0:2,x1:20,y1:10}};
+        expect(collectRawNumericGuards([{paragraphs:[{lines:[{text:'90%',bbox,confidence:20}]}]}],[candidate],{trustedWorkerData:true})).toEqual([]);
+    });
+    it('可信模式遇到继承坐标及无法反射的候选时按实际覆盖结果回退',()=>{
+        const bbox={x0:2,y0:2,x1:20,y1:10};
+        const blocks=[{paragraphs:[{lines:[{text:'90%',bbox,confidence:20}]}]}];
+        const inherited=Object.create({x0:0,y0:0,x1:21,y1:11}) as typeof bbox;
+        const candidate={text:'90%',numericConfidence:99,bbox:inherited};
+        expect(collectRawNumericGuards(blocks,[candidate],{trustedWorkerData:true})).toEqual([]);
+        const reflected=new Proxy({...candidate,bbox:{x0:2,y0:2,x1:19,y1:10}},
+            {getOwnPropertyDescriptor(){throw new Error('unavailable');}});
+        expect(collectRawNumericGuards(blocks,[reflected],{trustedWorkerData:true}))
+            .toEqual([{text:'',bbox,guardOnly:true,numericGuardText:'90%'}]);
+    });
+    it('同文首个候选的未知 bbox getter 抛错时保留首因，不越过它命中后面的精确框',()=>{
+        const failure=new Error('bbox getter first'),bbox={x0:2,y0:2,x1:20,y1:10};
+        const first={text:'90%',numericConfidence:99,get bbox():never {throw failure;}};
+        const exact={text:'90%',numericConfidence:99,bbox};
+        for(const options of [undefined,{trustedWorkerData:true}])
+            expect(()=>collectRawNumericGuards([{paragraphs:[{lines:[{text:'90%',bbox,confidence:20}]}]}],[first,exact],options)).toThrow(failure);
+    });
+    it('未知输入中的 Proxy 即使伪装数据描述符，也不跳过首个 bbox 读取异常',()=>{
+        const failure=new Error('bbox proxy first'),bbox={x0:2,y0:2,x1:20,y1:10};
+        const deceptive=new Proxy({...bbox},{get(target,key,receiver){if(key==='x0')throw failure;return Reflect.get(target,key,receiver);}});
+        const first={text:'90%',numericConfidence:99,bbox:deceptive};
+        const exact={text:'90%',numericConfidence:99,bbox};
+        expect(()=>collectRawNumericGuards([{paragraphs:[{lines:[{text:'90%',bbox,confidence:20}]}]}],[first,exact])).toThrow(failure);
+    });
+    it('非法位置和超过保护框数量上限时明确报错',()=>{
+        const invalid=[{paragraphs:[{lines:[{text:'90%',bbox:{x0:NaN,y0:0,x1:2,y1:2},confidence:20}]}]}];
+        expect(()=>collectRawNumericGuards(invalid)).toThrow('保护位置无效');
+        const lines=Array.from({length:4097},(_,i)=>({text:'90%',bbox:{x0:i*2,y0:0,x1:i*2+1,y1:1},confidence:20}));
+        expect(()=>collectRawNumericGuards([{paragraphs:[{lines}]}])).toThrow('保护区域过于复杂');
+    });
+    it('同文候选无法证明覆盖并超过比较预算时保留原图而不伪装成功',()=>{
+        const recognized=Array.from({length:1001},(_,i)=>({text:'90%',numericConfidence:99,bbox:{x0:i*2,y0:0,x1:i*2+1,y1:1}}));
+        const lines=Array.from({length:1001},(_,i)=>({text:'90%',bbox:{x0:100000+i*2,y0:0,x1:100001+i*2,y1:1},confidence:20}));
+        expect(()=>collectRawNumericGuards([{paragraphs:[{lines}]}],recognized)).toThrow('保护区域过于复杂');
+    });
+});
+
 describe('图片 OCR 有界尺寸和可信文本', () => {
     it('漫画按明确源语言覆盖专用字表缺口，区域代码共用语言包规则，自动模式不猜网站语言', () => {
         for (const source of ['ru', ' RU-ru ', 'ru_RU']) {
@@ -159,12 +594,29 @@ describe('图片 OCR 有界尺寸和可信文本', () => {
         }
         for (const source of ['auto', '', 'en', 'ja', 'zh-Hans', 'es', 'fr', 'uk', 'russian', 'korean']) expect(getMangaOcrEngine(source)).toBe('paddle');
     });
+    it.each([
+        ['ar', 'ara', 'العربية', ['ar', ' ar_SA ']],
+        ['he', 'heb', 'עברית', ['he', 'HE-IL', ' iw_IL ']],
+    ] as const)('在源语言列表中提供 %s，并只在明确选择后要求该语言包', (language, pack, label, aliases) => {
+        expect(IMAGE_OCR_SOURCE_LANGUAGES).toContainEqual({value: language, label});
+        expect(IMAGE_OCR_LANGUAGE_PACKS).toContainEqual(expect.objectContaining({code: pack, label, recommended: false}));
+        expect(normalizeImageOcrLanguageCodes([pack, 'eng', pack])).toEqual([pack, 'eng']);
+        expect(getRequiredImageOcrLanguages('auto')).not.toContain(pack);
+        for (const source of aliases) {
+            expect(getRequiredImageOcrLanguages(source)).toEqual([pack, 'eng']);
+            expect(getMangaOcrEngine(source)).toBe('tesseract');
+        }
+    });
     it('普通图片保留原始尺寸，大图同时受像素总数和最长边约束', () => {
         expect(getOcrImageSize(320, 180)).toEqual({width: 320, height: 180});
         expect(getOcrImageSize(1920, 1080)).toEqual({width: 1920, height: 1080});
         expect(getOcrImageSize(8000, 1000)).toEqual({width: 4096, height: 512});
         expect(getOcrImageSize(4000, 3000)).toEqual({width: 2828, height: 2121});
         expect(getOcrImageSize(1, 100_000)).toEqual({width: 1, height: 4096});
+        expect(getOcrImageSize(2480, 3508, 'document')).toEqual({width: 2480, height: 3508});
+        const document = getOcrImageSize(8000, 9000, 'document');
+        expect(document.width * document.height).toBeLessThanOrEqual(9_000_000);
+        expect(Math.max(document.width, document.height)).toBeLessThanOrEqual(4096);
     });
 
     it.each([[0, 10], [-1, 10], [10, 0], [10, -1], [Infinity, 10], [10, Infinity], [NaN, 10]])(

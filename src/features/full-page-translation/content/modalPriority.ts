@@ -51,12 +51,17 @@ function computed(element: Element): CSSStyleDeclaration | null {
 
 function isVisible(element: HTMLElement): boolean {
     if (element.isConnected === false || isOwned(element)) return false;
+    const ancestors: HTMLElement[] = [];
     for (const ancestor of composedAncestors(element)) {
         if (ancestor.nodeType !== 1) continue;
         const current = ancestor as HTMLElement;
+        if (current.hidden || current.hasAttribute('inert') || current.getAttribute('aria-hidden') === 'true') return false;
+        ancestors.push(current);
+    }
+    // 先排除整条组合祖先链的显式隐藏状态，避免解析不可见宿主组件的样式。
+    for (const current of ancestors) {
         const style = computed(current);
-        if (current.hidden || current.hasAttribute('inert') || current.getAttribute('aria-hidden') === 'true' ||
-            style?.display === 'none' || style?.visibility === 'hidden' || style?.visibility === 'collapse' || style?.opacity === '0') return false;
+        if (style?.display === 'none' || style?.visibility === 'hidden' || style?.visibility === 'collapse' || style?.opacity === '0') return false;
     }
     const rect = element.getBoundingClientRect?.();
     const view = element.ownerDocument.defaultView;
@@ -93,7 +98,8 @@ function hasBlockingMask(element: HTMLElement): boolean {
     const candidates = new Set<Element>();
     const root = element.parentElement ?? element.getRootNode();
     if (root.nodeType === 1 && matches(root as Element, MASK_SELECTOR)) candidates.add(root as Element);
-    if ('querySelectorAll' in root) (root as ParentNode).querySelectorAll(MASK_SELECTOR).forEach((node) => candidates.add(node));
+    // HTMLElement 的根只能是 Element、Document 或 DocumentFragment，均实现 ParentNode。
+    (root as ParentNode).querySelectorAll(MASK_SELECTOR).forEach((node) => candidates.add(node));
     for (const mask of candidates) {
         if (mask === element) continue;
         if (isOwned(mask)) continue;
@@ -177,8 +183,7 @@ export function findActiveTranslationModal(roots: Iterable<Node>): HTMLElement |
         const candidateHit = isHitAtCenter(candidate);
         const winnerHit = isHitAtCenter(winner);
         if (candidateHit !== winnerHit) { if (candidateHit) winner = candidate; return; }
-        if (zIndex(candidate) > zIndex(winner)) winner = candidate;
-        else if (zIndex(candidate) === zIndex(winner)) winner = candidate;
+        if (zIndex(candidate) >= zIndex(winner)) winner = candidate;
     });
     return winner;
 }

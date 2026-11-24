@@ -1,7 +1,7 @@
 /**
  * @file src/features/vocabulary/background/handler.ts
  * 文件职责：实现本地学习收藏的后台消息处理器，对查询、收藏、解释更新、复习、撤销删除、列表、导入导出和清空进行严格输入校验与统一错误映射。
- * 主要内容：定义仓库和广播依赖，构造词书变更消息及浏览器广播适配器，创建变更 ACK、主业务 handler 和组合 handlers，并在成功写操作后通知相关标签页。
+ * 主要内容：定义仓库和广播依赖，构造词书变更协议及兼容共享网页接收者端口的广播适配器，创建变更 ACK、主业务 handler 和组合 handlers，成功写操作后通知接收者。
  * 模块边界：本文件不直接操作 Dexie 表或 Vue UI；持久化由 repository contract 注入，消息形状来自 protocol，browser.tabs 广播通过适配器隔离，失败不会泄露内部数据。
  */
 import type {BackgroundMessageHandler} from '@/src/services/messaging/backgroundRouter';
@@ -22,7 +22,10 @@ import {
 
 export interface VocabularyBackgroundContext {
     sender?: {
+        id?: string;
+        url?: string;
         tab?: {
+            id?: number;
             incognito?: boolean;
         };
     };
@@ -33,6 +36,7 @@ export interface VocabularyBookChangedBroadcaster {
 }
 
 export interface VocabularyBookChangeBroadcastAdapter {
+    broadcastTabMessage?(message: VocabularyBookChangedMessage): Promise<void>;
     sendRuntimeMessage(message: VocabularyBookChangedMessage): Promise<unknown>;
     queryTabs(): Promise<Array<{id?: number}>>;
     sendTabMessage(tabId: number, message: VocabularyBookChangedMessage): Promise<unknown>;
@@ -49,10 +53,16 @@ export interface VocabularyBookRepositoryContract {
     relearn(entryId: string): Promise<unknown>;
     getReviewLogs(entryId: string): Promise<unknown>;
     remove(entryId: string): Promise<unknown>;
-    removeWithSnapshot(entryId: string): Promise<unknown>;
     clear(): Promise<void>;
     exportData(options?: VocabularyExportOptions): Promise<unknown>;
     importData(data: Record<string, unknown>): Promise<unknown>;
+}
+
+export interface VocabularyUndoRepositoryContract {
+    removeWithUndo(entryId: string): Promise<unknown>;
+    listUndo(): Promise<unknown>;
+    restoreUndo(undoId: string): Promise<'restored' | 'previously-restored' | 'expired' | 'missing'>;
+    discardUndo(undoId: string): Promise<void>;
 }
 
 export interface VocabularyBookBackgroundDependencies {
@@ -60,8 +70,10 @@ export interface VocabularyBookBackgroundDependencies {
     readonly isVocabularyBookEnabled: () => boolean;
     readonly isReencounterEnabled?: () => boolean;
     readonly vocabularyBook: VocabularyBookRepositoryContract;
+    readonly vocabularyUndo?: VocabularyUndoRepositoryContract;
     readonly broadcastChanged: VocabularyBookChangedBroadcaster;
     readonly logOperationFailure: (error: unknown) => void;
+    readonly isTrustedUndoSender?: (sender: VocabularyBackgroundContext['sender']) => boolean;
 }
 
 export const VOCABULARY_BOOK_CHANGED_ACK_RESPONSE = {success: true} as const;
@@ -89,6 +101,13 @@ function requiredText(value: unknown, message: string): string {
 
 function vocabularyEntryId(value: unknown): string {
     return requiredText(value, '缺少有效的单词条目标识');
+}
+
+function vocabularyUndoId(value: unknown): string {
+    if (typeof value !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value)) {
+        throw new VocabularyBookHandlerError('invalid-input', '删除恢复标识无效');
+    }
+    return value;
 }
 
 function validateGetByTermMessage(message: VocabularyBookRuntimeMessage): {sourceLanguage: string; term: string} {
@@ -176,7 +195,11 @@ export function createBrowserVocabularyBookChangedBroadcaster(
         // 步骤 1：扩展页通过 runtime 消息接收变更通知。
         void adapter.sendRuntimeMessage(message).catch(() => undefined);
 
-        // 步骤 2：content script 需要逐 tab 发送；受限页面失败不影响原请求。
+        // 步骤 2：共享端口选择实际 content 接收者；旧适配器仍逐标签发送。
+        if (adapter.broadcastTabMessage) {
+            void adapter.broadcastTabMessage(message).catch(() => undefined);
+            return;
+        }
         void adapter.queryTabs()
             .then((tabs) => Promise.allSettled(
                 tabs
@@ -271,11 +294,31 @@ export function createVocabularyBookHandler(
                         if (removed) notifyVocabularyBookChanged(dependencies, 'remove', entryId);
                         return {success: true, data: removed};
                     }
-                    case 'removeWithSnapshot': {
-                        const entryId = vocabularyEntryId(message.entryId);
-                        const snapshot = await dependencies.vocabularyBook.removeWithSnapshot(entryId);
-                        if (snapshot) notifyVocabularyBookChanged(dependencies, 'remove', entryId);
-                        return {success: true, data: snapshot};
+                    case 'removeWithUndo':
+                    case 'listUndo':
+                    case 'restoreUndo':
+                    case 'discardUndo': {
+                        if (import.meta.env.BROWSER === 'userscript') throw new VocabularyBookHandlerError('invalid-input', '操作不支持');
+                        // 原文和复习历史只留在后台数据库；不能让网页内容脚本枚举或恢复删除记录。
+                        if (context.sender?.tab?.incognito === true || !dependencies.vocabularyUndo || !dependencies.isTrustedUndoSender?.(context.sender)) {
+                            throw new VocabularyBookHandlerError('invalid-input', '请从扩展设置页面管理删除恢复记录');
+                        }
+                        if (message.action === 'listUndo') return {success: true, data: await dependencies.vocabularyUndo.listUndo()};
+                        if (message.action === 'removeWithUndo') {
+                            const entryId = vocabularyEntryId(message.entryId);
+                            const ticket = await dependencies.vocabularyUndo.removeWithUndo(entryId);
+                            if (ticket) notifyVocabularyBookChanged(dependencies, 'remove', entryId);
+                            return {success: true, data: ticket};
+                        }
+                        const undoId = vocabularyUndoId(message.undoId);
+                        if (message.action === 'discardUndo') {
+                            await dependencies.vocabularyUndo.discardUndo(undoId);
+                            notifyVocabularyBookChanged(dependencies, 'undo');
+                            return {success: true, data: true};
+                        }
+                        const result = await dependencies.vocabularyUndo.restoreUndo(undoId);
+                        if (result === 'restored') notifyVocabularyBookChanged(dependencies, 'import');
+                        return {success: true, data: result};
                     }
                     case 'clear':
                         await dependencies.vocabularyBook.clear();
@@ -293,6 +336,15 @@ export function createVocabularyBookHandler(
                 }
             } catch (error) {
                 // 步骤 2：保持旧 background 行为：词书错误转为结构化响应，未知错误转为 storage-error。
+                if (message.action === 'clear' || (import.meta.env.BROWSER !== 'userscript' && typeof message.action === 'string' && ['removeWithUndo', 'listUndo', 'restoreUndo', 'discardUndo'].includes(message.action))) {
+                    if (error instanceof VocabularyBookHandlerError) return {success: false, error: {code: error.code, message: error.message}};
+                    if (error instanceof Error && error.name === 'VocabularyBookError' && 'code' in error) {
+                        if (error.code === 'limit-exceeded') return {success: false, error: {code: 'limit-exceeded', message: '收藏或恢复记录空间已满，请先处理已有记录'}};
+                        if (error.code === 'invalid-input') return {success: false, error: {code: 'invalid-input', message: '已有相同收藏或复习记录，请先检查现有数据'}};
+                    }
+                    // 存储异常不写出可能包含原文、URL 或其他私密字段的异常对象。
+                    return {success: false, error: {code: 'storage-error', message: '收藏操作未确认，请检查收藏后重试'}};
+                }
                 return vocabularyFailure(error, dependencies.logOperationFailure);
             }
         },

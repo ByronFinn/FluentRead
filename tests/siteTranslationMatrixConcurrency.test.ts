@@ -1,5 +1,8 @@
 import {EventEmitter} from 'node:events';
+import {mkdtempSync, readFileSync, rmSync} from 'node:fs';
 import {createRequire} from 'node:module';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {describe, expect, it, vi} from 'vitest';
 
 // Every child and signal source is fake; these tests do not launch browsers or Node children.
@@ -296,4 +299,185 @@ describe('bounded real-site matrix scheduling', () => {
     });
     expect(runAttempt).toHaveBeenCalledTimes(1);
   });
+});
+
+describe('maintained compatibility profile', () => {
+  const {parseArgs, selectedEntries, childArgs} = require('../scripts/run-site-translation-matrix.cjs');
+  const {parseArgs: parseCase} = require('../scripts/run-site-translation-test.cjs');
+  const cases = require('./browser-translation-cases.json');
+  const profile = require('../scripts/site-translation/maintenance-cases.json');
+  const args = ['--extension-dir', '/temporary/production', '--playwright-root', '/runtime',
+    '--focus-safe-helper', '/helper', '--runtime-diagnostics-helper', '/diagnostics', '--allow-network', '--mode', 'full'];
+
+  it('selects ten independent real required hosts and all requested content categories', () => {
+    const parsed = parseArgs([...args, '--profile', 'maintenance']);
+    const entries = selectedEntries(parsed, Object.entries(cases)) as Array<[string, {url: string; tier: string}]>;
+    expect(entries).toHaveLength(10);
+    expect(new Set(entries.map(([, value]) => new URL(value.url).hostname)).size).toBe(10);
+    expect(entries.every(([, value]) => value.tier === 'required')).toBe(true);
+    expect(profile.cases.map((entry: {category: string}) => entry.category))
+      .toEqual(expect.arrayContaining(['news', 'long-article', 'github', 'discussion', 'dynamic-documentation']));
+    expect(() => selectedEntries({...parsed, cases: ['example-com']}, Object.entries(cases))).toThrow('cannot be combined');
+    expect(() => selectedEntries({...parsed, profile: 'unknown'}, Object.entries(cases))).toThrow('Unknown profile');
+  });
+
+  it('forwards explicit controlled-provider and lifecycle scope to each child without changing default live-provider mode', () => {
+    const parsed = parseArgs([...args, '--controlled-provider', '--stability-probes']);
+    const child = childArgs(parsed, 'index-luke-preface', 'full');
+    expect(child).toEqual(expect.arrayContaining(['--controlled-provider', '--stability-probes']));
+    expect(child).toEqual(expect.arrayContaining(['--runtime-diagnostics-helper', '/diagnostics']));
+    expect(parseCase(child.slice(1))).toMatchObject({controlledProvider: true, stabilityProbes: true, service: 'microsoft'});
+    expect(parseCase(childArgs(parseArgs(args), 'index-luke-preface', 'full').slice(1)).service).toBe('freeTranslation');
+    expect(() => parseArgs([...args, '--mode', 'both', '--stability-probes'])).toThrow('requires --mode full');
+    expect(() => parseCase([...child.slice(1), '--mode', 'hover'])).toThrow('requires --mode full');
+  });
+
+  it('requires runtime diagnostics for execution while keeping case listing available without a browser', () => {
+    const missing = args.filter(value => !['--runtime-diagnostics-helper', '/diagnostics'].includes(value));
+    expect(() => parseArgs(missing)).toThrow('--runtime-diagnostics-helper');
+    expect(() => parseCase([...missing, '--case', 'example-com'])).toThrow('--runtime-diagnostics-helper');
+    expect(parseArgs(['--list'])).toMatchObject({list: true});
+  });
+});
+
+describe('site runtime diagnostics verdict and evidence', () => {
+  const {loadRuntimeDiagnostics, finishRuntimeDiagnostics, unloadRuntimePage} = require('../scripts/run-site-translation-test.cjs');
+
+  it('unloads the owned document with a bounded navigation while runtime collection is still active', async () => {
+    const phases: string[] = [];
+    const diagnostics = {setPhase: vi.fn((phase: string) => phases.push(phase))};
+    const page = {isClosed: () => false, goto: vi.fn(async () => {expect(phases).toEqual(['case/full/unload']);})};
+    expect(await unloadRuntimePage(page, diagnostics, 'case/full/unload')).toMatchObject({status: 'observed'});
+    expect(page.goto).toHaveBeenCalledWith('about:blank', {waitUntil: 'domcontentloaded', timeout: 3000});
+    expect(await unloadRuntimePage(null, diagnostics, 'unload')).toMatchObject({status: 'unavailable'});
+  });
+
+  it('rejects a helper missing required capture interfaces instead of running a browser without diagnostics', () => {
+    expect(() => loadRuntimeDiagnostics('/helper', () => ({}))).toThrow('createRuntimeDiagnostics/redact');
+    expect(() => loadRuntimeDiagnostics('/helper', () => ({redact: String, createRuntimeDiagnostics: () => ({start() {}})})))
+      .toThrow('attachPage');
+  });
+
+  it('fails completed DOM work on runtime warnings and still retains capture gaps and stops the collector', async () => {
+    const warning = Error('one extension warning');
+    const snapshot = {passed: false, completeCoverage: false, coverage: {limitations: ['worker startup gap']}, counts: {errors: 0, warnings: 1}};
+    const diagnostics = {flush: vi.fn(), assertClean: vi.fn(() => {throw warning;}), snapshot: vi.fn(() => snapshot), stop: vi.fn()};
+    const output: Record<string, unknown> = {ok: true};
+    expect(await finishRuntimeDiagnostics(diagnostics, output, null)).toEqual([{stage: 'runtime-verdict', error: warning}]);
+    expect(output).toEqual({ok: false, runtimeDiagnostics: snapshot});
+    expect(diagnostics.stop).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the original functional failure and continues snapshot/stop when flush and verdict fail', async () => {
+    const flushError = Error('collector disconnected'), verdictError = Error('worker not observed');
+    const diagnostics = {flush: vi.fn(() => {throw flushError;}), assertClean: vi.fn(() => {throw verdictError;}), snapshot: vi.fn(() => ({passed: false})), stop: vi.fn()};
+    const output = {ok: false, error: 'original missing paragraph'};
+    expect(await finishRuntimeDiagnostics(diagnostics, output, null)).toEqual([
+      {stage: 'runtime-flush', error: flushError}, {stage: 'runtime-verdict', error: verdictError},
+    ]);
+    expect(output.error).toBe('original missing paragraph');
+    expect(diagnostics.snapshot).toHaveBeenCalledOnce();
+    expect(diagnostics.stop).toHaveBeenCalledOnce();
+  });
+
+  it('writes failed runtime evidence before stopping and preserves unknown ownership for investigation', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'fluentread-runtime-evidence-test-'));
+    const snapshot = {passed: false, completeCoverage: false, entries: [{ownership: 'unattributed', message: 'unknown warning'}]};
+    const diagnostics = {flush: vi.fn(), assertClean: vi.fn(() => {throw Error('unknown warning');}), snapshot: vi.fn(() => snapshot),
+      stop: vi.fn(() => {expect(JSON.parse(readFileSync(join(directory, 'runtime-diagnostics.json'), 'utf8'))).toEqual(snapshot);})};
+    try {
+      const output = {ok: true};
+      const failures = await finishRuntimeDiagnostics(diagnostics, output, directory);
+      expect(output.ok).toBe(false);
+      expect(failures.map((failure: {stage: string}) => failure.stage)).toEqual(['runtime-verdict']);
+      expect(diagnostics.stop).toHaveBeenCalledOnce();
+    } finally {rmSync(directory, {recursive: true, force: true});}
+  });
+
+  it('does not accept a silent helper verdict when its snapshot has no passing evidence', async () => {
+    const diagnostics = {flush() {}, assertClean() {}, snapshot: () => ({passed: false}), stop: vi.fn()};
+    const output = {ok: true};
+    expect((await finishRuntimeDiagnostics(diagnostics, output, null)).map((failure: {stage: string}) => failure.stage))
+      .toEqual(['runtime-snapshot']);
+    expect(output.ok).toBe(false);
+    expect(diagnostics.stop).toHaveBeenCalledOnce();
+  });
+});
+
+describe('bounded initial corpus on infinite feeds', () => {
+  const {completeFullPageScope, withMandatoryHeadingCoverage} = require('../scripts/run-site-translation-test.cjs');
+  const {normalizeCaseConfig, collectBaseCaseConfigErrors, CASES} = require('../scripts/site-translation/case-config.cjs');
+  const makeActions = () => ({scrollAndWaitFullPage: vi.fn(), settleCoverageByReveal: vi.fn(),
+    revealFullPageTarget: vi.fn(), waitForTranslationIdle: vi.fn(), observeCoverage: vi.fn()});
+  const context = {page: {}, timeout: 1000, selector: 'h3', scrollContainer: undefined,
+    verifyUnchanged: vi.fn(), waitForTarget: vi.fn()};
+
+  it('retains finite-page bottom traversal by default and exposes every frozen initial owner for a feed', async () => {
+    const finite = makeActions();
+    await completeFullPageScope(context, finite);
+    expect(finite.scrollAndWaitFullPage).toHaveBeenCalledOnce();
+    expect(finite.settleCoverageByReveal).not.toHaveBeenCalled();
+    const bounded = makeActions();
+    await completeFullPageScope({...context, fullPageScope: 'initial-corpus'}, bounded);
+    expect(bounded.scrollAndWaitFullPage).not.toHaveBeenCalled();
+    expect(bounded.settleCoverageByReveal).toHaveBeenCalledWith(context.page, 1000, '本轮已载入正文覆盖收敛', 0, context.verifyUnchanged);
+    expect(bounded.revealFullPageTarget).toHaveBeenCalledWith(context.page, 'h3');
+    expect(bounded.waitForTranslationIdle).toHaveBeenCalledWith(context.page, 1000, '本轮已载入正文回到目标后', 0);
+    expect(bounded.observeCoverage).toHaveBeenCalledOnce();
+  });
+
+  it('propagates a missing initial owner failure instead of calling incomplete feed coverage a pass', async () => {
+    const actions = makeActions();
+    actions.settleCoverageByReveal.mockRejectedValue(Error('initial owner missing-wrapper'));
+    await expect(completeFullPageScope({...context, fullPageScope: 'initial-corpus'}, actions)).rejects.toThrow('missing-wrapper');
+    expect(actions.revealFullPageTarget).not.toHaveBeenCalled();
+    expect(actions.observeCoverage).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported scopes and unbounded dynamic collection in initial-corpus cases', () => {
+    const example = structuredClone(CASES['example-com']);
+    expect(normalizeCaseConfig('finite', example).fullPageScope).toBe('finite-page');
+    example.fullPageScope = 'initial-corpus';
+    expect(collectBaseCaseConfigErrors('bounded', example)).toEqual([]);
+    example.coverageRules[0].trackDynamic = true;
+    expect(collectBaseCaseConfigErrors('bounded', example).join(' ')).toContain('不得启用 trackDynamic');
+    example.fullPageScope = 'skip-everything';
+    expect(collectBaseCaseConfigErrors('invalid', example).join(' ')).toContain('finite-page 或 initial-corpus');
+    expect(withMandatoryHeadingCoverage([], false, 'initial-corpus')).toEqual([
+      expect.objectContaining({selector: 'h1', name: 'mandatory-visible-latin-h1', trackDynamic: false}),
+    ]);
+    expect(withMandatoryHeadingCoverage([])[0].trackDynamic).toBe(true);
+  });
+});
+
+describe('focus guard is a matrix stop condition', () => {
+  it('does not retry a focus violation as a flaky site failure', async () => {
+    const attempt=vi.fn(async () => ({ok:false,timedOut:false,exitCode:86}));
+    const result=await runJobAttempts(attempt,2);
+    expect(attempt).toHaveBeenCalledOnce();expect(result.attempts).toHaveLength(1);
+  });
+  it('stops dispatch and signals an already running sibling after the owned browser becomes foreground', async () => {
+    const source=new EventEmitter();const started:string[]=[];let siblingAborted=false;
+    const result=await runJobsWithBoundedConcurrency(jobs,async (job,signal)=>{
+      started.push(job.name);
+      if(job.name==='required-0')return {ok:false,timedOut:false,exitCode:86};
+      signal.addEventListener('abort',()=>{siblingAborted=true;},{once:true});
+      await Promise.resolve();await Promise.resolve();
+      return {ok:!signal.aborted,timedOut:false,aborted:signal.aborted};
+    },{signalSource:source});
+    expect(started).toEqual(['required-0','required-1']);expect(siblingAborted).toBe(true);
+    expect(result).toMatchObject({aborted:true,abortSignal:'FOCUS_SAFETY_VIOLATION'});
+    expect(result.results.slice(2).every(item=>item.notStarted&&item.aborted)).toBe(true);
+    expect(source.listenerCount('SIGINT')).toBe(0);expect(source.listenerCount('SIGTERM')).toBe(0);
+  });
+});
+
+it('only propagates a public focus code through own causal errors into the fatal exit status', () => {
+  const {siteTestExitCode}=require('../scripts/testing/site-error-diagnostics.cjs');
+  const focused=Object.assign(new Error('Owned browser is foreground'),{code:'FOCUS_SAFETY_VIOLATION'});
+  expect(siteTestExitCode(focused)).toBe(86);
+  expect(siteTestExitCode(new AggregateError([new Error('cleanup'),new Error('wrapper',{cause:focused})]))).toBe(86);
+  const getter=vi.fn(()=>focused);const accessor=Object.defineProperty({},'cause',{get:getter});
+  for(const error of [new Error('FOCUS_SAFETY_VIOLATION'),{code:'UNKNOWN'},Object.create(focused),accessor])expect(siteTestExitCode(error)).toBe(1);
+  expect(getter).not.toHaveBeenCalled();
 });

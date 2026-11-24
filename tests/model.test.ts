@@ -18,6 +18,7 @@ import {
     normalizeFloatingBallClickAction,
     normalizeFloatingBallCollapsedOpacity,
     normalizeFloatingBallHoverDelay,
+    normalizeFloatingBallMargin,
     normalizeFloatingBallToolsDisplay,
 } from '@/src/core/config/model';
 import { getMimoEndpoint, MIMO_ENDPOINTS, MINIMAX_ENDPOINTS, tongyiTokenPlanUrl, urls } from '@/src/core/config/constants';
@@ -114,6 +115,14 @@ describe('AI 模型编号列表', () => {
         expect(models.get(services.infini)).toContain('glm-5.2');
         expect(models.get(services.infini)).not.toContain('glm-5.3');
         expect(models.get(services.moonshot)).toContain('kimi-k2.7-code');
+        expect(models.get(services.cloudgpu)).toEqual([
+            'deepseek-v4.1-flash', 'kimi-k3', 'qwen3.6-35b', customModelString,
+        ]);
+        expect(defaultModelIds[services.cloudgpu]).toBe('deepseek-v4.1-flash');
+        expect(models.get(services.cheapaimodel)).toEqual([
+            'deepseek-v4-1-flash', 'glm-5.3-flash', 'glm-5.3', customModelString,
+        ]);
+        expect(defaultModelIds[services.cheapaimodel]).toBe('deepseek-v4-1-flash');
         expect(models.get(services.yiyan)).toContain('ernie-5.1');
         expect(models.get(services.minimax)).toContain('MiniMax-M2.7');
         expect(models.get(services.minimax)).toContain('MiniMax-M3');
@@ -171,6 +180,10 @@ describe('AI 模型编号列表', () => {
             services.fireworks,
             services.deepinfra,
             services.perplexity,
+            services.runcrate,
+            services.cloudgpu,
+            services.cheaperinference,
+            services.cheapaimodel,
             services.ollama,
             services.custom,
         ]);
@@ -188,12 +201,44 @@ describe('AI 模型编号列表', () => {
             services.fireworks,
             services.deepinfra,
             services.perplexity,
+            services.runcrate,
+            services.cloudgpu,
+            services.cheaperinference,
+            services.cheapaimodel,
             services.ollama,
             services.custom,
         ]);
         expect(aiServices.filter(option => option.catalogKind === 'provider')).toHaveLength(16);
         expect(servicesType.isMachine(services.freeTranslation)).toBe(true);
         expect(defaultOption.service).toBe(services.freeTranslation);
+    });
+
+    it('为各个服务提供已核实的新文本模型，并保留原默认与旧选择', () => {
+        const additions: Record<string, string[]> = {
+            [services.openai]: ['gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-sol'],
+            [services.gemini]: ['gemini-4-argon'],
+            [services.tongyi]: ['qwen3.8-27b', 'qwen3.8-2.4t-a95b'],
+            [services.claude]: ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5-5'],
+            [services.jieyue]: ['step-3.7-flash', 'step-5-preview'],
+            [services.doubao]: ['doubao-seed-2-1-lite-260915', 'doubao-seed-2-1-pro-260915', 'doubao-seed-2-1-turbo-260628', 'doubao-seed-evolving'],
+            [services.siliconCloud]: ['deepseek-ai/DeepSeek-V4.1-Flash', 'Qwen/Qwen3.8-27B'],
+            [services.groq]: ['qwen/qwen3.8-27b'],
+            [services.openrouter]: ['qwen/qwen3.8-flash', 'google/gemini-4-argon', 'openai/gpt-6-luna', 'openai/gpt-6.1-sol', 'anthropic/claude-haiku-5.5', 'anthropic/claude-sonnet-5.5', 'anthropic/claude-opus-5.5', 'stepfun/step-3.7-flash'],
+            [services.mistral]: ['mistral-large-4', 'zai-glm-5-3', 'zai-glm-5-3-flash', 'deepseek-v4-1-flash-1017'],
+            [services.togetherai]: ['Qwen/Qwen3.8-27B'],
+            [services.deepinfra]: ['Qwen/Qwen3.8-27B'],
+            [services.ollama]: ['qwen3.8:27b', 'qwen3.8-flash-next:125b-a6b-q4_K_M', 'qwen3.8-flash-next:125b-mlx'],
+        };
+        for (const [service, added] of Object.entries(additions)) {
+            const options = models.get(service)!;
+            for (const model of added) expect(options).toContain(model);
+            expect(new Set(options).size).toBe(options.length);
+            expect(options.at(0)).toBe(defaultModelIds[service as keyof typeof defaultModelIds]);
+            expect(options.at(-1)).toBe(customModelString);
+        }
+        expect(models.get(services.groq)).toContain('qwen/qwen3.6-27b');
+        expect(normalizeConfig({model: {[services.groq]: 'qwen/qwen3.6-27b'}}).model[services.groq])
+            .toBe('qwen/qwen3.6-27b');
     });
 
     it('退役服务回退到可用默认值并清除遗留连接配置', () => {
@@ -1095,12 +1140,12 @@ describe('双语逐句高亮配置', () => {
                 .toMatchObject({bilingualSentenceHighlightEnabled: true, bilingualSentenceHighlightStyle: 'rose'});
         }
     });
-    it('默认关闭，并只接受显式布尔值开启', () => {
-        expect(new Config().bilingualSentenceHighlightEnabled).toBe(false);
-        expect(normalizeConfig({}).bilingualSentenceHighlightEnabled).toBe(false);
+    it('默认开启，显式关闭优先，非法值回到默认', () => {
+        expect(new Config().bilingualSentenceHighlightEnabled).toBe(true);
+        expect(normalizeConfig({}).bilingualSentenceHighlightEnabled).toBe(true);
         expect(normalizeConfig({bilingualSentenceHighlightEnabled: true}).bilingualSentenceHighlightEnabled).toBe(true);
         expect(normalizeConfig({bilingualSentenceHighlightEnabled: false}).bilingualSentenceHighlightEnabled).toBe(false);
-        expect(normalizeConfig({bilingualSentenceHighlightEnabled: 'true'}).bilingualSentenceHighlightEnabled).toBe(false);
+        expect(normalizeConfig({bilingualSentenceHighlightEnabled: 'true'}).bilingualSentenceHighlightEnabled).toBe(true);
     });
 });
 
@@ -1136,6 +1181,23 @@ describe('鼠标悬浮翻译延迟配置', () => {
 });
 
 describe('悬浮球进阶外观配置', () => {
+    it('defaults and round-trips independent signed margins without changing the display mode', () => {
+        expect(new Config()).toMatchObject({floatingBallDefaultMargin: 0, floatingBallPopoutMargin: 20});
+        expect(normalizeConfig({floatingBallToolsDisplay: 'hover'}))
+            .toMatchObject({floatingBallDefaultMargin: 0, floatingBallPopoutMargin: 20, floatingBallToolsDisplay: 'hover'});
+        const saved = JSON.parse(JSON.stringify(normalizeConfig({floatingBallDefaultMargin: -18, floatingBallPopoutMargin: -18})));
+        expect(normalizeConfig(saved)).toMatchObject({floatingBallDefaultMargin: -18, floatingBallPopoutMargin: -18});
+        expect(normalizeFloatingBallMargin(18.6)).toBe(19);
+        expect(normalizeFloatingBallMargin(' -20.4 ')).toBe(-20);
+        expect(normalizeFloatingBallMargin(-999)).toBe(-200);
+        expect(normalizeFloatingBallMargin(999)).toBe(200);
+        for (const value of [null, false, '', '  ', 'bad', undefined, Number.NaN, Infinity, -Infinity, {}, []]) {
+            expect(normalizeFloatingBallMargin(value)).toBe(0);
+            expect(normalizeFloatingBallMargin(value, 20)).toBe(20);
+            expect(normalizeConfig({floatingBallDefaultMargin: value, floatingBallPopoutMargin: value}))
+                .toMatchObject({floatingBallDefaultMargin: 0, floatingBallPopoutMargin: 20});
+        }
+    });
     it('默认关闭悬浮球，开启后悬停展开；点击翻译、标准尺寸与设置入口保持可用', () => {
         const defaults = new Config();
         expect(defaults.disableFloatingBall).toBe(true);
@@ -1728,7 +1790,6 @@ describe('OpenAI 兼容服务端点', () => {
 
     it('文心一言使用 Bearer Token，不再要求旧 AK/SK', () => {
         expect(servicesType.isUseToken(services.yiyan)).toBe(true);
-        expect(servicesType.isUseAkSk(services.yiyan)).toBe(false);
     });
 });
 

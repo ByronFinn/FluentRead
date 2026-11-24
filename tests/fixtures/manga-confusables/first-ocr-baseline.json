@@ -1,0 +1,1552 @@
+{
+  "version": 1,
+  "scope": "First frozen-v3 stage2 observer run, six independently designed controls plus unchanged originalmixed reference. Historical evidence, not a v5 production pass. No output chosen or replaced.",
+  "sourceFrozenAt": "2026-10-25T07:10:22.777975+00:00",
+  "sourceBeforeAnyOcr": true,
+  "sourceDesignSha256": "7af332554f08681a25768616c192d912bbaf25582f7a48270f834c695facd0fa",
+  "originalSourceManifestSha256": "8c405d8e7482ae966f82c2ff1489414f0238be689cc8b158fa33a391a93138b7",
+  "sourceAuthoredBeforeResultSelection": true,
+  "diagnosticPreparedAt": "2026-10-25T07:38:56.629771+00:00",
+  "extensionTreeSha256": "30294c86872681438b752a893ff2dac3ed20ae62eb01adc8ea272606c3c6b301",
+  "observerSdkSha256": "15bf101488b626000d969144428ac14adb4cb9db516ba12a8dd9de7cba4ce3b1",
+  "firstSevenRunStrictExit": 1,
+  "firstSevenRunAnchors": {
+    "found": 16,
+    "expected": 17
+  },
+  "newSix": {
+    "fullAnchorsFound": 12,
+    "fullAnchorsExpected": 12,
+    "strictPass": false,
+    "failuresRetained": true,
+    "scenes": [
+      {
+        "scene": "ja-clear-management-tags",
+        "texts": [
+          "管理Xモ NOTE OT 管理メモ NOTE OT",
+          "予備の箱 CODE OO"
+        ],
+        "sourceCharacterInventory": {
+          "excess": [
+            {
+              "character": "管",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "理",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "X",
+              "expected": 0,
+              "actual": 1,
+              "excess": 1
+            },
+            {
+              "character": "モ",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "N",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "O",
+              "expected": 5,
+              "actual": 7,
+              "excess": 2
+            },
+            {
+              "character": "T",
+              "expected": 2,
+              "actual": 4,
+              "excess": 2
+            },
+            {
+              "character": "E",
+              "expected": 2,
+              "actual": 3,
+              "excess": 1
+            }
+          ],
+          "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+        },
+        "qualityFailures": [
+          {
+            "type": "unexpected-ocr-characters",
+            "excess": [
+              {
+                "character": "管",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "理",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "X",
+                "expected": 0,
+                "actual": 1,
+                "excess": 1
+              },
+              {
+                "character": "モ",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "N",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "O",
+                "expected": 5,
+                "actual": 7,
+                "excess": 2
+              },
+              {
+                "character": "T",
+                "expected": 2,
+                "actual": 4,
+                "excess": 2
+              },
+              {
+                "character": "E",
+                "expected": 2,
+                "actual": 3,
+                "excess": 1
+              }
+            ],
+            "reason": "Actual offscreen source text contains more normalized characters than declared source truth"
+          }
+        ],
+        "negativeDetections": [],
+        "protectedPixels": {
+          "source": {
+            "width": 1600,
+            "height": 1000,
+            "pixels": [
+              [
+                97,
+                134,
+                142,
+                255
+              ],
+              [
+                238,
+                237,
+                226,
+                255
+              ]
+            ]
+          },
+          "translated": {
+            "width": 1600,
+            "height": 1000,
+            "pixels": [
+              [
+                97,
+                134,
+                142,
+                255
+              ],
+              [
+                238,
+                237,
+                226,
+                255
+              ]
+            ]
+          }
+        },
+        "restoreAndRedisplay": {
+          "sourcePreserved": true,
+          "bitmapPreserved": true,
+          "additionalOcrOperations": 0,
+          "additionalTextRequests": 0
+        },
+        "actualSourceLines": [
+          "管理Xモ NOTE OT 管理メモ NOTE OT",
+          "予備の箱 CODE OO"
+        ],
+        "allAnchorsFound": true
+      },
+      {
+        "scene": "ja-soft-instruction-tags",
+        "texts": [
+          "次の作業NOTE OT",
+          "確認してCHECKIT"
+        ],
+        "sourceCharacterInventory": {
+          "excess": [],
+          "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+        },
+        "qualityFailures": [],
+        "negativeDetections": [],
+        "protectedPixels": {
+          "source": {
+            "width": 1600,
+            "height": 1000,
+            "pixels": [
+              [
+                97,
+                134,
+                142,
+                255
+              ],
+              [
+                221,
+                225,
+                224,
+                255
+              ]
+            ]
+          },
+          "translated": {
+            "width": 1600,
+            "height": 1000,
+            "pixels": [
+              [
+                97,
+                134,
+                142,
+                255
+              ],
+              [
+                221,
+                225,
+                224,
+                255
+              ]
+            ]
+          }
+        },
+        "restoreAndRedisplay": {
+          "sourcePreserved": true,
+          "bitmapPreserved": true,
+          "additionalOcrOperations": 0,
+          "additionalTextRequests": 0
+        },
+        "actualSourceLines": [
+          "次の作業NOTE OT",
+          "確認してCHECKIT"
+        ],
+        "allAnchorsFound": true
+      },
+      {
+        "scene": "ja-soft-inventory-tags",
+        "texts": [
+          "在庫記録NOTEOT",
+          "照合記号 O0 I1 Z2 S5 T7 B8"
+        ],
+        "sourceCharacterInventory": {
+          "excess": [],
+          "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+        },
+        "qualityFailures": [],
+        "negativeDetections": [],
+        "protectedPixels": {
+          "source": {
+            "width": 1600,
+            "height": 1000,
+            "pixels": [
+              [
+                97,
+                134,
+                142,
+                255
+              ],
+              [
+                221,
+                225,
+                224,
+                255
+              ]
+            ]
+          },
+          "translated": {
+            "width": 1600,
+            "height": 1000,
+            "pixels": [
+              [
+                97,
+                134,
+                142,
+                255
+              ],
+              [
+                221,
+                225,
+                224,
+                255
+              ]
+            ]
+          }
+        },
+        "restoreAndRedisplay": {
+          "sourcePreserved": true,
+          "bitmapPreserved": true,
+          "additionalOcrOperations": 0,
+          "additionalTextRequests": 0
+        },
+        "actualSourceLines": [
+          "在庫記録NOTEOT",
+          "照合記号 O0 I1 Z2 S5 T7 B8"
+        ],
+        "allAnchorsFound": true
+      },
+      {
+        "scene": "ja-split-font-reference-tags",
+        "texts": [
+          "記録力ードNOTE O T 保管済み記録カード NOTE OT 保管済み",
+          "照合番号 0 O 1I 2Z 5S 7T 8B 照合番号 0 0 1I 2Z 5S 7T 8B"
+        ],
+        "sourceCharacterInventory": {
+          "excess": [
+            {
+              "character": "記",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "録",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "力",
+              "expected": 0,
+              "actual": 1,
+              "excess": 1
+            },
+            {
+              "character": "ー",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "ド",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "N",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "O",
+              "expected": 3,
+              "actual": 5,
+              "excess": 2
+            },
+            {
+              "character": "T",
+              "expected": 3,
+              "actual": 6,
+              "excess": 3
+            },
+            {
+              "character": "E",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "保",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "管",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "済",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "み",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "照",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "合",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "番",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "号",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "0",
+              "expected": 1,
+              "actual": 3,
+              "excess": 2
+            },
+            {
+              "character": "1",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "I",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "2",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "Z",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "5",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "S",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "7",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "8",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            },
+            {
+              "character": "B",
+              "expected": 1,
+              "actual": 2,
+              "excess": 1
+            }
+          ],
+          "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+        },
+        "qualityFailures": [
+          {
+            "type": "unexpected-ocr-characters",
+            "excess": [
+              {
+                "character": "記",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "録",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "力",
+                "expected": 0,
+                "actual": 1,
+                "excess": 1
+              },
+              {
+                "character": "ー",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "ド",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "N",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "O",
+                "expected": 3,
+                "actual": 5,
+                "excess": 2
+              },
+              {
+                "character": "T",
+                "expected": 3,
+                "actual": 6,
+                "excess": 3
+              },
+              {
+                "character": "E",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "保",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "管",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "済",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "み",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "照",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "合",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "番",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "号",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "0",
+                "expected": 1,
+                "actual": 3,
+                "excess": 2
+              },
+              {
+                "character": "1",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "I",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "2",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "Z",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "5",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "S",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "7",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "8",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              },
+              {
+                "character": "B",
+                "expected": 1,
+                "actual": 2,
+                "excess": 1
+              }
+            ],
+            "reason": "Actual offscreen source text contains more normalized characters than declared source truth"
+          }
+        ],
+        "negativeDetections": [],
+        "protectedPixels": {
+          "source": {
+            "width": 1600,
+            "height": 1000,
+            "pixels": [
+              [
+                97,
+                134,
+                142,
+                255
+              ],
+              [
+                238,
+                237,
+                226,
+                255
+              ]
+            ]
+          },
+          "translated": {
+            "width": 1600,
+            "height": 1000,
+            "pixels": [
+              [
+                97,
+                134,
+                142,
+                255
+              ],
+              [
+                238,
+                237,
+                226,
+                255
+              ]
+            ]
+          }
+        },
+        "restoreAndRedisplay": {
+          "sourcePreserved": true,
+          "bitmapPreserved": true,
+          "additionalOcrOperations": 0,
+          "additionalTextRequests": 0
+        },
+        "actualSourceLines": [
+          "記録力ードNOTE O T 保管済み記録カード NOTE OT 保管済み",
+          "照合番号 0 O 1I 2Z 5S 7T 8B 照合番号 0 0 1I 2Z 5S 7T 8B"
+        ],
+        "allAnchorsFound": true
+      },
+      {
+        "scene": "ja-small-long-preservation-tags",
+        "texts": [
+          "確認メモ NOTE OT 番号は変更しない",
+          "予備のラベル CODE OO CHECK IT"
+        ],
+        "sourceCharacterInventory": {
+          "excess": [],
+          "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+        },
+        "qualityFailures": [],
+        "negativeDetections": [],
+        "protectedPixels": {
+          "source": {
+            "width": 1600,
+            "height": 1000,
+            "pixels": [
+              [
+                97,
+                134,
+                142,
+                255
+              ],
+              [
+                221,
+                225,
+                224,
+                255
+              ]
+            ]
+          },
+          "translated": {
+            "width": 1600,
+            "height": 1000,
+            "pixels": [
+              [
+                97,
+                134,
+                142,
+                255
+              ],
+              [
+                221,
+                225,
+                224,
+                255
+              ]
+            ]
+          }
+        },
+        "restoreAndRedisplay": {
+          "sourcePreserved": true,
+          "bitmapPreserved": true,
+          "additionalOcrOperations": 0,
+          "additionalTextRequests": 0
+        },
+        "actualSourceLines": [
+          "確認メモ NOTE OT 番号は変更しない",
+          "予備のラベル CODE OO CHECK IT"
+        ],
+        "allAnchorsFound": true
+      },
+      {
+        "scene": "ja-paired-true-ot-digit07",
+        "texts": [
+          "読書メモ NOTE OT",
+          "読書メモ NOTE 07"
+        ],
+        "sourceCharacterInventory": {
+          "excess": [],
+          "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+        },
+        "qualityFailures": [],
+        "negativeDetections": [],
+        "protectedPixels": {
+          "source": {
+            "width": 1600,
+            "height": 1000,
+            "pixels": [
+              [
+                97,
+                134,
+                142,
+                255
+              ],
+              [
+                221,
+                225,
+                224,
+                255
+              ]
+            ]
+          },
+          "translated": {
+            "width": 1600,
+            "height": 1000,
+            "pixels": [
+              [
+                97,
+                134,
+                142,
+                255
+              ],
+              [
+                221,
+                225,
+                224,
+                255
+              ]
+            ]
+          }
+        },
+        "restoreAndRedisplay": {
+          "sourcePreserved": true,
+          "bitmapPreserved": true,
+          "additionalOcrOperations": 0,
+          "additionalTextRequests": 0
+        },
+        "actualSourceLines": [
+          "読書メモ NOTE OT",
+          "読書メモ NOTE 07"
+        ],
+        "allAnchorsFound": true
+      }
+    ]
+  },
+  "observerPolicy": {
+    "sourceRowLimitPerOriginalPage": 2,
+    "maxSteps": 128,
+    "maxExtraRecognitionCallsPerOriginalPage": 4,
+    "consumesExistingSharedBudget": true,
+    "confidence": "[.65,.95)",
+    "geometry": "width>=120; width/height>=3",
+    "expectedTextUsedForSelection": false,
+    "noReplacement": true
+  },
+  "selectedSourceResults": [
+    {
+      "scene": "ja-clear-management-tags",
+      "sourceRegionId": "line-1",
+      "sourceTruth": "管理メモ NOTE OT",
+      "groupId": "2:1",
+      "mangaCallId": 2,
+      "baseline": {
+        "text": "管理メモ NOTE OT",
+        "confidence": 0.9228615413109461,
+        "input": {
+          "effectiveWidth": 448,
+          "paddedWidth": 473,
+          "batchRows": 6,
+          "validSteps": 56,
+          "classes": 18710
+        }
+      },
+      "views": [
+        {
+          "mode": "same-box-batch1",
+          "results": [
+            {
+              "text": "管理メモ NOTE OT",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 439,
+                "height": 47
+              },
+              "confidence": 0.927539050579071
+            }
+          ]
+        },
+        {
+          "mode": "white-border-2px",
+          "results": [
+            {
+              "text": "管理メモ NOTE OT",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 443,
+                "height": 51
+              },
+              "confidence": 0.9212691088517507
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scene": "ja-soft-instruction-tags",
+      "sourceRegionId": "line-1",
+      "sourceTruth": "次の作業 NOTE OT",
+      "groupId": "3:1",
+      "mangaCallId": 5,
+      "baseline": {
+        "text": "次の作業 NOTE OT",
+        "confidence": 0.9452103823423386,
+        "input": {
+          "effectiveWidth": 419,
+          "paddedWidth": 796,
+          "batchRows": 5,
+          "validSteps": 53,
+          "classes": 18710
+        }
+      },
+      "views": [
+        {
+          "mode": "same-box-batch1",
+          "results": [
+            {
+              "text": "次の作業 NOTE OT",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 332,
+                "height": 38
+              },
+              "confidence": 0.9868967632452647
+            }
+          ]
+        },
+        {
+          "mode": "white-border-2px",
+          "results": [
+            {
+              "text": "次の作業 NOTE OT",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 336,
+                "height": 42
+              },
+              "confidence": 0.9843699038028717
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scene": "ja-soft-inventory-tags",
+      "sourceRegionId": "line-2",
+      "sourceTruth": "照合記号 O0 I1 Z2 S5 T7 B8",
+      "groupId": "4:1",
+      "mangaCallId": 6,
+      "baseline": {
+        "text": "照合記号 O0 I1 Z2 S5 T7 B8",
+        "confidence": 0.9187374358827417,
+        "input": {
+          "effectiveWidth": 735,
+          "paddedWidth": 908,
+          "batchRows": 3,
+          "validSteps": 92,
+          "classes": 18710
+        }
+      },
+      "views": [
+        {
+          "mode": "same-box-batch1",
+          "results": [
+            {
+              "text": "照合記号 O0 I1 Z2 S5 T7 B8",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 551,
+                "height": 36
+              },
+              "confidence": 0.9493046538396315
+            }
+          ]
+        },
+        {
+          "mode": "white-border-2px",
+          "results": [
+            {
+              "text": "照合記号 00 11 Z2 S5 T7 B8",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 555,
+                "height": 40
+              },
+              "confidence": 0.9147692756219343
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scene": "ja-soft-inventory-tags",
+      "sourceRegionId": "line-2",
+      "sourceTruth": "照合記号 O0 I1 Z2 S5 T7 B8",
+      "groupId": "4:2",
+      "mangaCallId": 7,
+      "baseline": {
+        "text": "照合記号 O0 I1 Z2 S5 T7 B8",
+        "confidence": 0.9412794980135831,
+        "input": {
+          "effectiveWidth": 754,
+          "paddedWidth": 792,
+          "batchRows": 4,
+          "validSteps": 95,
+          "classes": 18710
+        }
+      },
+      "views": [
+        {
+          "mode": "same-box-batch1",
+          "results": [
+            {
+              "text": "照合記号 O0 I1 Z2 S5 T7 B8",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 550,
+                "height": 35
+              },
+              "confidence": 0.9411799311637878
+            }
+          ]
+        },
+        {
+          "mode": "white-border-2px",
+          "results": [
+            {
+              "text": "照合記号 00 11 Z2 S5 T7 B8",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 554,
+                "height": 39
+              },
+              "confidence": 0.904122916134921
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scene": "ja-split-font-reference-tags",
+      "sourceRegionId": "line-1",
+      "sourceTruth": "記録カード NOTE OT 保管済み",
+      "groupId": "5:1",
+      "mangaCallId": 8,
+      "baseline": {
+        "text": "記録力ードNOTE O T 保管済み",
+        "confidence": 0.8722679439712974,
+        "input": {
+          "effectiveWidth": 220,
+          "paddedWidth": 220,
+          "batchRows": 6,
+          "validSteps": 27,
+          "classes": 18710
+        }
+      },
+      "views": [
+        {
+          "mode": "same-box-batch1",
+          "results": [
+            {
+              "text": "記録力ードNOTE O T 保管済み",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 647,
+                "height": 141
+              },
+              "confidence": 0.8722679439712974
+            }
+          ]
+        },
+        {
+          "mode": "white-border-2px",
+          "results": [
+            {
+              "text": "記録力ー ド NOTE OT 保管済み",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 651,
+                "height": 145
+              },
+              "confidence": 0.8689817355738746
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scene": "ja-split-font-reference-tags",
+      "sourceRegionId": "line-2",
+      "sourceTruth": "照合番号 0O 1I 2Z 5S 7T 8B",
+      "groupId": "5:2",
+      "mangaCallId": 8,
+      "baseline": {
+        "text": "照合番号 0 O 1I 2Z 5S 7T 8B",
+        "confidence": 0.9484768266027624,
+        "input": {
+          "effectiveWidth": 384,
+          "paddedWidth": 384,
+          "batchRows": 2,
+          "validSteps": 48,
+          "classes": 18710
+        }
+      },
+      "views": [
+        {
+          "mode": "same-box-batch1",
+          "results": [
+            {
+              "text": "照合番号 0 O 1I 2Z 5S 7T 8B",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 664,
+                "height": 83
+              },
+              "confidence": 0.9484768266027624
+            }
+          ]
+        },
+        {
+          "mode": "white-border-2px",
+          "results": [
+            {
+              "text": "照合番号 00 1I 2Z 5S 7T 8B",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 668,
+                "height": 87
+              },
+              "confidence": 0.9672185724431818
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scene": "ja-small-long-preservation-tags",
+      "sourceRegionId": "line-1",
+      "sourceTruth": "確認メモ NOTE OT 番号は変更しない",
+      "groupId": "6:1",
+      "mangaCallId": 10,
+      "baseline": {
+        "text": "確認メモ NOTE OT 番号は変更しない",
+        "confidence": 0.9452892712184361,
+        "input": {
+          "effectiveWidth": 740,
+          "paddedWidth": 852,
+          "batchRows": 2,
+          "validSteps": 93,
+          "classes": 18710
+        }
+      },
+      "views": [
+        {
+          "mode": "same-box-batch1",
+          "results": [
+            {
+              "text": "確認メモ NOTE OT 番号は変更しない",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 524,
+                "height": 34
+              },
+              "confidence": 0.9627217678796678
+            }
+          ]
+        },
+        {
+          "mode": "white-border-2px",
+          "results": [
+            {
+              "text": "確認メモ NOTE OT 番号は変更しない",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 528,
+                "height": 38
+              },
+              "confidence": 0.9653906311307635
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scene": "ja-paired-true-ot-digit07",
+      "sourceRegionId": "line-2",
+      "sourceTruth": "読書メモ NOTE 07",
+      "groupId": "7:1",
+      "mangaCallId": 12,
+      "baseline": {
+        "text": "読書メモ NOTE 07",
+        "confidence": 0.9348812450965246,
+        "input": {
+          "effectiveWidth": 494,
+          "paddedWidth": 501,
+          "batchRows": 6,
+          "validSteps": 63,
+          "classes": 18710
+        }
+      },
+      "views": [
+        {
+          "mode": "same-box-batch1",
+          "results": [
+            {
+              "text": "読書メモ NOTE 07",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 391,
+                "height": 38
+              },
+              "confidence": 0.9393721371889114
+            }
+          ]
+        },
+        {
+          "mode": "white-border-2px",
+          "results": [
+            {
+              "text": "読書メモ NOTE 07",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 395,
+                "height": 42
+              },
+              "confidence": 0.9305975635846456
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scene": "ja-paired-true-ot-digit07",
+      "sourceRegionId": "line-1",
+      "sourceTruth": "読書メモ NOTE OT",
+      "groupId": "7:2",
+      "mangaCallId": 12,
+      "baseline": {
+        "text": "読書メモ NOTE OT",
+        "confidence": 0.9395443896452585,
+        "input": {
+          "effectiveWidth": 501,
+          "paddedWidth": 501,
+          "batchRows": 6,
+          "validSteps": 63,
+          "classes": 18710
+        }
+      },
+      "views": [
+        {
+          "mode": "same-box-batch1",
+          "results": [
+            {
+              "text": "読書メモ NOTE OT",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 397,
+                "height": 38
+              },
+              "confidence": 0.9395443896452585
+            }
+          ]
+        },
+        {
+          "mode": "white-border-2px",
+          "results": [
+            {
+              "text": "読書メモ NOTE OT",
+              "box": {
+                "x": 0,
+                "y": 0,
+                "width": 401,
+                "height": 42
+              },
+              "confidence": 0.9549011041720709
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "allSevenBudgetObservations": [
+    {
+      "pageId": 1,
+      "scene": "japanese-horizontal-mixed",
+      "originalMangaCalls": 1,
+      "selectedSourceObservations": 1,
+      "distinctAnnotatedSourceRowsSelected": 1,
+      "extraRecognitionNativeCalls": 2,
+      "extraDetectionNativeCalls": 0,
+      "budgetAfterEachOriginalCall": [
+        {
+          "mangaCallId": 1,
+          "beforeDiagnostic": 4,
+          "afterDiagnostic": 2,
+          "extraThisPage": 2
+        }
+      ]
+    },
+    {
+      "pageId": 2,
+      "scene": "ja-clear-management-tags",
+      "originalMangaCalls": 2,
+      "selectedSourceObservations": 1,
+      "distinctAnnotatedSourceRowsSelected": 1,
+      "extraRecognitionNativeCalls": 2,
+      "extraDetectionNativeCalls": 0,
+      "budgetAfterEachOriginalCall": [
+        {
+          "mangaCallId": 2,
+          "beforeDiagnostic": 4,
+          "afterDiagnostic": 2,
+          "extraThisPage": 2
+        },
+        {
+          "mangaCallId": 3,
+          "beforeDiagnostic": 2,
+          "afterDiagnostic": 2,
+          "extraThisPage": 2
+        }
+      ]
+    },
+    {
+      "pageId": 3,
+      "scene": "ja-soft-instruction-tags",
+      "originalMangaCalls": 2,
+      "selectedSourceObservations": 1,
+      "distinctAnnotatedSourceRowsSelected": 1,
+      "extraRecognitionNativeCalls": 2,
+      "extraDetectionNativeCalls": 0,
+      "budgetAfterEachOriginalCall": [
+        {
+          "mangaCallId": 4,
+          "beforeDiagnostic": 4,
+          "afterDiagnostic": 4,
+          "extraThisPage": 0
+        },
+        {
+          "mangaCallId": 5,
+          "beforeDiagnostic": 4,
+          "afterDiagnostic": 2,
+          "extraThisPage": 2
+        }
+      ]
+    },
+    {
+      "pageId": 4,
+      "scene": "ja-soft-inventory-tags",
+      "originalMangaCalls": 2,
+      "selectedSourceObservations": 2,
+      "distinctAnnotatedSourceRowsSelected": 1,
+      "extraRecognitionNativeCalls": 4,
+      "extraDetectionNativeCalls": 0,
+      "budgetAfterEachOriginalCall": [
+        {
+          "mangaCallId": 6,
+          "beforeDiagnostic": 4,
+          "afterDiagnostic": 2,
+          "extraThisPage": 2
+        },
+        {
+          "mangaCallId": 7,
+          "beforeDiagnostic": 2,
+          "afterDiagnostic": 0,
+          "extraThisPage": 4
+        }
+      ]
+    },
+    {
+      "pageId": 5,
+      "scene": "ja-split-font-reference-tags",
+      "originalMangaCalls": 2,
+      "selectedSourceObservations": 2,
+      "distinctAnnotatedSourceRowsSelected": 2,
+      "extraRecognitionNativeCalls": 4,
+      "extraDetectionNativeCalls": 0,
+      "budgetAfterEachOriginalCall": [
+        {
+          "mangaCallId": 8,
+          "beforeDiagnostic": 4,
+          "afterDiagnostic": 0,
+          "extraThisPage": 4
+        },
+        {
+          "mangaCallId": 9,
+          "beforeDiagnostic": 0,
+          "afterDiagnostic": 0,
+          "extraThisPage": 4
+        }
+      ]
+    },
+    {
+      "pageId": 6,
+      "scene": "ja-small-long-preservation-tags",
+      "originalMangaCalls": 2,
+      "selectedSourceObservations": 1,
+      "distinctAnnotatedSourceRowsSelected": 1,
+      "extraRecognitionNativeCalls": 2,
+      "extraDetectionNativeCalls": 0,
+      "budgetAfterEachOriginalCall": [
+        {
+          "mangaCallId": 10,
+          "beforeDiagnostic": 4,
+          "afterDiagnostic": 2,
+          "extraThisPage": 2
+        },
+        {
+          "mangaCallId": 11,
+          "beforeDiagnostic": 2,
+          "afterDiagnostic": 2,
+          "extraThisPage": 2
+        }
+      ]
+    },
+    {
+      "pageId": 7,
+      "scene": "ja-paired-true-ot-digit07",
+      "originalMangaCalls": 2,
+      "selectedSourceObservations": 2,
+      "distinctAnnotatedSourceRowsSelected": 2,
+      "extraRecognitionNativeCalls": 4,
+      "extraDetectionNativeCalls": 0,
+      "budgetAfterEachOriginalCall": [
+        {
+          "mangaCallId": 12,
+          "beforeDiagnostic": 4,
+          "afterDiagnostic": 0,
+          "extraThisPage": 4
+        },
+        {
+          "mangaCallId": 13,
+          "beforeDiagnostic": 0,
+          "afterDiagnostic": 0,
+          "extraThisPage": 4
+        }
+      ]
+    }
+  ],
+  "originalOutputArraysPreserved": {
+    "calls": 13,
+    "allDeepEqual": true,
+    "replacementPerformed": false,
+    "limitation": "This checks every recognizeManga return before versus after its observer. Shared retry consumption may affect later tile calls, so this is not a separate no-observer full-page A/B."
+  },
+  "models": {
+    "networkDownloads": 0,
+    "modelRequestsAfterPreload": 0,
+    "recordedModelRequests": 0,
+    "allFilesCacheHit": true,
+    "cacheBytes": 237406681
+  },
+  "runtime": {
+    "passed": false,
+    "standardCounts": {
+      "errors": 0,
+      "warnings": 0,
+      "expected": 0,
+      "site": 0
+    },
+    "offscreenWorkerCounts": {
+      "errors": 0,
+      "warnings": 1,
+      "rawErrors": 0,
+      "rawWarnings": 2,
+      "advisories": 0
+    },
+    "warningClassification": "One unique upstream ORT mixed-provider placement warning (two raw observations), retained as blocker because strict functional quality fails. No runtime-clean claim.",
+    "browserClosed": true,
+    "profileRemoved": true,
+    "cleanupErrors": [],
+    "finalizationErrors": [],
+    "standardCoverageFailures": [],
+    "offscreenWorkerFailures": []
+  },
+  "conclusion": "Five low-confidence literal NOTE OT source rows now exercise the frozen two-view policy and keep OT. Correct 07 also remains07. The two mixed-code physical rows expose white-border corruption (O0/I1 to00/11 and0O to00), including one confidence increase despite error. Only the old mixed positive shows two-view agreement on changed text in this small corpus; this is useful calibration but does not justify a general production replacement rule. Literal OO/IT rows were high-confidence/ineligible, which remains an explicit gap.",
+  "limitations": [
+    "Intentionally old frozen v3 observer; not current v5 production source build.",
+    "10 eligible observations correspond to9 annotated physical rows; mixed-code same source is observed from2 overlapping horizontal tiles. They are not10 independent examples.",
+    "OO/IT controls remain highconfidence and were not diagnostically retried; do not claim lowconfidence OO/IT validation.",
+    "Full-row confidence and approximate pruned beam shares are not calibrated correctness probabilities; two views are correlated.",
+    "Addedcalls consume original4box sharedbudget; final scene outputs may differ from standalone no-observer run on later tiles.",
+    "Strict wholepage additions on clear/splitcontrolscenes remain real failures even though all12 fullsourceanchors are present; no truth/filter modification."
+  ],
+  "evidenceSha256": {
+    "source-freeze-proof.json": "807a3f2e20be1fcc262f12ca75cbe4c2f6bd962906ff732ce934e7e155a11b40",
+    "stage2-events.jsonl": "8a7fa94cef38285b23b61a401f76abc07a5861ac5d89ab69d6adfdfa419812d3",
+    "stage2-summary.json": "943deada65c17866717e524b222f2835bea7e1600bf637a4a24e25e5fe394299",
+    "stage2-analysis.md": "fe6b1d9e5aa71dad5237e581fedbb0bb5ce9a95d2b6f2af13428fbb82d1b832e",
+    "browser-stage2/report.json": "48112cd4fcbbf1f4c41cfe701f16094f8b3bfa956367b5ec381a3724ee9d6f78",
+    "browser-stage2/runtime-diagnostics.json": "e64394cd5865b77753b7f174ad9c8ef896d3130c47cb2e94349fc1eaf59ad9d6"
+  },
+  "originalMixedReference": {
+    "sourceTruth": "読書メモ NOTE 07",
+    "baseline": {
+      "text": "読書メモ NOTE OT",
+      "confidence": 0.9152595450480779,
+      "input": {
+        "effectiveWidth": 551,
+        "paddedWidth": 635,
+        "batchRows": 6,
+        "validSteps": 69,
+        "classes": 18710
+      }
+    },
+    "views": [
+      {
+        "mode": "same-box-batch1",
+        "results": [
+          {
+            "text": "読書メモ NOTE 07",
+            "box": {
+              "x": 0,
+              "y": 0,
+              "width": 390,
+              "height": 34
+            },
+            "confidence": 0.9010722488164902
+          }
+        ]
+      },
+      {
+        "mode": "white-border-2px",
+        "results": [
+          {
+            "text": "読書メモ NOTE 07",
+            "box": {
+              "x": 0,
+              "y": 0,
+              "width": 394,
+              "height": 38
+            },
+            "confidence": 0.8932630121707916
+          }
+        ]
+      }
+    ]
+  },
+  "rawObservationArchiveScope": "Repository summary retains all six final source/transport results, exact strict failures and all selected two-view outputs. Full 486-event raw stream including high-confidence/ineligible rows is preserved under evidenceSha256, not duplicated into test inputs."
+}

@@ -66,6 +66,16 @@ function displayMath(expression = 'λ → kernel(x) + 𝑦') {
 }
 
 describe('PDF preserved image components with unchanged text sequence', () => {
+    it.each(['empty', 'translated', 'source-only', 'source-control'] as const)('preserves %s text entries without consulting page geometry when no region exists', kind => {
+        const targets = kind === 'empty' ? [] : [text(kind === 'source-only' ? -1 : 0, rect(40, 100), kind === 'source-control' ? '\u0093' : 'First paragraph'), text(1, rect(40, 180), 'Second paragraph')];
+        const original = JSON.stringify(targets), entries = Object.freeze(targets.map(entry => Object.freeze(entry)));
+        const sourcePage = {...page([]), get blocks(): PdfDocumentBlock[] {throw new Error('No-region plans must not inspect page geometry');}};
+        const output = groupPdfReadingRegions(sourcePage, entries, new Set(kind === 'source-control' ? [0] : []));
+        expect(output).toEqual(entries); expect(output).not.toBe(entries);
+        output.forEach((entry, index) => expect(entry).toBe(entries[index]));
+        expect(JSON.stringify(entries)).toBe(original);
+    });
+
     it('joins a complete centered single-line mathematical body with its same-baseline terminal number before the unchanged body text', () => {
         for (const expression of ['λ → kernel(x) + 𝑦', '𝔇Σ ≔ 𝖲𝖾𝗍(𝐾)', 'ℳ = f(x)', 'x = 1']) {
             const fixture = displayMath(expression), original = JSON.stringify(fixture), output = group(fixture.blocks, fixture.entries);
@@ -76,6 +86,15 @@ describe('PDF preserved image components with unchanged text sequence', () => {
             expect(output).toEqual([fixture.targets[0], pictures[0], fixture.targets[1], fixture.targets[2]]);
             expect(output.filter(entry => entry.kind === 'text')).toEqual(fixture.targets); expect(JSON.stringify(fixture)).toBe(original);
         }
+    });
+    it('uses the nearest surrounding paragraphs when multiple aligned prose paragraphs support a display formula', () => {
+        const fixture = displayMath();
+        const move = (entry: PdfDocumentBlock, segmentIndex: number, y: number): PdfDocumentBlock => ({...entry, segmentIndex, y, lines: entry.lines!.map(line => ({...line, y: line.y + y - entry.y, baseline: (line.baseline ?? line.y) + y - entry.y}))});
+        const before = move(fixture.before, 4, 100), after = move(fixture.after, 5, 450);
+        const targets = [text(4, before), ...fixture.targets, text(5, after)];
+        const output = group([before, ...fixture.blocks, after], [targets[0], fixture.entries[0], fixture.entries[1], fixture.entries[2], fixture.entries[3], targets.at(-1)!]);
+        expect(output.filter(entry => entry.kind === 'text')).toEqual(targets);
+        expect(regions(output)).toHaveLength(1); expect(regions(output)[0].segmentIndexes).toEqual([-1, 1]);
     });
 
     it('requires a complete mathematical line rather than ordinary sentences, lists, headings or uncertain source glyphs', () => {
@@ -384,8 +403,8 @@ describe('PDF preserved image components with unchanged text sequence', () => {
         expect(regions(output)).toHaveLength(2); expect(output.filter(e => e.kind === 'text').map(e => e.segmentIndex)).toEqual([0, 1, 2, 3]);
         // 不同横向范围的空白带不连成一个猜测的整页竖带。
         const elsewhere = [rect(50, 200, 200, 30), rect(400, 200, 150, 30)];
-        expect(group([...paragraphs.slice(0, 2).map((r, i) => block(i, r, 'column', 'text', {lineCount: 2})), ...elsewhere.map((r, i) => block(i + 2, r, 'different', 'text', {lineCount: 2}))],
-            [...paragraphs.slice(0, 2).map((r, i) => text(i, r)), ...elsewhere.map((r, i) => text(i + 2, r))]).filter(e => e.kind === 'text')).toHaveLength(4);
+        expect(group([...paragraphs.slice(0, 2).map((r, i) => block(i, r, 'column', 'text', {lineCount: 2})), ...elsewhere.map((r, i) => block(i + 2, r, 'different', 'text', {lineCount: 2})), block(-1, formula), block(-1, number, '(8)')],
+            [...paragraphs.slice(0, 2).map((r, i) => text(i, r)), ...elsewhere.map((r, i) => text(i + 2, r)), image('m', formula), image('n', number)]).filter(e => e.kind === 'text')).toHaveLength(4);
     });
 
     it('does not use a terminal number already inside a broad source crop as condition baseline evidence', () => {

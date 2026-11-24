@@ -1,7 +1,7 @@
 <!--
 @file src/features/settings/ui/ReadingAssistanceSettings.vue
 文件职责：作为翻译设置的首项，提供双语逐句高亮的当前样式入口和可立即体验的阅读示例。
-主要内容：桌面左侧展示可切换网页明暗的实时预览，右侧集中展示当前样式或“无”、说明与样式入口，以及默认关闭的个人校订开关；高亮开关合并在样式选择中，窄屏纵向排列，开启后允许指针与键盘逐句体验，仅译文模式提供切回双语的入口。
+主要内容：桌面左侧展示可切换网页明暗的实时预览，右侧集中展示当前样式或“无”、说明与样式入口，以及默认关闭的个人校订开关，校订名称及说明直接使用七语资源；高亮开关合并在样式选择中，窄屏纵向排列，开启后允许指针与键盘逐句体验，仅译文模式提供切回双语的入口。
 模块边界：只编辑父级 Config 草稿和发出导航事件；示例不发起翻译，不向宿主网页写入节点或样式。
 -->
 <template>
@@ -37,8 +37,8 @@
             <el-icon aria-hidden="true"><ArrowRight /></el-icon>
           </button>
         </SettingsItem>
-        <SettingsItem v-if="personalCorrectionsSupported" id="personal-corrections-settings" label="个人校订" description="修改网页译文，并在你确认的范围内复用。默认关闭。" help="开启后，在双语段落上点击“校订译文”，或按 Alt/Option + Shift + E。关闭后保留已保存译法，停止校订入口和复用。">
-          <el-switch v-model="config.personalCorrectionsEnabled" class="settings-toggle" data-testid="personal-corrections-enabled" aria-label="个人校订" />
+        <SettingsItem v-if="personalCorrectionsSupported" id="personal-corrections-settings" :label="t('settings.personalCorrections.title')" :description="t('settings.personalCorrections.description')" :help="t('settings.personalCorrections.help')">
+          <el-switch v-model="config.personalCorrectionsEnabled" class="settings-toggle" data-testid="personal-corrections-enabled" :aria-label="t('settings.personalCorrections.title')" />
         </SettingsItem>
       </div>
     </div>
@@ -71,7 +71,7 @@ const currentStyleLabel = computed(() => {
 .reading-assistance-workspace { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 24px; padding: 20px; }
 .reading-assistance-example { display: grid; min-width: 0; gap: 12px; }
 .reading-assistance-controls { min-width: 0; }
-.reading-assistance-controls :deep(.settings-item) { grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; min-height: 0; padding: 0 0 18px; }
+.reading-assistance-controls :deep(.settings-item) { grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; min-height: 0; padding: 9px 0; }
 .reading-assistance-controls :deep(.settings-item-control > .settings-navigation-link) { width: auto; max-width: 220px; }
 .reading-assistance-controls .settings-navigation-link > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .reading-assistance-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; color: var(--muted); font-size: 12px; }

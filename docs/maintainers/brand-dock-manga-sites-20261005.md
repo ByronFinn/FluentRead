@@ -30,7 +30,7 @@ MangaFreak、Manga4u、MG Read、Yymanhua、Mangaraw、Antbyw 和 Speed Manga �
 
 ComicWalker 的公开章节正文是可读画布，首张在画布自身、后续页在父容器上标记 `data-type="contents"`；两种结构都进入同一会话，排除结束推荐图片。透明翻页遮罩仅接受正文画布的相邻 `_cover_` 元素。Naver 按数字作品和章节查询及 `content_image_` 标记排除年龄提示；AIManga 按编号正文说明与正文图片域名，MangaFire 按 `reader__page`，MangaZ 按公开 vw 阅读器的 `page_unit.page_image` 限定正文。MangaPark 需从作品页免费按钮打开站内 minobi 阅读器，再检测其正文图片；作品缩略图和 `chiramiseDiv` 片段不进入队列。Meteor 旧站转至 Kirapo，分片正文仅提供圈选入口，当前域名补入同一清单名称。
 
-Palcy 与 Comic Pixiv 的公开正文采用 CSS 背景图，现把其完整同源 blob 页面接入同一串行会话、图片客户端和压缩图块合成器。仅处理单层 contain、no-repeat、无边框内距的正文，在附近页串行探测尺寸和可读性后立即释放解码图；尺寸元数据弱引用宿主节点，完整快照和译图沿用原有像素预算。背景位置和留白决定译图真实范围，宿主 CSS、原图像素及翻页交互保持不变；来源更换、暂停、关闭与卸载取消旧任务。空白页广告、封面及应用推荐图排除。无法读取或不能精确定位的背景正文保留圈选入口。
+Palcy 与 Comic Pixiv 的公开正文采用 CSS 背景图，现把其完整同源 blob 页面接入同一串行会话、图片客户端和压缩图块合成器。仅处理单层 contain、no-repeat、无边框内距的正文，在附近页串行探测尺寸和可读性后立即释放解码图；尺寸元数据弱引用宿主节点，完整快照和译图沿用原有像素预算。完成译图经 PNG 编码和原生 Image 预加载后，在原元素的背景层借用 background-image 显示，保留原背景色、子内容与交互；暂停归还原图并保留译图资源，来源更换、关闭、淘汰与卸载释放资源。样式按自有声明归还，不覆盖宿主后续改写；原图像素不变。空白页广告、封面及应用推荐图排除。无法读取或不能精确定位的背景正文保留圈选入口。
 
 Zebrack 从作品页的免费首读按钮进入 `/title/5554/chapter/75530/viewer`，GANGAN ONLINE 从公开首页进入 `/title/2322/chapter/132575`；两者按完整同源 blob 正文图片限定章节，避免依赖散列类名。少年 Magazine 官网的公开试读链接指向 MangaPoke，正文画布受跨域限制；其广告图片排除，仅提供圈选。Sunday Webry 的 www 地址可正常访问并显示 GigaViewer 章节，加入同一不可读画布圈选规则。裸域名证书或连接失败保留为历史，不等同于 www 地址不可用。
 

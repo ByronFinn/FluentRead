@@ -23,7 +23,7 @@ const keepAliveSpy = () => {
     return {keepAlive, acquire, releasedCount: () => released};
 };
 describe('comment background handler', () => {
-    let run: ReturnType<typeof vi.fn>;
+    let run: ReturnType<typeof vi.fn<(request: CommentRequest, signal: AbortSignal) => Promise<CommentResponse>>>;
     let eligible: string | undefined;
     let ready: Promise<unknown>;
     const deps = () => ({
@@ -32,7 +32,7 @@ describe('comment background handler', () => {
         eligibility: () => eligible,
         run: (request: CommentRequest, signal: AbortSignal) => run(request, signal),
     });
-    beforeEach(() => { run = vi.fn().mockResolvedValue({success: true, comments: []}); eligible = undefined; ready = Promise.resolve(); });
+    beforeEach(() => { run = vi.fn().mockResolvedValue({success: true, comments: [], sourceTranslation: null}); eligible = undefined; ready = Promise.resolve(); });
 
     it('rejects foreign senders and malformed envelopes', async () => {
         const handler = createCommentHandler(deps());
@@ -54,12 +54,12 @@ describe('comment background handler', () => {
 
     it('runs, blocks by eligibility and re-checks after completion', async () => {
         const handler = createCommentHandler(deps());
-        expect(await handler.handle(runRequest() as never, sender())).toEqual({success: true, comments: []});
+        expect(await handler.handle(runRequest() as never, sender())).toEqual({success: true, comments: [], sourceTranslation: null});
         expect(run).toHaveBeenCalledOnce();
         eligible = '评论功能已停用';
         expect(failure(await handler.handle(runRequest({requestId: 'r2'}) as never, sender())).error).toContain('停用');
         eligible = undefined;
-        run.mockImplementation(async () => { eligible = '当前网站已禁用扩展'; return {success: true, comments: []}; });
+        run.mockImplementation(async () => { eligible = '当前网站已禁用扩展'; return {success: true, comments: [], sourceTranslation: null}; });
         expect(failure(await handler.handle(runRequest({requestId: 'r3'}) as never, sender())).error).toContain('禁用');
     });
 
@@ -107,7 +107,7 @@ describe('comment background handler', () => {
             ready = new Promise<void>((resolve) => { gate = resolve; });
             const handler = createCommentHandler(deps());
             const pending = handler.handle(runRequest() as never, sender());
-            run.mockResolvedValue({success: true, comments: []});
+            run.mockResolvedValue({success: true, comments: [], sourceTranslation: null});
             gate();
             expect((await pending).success).toBe(true);
 
@@ -221,7 +221,7 @@ describe('comment background handler', () => {
     it('defaults owner coordinates when the sender omits frame, document and url', async () => {
         const handler = createCommentHandler(deps());
         expect(await handler.handle(runRequest() as never, {id: 'ext', tab: {id: 5}}))
-            .toEqual({success: true, comments: []});
+            .toEqual({success: true, comments: [], sourceTranslation: null});
         expect(run).toHaveBeenCalledOnce();
         expect(failure(await handler.handle(runRequest({requestId: 'r1'}) as never, {id: 'ext', tab: {id: 5}})).cancelled)
             .toBe(true);
@@ -249,9 +249,9 @@ describe('comment background handler', () => {
     it('evicts the oldest finished keys once history exceeds its cap', async () => {
         const handler = createCommentHandler(deps());
         for (let index = 0; index < 70; index += 1) {
-            expect(await handler.handle(runRequest({requestId: `k${index}`}) as never, sender())).toEqual({success: true, comments: []});
+            expect(await handler.handle(runRequest({requestId: `k${index}`}) as never, sender())).toEqual({success: true, comments: [], sourceTranslation: null});
         }
-        expect(await handler.handle(runRequest({requestId: 'k0'}) as never, sender())).toEqual({success: true, comments: []});
+        expect(await handler.handle(runRequest({requestId: 'k0'}) as never, sender())).toEqual({success: true, comments: [], sourceTranslation: null});
         expect(failure(await handler.handle(runRequest({requestId: 'k69'}) as never, sender())).cancelled).toBe(true);
     });
 
@@ -274,7 +274,7 @@ describe('comment background handler', () => {
         const second = handler.handle(runRequest() as never, frame2);
         await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
         expect(failure(await handler.handle({type: 'fluentReadComment', action: 'cancel', requestId: 'r1'} as never, frame1)).cancelled).toBe(true);
-        expect(await second).toEqual({success: true, comments: []});
+        expect(await second).toEqual({success: true, comments: [], sourceTranslation: null});
         releaseFirst({success: true, comments: [{content: '迟到的答案', translation: null}], sourceTranslation: null});
         expect(failure(await first).cancelled).toBe(true);
     });

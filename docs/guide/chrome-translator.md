@@ -1,32 +1,21 @@
-# 使用 Chrome 本地翻译
+# 浏览器内置翻译
 
-Chrome 内置翻译使用浏览器的本地模型处理文字。使用前需要确认浏览器支持当前语言组合，并下载相应的模型。
+FluentRead 可通过桌面版 Chrome 138+ 和 Edge 148+ 的 Translator API 在设备上翻译。首次下载语言包需要联网，下载后可离线翻译。实际可用性取决于浏览器版本、设备、语言对和管理策略。
 
-<GuideVisual kind="chrome-local" />
+Firefox 也提供设备端整页翻译和划词翻译，可以从 Firefox 菜单使用。它暂未向扩展开放翻译接口。在 Firefox 上使用 FluentRead 离线翻译时，可选择「本地模型翻译」。
 
-## 准备语言
+## 准备语言包
 
-1. 打开 **设置 → 通用设置 → 基础配置**，将 **默认网页翻译服务** 设为 **Chrome内置AI翻译**，确认源语言和目标语言。
-2. 点击 **配置服务** 并在连接设置中点击 **检查连接**。
-3. 按提示等待模型下载，保持设置页打开；下载时提示里会显示进度条和百分比。
-4. 准备好后，回到网页重新翻译。
+1. 打开 **设置 → 翻译服务 → 浏览器内置翻译**，查看当前语言对和语言包状态。
+2. 点击 **准备语言包**，让浏览器按需下载模型并验证语言对。若已下载，点击 **检查语言包**。
+3. 状态显示 **已就绪** 后，可点击 **设为默认翻译服务**，再回到网页翻译。使用新的语言对时，按提示准备对应的语言包。
 
-一次准备只对应当前语言组合。换成另一种语言时，可能需要再次准备。使用自动源语言遇到问题时，可以先明确指定原语言重试。
+旧配置里的「Chrome 内置 AI 翻译」会显示为「浏览器内置翻译」。
 
-<details class="guide-details">
-<summary>显示不可用怎么办？</summary>
+## 检查可用性
 
-## 显示不可用怎么办？
+设置页会提示浏览器是否开放接口。如果语言对不可用，请检查浏览器提供的语言支持、网络和管理策略。也可以在翻译服务中切换到其他服务。
 
-可用性受 Chrome 版本、设备、浏览器策略、语言和下载状态影响，不是每台电脑都能使用所有语言。先检查网络与浏览器更新；暂时无法准备时，可以换用其他翻译服务继续阅读。
-
-本地模型的首次下载仍需要联网，不能把尚未准备的语言当作已经离线可用。
-
-需要深入排查时，Chrome 的[本地模型帮助](https://developer.chrome.com/docs/ai/debug-built-in-model)提供诊断入口。
-
-</details>
-
-## 相关文档
-
-- [文档首页](/docs/)
-- [遇到问题](/guide/faq)
+- [Chrome Translator API](https://developer.chrome.com/docs/ai/translator-api) · [Chrome 模型诊断](https://developer.chrome.com/docs/ai/debug-built-in-model)
+- [Microsoft Edge Translator API](https://learn.microsoft.com/microsoft-edge/web-platform/translator-api)
+- [Firefox 本地翻译帮助](https://support.mozilla.org/kb/website-translation)

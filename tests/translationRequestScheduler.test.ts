@@ -20,6 +20,16 @@ async function flushMicrotasks(times = 8): Promise<void> {
 }
 
 describe('translation request scheduler', () => {
+    it('压缩大页面等待队列时保留中途取消空槽，所有剩余任务及下一请求仍能完成', async () => {
+        const scheduler = createTranslationRequestScheduler(() => ({maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 0}));
+        const size = 2300, removed = 2200, caller = new AbortController(), ran: number[] = [];
+        const jobs = Array.from({length: size}, (_, index) => scheduler.schedule(async () => {ran.push(index); return index;}, index === removed ? {signal: caller.signal} : {}));
+        const settled = Promise.allSettled(jobs); caller.abort(); await vi.runAllTimersAsync(); const outcomes = await settled;
+        expect(outcomes[removed]).toMatchObject({status: 'rejected', reason: {name: 'AbortError'}});
+        expect(outcomes.filter(item => item.status === 'fulfilled')).toHaveLength(size - 1);
+        expect(ran).toEqual(Array.from({length: size}, (_, index) => index).filter(index => index !== removed));
+        await expect(scheduler.schedule(async () => 'next')).resolves.toBe('next');
+    });
     beforeEach(() => {
         vi.useFakeTimers();
         vi.setSystemTime(0);
@@ -27,6 +37,84 @@ describe('translation request scheduler', () => {
 
     afterEach(() => {
         vi.useRealTimers();
+    });
+
+    it('回收不再使用的模型 bucket，同时保留一分钟内的限速历史', async () => {
+        const limits = {maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 1};
+        const config: TranslationRequestSchedulerConfig = {
+            translationRequestsPerSecond: 0, translationRequestsPerMinute: 0,
+            modelRequestLimits: {svc: {old: {enabled: true, limits}}},
+        };
+        const identity = {service: 'svc', model: 'old'};
+        const key = JSON.stringify(['model', 'svc', 'old']);
+        const scheduler = createTranslationRequestScheduler(() => config);
+        const setSpy = vi.spyOn(Map.prototype, 'set');
+        let buckets!: Map<string, unknown>;
+        let first!: Promise<string>;
+        try {
+            first = scheduler.schedule(async () => 'first', {identity});
+            const index = setSpy.mock.calls.findIndex(([item, value]) => item === key
+                && value && Array.isArray((value as {starts?: unknown}).starts));
+            expect(index).toBeGreaterThanOrEqual(0);
+            buckets = setSpy.mock.contexts[index] as Map<string, unknown>;
+        } finally {
+            setSpy.mockRestore();
+        }
+        await first;
+        await flushMicrotasks();
+        vi.setSystemTime(59_999);
+        const abort = new AbortController();
+        const started = vi.fn(async () => 'second');
+        const pending = scheduler.schedule(started, {identity, signal: abort.signal});
+        void pending.catch(() => undefined);
+        try {
+            expect(started).not.toHaveBeenCalled();
+            expect(buckets.has(key)).toBe(true);
+        } finally {
+            abort.abort();
+        }
+        await expect(pending).rejects.toMatchObject({name: 'AbortError'});
+
+        config.modelRequestLimits = {};
+        vi.setSystemTime(60_000);
+        await scheduler.schedule(async () => 'other', {identity: {service: 'other'}});
+        await flushMicrotasks();
+        expect(buckets.has(key)).toBe(false);
+    });
+
+    it('清理空历史时仍保留未结束的模型并发槽', async () => {
+        const limits = {maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 0};
+        const config: TranslationRequestSchedulerConfig = {modelRequestLimits: {svc: {active: {enabled: true, limits}}}};
+        const scheduler = createTranslationRequestScheduler(() => config);
+        const identity = {service: 'svc', model: 'active'};
+        const key = JSON.stringify(['model', 'svc', 'active']);
+        const hold = deferred<void>();
+        const setSpy = vi.spyOn(Map.prototype, 'set');
+        let buckets!: Map<string, unknown>;
+        let first!: Promise<void>;
+        try {
+            try {
+                first = scheduler.schedule(async () => hold.promise, {identity, countRate: false});
+                const index = setSpy.mock.calls.findIndex(([item, value]) => item === key
+                    && value && Array.isArray((value as {starts?: unknown}).starts));
+                expect(index).toBeGreaterThanOrEqual(0);
+                buckets = setSpy.mock.contexts[index] as Map<string, unknown>;
+            } finally {
+                setSpy.mockRestore();
+            }
+            vi.setSystemTime(120_000);
+            const started = vi.fn(async () => undefined);
+            const second = scheduler.schedule(started, {identity, countRate: false});
+            expect(buckets.has(key)).toBe(true);
+            expect(started).not.toHaveBeenCalled();
+            hold.resolve();
+            await Promise.all([first, second]);
+            await flushMicrotasks();
+            expect(started).toHaveBeenCalledOnce();
+            expect(buckets.has(key)).toBe(false);
+        } finally {
+            hold.resolve();
+        }
     });
 
     it('按配置限制并发请求并保持 FIFO', async () => {
@@ -518,6 +606,308 @@ describe('translation request scheduler', () => {
             throw new Error('scheduler task failed');
         }, {signal: errorController.signal})).rejects.toThrow('scheduler task failed');
     });
+
+    it.each([false, true])('阻塞队列的大批入队和逐项取消只读取线性数量的请求身份（截止时间：%s）', async (withDeadlines) => {
+        const scheduler = createTranslationRequestScheduler(() => ({
+            maxConcurrentTranslations: 1,
+            translationRequestsPerSecond: 0,
+            translationRequestsPerMinute: 0,
+        }));
+        let reads = 0;
+        const identity = {get service() {reads += 1; return 'burst';}, model: 'm'};
+        const blocker = deferred<void>();
+        const active = scheduler.schedule(async () => blocker.promise, {identity});
+        const controllers = Array.from({length: 4_000}, () => new AbortController());
+        const waiting = controllers.map((controller, index) => {
+            // 时钟正常推进不会解锁纯并发阻塞，不能因此退回整队扫描。
+            vi.setSystemTime(index);
+            return scheduler.schedule(async () => 'never', {identity, signal: controller.signal,
+                ...(withDeadlines ? {deadlineAt: 45_000 + index} : {})})
+                .catch(error => error.name);
+        });
+        const enqueueReads = reads;
+        expect(enqueueReads).toBeLessThanOrEqual(controllers.length * 2 + 2);
+        // 非最早 deadline 的取消无需重新排时；最早项最后取消仍会完整复核。
+        (withDeadlines ? [...controllers].reverse() : controllers).forEach(controller => controller.abort());
+        expect(reads - enqueueReads).toBeLessThanOrEqual(controllers.length);
+        expect(await Promise.all(waiting)).toEqual(controllers.map(() => 'AbortError'));
+        expect(vi.getTimerCount()).toBe(0);
+        blocker.resolve();
+        await active;
+    });
+
+    it('取消一种服务的最后等待项后，不让旧 FIFO 前沿阻塞新逻辑任务', async () => {
+        const limits = {maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 0};
+        const scheduler = createTranslationRequestScheduler(() => ({...limits,
+            serviceRequestLimits: {a: {enabled: true, limits}, b: {enabled: true, limits}},
+        }));
+        const firstGate = deferred<void>(), secondGate = deferred<void>();
+        const first = scheduler.schedule(async () => firstGate.promise, {identity: {service: 'a'}});
+        const second = scheduler.schedule(async () => secondGate.promise, {identity: {service: 'b'}});
+        const controller = new AbortController();
+        const removed = scheduler.schedule(async () => 'never', {identity: {service: 'b'}, signal: controller.signal})
+            .catch(error => error.name);
+        const waiting = scheduler.schedule(async () => 'later', {identity: {service: 'a'}});
+        controller.abort();
+        const task = vi.fn(async () => 'logical');
+        const logical = scheduler.schedule(task, {identity: {service: 'b'}, countConcurrency: false});
+        expect(task).toHaveBeenCalledTimes(1);
+        expect(await removed).toBe('AbortError');
+        expect(await logical).toBe('logical');
+        firstGate.resolve(); secondGate.resolve();
+        await Promise.all([first, second, waiting]);
+    });
+
+    it('增量入队保留旧速率唤醒并及时处理新条目的更早截止时间', async () => {
+        const scheduler = createTranslationRequestScheduler(() => ({
+            maxConcurrentTranslations: 1, translationRequestsPerSecond: 1, translationRequestsPerMinute: 0,
+        }));
+        await scheduler.schedule(async () => 'first');
+        await flushMicrotasks();
+        const order: string[] = [];
+        const later = scheduler.schedule(async () => {order.push('later'); return 'later';});
+        const expiredTask = vi.fn(async () => 'never');
+        const expired = scheduler.schedule(expiredTask, {deadlineAt: 100}).catch(error => error.name);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(await expired).toBe('TranslationRequestSchedulerDeadlineError');
+        expect(expiredTask).not.toHaveBeenCalled();
+        expect(order).toEqual([]);
+        await vi.advanceTimersByTimeAsync(899);
+        expect(order).toEqual([]);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await later).toBe('later');
+        expect(order).toEqual(['later']);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('配置原位修改会重建所有服务的等待前沿，而不只检查新条目', async () => {
+        const limits = {maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 0};
+        const config = {...limits, serviceRequestLimits: {
+            a: {enabled: true, limits: {...limits}}, b: {enabled: true, limits: {...limits}},
+        }};
+        const scheduler = createTranslationRequestScheduler(() => config);
+        const gate = deferred<void>();
+        const active = scheduler.schedule(async () => gate.promise, {identity: {service: 'a'}});
+        const ready = vi.fn(async () => 'ready');
+        const waiting = scheduler.schedule(ready, {identity: {service: 'a'}});
+        expect(ready).not.toHaveBeenCalled();
+        config.serviceRequestLimits.a.limits.maxConcurrentTranslations = 2;
+        const unrelated = scheduler.schedule(async () => 'other', {identity: {service: 'b'}});
+        expect(ready).toHaveBeenCalledTimes(1);
+        gate.resolve();
+        await Promise.all([active, waiting, unrelated]);
+    });
+
+    it('增量入队立即拒绝已经过期的条目而不启动任务或遗留 timer', async () => {
+        vi.setSystemTime(100);
+        const scheduler = createTranslationRequestScheduler(() => ({maxConcurrentTranslations: 1,
+            translationRequestsPerSecond: 0, translationRequestsPerMinute: 0}));
+        const gate = deferred<void>();
+        const active = scheduler.schedule(async () => gate.promise);
+        const expiredTask = vi.fn(async () => 'never');
+        await expect(scheduler.schedule(expiredTask, {deadlineAt: 99}))
+            .rejects.toBeInstanceOf(TranslationRequestSchedulerDeadlineError);
+        expect(expiredTask).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+        gate.resolve();
+        await active;
+    });
+
+    it('旧直调 attempt 取消后清理其专用 FIFO 计数并保留下一次速率唤醒', async () => {
+        const scheduler = createTranslationRequestScheduler(() => ({maxConcurrentTranslations: 1,
+            translationRequestsPerSecond: 1, translationRequestsPerMinute: 0}));
+        await scheduler.scheduleAttempt(async () => 'prime');
+        await flushMicrotasks();
+        const controller = new AbortController();
+        const cancelledTask = vi.fn(async () => 'never');
+        const cancelled = scheduler.scheduleAttempt(cancelledTask, {signal: controller.signal}).catch(error => error.name);
+        const nextTask = vi.fn(async () => 'next');
+        const next = scheduler.scheduleAttempt(nextTask);
+        controller.abort();
+        expect(await cancelled).toBe('AbortError');
+        await vi.advanceTimersByTimeAsync(999);
+        expect(nextTask).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(await next).toBe('next');
+        expect(cancelledTask).not.toHaveBeenCalled();
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it('配置重投影期间同步取消旧等待项，不留下过期的 bucket 引用', async () => {
+        const limits = {maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 0};
+        const config: TranslationRequestSchedulerConfig = {...limits,
+            // 持久化旧设置中的空模型项应按继承处理，而不是阻止全局调度。
+            modelRequestLimits: {legacy: null as unknown as Record<string, never>}};
+        const scheduler = createTranslationRequestScheduler(() => config);
+        const gate = deferred<void>();
+        const active = scheduler.schedule(async () => gate.promise, {identity: {service: 'a'}});
+        const controller = new AbortController();
+        const cancelledTask = vi.fn(async () => 'never');
+        const waiting = scheduler.schedule(cancelledTask, {identity: {service: 'a'}, signal: controller.signal})
+            .catch(error => error.name);
+        config.serviceRequestLimits = {a: {enabled: true, limits}, b: {enabled: true, limits}};
+        const unrelated = scheduler.schedule(async () => {controller.abort(); return 'b';}, {identity: {service: 'b'}});
+        expect(await unrelated).toBe('b');
+        expect(await waiting).toBe('AbortError');
+        expect(cancelledTask).not.toHaveBeenCalled();
+        gate.resolve();
+        await active;
+        await expect(scheduler.schedule(async () => 'next', {identity: {service: 'a'}})).resolves.toBe('next');
+    });
+
+    it.each(['config', 'clock'])('取消期间 %s 回调同步入队的其它服务立即调度，不等待无关传输释放', async (port) => {
+        const limits = {maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 0};
+        const config = {...limits, serviceRequestLimits: {a: {enabled: true, limits}, b: {enabled: true, limits}}};
+        let onRead: (() => void) | undefined;
+        const read = () => {const callback = onRead; onRead = undefined; callback?.();};
+        const scheduler = createTranslationRequestScheduler(() => {if (port === 'config') read(); return config;},
+            {now: () => {if (port === 'clock') read(); return Date.now();}});
+        const gate = deferred<void>();
+        const active = scheduler.schedule(async () => gate.promise, {identity: {service: 'a'}});
+        const controller = new AbortController();
+        const cancelled = scheduler.schedule(async () => 'never', {identity: {service: 'a'}, signal: controller.signal})
+            .catch(error => error.name);
+        const independentTask = vi.fn(async () => 'b');
+        let independent!: Promise<string>;
+        onRead = () => {independent = scheduler.schedule(independentTask, {identity: {service: 'b'}});};
+        controller.abort();
+        try {
+            expect(independentTask).toHaveBeenCalledTimes(1);
+            expect(await independent).toBe('b');
+            expect(await cancelled).toBe('AbortError');
+        } finally {
+            gate.resolve();
+            await active;
+        }
+    });
+
+    it('取消期间配置回调同步取消最早截止项，释放最后一个等待 timer', async () => {
+        const earliest = new AbortController();
+        const latest = new AbortController();
+        let cancelDuringRead = false;
+        const scheduler = createTranslationRequestScheduler(() => {
+            if (cancelDuringRead) {cancelDuringRead = false; earliest.abort();}
+            return {maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 0};
+        });
+        const gate = deferred<void>();
+        const active = scheduler.schedule(async () => gate.promise);
+        const first = scheduler.schedule(async () => 'never', {deadlineAt: 100, signal: earliest.signal})
+            .catch(error => error.name);
+        const second = scheduler.schedule(async () => 'never', {signal: latest.signal})
+            .catch(error => error.name);
+        expect(vi.getTimerCount()).toBe(1);
+        cancelDuringRead = true;
+        latest.abort();
+        expect(await Promise.all([first, second])).toEqual(['AbortError', 'AbortError']);
+        expect(vi.getTimerCount()).toBe(0);
+        gate.resolve();
+        await active;
+    });
+
+    it.each(['config', 'clock'])('追加期间 %s 回调同步入队仍保持外层先到的 FIFO 顺序', async (port) => {
+        const limits = {maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 0};
+        const config = {...limits, serviceRequestLimits: {a: {enabled: true, limits}, b: {enabled: true, limits}}};
+        let onRead: (() => void) | undefined;
+        const read = () => {const callback = onRead; onRead = undefined; callback?.();};
+        const scheduler = createTranslationRequestScheduler(() => {if (port === 'config') read(); return config;},
+            {now: () => {if (port === 'clock') read(); return Date.now();}});
+        const gate = deferred<void>();
+        const active = scheduler.schedule(async () => gate.promise, {identity: {service: 'a'}});
+        const order: string[] = [];
+        let nested!: Promise<void>;
+        onRead = () => {nested = scheduler.schedule(async () => {order.push('nested');}, {identity: {service: 'b'}});};
+        const outer = scheduler.schedule(async () => {order.push('outer');}, {identity: {service: 'b'}});
+        try {
+            expect(order).toEqual(['outer']);
+            await Promise.all([outer, nested]);
+            expect(order).toEqual(['outer', 'nested']);
+        } finally {
+            gate.resolve();
+            await active;
+        }
+    });
+
+
+    it('无冷却响应推进时钟后，时钟回退仍清除旧速率和等待前沿', async () => {
+        vi.setSystemTime(100);
+        const scheduler = createTranslationRequestScheduler(() => ({
+            maxConcurrentTranslations: 2, translationRequestsPerSecond: 1, translationRequestsPerMinute: 0,
+        }));
+        await scheduler.schedule(async () => 'first');
+        await flushMicrotasks();
+        const controller = new AbortController();
+        const secondTask = vi.fn(async () => 'second');
+        const second = scheduler.schedule(secondTask, {signal: controller.signal});
+        vi.setSystemTime(200);
+        scheduler.observeResponse({quotaScope: 'scope'}, {status: 503, headers: new Headers()});
+        vi.setSystemTime(150);
+        const third = scheduler.schedule(async () => 'third', {signal: controller.signal})
+            .catch(error => error.name);
+        expect(secondTask).toHaveBeenCalledTimes(1);
+        expect(await second).toBe('second');
+        controller.abort();
+        expect(await third).toBe('AbortError');
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+
+    it('取消最早截止项后撤掉旧 timer，保留剩余条目的准确唤醒时间', async () => {
+        const readConfig = vi.fn(() => ({maxConcurrentTranslations: 1,
+            translationRequestsPerSecond: 0, translationRequestsPerMinute: 0}));
+        const scheduler = createTranslationRequestScheduler(readConfig);
+        const gate = deferred<void>();
+        const active = scheduler.schedule(async () => gate.promise);
+        const controller = new AbortController();
+        const earliest = scheduler.schedule(async () => 'never', {signal: controller.signal, deadlineAt: 100})
+            .catch(error => error.name);
+        const later = scheduler.schedule(async () => 'never', {deadlineAt: 200})
+            .catch(error => error.name);
+        controller.abort();
+        expect(await earliest).toBe('AbortError');
+        readConfig.mockClear();
+        await vi.advanceTimersByTimeAsync(100);
+        expect(readConfig).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(100);
+        expect(await later).toBe('TranslationRequestSchedulerDeadlineError');
+        gate.resolve();
+        await active;
+    });
+
+
+    it.each([500, 1_000, 1_500])('FIFO 后方模型在 %i ms 取消前项后按速率恢复时间启动', async (cancelAt) => {
+        const limits = (concurrency: number, rate = 0) => ({maxConcurrentTranslations: concurrency,
+            translationRequestsPerSecond: rate, translationRequestsPerMinute: 0});
+        const scheduler = createTranslationRequestScheduler(() => ({...limits(3),
+            serviceRequestLimits: {svc: {enabled: true, limits: limits(3)}},
+            modelRequestLimits: {svc: {a: {enabled: true, limits: limits(1)}, b: {enabled: true, limits: limits(1, 1)}}},
+        }));
+        const gate = deferred<void>();
+        const active = scheduler.schedule(async () => gate.promise, {identity: {service: 'svc', model: 'a'}});
+        await scheduler.schedule(async () => 'prime-rate', {identity: {service: 'svc', model: 'b'}});
+        await flushMicrotasks();
+        const controller = new AbortController();
+        const first = scheduler.schedule(async () => 'never', {identity: {service: 'svc', model: 'a'}, signal: controller.signal})
+            .catch(error => error.name);
+        const ready = vi.fn(async () => 'ready');
+        const second = scheduler.schedule(ready, {identity: {service: 'svc', model: 'b'}});
+        expect(vi.getTimerCount()).toBe(0);
+        vi.setSystemTime(cancelAt);
+        controller.abort();
+        if (cancelAt < 1_000) {
+            expect(ready).not.toHaveBeenCalled();
+            expect(vi.getTimerCount()).toBe(1);
+            await vi.advanceTimersByTimeAsync(1_000 - cancelAt - 1);
+            expect(ready).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+        }
+        expect(ready).toHaveBeenCalledTimes(1);
+        expect(await first).toBe('AbortError');
+        expect(await second).toBe('ready');
+        expect(vi.getTimerCount()).toBe(0);
+        gate.resolve();
+        await active;
+    });
+
 });
 
 function schedulerForLeaseTest(

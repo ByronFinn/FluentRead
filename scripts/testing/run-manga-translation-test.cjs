@@ -1,20 +1,45 @@
 'use strict';
-/** 漫画生产扩展专项：临时 profile、关闭 Shadow DOM 可信点击、真实 OCR；区分在线站点、提前页和滚动返页稳定性；仅夹具可控地挂起文字服务；性能模式复用同一原图和真实模型，记录冷启动、逐次推理和编码。 */
+/**
+ * @file scripts/testing/run-manga-translation-test.cjs
+ * 文件职责：在临时 profile 中用可信点击和真实模型验证生产漫画翻译、滚动及缓存行为。
+ * 主要内容：固定模型文件经校验后由既有 UI 导入；性能模式测量冷/热推理，质量 manifest 检查真实 OCR 锚点、画面保护与原/译切换；可选角色补充绑定原manifest，正文、注音和视觉分区独立验收并保留旧分数；受控阿拉伯语、希伯来语目标可记录实际字形方向，不能据此声称真实供应商翻译准确。
+ * 模块边界：受控模式仅替换夹具的 Google 文字传输，微软翻译路径和未知 Google 请求直接失败，不能回到原 fetch 联网；真实模式逐次记录原文白名单匹配、HTTP状态及耗时，不把测试器拒绝误报为真实服务回退；后台API明确就绪后才操作扩展页，记录启动状态变化，超时仍失败；不修改生产 OCR/修补结果，不访问日常浏览器 profile，浏览器启动与页面创建均走不抢焦点 helper。
+ */
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
+const {createHash} = require('node:crypto');
 const {execFileSync} = require('node:child_process');
+const {ensureImageTranslationModelFiles, defaultImageTranslationModelCacheDirectory, readImageTranslationModelManifest} = require('./image-model-cache.cjs');
+const {getMangaOrtModelCatalog, validateMangaOrtModelFiles} = require('./manga-ort-diagnostics.cjs');
+const {validateQualityFixtureExpectations,evaluateCapturedQualityFixture,evaluateQualityAlphaProbes} = require('./manga-quality-corpus.cjs');
+const {validateQualityRoleManifest,evaluateCapturedQualityRoles}=require('./manga-quality-roles.cjs');
 function arg(name, fallback) {const index = process.argv.indexOf(`--${name}`); return index < 0 ? fallback : process.argv[index + 1];}
 let extensionDir = path.resolve(arg('extension-dir', '.output/chrome-mv3'));
 let diagnosticFixture;
 const artifacts = path.resolve(arg('artifacts-dir', '/private/tmp/fluentread-manga-browser'));
 const packages = arg('playwright-root', process.env.PLAYWRIGHT_ROOT);
 const helper = arg('focus-safe-helper', process.env.FLUENTREAD_FOCUS_SAFE_HELPER);
+const diagnosticsHelper=arg('runtime-diagnostics-helper',process.env.FLUENTREAD_RUNTIME_DIAGNOSTICS_HELPER);
+const diagnostics=diagnosticsHelper&&require(path.resolve(diagnosticsHelper)).createRuntimeDiagnostics();
 if (!packages || !helper) throw new Error('Provide --playwright-root and --focus-safe-helper');
 const {chromium} = require(path.join(packages, 'playwright'));
 const {launchFocusSafePersistentContext, newPageWithoutForeground, activateExtensionTabWithoutForeground} = require(helper);
 const liveSite = process.argv.includes('--live-site');
 const liveTranslation = process.argv.includes('--live-translation');
+const liveTextAllowlistPath=arg('live-text-allowlist',null);
+const liveTextAllowlist=liveTextAllowlistPath?JSON.parse(fs.readFileSync(path.resolve(liveTextAllowlistPath),'utf8')):null;
+if(liveTextAllowlistPath)assert.ok(liveTranslation&&Array.isArray(liveTextAllowlist)&&liveTextAllowlist.length>0&&liveTextAllowlist.every(text=>typeof text==='string'&&text.trim()),'Live text allowlist requires explicit non-empty strings and live transport');
+const translationMapPath=arg('translation-map',null);
+const translationMap=translationMapPath?JSON.parse(fs.readFileSync(path.resolve(translationMapPath),'utf8')):null;
+if(translationMapPath){
+    assert.ok(!liveTranslation&&translationMap&&typeof translationMap==='object'&&!Array.isArray(translationMap),'Translation maps require deterministic transport');
+    assert.ok(Object.values(translationMap).every(value=>typeof value==='string'&&value.trim()),'Translation map values must be non-empty strings');
+}
+const translationService = arg('translation-service','google');
+const imageTranslationService = arg('image-translation-service',translationService);
+if((translationService!=='google'||imageTranslationService!=='google')&&!liveTranslation)
+    throw new Error('Non-Google translation providers require --live-translation; only Google has a deterministic transport fixture');
 const readerSmoke = process.argv.includes('--reader-smoke');
 const canvasReaderTest = process.argv.includes('--canvas-reader');
 const backgroundReaderTest = process.argv.includes('--background-reader');
@@ -29,7 +54,14 @@ const blockedOfficial = process.argv.includes('--blocked-official');
 const blockedAll = process.argv.includes('--blocked-all-model-sources');
 const offlineModels = arg('offline-models-dir',null);
 const preloadModels = arg('preload-models-dir',null);
+const modelCacheDir = path.resolve(arg('model-cache-dir',defaultImageTranslationModelCacheDirectory()));
 const baseline = process.argv.includes('--baseline');
+// 仅约束缓存助手的下载，不能替代浏览器全 target 网络隔离。
+const noCacheDownload = process.argv.includes('--model-cache-no-download');
+const preloadTextSeg = process.argv.includes('--preload-text-seg');
+if(preloadTextSeg)assert.ok(noCacheDownload,'--preload-text-seg requires --model-cache-no-download');
+if(noCacheDownload)assert.ok(!preloadModels&&!offlineModels&&!blockedOfficial&&!blockedAll&&!baseline,
+    '--model-cache-no-download requires the shared model cache; it does not apply to other model-source modes');
 const readingPauseMs=Number(arg('reading-pause-ms','0'));
 const skipFirstCancel=process.argv.includes('--skip-first-cancel');
 const readAheadTest=process.argv.includes('--prefetch-pages');
@@ -38,9 +70,67 @@ const scrollIntentTest=process.argv.includes('--scroll-intent');
 const cacheNavigationTest=process.argv.includes('--cache-navigation');
 const tieredCacheTest=process.argv.includes('--tiered-cache');
 const pageFeedbackTest=process.argv.includes('--page-feedback');
+const errorRecoveryTest=process.argv.includes('--error-recovery');
+const errorRecoverySurface=arg('error-recovery-surface','image');
+const recoveryCanvasAlpha=process.argv.includes('--recovery-canvas-alpha');
+const recoveryBackgroundAlpha=process.argv.includes('--recovery-background-alpha');
+if(recoveryCanvasAlpha)assert.ok(errorRecoveryTest&&errorRecoverySurface==='canvas','Transparent Canvas checks require the controlled Canvas recovery fixture');
+if(recoveryBackgroundAlpha)assert.ok(errorRecoveryTest&&errorRecoverySurface==='background','Transparent background checks require the controlled background recovery fixture');
+assert.ok(['image','canvas','background','segments'].includes(errorRecoverySurface),'Recovery surface must be image, canvas, background or segments');
+if(process.argv.includes('--error-recovery-surface'))assert.ok(errorRecoveryTest,'--error-recovery-surface requires --error-recovery');
+const recoveryViewportValue=arg('recovery-viewport',null),recoveryViewportParts=recoveryViewportValue?.match(/^(\d{3,4})x(\d{3,4})$/);
+const recoveryViewport=recoveryViewportParts?{width:Number(recoveryViewportParts[1]),height:Number(recoveryViewportParts[2])}:null;
+const recoveryLongDetails=process.argv.includes('--recovery-long-details'),recoveryRtl=process.argv.includes('--recovery-rtl');
+if(process.argv.includes('--recovery-viewport'))assert.ok(errorRecoveryTest&&recoveryViewport&&recoveryViewport.width>=320&&recoveryViewport.width<=1600&&recoveryViewport.height>=240&&recoveryViewport.height<=1200,'Recovery CSS viewport must be 320–1600 x 240–1200 and requires --error-recovery');
+if(recoveryLongDetails||recoveryRtl)assert.ok(errorRecoveryTest,'Recovery long-details and RTL flags require --error-recovery');
 const prefetchPages=Number(arg('prefetch-pages','0'));
-const pipelineInputs=arg('pipeline-inputs',null)?.split(',').map(file=>path.resolve(file));
-const pipelineRounds=Number(arg('pipeline-rounds','3'));
+const explicitPipelineInputs=arg('pipeline-inputs',null)?.split(',').map(file=>path.resolve(file));
+const qualityManifestPath=arg('quality-manifest',null);
+const qualityProfile=arg('quality-profile','manga');
+assert.ok(['manga','image'].includes(qualityProfile),'Quality profile must be manga or image');
+const ordinaryImageQuality=qualityProfile==='image';
+assert.ok(!qualityManifestPath||!explicitPipelineInputs,'Choose either --quality-manifest or --pipeline-inputs');
+const qualityManifestBytes=qualityManifestPath?fs.readFileSync(path.resolve(qualityManifestPath)):null;
+const qualityManifest=qualityManifestBytes?JSON.parse(qualityManifestBytes.toString('utf8')):null;
+const qualityFixtures=qualityManifest?.fixtures;
+const qualityRolesPath=arg('quality-roles',null);
+let qualityRoles=null,qualityRoleProfile;
+if(qualityRolesPath){
+    assert.ok(qualityManifestBytes,'--quality-roles requires --quality-manifest');
+    const file=path.resolve(qualityRolesPath),stat=fs.statSync(file);assert.ok(stat.isFile()&&stat.size<=65536,'Quality role profile is a bounded regular file');
+    const bytes=fs.readFileSync(file),profile=JSON.parse(bytes.toString('utf8'));qualityRoles=validateQualityRoleManifest(qualityManifestBytes,profile);
+    qualityRoleProfile={path:file,sha256:createHash('sha256').update(bytes).digest('hex'),manifestSha256:profile.manifestSha256};
+}
+if(qualityManifest){
+    assert.equal(qualityManifest.version,1,'Use a supported quality manifest version');
+    assert.ok(Array.isArray(qualityFixtures)&&qualityFixtures.length>=1&&qualityFixtures.length<=32,'Quality corpus contains 1–32 bounded scenes');
+    const names=new Set();
+    for(const fixture of qualityFixtures){
+        assert.ok(typeof fixture.name==='string'&&/^[a-z0-9][a-z0-9-]*$/.test(fixture.name)&&!names.has(fixture.name),'Quality scene names are unique safe artifact stems');names.add(fixture.name);
+        assert.ok(typeof fixture.file==='string'&&fixture.mime==='image/png','Quality corpus uses named PNG files');
+        fixture.input=path.resolve(path.dirname(path.resolve(qualityManifestPath)),fixture.file);
+        const bytes=fs.readFileSync(fixture.input);
+        assert.equal(bytes.length,fixture.bytes,`Fixture byte length: ${fixture.name}`);
+        assert.equal(createHash('sha256').update(bytes).digest('hex'),fixture.sha256,`Fixture SHA-256: ${fixture.name}`);
+        assert.ok(['en','ja','ko','ru','auto'].includes(fixture.sourceLanguage),'Quality scenes specify a supported OCR language');
+        assert.ok([fixture.width,fixture.height].every(value=>Number.isInteger(value)&&value>0&&value<=8192)&&fixture.width*fixture.height<=16_777_216,'Quality scene dimensions match the runtime 8192-side / 16MP limits');
+        validateQualityFixtureExpectations(fixture);
+        assert.ok(Array.isArray(fixture.protectedProbes)&&(fixture.protectedProbes.length||(fixture.protectedAlphaProbes?.length??0)>0)&&fixture.protectedProbes.every(probe=>Number.isInteger(probe.x)&&probe.x>=0&&probe.x<fixture.width&&Number.isInteger(probe.y)&&probe.y>=0&&probe.y<fixture.height&&Array.isArray(probe.rgb)&&probe.rgb.length===3&&probe.rgb.every(value=>Number.isInteger(value)&&value>=0&&value<=255)),'Quality scenes declare protected source pixels');
+    }
+}
+const pipelineInputs=qualityFixtures?.map(fixture=>fixture.input)||explicitPipelineInputs;
+if(qualityManifest)assert.ok(fs.existsSync(path.join(extensionDir,'manifest.json')),'Quality matrix requires an existing built extension manifest before browser launch');
+if(ordinaryImageQuality)assert.ok(qualityManifest&&!liveSite&&(!liveTranslation||liveTextAllowlist)&&!readerSmoke&&!surfaceReaderTest&&!segmentReaderTest
+    &&!baseline&&!errorRecoveryTest&&!readAheadTest&&!scrollStabilityTest&&!scrollIntentTest&&!cacheNavigationTest&&!tieredCacheTest&&!pageFeedbackTest&&prefetchPages===0
+    &&!offlineModels&&!preloadModels&&!blockedOfficial&&!blockedAll
+    &&qualityFixtures.every(fixture=>['en','ja','auto'].includes(fixture.sourceLanguage)),
+    'Ordinary Paddle quality requires a controlled en/ja/auto corpus, including explicitly wordless scenes, and shared OCR cache, without other reader modes, prefetch or legacy model-source diagnostics');
+if(errorRecoveryTest)assert.ok(!liveSite&&!liveTranslation&&!readerSmoke&&!canvasReaderTest&&!backgroundReaderTest&&!segmentReaderTest&&!pipelineInputs
+    &&!readAheadTest&&!scrollStabilityTest&&!scrollIntentTest&&!cacheNavigationTest&&!tieredCacheTest&&!pageFeedbackTest&&prefetchPages===0,
+    'Error recovery uses only its controlled fixture with prefetch disabled, without live/pipeline/other reader modes');
+const pipelineRounds=Number(arg('pipeline-rounds',qualityManifest?'1':'3'));
+if(pipelineInputs)assert.ok(Number.isInteger(pipelineRounds)&&pipelineRounds>=(qualityManifest?1:2)&&pipelineRounds<=5,qualityManifest?'Quality scenes allow 1–5 bounded rounds':'Measure first use separately from bounded warm runs (2–5 rounds)');
+const layoutTraceLimit=Math.max(100,(qualityFixtures?.length??0)*pipelineRounds+8);
 const graphOverride=arg('pipeline-graph',null);
 const gpuDiagnosis=process.argv.includes('--gpu-diagnosis');
 const forceCpu=process.argv.includes('--pipeline-cpu');
@@ -48,8 +138,13 @@ const extensionDebugging=process.argv.includes('--extension-debugging');
 const startupExtensionId=arg('extension-id',null);
 if(startupExtensionId)assert.match(startupExtensionId,/^[a-p]{32}$/,'Use a verified unpacked extension ID');
 const traceReader=process.argv.includes('--trace-reader');
-const traceLayout=process.argv.includes('--trace-layout');
-const targetUrl = arg('site-url','https://mangaplus.shueisha.co.jp/viewer/1024050');
+const traceLayout=process.argv.includes('--trace-layout')||Boolean(qualityManifest);
+const assertNoRenderSkips=process.argv.includes('--assert-no-render-skips');
+if(assertNoRenderSkips)assert.ok(liveSite&&readerSmoke&&traceLayout,'--assert-no-render-skips requires a traced live reader smoke');
+const recoveryFixtureUrl=errorRecoverySurface==='canvas'?'https://comic-walker.com/detail/KC_1068_S/episodes/KC_1068_E':
+    errorRecoverySurface==='background'?'https://palcy.jp/comics/1068':'https://mangaplus.shueisha.co.jp/viewer/1024050';
+const targetUrl = arg('site-url',errorRecoveryTest?recoveryFixtureUrl:'https://mangaplus.shueisha.co.jp/viewer/1024050');
+if(errorRecoveryTest&&errorRecoverySurface!=='image')assert.equal(targetUrl,recoveryFixtureUrl,'Controlled recovery surfaces use an existing production reader profile and its exact fixture URL');
 const pixiv=targetUrl.includes('pixiv.net/artworks/');
 const explicitReaderSelector=arg('reader-selector',null);
 if(explicitReaderSelector)assert.ok(readerSmoke && liveSite && !pixiv && !surfaceReaderTest,'Explicit image selectors are limited to live reader smoke checks');
@@ -78,11 +173,13 @@ if(surfaceReaderTest){
     assert.ok(Number.isInteger(canvasTurnCount)&&canvasTurnCount>=1&&canvasTurnCount<=4,'Canvas turns must be 1–4');
     assert.ok(['ArrowLeft','ArrowRight'].includes(canvasTurnKey),'Canvas chapter turns use a normal horizontal arrow key');
 }
-const readerSelector=explicitReaderSelector || (surfaceReaderTest?explicitCanvasSelector || (backgroundReaderTest?'div[id^="page-"][style*="blob:"]':'#comici-viewer .-cv-page-canvas canvas'):pixiv?'img[src*="/img-master/"][src*="/150354216_p"], img[src*="/img-original/"][src*="/150354216_p"]':'.zao-image');
+const recoverySelector=errorRecoverySurface==='canvas'?'[data-viewer-full-screen-helper] canvas[data-type="contents"]':
+    errorRecoverySurface==='background'?'div[id^="page-"][style*="blob:"]':'.zao-image';
+const readerSelector=(errorRecoveryTest&&errorRecoverySurface!=='image'?recoverySelector:null)||explicitReaderSelector || (surfaceReaderTest?explicitCanvasSelector || (backgroundReaderTest?'div[id^="page-"][style*="blob:"]':'#comici-viewer .-cv-page-canvas canvas'):pixiv?'img[src*="/img-master/"][src*="/150354216_p"], img[src*="/img-original/"][src*="/150354216_p"]':'.zao-image');
 const sourceLanguage=arg('source-language',pixiv||surfaceReaderTest?'ja':'en');
 assert.ok(['en','ja','ko','ru','auto'].includes(sourceLanguage),'Use a supported sample source language');
 const targetLanguage=arg('target-language','zh-Hans');
-assert.ok(['zh-Hans','en'].includes(targetLanguage),'Use a bounded sample target language');
+assert.ok(['zh-Hans','en','ar','he'].includes(targetLanguage),'Use a bounded sample target language');
 const canvasContentPixels=process.argv.includes('--canvas-content-pixels');
 if(canvasContentPixels)assert.ok(canvasReaderTest&&liveSite&&explicitCanvasSelector,'Content-world pixel diagnostics require an explicit live public canvas reader');
 const canvasFirstSpreadOnly=process.argv.includes('--canvas-first-spread-only');
@@ -106,20 +203,50 @@ if(readerDismissSelector)assert.ok(imageTurnKey,'Public reader notices are limit
 let profile; let launchAttempted = false;
 fs.mkdirSync(artifacts, {recursive: true});
 const report = {site: liveSite ? 'live MANGA Plus' : 'controlled MANGA Plus reader fixture',
-    translation: liveTranslation ? 'live Google' : 'deterministic Google text transport',
-    ocr: ['ru','ko'].includes(sourceLanguage) ? 'real production Tesseract with manga cleanup and typesetting' : 'real production PaddleOCR', cases: [], screenshots: [], errors: [], hostErrors: [], pageErrors: [], consoleErrors: []};
+    translation: liveTranslation ? `live ${translationService}` : 'deterministic Google text transport',
+    imageTranslationService,
+    ocr: ordinaryImageQuality ? 'real production PaddleOCR ordinary-image profile' : ['ru','ko'].includes(sourceLanguage) ? 'real production Tesseract with manga cleanup and typesetting' : 'real production PaddleOCR', qualityProfile, cases: [], screenshots: [], errors: [], hostErrors: [], pageErrors: [], consoleErrors: []};
+const javascriptFiles=[];
+function collectJavaScript(directory){
+    for(const entry of fs.readdirSync(directory,{withFileTypes:true})){
+        const file=path.join(directory,entry.name);
+        if(entry.isDirectory())collectJavaScript(file);else if(file.endsWith('.js'))javascriptFiles.push(file);
+    }
+}
+if(errorRecoveryTest){
+    report.site=`controlled ${errorRecoverySurface} recovery fixture using production reader discovery`;
+    report.errorRecovery={surface:errorRecoverySurface,fixtureUrl:targetUrl,sourceSelector:readerSelector,
+        scope:'Controlled page matches production reader discovery; only OCR-following text transport is failed; source pixels remain unchanged, only the exact native Canvas visibility or background-image presentation receipt is permitted while translated output is visible, and all attributes are checked after restoration',canvasAlpha:recoveryCanvasAlpha,backgroundAlpha:recoveryBackgroundAlpha};
+}
 if(pixiv)report.site='live Pixiv artwork 150354216';
 if(surfaceReaderTest){report.site=`live readable ${backgroundReaderTest?'background':'canvas'} chapter: ${targetUrl}`;report.canvasReader={selector:readerSelector,openSelector:canvasOpenSelector,initialTurns:canvasInitialTurns,turnKey:canvasTurnKey,turnCount:canvasTurnCount,readySettleMs:canvasReadySettleMs,nextClickSelector:canvasNextClickSelector,nextClickPosition:canvasNextClickPosition};}
 if(explicitReaderSelector){report.site=`live image chapter: ${targetUrl}`;report.readerSelector=explicitReaderSelector;}
 report.prefetchPages=prefetchPages;
 report.sourceLanguage=sourceLanguage;report.readerOpenSelector=readerOpenSelector;report.readerScrollSelector=readerScrollSelector;
 report.targetLanguage=targetLanguage;
+if(qualityManifest)report.qualityManifest={path:path.resolve(qualityManifestPath),version:qualityManifest.version,scenes:qualityFixtures.map(({name,sourceLanguage,scene,expectedAnchors,expectedNoText,forbiddenRegions,protectedProbes})=>({name,sourceLanguage,scene,expectedAnchors,expectedNoText,forbiddenRegions,protectedProbes}))};
+if(qualityRoleProfile)report.qualityRoleProfile=qualityRoleProfile;
+if(translationMapPath)report.controlledTranslationMap={path:path.resolve(translationMapPath),sha256:createHash('sha256').update(fs.readFileSync(path.resolve(translationMapPath))).digest('hex'),entries:Object.keys(translationMap).length,scope:'Fixed source-to-target text for layout inspection; not a measurement of live translation quality. Missing sources fail the run.'};
 if(canvasContentPixels)report.canvasPixelWorld='own production extension content world; ordinary API, no prototype substitution';
 report.readerStartIndex=readerStartIndex;
 report.readerNextSelector=readerNextSelector;
 if(imageTurnKey)report.pagedImages={turnKey:imageTurnKey,initialTurns:imageInitialTurns,urlPolicy:imageStableUrl?'stable':'changes'};
-let launched, page, worker, cdp, popup, modelObserver, browserPid,loadedExtensionId,contentPixelContext;
+let launched, page, worker, cdp, popup, modelObserver, browserPid,loadedExtensionId,contentPixelContext,preparedModels;
 loadedExtensionId=startupExtensionId;
+
+async function prepareModelFilesForTest() {
+    const needsPaddle=(qualityFixtures?.map(fixture=>fixture.sourceLanguage)||[sourceLanguage]).some(language=>!['ru','ko'].includes(language));
+    const kinds=ordinaryImageQuality?['ocr']:needsPaddle?['ocr','inpaint']:['inpaint'];
+    if(preloadTextSeg){if(!kinds.includes('ocr'))kinds.push('ocr');kinds.push('seg');}
+    preparedModels=await ensureImageTranslationModelFiles({directory:modelCacheDir,kinds,sourceDirectories:[modelCacheDir],allowNetworkDownload:!noCacheDownload});
+    if(preloadTextSeg){
+        const catalog=getMangaOrtModelCatalog({includeSeg:true});
+        validateMangaOrtModelFiles(preparedModels.files,catalog);
+        report.textSegPreload={cachedOnly:true,readOnlyFileCache:true,sessionPrepared:false,modelCreationCatalog:catalog,
+            scope:'Catalog and cache identities only; actual creation requires the strict pre-start collector. Preload imports CacheStorage without prepare-seg or inference.'};
+    }
+    report.modelCache=preparedModels;
+}
 function focusGuard() {
     const current=JSON.parse(execFileSync('/usr/bin/osascript',['-l','JavaScript','-e',"ObjC.import('AppKit');const app=$.NSWorkspace.sharedWorkspace.frontmostApplication;JSON.stringify({pid:Number(app.processIdentifier),name:ObjC.unwrap(app.localizedName)});"],{encoding:'utf8'}));
     assert.notEqual(current.pid,browserPid,'Isolated test browser must stay behind the user app');
@@ -205,6 +332,65 @@ window.addPage=(text,id)=>{
 };addPage('Welcome to FluentRead','page-one');addPage('Second manga page','page-two');addPage('Third manga page','page-three');
 ${readAheadTest || scrollStabilityTest || scrollIntentTest || cacheNavigationTest || tieredCacheTest || pageFeedbackTest ? "addPage('Fourth manga page','page-four');addPage('Fifth manga page','page-five');addPage('Sixth manga page','page-six');" : ''}
 </script></body></html>`;
+/** 夹具只绘制站点公开 DOM；canvas/background 复用现有适配，长图由生产 2048px 分段规则自行发现。 */
+function recoverySurfaceFixture(surface) {
+    assert.ok(['canvas','background','segments'].includes(surface));
+    let alphaSource=null;
+    if(recoveryCanvasAlpha||recoveryBackgroundAlpha){
+        const input=fs.readFileSync(path.join(__dirname,'../../tests/fixtures/manga-chromatic/translucent-red-dialogue-overlay.png'));
+        const sha256=createHash('sha256').update(input).digest('hex');
+        assert.equal(sha256,'884f78dfc09b80aa8d5cf3e97e58235c1572b8fa7883487b74aa4dcac9affe38','Use the independently frozen transparent source without edits');
+        alphaSource=`data:image/png;base64,${input.toString('base64')}`;
+        const alpha={inputSha256:sha256,source:'existing independently designed red-alpha PNG; real production OCR/inpainting with controlled text transport',background:recoveryBackgroundAlpha?[29,65,83,255]:[23,25,35,255]};
+        if(recoveryCanvasAlpha)report.recoveryCanvasAlpha=alpha;
+        else report.recoveryBackgroundAlpha={...alpha,wordlessChildRegion:{x0:90,y0:730,x1:810,y1:850}};
+    }
+    return `<!doctype html><html><head><meta charset="utf-8"><title>Manga recovery ${surface} fixture</title><style>
+body{margin:0;background:#171923;color:white;font:16px system-ui}.heading{padding:22px;text-align:center}
+.zao-image-container{width:760px;margin:0 auto 50px}.manga-recovery-source{width:760px;height:1100px;display:block;padding:0;border:0}
+${recoveryCanvasAlpha?'#reader>.zao-image-container:first-child{width:900px}#reader>.zao-image-container:first-child canvas{width:900px;height:auto;aspect-ratio:1}':''}
+${recoveryBackgroundAlpha?'#reader>.zao-image-container:first-child{width:900px}#reader>.zao-image-container:first-child .manga-recovery-source{width:100%;height:auto;aspect-ratio:1;position:relative;background-color:rgb(29,65,83)}#recovery-host-caption,#recovery-host-action{position:absolute;left:12.444444%;width:30%;box-sizing:border-box;margin:0;padding:0;border:0!important;font:clamp(8px,1.6vw,16px)/1.1 system-ui!important;color:white!important;display:flex;align-items:center;justify-content:center;overflow:hidden}#recovery-host-caption{top:82.666667%;height:3.111111%;background:rgb(48,32,96)}#recovery-host-action{top:87.555556%;height:4.444444%;background:rgb(24,128,72)!important;cursor:pointer}':''}
+button{border:24px solid green!important;font:60px monospace!important;background:red!important}
+</style></head><body><div class="heading">漫画错误恢复 · ${surface}</div><main id="reader"></main><script>
+(async()=>{
+ const surface=${JSON.stringify(surface)},alphaSource=${JSON.stringify(alphaSource)},urls=[];
+ addEventListener('pagehide',()=>urls.forEach(url=>URL.revokeObjectURL(url)),{once:true});
+ const panel=(canvas,top,text)=>{
+  const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.fillStyle='#fff';ctx.fillRect(0,top,760,1100);
+  ctx.strokeStyle='#222';ctx.lineWidth=4;ctx.strokeRect(24,top+24,712,500);ctx.strokeRect(24,top+550,712,520);
+  ctx.beginPath();ctx.ellipse(380,top+160,310,100,0,0,Math.PI*2);ctx.stroke();
+  ctx.fillStyle='#111';ctx.textAlign='center';ctx.font='bold 36px Arial';ctx.fillText(text,380,top+150);
+  ctx.font='32px Arial';ctx.fillText('Read every page',380,top+205);ctx.fillText('Scroll to continue',380,top+680);
+ };
+ const blobUrl=async canvas=>{const blob=await new Promise(resolve=>canvas.toBlob(resolve));if(!blob)throw new Error('Recovery fixture PNG encoding failed');const url=URL.createObjectURL(blob);urls.push(url);return url;};
+ const sourceBlobUrl=data=>{const bytes=Uint8Array.from(atob(data.split(',')[1]),value=>value.charCodeAt(0)),url=URL.createObjectURL(new Blob([bytes],{type:'image/png'}));urls.push(url);return url;};
+ const append=element=>{const wrap=document.createElement('div');wrap.className='zao-image-container';
+  if(surface==='canvas')wrap.setAttribute('data-viewer-full-screen-helper','');wrap.append(element);document.querySelector('#reader').append(wrap);};
+ const texts=['Welcome to FluentRead','Second manga page','Third manga page'];
+ if(surface==='segments'){
+  const canvas=document.createElement('canvas');canvas.width=760;canvas.height=6144;
+  const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.fillStyle='white';ctx.fillRect(0,0,760,6144);
+  texts.forEach((text,index)=>panel(canvas,index*2048,text));
+  const image=document.createElement('img');image.className='zao-image manga-recovery-source';image.id='page-one';image.style.height='auto';
+  image.src=await blobUrl(canvas);await image.decode();append(image);canvas.width=canvas.height=0;
+ }else for(let index=0;index<3;index++){
+  const canvas=document.createElement('canvas');canvas.width=760;canvas.height=1100;panel(canvas,0,texts[index]);
+  if(index===0&&alphaSource){const source=new Image();source.src=alphaSource;await source.decode();canvas.width=canvas.height=900;canvas.getContext('2d').drawImage(source,0,0);canvas.setAttribute('style','touch-action:pan-y;transition:opacity 150ms linear');}
+  if(surface==='canvas'){canvas.className='manga-recovery-source';canvas.id='page-'+index;canvas.setAttribute('data-type','contents');append(canvas);}
+  else{const element=document.createElement('div');element.className='manga-recovery-source';element.id='page-'+index;
+   const originalUrl=index===0&&${recoveryBackgroundAlpha}?sourceBlobUrl(alphaSource):await blobUrl(canvas);
+   element.style.cssText='background-size:contain;background-repeat:no-repeat;background-position:50% 50%;background-origin:padding-box;background-image:url("'+originalUrl+'")';
+   if(index===0&&${recoveryBackgroundAlpha}){const caption=document.createElement('span');caption.id='recovery-host-caption';caption.textContent='Original host content';
+    const button=document.createElement('button');button.id='recovery-host-action';button.type='button';button.textContent='Original host action';element.append(caption,button);
+    window.__recoveryHostClicks=[];element.addEventListener('click',event=>{if(event.target.closest('#recovery-host-action'))window.__recoveryHostClicks.push({trusted:event.isTrusted,target:event.target.id});});}
+   append(element);canvas.width=canvas.height=0;}
+ }
+ window.__recoverySurfaceFixture={ready:true,surface,pages:3,sourceCount:surface==='segments'?1:3,
+  naturalWidth:${recoveryCanvasAlpha||recoveryBackgroundAlpha?900:760},naturalHeight:${recoveryCanvasAlpha||recoveryBackgroundAlpha?900:"surface==='segments'?6144:1100"},segmentHeight:surface==='segments'?2048:null,
+  sourceDimensions:[...document.querySelectorAll('.manga-recovery-source')].map((element,index)=>({width:element.naturalWidth||element.width||(${recoveryBackgroundAlpha}&&index===0?900:760),height:element.naturalHeight||element.height||(${recoveryBackgroundAlpha}&&index===0?900:1100)}))};
+})().catch(error=>{window.__recoverySurfaceFixture={error:error.message};console.error(error);});
+</script></body></html>`;
+}
 async function ui(hostId, code) {
     const tree = await cdp.send('DOM.getDocument', {depth: -1, pierce: true}); let host;
     function visit(node) {
@@ -225,8 +411,58 @@ async function ui(hostId, code) {
 const ball = code => ui('fluent-read-floating-ball-container', code);
 const imageUi = code => ui('fluent-read-image-translation-root', code);
 const mangaEntry = code => ui('fluent-read-manga-entry-container',code);
-const surfaceHost=segmentReaderTest?'fluent-read-manga-segment-container':backgroundReaderTest?'fluent-read-manga-background-container':'fluent-read-manga-canvas-container';
+const surfaceHost=segmentReaderTest||(errorRecoveryTest&&errorRecoverySurface==='segments')?'fluent-read-manga-segment-container':
+    backgroundReaderTest||(errorRecoveryTest&&errorRecoverySurface==='background')?'fluent-read-manga-background-container':'fluent-read-manga-canvas-container';
 const canvasUi = code => ui(surfaceHost,code);
+/** 先固定原站来源；激活后的样式只允许借背景图片，不得把自有译图当成新的原图。 */
+async function backgroundSourceUrls() {
+    const urls=await page.locator(readerSelector).evaluateAll(elements=>elements.map(element=>{
+        const url=/^url\(["']?(blob:[^"')]+)["']?\)$/.exec(getComputedStyle(element).backgroundImage)?.[1];
+        if(!element.id||!url||new URL(url).origin!==location.origin)throw new Error('Background source must have its existing ID and same-origin blob URL');
+        return {id:element.id,url};
+    }));
+    assert.equal(new Set(urls.map(source=>source.id)).size,urls.length,'Existing background source IDs are unique');return urls;
+}
+async function backgroundReceiptStyle(raw,url) {
+    return page.evaluate(({raw,url})=>{const style=document.createElement('div').style;style.cssText=raw||'';style.setProperty('background-image',`url("${url}")`,'important');return style.cssText;},{raw,url});
+}
+async function backgroundSnapshot(source,originals) {
+    return source.evaluate(async(element,originals)=>{
+        const url=originals.find(source=>source.id===element.id)?.url;
+        if(!url)throw new Error('Original background URL was not pinned before presentation');
+        const image=new Image(),canvas=document.createElement('canvas');
+        try{
+            image.src=url;await image.decode();canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
+            const context=canvas.getContext('2d',{willReadFrequently:true});if(!context)throw new Error('Background source readback context unavailable');
+            context.drawImage(image,0,0);let hash=2166136261;for(const value of context.getImageData(0,0,canvas.width,canvas.height).data)hash=Math.imul(hash^value,16777619);
+            return {id:element.id,width:canvas.width,height:canvas.height,pixelHash:hash>>>0,sourceUrl:url,
+                attributes:Object.fromEntries(element.getAttributeNames().sort().map(name=>[name,element.getAttribute(name)])),children:element.innerHTML,backgroundColor:getComputedStyle(element).backgroundColor};
+        }finally{image.src='';canvas.width=canvas.height=0;}
+    },originals);
+}
+/** 读取真实 CSS 译图地址及其 PNG；检查数据不通过固定画布层或生产私有状态。 */
+async function backgroundPresentations(originals) {
+    return page.locator(readerSelector).evaluateAll(async(elements,originals)=>{
+        const sourceUrls=new Map(originals.map(source=>[source.id,source.url]));
+        const results=[];
+        for(const element of elements){
+            const rect=element.getBoundingClientRect(),style=getComputedStyle(element);
+            const url=/^url\(["']?(blob:[^"')]+)["']?\)$/.exec(style.backgroundImage)?.[1];
+            const inline=/^url\(["']?(blob:[^"')]+)["']?\)$/.exec(element.style.getPropertyValue('background-image'))?.[1];
+            if(!url||url!==inline||element.style.getPropertyPriority('background-image')!=='important'||sourceUrls.get(element.id)===url
+                ||!element.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})||rect.width<=0||rect.height<=0||rect.left>=innerWidth||rect.right<=0||rect.top>=innerHeight||rect.bottom<=0)continue;
+            const image=new Image(),canvas=document.createElement('canvas');
+            try{
+                image.src=url;await image.decode();canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;
+                const context=canvas.getContext('2d',{willReadFrequently:true});if(!context)throw new Error('Background PNG readback context unavailable');
+                context.drawImage(image,0,0);let hash=2166136261;for(const value of context.getImageData(0,0,canvas.width,canvas.height).data)hash=Math.imul(hash^value,16777619);
+                results.push({id:element.id,url,width:canvas.width,height:canvas.height,hash:hash>>>0,data:canvas.toDataURL('image/png'),
+                    attributes:Object.fromEntries(element.getAttributeNames().sort().map(name=>[name,element.getAttribute(name)]))});
+            }finally{image.src='';canvas.width=canvas.height=0;}
+        }
+        return results;
+    },originals);
+}
 async function evaluateReaderElements(operation,value){
     if(!canvasContentPixels)return page.locator(readerSelector).evaluateAll(operation,value);
     assert.ok(contentPixelContext,'Own production content context exists before reading pixels');
@@ -242,7 +478,66 @@ async function wait(test, timeout=180000, allowFailure=false) {
         await page.waitForTimeout(200);}
     throw new Error(`Timed out: ${report.currentCase}; image controls: ${await imageUi('return Array.from(this.querySelectorAll(".fr-image-status")).map(e=>e.textContent).join(" | ")')}`);
 }
+async function verifyBackgroundReader() {
+    assert.ok(liveSite,'Background reader smoke uses an explicitly supplied public chapter');
+    const visibleSources=async()=>{const sources=[];for(const source of await page.locator(readerSelector).all())if(await source.evaluate(element=>{const r=element.getBoundingClientRect();return r.width>0&&r.height>0&&r.left<innerWidth&&r.right>0&&r.top<innerHeight&&r.bottom>0;}))sources.push(source);return sources;};
+    const sources=await visibleSources();assert.ok(sources.length,'Visible public background sources are present');
+    let originalUrls=await backgroundSourceUrls();
+    const snapshot=(targets=sources,urls=originalUrls)=>Promise.all(targets.map(source=>backgroundSnapshot(source,urls)));
+    const original=await snapshot();report.canvasSource=original;report.backgroundOriginalUrls=originalUrls;await screenshot('canvas-original');
+    const outputs=()=>backgroundPresentations(originalUrls);
+    const visible=async()=>(await outputs()).length;
+    const noFixedCanvas=async()=>assert.equal((await canvasUi('return this.querySelectorAll("canvas").length'))??0,0,'Background output remains in its original CSS painting layer');
+    const assertLeased=async(actual,expected,bitmaps)=>{
+        assert.equal(actual.length,expected.length);
+        for(let index=0;index<actual.length;index++){
+            const source=expected[index],output=bitmaps.find(output=>output.id===source.id);
+            if(actual[index].attributes.style===source.attributes.style){assert.deepEqual(actual[index],source);continue;}
+            assert.ok(output,'Every changed background has its own decoded translated PNG');assert.equal(output.width,source.width);assert.equal(output.height,source.height);
+            const style=await backgroundReceiptStyle(source.attributes.style,output.url);
+            assert.deepEqual(actual[index],{...source,attributes:{...source.attributes,style}},'Original background pixels, child content and every attribute survive apart from the exact owned image longhand');
+        }
+    };
+    const unchanged=async active=>{const actual=await snapshot();if(active)await assertLeased(actual,original,await outputs());else assert.deepEqual(actual,original);};
+    const layout=()=>page.locator(readerSelector).evaluateAll(elements=>elements.map(element=>{const rect=element.getBoundingClientRect(),style=getComputedStyle(element);return {id:element.id,style:element.getAttribute('style'),backgroundImage:style.backgroundImage,backgroundColor:style.backgroundColor,backgroundSize:style.backgroundSize,backgroundPosition:style.backgroundPosition,rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height}};}));
+    report.currentCase='public readable background translates in its original CSS layer while preserving original source pixels and host content';
+    const started=Date.now();await toggle();
+    await wait(async()=>await visible()>0&&await ball('return this.querySelector(".floating-ball-manga").getAttribute("aria-busy") === "false"'),300000);
+    const first=await outputs();report.translatedCanvasPixels=first.map(({id,width,height,hash,url})=>({id,width,height,hash,url}));
+    assert.ok(first.some(output=>original.some(source=>source.id===output.id&&source.pixelHash!==output.hash)),'Actual translated background PNG pixels differ from the pinned original');
+    await unchanged(true);await noFixedCanvas();await assertQuietReading();
+    report.canvasLayoutBeforeScreenshot=await layout();for(let index=0;index<first.length;index++)fs.writeFileSync(path.join(artifacts,`canvas-output-${index}.png`),Buffer.from(first[index].data.split(',')[1],'base64'));
+    await screenshot('canvas-translated');report.canvasLayoutAfterScreenshot=await layout();report.canvasFirstPageMs=Date.now()-started;report.cases.push(report.currentCase);
+    const operations=await ops();await page.mouse.move(400,200);await page.mouse.move(30,30);await page.waitForTimeout(1200);
+    assert.ok(await visible()>0,'Translated background remains after pointer exit');await unchanged(true);assert.equal(await ops(),operations,'Original URL readback and stable layout do not repeat OCR');
+    await screenshot('canvas-stable-after-pointer');report.canvasStableAfterPointerExit=true;report.sourceType='CSS background';
+    report.currentCase='pause restores every background attribute and reactivation preserves the cached PNG and URL without OCR';
+    const beforePause=await outputs();await toggle();await wait(async()=>await visible()===0);await unchanged(false);
+    await toggle();await wait(async()=>await visible()>0);assert.equal(await ops(),operations);assert.deepEqual(await outputs(),beforePause,'Cached background output retains exact PNG, URL and attributes');await unchanged(true);report.cases.push(report.currentCase);
+    let finalSources=sources,finalOriginal=original;
+    report.currentCase='normal chapter turn translates a new original background through the same serial queue';
+    const target=await page.locator(readerSelector).first().boundingBox();assert.ok(target&&target.width>80&&target.height>40,'Public background remains before a normal chapter turn');
+    await page.mouse.move(Math.max(1,Math.min(1200,target.x+target.width/2)),Math.max(1,Math.min(700,target.y+target.height/2)));
+    const paintUrls=()=>page.locator(readerSelector).evaluateAll(elements=>elements.flatMap(element=>{const r=element.getBoundingClientRect();return r.width>80&&r.height>40&&r.left<innerWidth&&r.right>0&&r.top<innerHeight&&r.bottom>0?[{id:element.id,paint:getComputedStyle(element).backgroundImage}]:[];}));
+    const beforePaint=await paintUrls();report.canvasTurn={paintBefore:beforePaint,originalBefore:original.map(({id,sourceUrl,pixelHash,width,height})=>({id,sourceUrl,pixelHash,width,height})),mode:canvasNextClickSelector?'normal-public-click':'normal-arrow-key'};
+    for(let turn=0;turn<canvasTurnCount;turn++){if(canvasNextClickSelector)await page.locator(canvasNextClickSelector).click({position:{x:canvasNextClickPosition[0],y:canvasNextClickPosition[1]},timeout:15000});else await page.keyboard.press(canvasTurnKey);}
+    await wait(async()=>{const current=await paintUrls();report.canvasTurn.paintAfter=current;return current.length>0&&JSON.stringify(current)!==JSON.stringify(beforePaint);},10000);
+    await wait(async()=>await ops()>operations&&await visible()>0&&await ball('return this.querySelector(".floating-ball-manga").getAttribute("aria-busy") === "false"'),300000);
+    const turned=await outputs(),turnedOperations=await ops();await noFixedCanvas();await screenshot('canvas-next-pages');
+    // 暂停后读取真正的新原站来源，不能把测试自己的新译图 URL 当作翻页依据。
+    await toggle();await wait(async()=>await page.locator(readerSelector).evaluateAll((elements,urls)=>elements.every(element=>!urls.includes(/^url\(["']?(blob:[^"')]+)["']?\)$/.exec(getComputedStyle(element).backgroundImage)?.[1])),turned.map(output=>output.url)));
+    originalUrls=await backgroundSourceUrls();finalSources=await visibleSources();finalOriginal=await snapshot(finalSources);
+    report.canvasTurn.originalAfter=finalOriginal.map(({id,sourceUrl,pixelHash,width,height})=>({id,sourceUrl,pixelHash,width,height}));
+    assert.notDeepEqual(report.canvasTurn.originalAfter,report.canvasTurn.originalBefore,'A real original page identity or its pixels changed on the public turn');
+    assert.ok(turned.some(output=>finalOriginal.some(source=>source.id===output.id&&source.pixelHash!==output.hash)),'Turned output differs from its actual restored original source');
+    for(const output of turned){const source=finalOriginal.find(source=>source.id===output.id);assert.ok(source,'Translated turn output belongs to a current original');assert.deepEqual(output.attributes,{...source.attributes,style:await backgroundReceiptStyle(source.attributes.style,output.url)},'Turned source permits only the image presentation receipt');}
+    await toggle();await wait(async()=>await visible()>0);assert.equal(await ops(),turnedOperations);assert.deepEqual(await outputs(),turned,'Returning the turned background uses the same decoded PNG/URL without OCR');report.cases.push(report.currentCase);
+    report.currentCase='master switch restores background attributes and removes translation UI';
+    await patch({on:false});await wait(async()=>await visible()===0);assert.deepEqual(await snapshot(finalSources),finalOriginal);await wait(async()=>await page.locator('#'+surfaceHost).count()===0);
+    auditPageErrors();assert.deepEqual(report.errors,[]);assert.deepEqual(report.consoleErrors,[]);report.cases.push(report.currentCase);focusGuard();
+}
 async function verifyCanvasReader() {
+    if(backgroundReaderTest)return verifyBackgroundReader();
     assert.ok(liveSite,'Canvas reader smoke uses an explicitly supplied public chapter');
     const visibleSurfaces=()=>canvasUi('return [...this.querySelectorAll("canvas")].filter(c=>c.style.display === "block").length');
     const sources=[];
@@ -266,12 +561,27 @@ async function verifyCanvasReader() {
         return {id:c.id,width:c.width,height:c.height,style:c.getAttribute('style'),className:c.className,hash:hash>>>0};
     })):mainSnapshot;
     const original=await snapshot();report.canvasSource=original;await screenshot('canvas-original');
+    const leasedStyles=await page.evaluate(styles=>styles.map(raw=>{const style=document.createElement('canvas').style;style.cssText=raw||'';style.setProperty('transition-property','none','important');style.setProperty('opacity','0','important');return style.cssText;}),original.map(source=>source.style));
+    const unchanged=async(allowReceipt=false)=>{
+        const actual=await snapshot();assert.equal(actual.length,original.length);
+        const visible=allowReceipt&&!backgroundReaderTest?await canvasUi('return [...this.querySelectorAll("canvas")].filter(c=>{const r=c.getBoundingClientRect();return c.isConnected&&c.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})&&getComputedStyle(c).display!=="none"&&r.width>0&&r.height>0&&r.left<innerWidth&&r.right>0&&r.top<innerHeight&&r.bottom>0;}).map(c=>{const r=c.getBoundingClientRect();return {width:c.width,height:c.height,x:r.x,y:r.y,w:r.width,h:r.height};})'):[];
+        for(let index=0;index<actual.length;index++){
+            const leased=allowReceipt&&!backgroundReaderTest&&actual[index].style!==original[index].style;
+            const expected=leased?{...original[index],style:leasedStyles[index]}:original[index];
+            assert.deepEqual(actual[index],expected,'Canvas pixels and attributes are unchanged apart from the exact owned visibility receipt');
+            if(leased){
+                const rect=await sources[index].evaluate(c=>{const r=c.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height};});
+                const match=visible.findIndex(output=>output.width===actual[index].width&&output.height===actual[index].height&&Object.keys(rect).every(key=>Math.abs(output[key]-rect[key])<.5));
+                assert.ok(match>=0,'Each hidden source must have its own visible translated surface with matching dimensions and geometry');visible.splice(match,1);
+            }
+        }
+    };
     report.currentCase=`public readable ${backgroundReaderTest?'background':'canvas'} runs real manga OCR and translated overlay without changing the source`;
     const started=Date.now();await toggle();
     await wait(async()=>(await visibleSurfaces())>0 && await ball('return this.querySelector(".floating-ball-manga").getAttribute("aria-busy") === "false"'),300000);
     report.translatedCanvasPixels=await canvasUi('return [...this.querySelectorAll("canvas")].filter(c=>c.style.display === "block").map(c=>{const data=c.getContext("2d").getImageData(0,0,c.width,c.height).data;let hash=2166136261;for(const v of data)hash=Math.imul(hash^v,16777619);return {width:c.width,height:c.height,hash:hash>>>0}})');
     assert.ok(report.translatedCanvasPixels.some(output=>!original.some(source=>source.hash===output.hash)),'Translated canvas pixels differ from the original');
-    assert.deepEqual(await snapshot(),original);await assertQuietReading();
+    await unchanged(true);await assertQuietReading();
     const layout=()=>canvasUi('return [...this.querySelectorAll("canvas")].map(c=>{const r=c.getBoundingClientRect();return {style:c.style.cssText,rect:{x:r.x,y:r.y,width:r.width,height:r.height},parentStyle:c.parentNode.host.style.cssText}})');
     report.canvasLayoutBeforeScreenshot=await layout();
     const outputs=await canvasUi('return [...this.querySelectorAll("canvas")].filter(c=>c.style.display === "block").map(c=>c.toDataURL("image/png"))');
@@ -282,10 +592,10 @@ async function verifyCanvasReader() {
     const operations=await ops();
     await page.mouse.move(400,200);await page.mouse.move(30,30);await page.waitForTimeout(1200);
     assert.ok((await visibleSurfaces())>0,'The translated canvas remains visible after pointer exit and source pixel readback');
-    assert.deepEqual(await snapshot(),original);assert.equal(await ops(),operations,'Unchanged canvas does not repeat OCR after resampling');
+    await unchanged(true);assert.equal(await ops(),operations,'Unchanged canvas does not repeat OCR after resampling');
     await screenshot('canvas-stable-after-pointer');report.canvasStableAfterPointerExit=true;report.sourceType=backgroundReaderTest?'CSS background':'canvas';
     report.currentCase='pause restores the original canvas and repeated activation reuses the translated page';
-    await toggle();await wait(async()=>(await visibleSurfaces())===0);assert.deepEqual(await snapshot(),original);
+    await toggle();await wait(async()=>(await visibleSurfaces())===0);await unchanged();
     await toggle();await wait(async()=>(await visibleSurfaces())>0);assert.equal(await ops(),operations);report.cases.push(report.currentCase);
     if(!canvasFirstSpreadOnly){
     report.currentCase='normal chapter turn translates new canvas pages through the same serial queue';
@@ -378,15 +688,63 @@ async function verifySegmentReader() {
 }
 async function toggle() {
     await activateVisible(page);
-    const point=await ball(`const b=this.querySelector('.floating-ball-manga');if(!b)return null;const r=b.getBoundingClientRect(),clipped=getComputedStyle(b).clipPath!=='none',left=this.querySelector('.fr-floating-ball').dataset.position==='left';return {x:r.x+r.width*(clipped?(left ? .75 : .25):.5),y:r.y+r.height/2}`);
+    if(ordinaryImageQuality){
+        const image=page.locator('.zao-image').first(),bounds=await image.boundingBox();assert.ok(bounds);
+        await page.mouse.move(bounds.x+Math.min(bounds.width/2,150),Math.max(5,bounds.y+Math.min(80,bounds.height/2)));
+        await wait(async()=>await imageUi(`return [...this.querySelectorAll('.fr-image-controls:not([hidden]) .fluent-read-image-translation-button')].some(b=>getComputedStyle(b).display!=='none'&&b.getBoundingClientRect().width>0)`),10000);
+        const point=await imageUi(`const b=[...this.querySelectorAll('.fr-image-controls:not([hidden]) .fluent-read-image-translation-button')].find(b=>getComputedStyle(b).display!=='none'&&b.getBoundingClientRect().width>0);const r=b.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,hit=this.elementFromPoint(x,y);return {x,y,viewport:{width:innerWidth,height:innerHeight},hit:hit===b||b.contains(hit)};`);
+        assert.ok(point.hit&&point.x>=0&&point.x<point.viewport.width&&point.y>=0&&point.y<point.viewport.height,'Ordinary action is visible and hit-testable');
+        await page.mouse.click(point.x,point.y);return;
+    }
+    const point=await ball(`const b=this.querySelector('.floating-ball-manga');if(!b)return null;const r=b.getBoundingClientRect(),clipped=getComputedStyle(b).clipPath!=='none',left=this.querySelector('.fr-floating-ball').dataset.position==='left',x0=Math.max(0,r.left),x1=Math.min(innerWidth,r.right);return {x:x0+(x1-x0)*(clipped?(left ? .75 : .25):.5),y:(Math.max(0,r.top)+Math.min(innerHeight,r.bottom))/2}`);
     assert.ok(point,'Manga button exists');await page.mouse.move(point.x,point.y);
     await wait(async()=>await ball('return this.querySelector(".fr-floating-ball").classList.contains("floating-ball-expanded")'),3000);
     await page.waitForTimeout(500);
-    const expanded=await ball(`const r=this.querySelector('.floating-ball-manga').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}`);
-    await page.mouse.move(expanded.x,expanded.y);await page.waitForTimeout(150);
+    const expanded=await ball(`const b=this.querySelector('.floating-ball-manga'),r=b.getBoundingClientRect(),x=(Math.max(0,r.left)+Math.min(innerWidth,r.right))/2,y=(Math.max(0,r.top)+Math.min(innerHeight,r.bottom))/2,hit=this.elementFromPoint(x,y);return {x,y,hit:hit===b||b.contains(hit),pressed:b.getAttribute('aria-pressed'),rect:{left:r.left,top:r.top,right:r.right,bottom:r.bottom},viewport:{width:innerWidth,height:innerHeight}}`);
+    report.toggleInteractions??=[];report.toggleInteractions.push(expanded);
+    assert.ok(expanded.hit&&expanded.x>=0&&expanded.x<expanded.viewport.width&&expanded.y>=0&&expanded.y<expanded.viewport.height,'Expanded manga action is visible and hit-testable');
     await page.mouse.click(expanded.x,expanded.y);
+    await wait(async()=>await ball(`return this.querySelector('.floating-ball-manga')?.getAttribute('aria-pressed') === ${JSON.stringify(expanded.pressed === 'true' ? 'false' : 'true')}`),3000);
 }
 async function ops() {return worker.evaluate(()=>globalThis.__mangaTest.operations.length);}
+async function setInputFilesUsingLocalPaths(locator,ownerPage,files,browserContext) {
+    try {await locator.setInputFiles(files);return 'playwright';}
+    catch(error) {
+        if(!/Cannot transfer files larger than 50Mb to a browser not co-located with the server/.test(error.message))throw error;
+        // CDP sends only local file paths to this same-host browser; it avoids copying a 200+ MB model through Playwright's remote transport.
+        const session=await browserContext.newCDPSession(ownerPage);
+        try {
+            await session.send('DOM.enable');
+            const {root}=await session.send('DOM.getDocument',{depth:1});
+            const {nodeId}=await session.send('DOM.querySelector',{nodeId:root.nodeId,selector:'input[type="file"]'});
+            assert.ok(nodeId,'Model file input is present in the isolated browser document');
+            await session.send('DOM.setFileInputFiles',{nodeId,files});
+            assert.equal(await locator.evaluate(input=>input.files?.length),files.length,'The browser accepted every local model path');
+            report.modelFileImportTransport='CDP local paths';
+            return 'CDP local paths';
+        } finally {await session.detach();}
+    }
+}
+async function assertLatestLayoutHasNoSkippedTranslations() {
+    if(!assertNoRenderSkips)return;
+    const id=await worker.evaluate(()=>globalThis.__mangaTest.operations.at(-1));
+    const layout=await worker.evaluate(id=>globalThis.__mangaTest.layoutResults?.find(result=>result.requestId===id),id);
+    assert.ok(layout,'The real offscreen response was captured for the visible source page');
+    const skipped=layout.lines.filter(line=>line.renderSkipped).map(line=>line.sourceText);
+    assert.deepEqual(skipped,[],'The manga page has no OCR echo that forces a valid neighboring translation to be skipped');
+    report.renderSkipAssertions??=[];report.renderSkipAssertions.push({requestId:id,sourceLines:layout.lines.length,skipped});
+}
+async function readerScrollState() {
+    return page.evaluate(selector=>{
+        const image=[...document.querySelectorAll(selector)].at(-1),containers=[];
+        for(let element=image?.parentElement;element;element=element.parentElement){
+            if(element.scrollHeight<=element.clientHeight+4)continue;
+            containers.push({tag:element.tagName,id:element.id,className:String(element.className||'').slice(0,120),top:element.scrollTop,scrollHeight:element.scrollHeight,clientHeight:element.clientHeight});
+        }
+        const root=document.scrollingElement;
+        return {windowY:scrollY,windowHeight:innerHeight,documentHeight:root?.scrollHeight||document.documentElement.scrollHeight,containers};
+    },readerSelector);
+}
 async function scrollReaderImage(index) {
     if(readerNextSelector){
         assert.ok(index>=readerCurrentIndex,'Normal page-turn samples move forward through observed body images');
@@ -394,6 +752,31 @@ async function scrollReaderImage(index) {
             await page.locator(readerNextSelector).click({timeout:15000});readerCurrentIndex++;
             await page.locator(readerSelector).nth(readerCurrentIndex).waitFor({state:'visible',timeout:15000});
         }
+    }else{
+        // Infinite-scroll readers may only insert the next body image after the
+        // last currently loaded image reaches the viewport. Discover it with
+        // bounded ordinary wheel gestures before locating the requested index.
+        const images=page.locator(readerSelector),initialCount=await images.count(),steps=[];
+        let count=initialCount,stagnantSteps=0;
+        for(let attempt=0;count<=index&&attempt<Math.min(60,index+12);attempt++){
+            const before=await readerScrollState();
+            const beforeCount=count,last=images.last();
+            if(beforeCount){
+                await last.scrollIntoViewIfNeeded();
+                const box=await last.boundingBox();
+                if(box)await page.mouse.move(box.x+box.width/2,Math.min(before.windowHeight-8,Math.max(8,box.y+box.height*.75)));
+            }else await page.mouse.move(Math.floor(innerWidth/2),Math.floor(before.windowHeight*.75));
+            await page.mouse.wheel(0,Math.max(300,Math.floor(before.windowHeight*.8)));
+            await page.waitForTimeout(400);
+            count=await images.count();
+            const after=await readerScrollState();
+            steps.push({attempt:attempt+1,count,scroll:after});
+            const noProgress=count===beforeCount&&JSON.stringify(after)===JSON.stringify(before);
+            stagnantSteps=noProgress?stagnantSteps+1:0;
+            if(stagnantSteps>=3)break;
+        }
+        (report.readerImageDiscovery??=[]).push({targetIndex:index,initialCount,finalCount:count,steps});
+        if(count<=index)throw new Error(`Unable to reveal body image index ${index}; loaded ${count} matching elements after bounded scroll discovery`);
     }
     const image=page.locator(readerSelector).nth(index);
     const anchor=page.locator(readerScrollSelector||readerSelector).nth(index);
@@ -496,7 +879,16 @@ async function activateVisible(target) {
     (report.tabVisibility??=[]).push({url,...state});
 }
 async function gotoVisible(target,url,options) {const response=await target.goto(url,options);await activateVisible(target);return response;}
-async function screenshot(name,beforeCapture) {await activateVisible(page);await page.mouse.move(30,30);await page.waitForTimeout(300);if(beforeCapture)await beforeCapture();const file=path.join(artifacts,`${name}.png`);await page.screenshot({path:file});report.screenshots.push(file);}
+async function screenshot(name,beforeCapture) {
+    await activateVisible(page);await page.mouse.move(30,30);await page.waitForTimeout(300);if(beforeCapture)await beforeCapture();
+    const file=path.join(artifacts,`${name}.png`);
+    if(errorRecoveryTest&&recoveryViewport){
+        // 手动 CDP CSS 视口不属于 Playwright 的 viewport 状态；直接捕获，避免其截图端口恢复外层尺寸。
+        const result=await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false,fromSurface:true});fs.writeFileSync(file,Buffer.from(result.data,'base64'));
+        assert.deepEqual(await page.evaluate(()=>({width:innerWidth,height:innerHeight})),recoveryViewport,'Recovery screenshot preserves the emulated CSS viewport');
+    }else await page.screenshot({path:file});
+    report.screenshots.push(file);
+}
 async function toolScreenshot(name){
     await page.mouse.move(30,30);
     const box=await ball(`const r=this.querySelector('.floating-ball-manga').getBoundingClientRect();return {x:r.x-8,y:r.y-8,width:r.width+16,height:r.height+16}`);
@@ -528,11 +920,220 @@ async function patch(config) {
     },config);
 }
 async function assertQuietReading() {
+    if(ordinaryImageQuality){
+        assert.equal(Boolean(await mangaEntry('return !!this.querySelector(".fr-manga-entry")')),false,'Ordinary mode does not open manga panels');
+        assert.notEqual(await imageUi('return [...this.querySelectorAll(".fr-image-feedback")].some(e=>!e.hidden&&e.dataset.manga==="true")'),true,'Ordinary mode does not use manga status');
+        return;
+    }
     assert.equal(await mangaEntry('return !!this.querySelector(".fr-manga-entry")'),false,'No automatic reader panel');
-    assert.notEqual(await imageUi('return [...this.querySelectorAll(".fr-image-feedback")].some(e=>!e.hidden && (e.dataset.manga!=="true" || e.dataset.phase!=="loading" || !!e.querySelector("button")))'),true,'Only noninteractive per-page manga status may appear');
+    assert.notEqual(await imageUi('return [...this.querySelectorAll(".fr-image-feedback")].some(e=>{if(e.hidden)return false;const warning=e.dataset.phase==="translated"&&e.dataset.warning==="true"&&e.dataset.warningAction==="true";return e.dataset.manga!=="true"&&(e.dataset.phase!=="loading"&&!warning)||[...e.querySelectorAll("button")].some(button=>!button.hidden&&!button.classList.contains("fr-image-warning-button"))})'),true,'Only loading status or the dedicated read-text warning may appear during manga reading');
     assert.notEqual(await imageUi('return [...this.querySelectorAll(".fr-image-controls")].some(e=>!e.hidden && getComputedStyle(e).display!=="none")'),true,'No per-image original, text or cancel controls while reading');
 }
 
+/** 只注入文字传输失败；识别、页面状态、可信点击和重试继续执行生产实现。 */
+async function verifyErrorRecovery() {
+    const kind=errorRecoverySurface, sources=page.locator(readerSelector);
+    const recoveryUi=code=>ui(kind==='image'?'fluent-read-image-translation-root':surfaceHost,code);
+    const sourceFor=index=>sources.nth(kind==='segments'?0:index-1);
+    if(recoveryViewport){
+        // 只模拟页面 CSS 视口；第二屏外层浏览器仍为正常尺寸且不激活。
+        await cdp.send('Emulation.setDeviceMetricsOverride',{...recoveryViewport,deviceScaleFactor:1,mobile:false});
+        await page.addStyleTag({content:'.zao-image-container{max-width:100%;margin-bottom:calc(100vh + 50px);}.zao-image,.manga-recovery-source{width:100%;height:auto;max-width:100%;}.manga-recovery-source:not(img):not(canvas){aspect-ratio:760/1100;}#decoy{display:none;}.heading{font-size:14px;padding:12px;}'});
+        const actual=await page.evaluate(()=>({width:innerWidth,height:innerHeight}));
+        assert.deepEqual(actual,recoveryViewport,'Requested recovery CSS viewport is actually rendered');
+    }
+    if(recoveryRtl)await page.evaluate(()=>{document.documentElement.dir='rtl';});
+    report.recoveryEnvironment={viewport:await page.evaluate(()=>({width:innerWidth,height:innerHeight})),rtl:recoveryRtl,longDetails:recoveryLongDetails};
+    await sources.first().waitFor();
+    if(kind==='image'||kind==='segments')await page.waitForFunction(selector=>[...document.querySelectorAll(selector)].every(image=>image.complete&&image.naturalWidth>=80),readerSelector);
+    const originalBackgrounds=kind==='background'?await backgroundSourceUrls():[];
+    const snapshot=source=>kind==='background'?backgroundSnapshot(source,originalBackgrounds):source.evaluate(async(element,kind)=>{
+        let target=element,ownedImage;
+        try{
+            if(kind!=='canvas'){
+                let image=element;
+                if(kind==='background'){
+                    const url=/^url\(["']?(blob:[^"')]+)["']?\)$/.exec(getComputedStyle(element).backgroundImage)?.[1];
+                    if(!url||new URL(url).origin!==location.origin)throw new Error('Recovery background must be a same-origin blob');
+                    ownedImage=image=new Image();image.src=url;await image.decode();
+                }
+                target=document.createElement('canvas');target.width=image.naturalWidth;target.height=image.naturalHeight;
+                const context=target.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);
+            }
+            const data=target.getContext('2d',{willReadFrequently:true}).getImageData(0,0,target.width,target.height).data;
+            let hash=2166136261;for(const value of data)hash=Math.imul(hash^value,16777619);
+            return {id:element.id,width:target.width,height:target.height,pixelHash:hash>>>0,
+                attributes:Object.fromEntries(element.getAttributeNames().sort().map(name=>[name,element.getAttribute(name)]))};
+        }finally{if(target!==element)target.width=target.height=0;if(ownedImage)ownedImage.src='';}
+    },kind);
+    const originals=[];for(let index=0;index<await sources.count();index++)originals.push(await snapshot(sources.nth(index)));
+    if(recoveryBackgroundAlpha){
+        const url=originalBackgrounds.find(source=>source.id===originals[0].id).url;
+        const sha=await page.evaluate(async url=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await(await fetch(url)).arrayBuffer())),value=>value.toString(16).padStart(2,'0')).join(''),url);
+        assert.equal(sha,report.recoveryBackgroundAlpha.inputSha256,'Background blob contains the exact frozen PNG bytes, without a canvas re-encode');report.recoveryBackgroundAlpha.originalBlobSha256=sha;
+    }
+    const expectedOriginals=structuredClone(originals);
+    const leasedStyles=kind==='canvas'?await page.evaluate(styles=>styles.map(raw=>{const style=document.createElement('canvas').style;style.cssText=raw||'';style.setProperty('transition-property','none','important');style.setProperty('opacity','0','important');return style.cssText;}),originals.map(source=>source.attributes.style)):[];
+    report.recoverySourceOriginals=originals;
+    const unchanged=async(index,allowImageHiding=false)=>{
+        const actual=await snapshot(sourceFor(index)),original=expectedOriginals[kind==='segments'?0:index-1];
+        if(kind==='image'&&allowImageHiding){
+            const withoutStyle=value=>({...value,attributes:Object.fromEntries(Object.entries(value.attributes).filter(([key])=>key!=='style'))});
+            assert.deepEqual(withoutStyle(actual),withoutStyle(original),'Recovery preserves original pixels and source attributes');
+        }else if(kind==='canvas'&&allowImageHiding&&actual.attributes.style!==original.attributes.style){
+            assert.deepEqual(actual,{...original,attributes:{...original.attributes,style:leasedStyles[index-1]}},'Active Canvas permits only the exact owned visibility receipt; pixels and all other attributes remain unchanged');
+        }else if(kind==='background'&&allowImageHiding&&actual.attributes.style!==original.attributes.style){
+            const bitmap=(await visibleBitmaps()).find(output=>output.id===actual.id);assert.ok(bitmap,'Active background has a decoded translated PNG');
+            assert.equal(bitmap.width,original.width);assert.equal(bitmap.height,original.height);
+            const style=await backgroundReceiptStyle(original.attributes.style,bitmap.url);
+            assert.deepEqual(actual,{...original,attributes:{...original.attributes,style}},'Background only borrows the exact image longhand; original URL pixels, child content and all other attributes remain unchanged');
+        }else assert.deepEqual(actual,original,'Recovery leaves original pixels, dimensions and all source attributes unchanged');
+    };
+    const recoveryError=recoveryLongDetails?Array.from({length:80},(_,index)=>`Controlled text transport failure, diagnostic line ${index+1}: retry keeps the original manga artwork visible.`).join('\n'):'Controlled text transport failure for manga recovery';
+    await modelObserver.command('Runtime.evaluate',{expression:`(()=>{
+        const send=chrome.runtime.sendMessage.bind(chrome.runtime);
+        const fixture=globalThis.__recoveryFixture={fail:true,failures:[]};
+        chrome.runtime.sendMessage=(message,...args)=>{
+            if(message?.type!=='fluentReadImageTranslateTexts'||!fixture.fail)return send(message,...args);
+            fixture.failures.push({requestId:message.requestId,texts:message.texts});
+            const response={success:false,error:${JSON.stringify(recoveryError)},errorCode:'failed'};
+            const callback=args.at(-1);
+            if(typeof callback==='function'){queueMicrotask(()=>callback(response));return;}
+            return Promise.resolve(response);
+        };
+    })()`});
+    const control=async selector=>recoveryUi(`const e=this.querySelector('.fr-image-feedback[data-phase="error"]:not([hidden]) ${selector}');if(!e)return null;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {x:r.x+r.width/2,y:r.y+r.height/2,width:r.width,height:r.height,visible:!e.hidden&&r.width>0&&r.height>0&&s.visibility==='visible'&&e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}),text:e.textContent};`);
+    const click=async selector=>{const p=await control(selector);assert.ok(p?.visible,`Recovery control must be visible before trusted input: ${selector}`);await page.mouse.click(p.x,p.y);};
+    const failed=()=>recoveryUi(`const f=this.querySelector('.fr-image-feedback[data-phase="error"]:not([hidden])');if(!f)return null;const r=f.getBoundingClientRect(),s=getComputedStyle(f);return {x:r.x,y:r.y,width:r.width,height:r.height,text:f.querySelector('.fr-image-status').textContent,pointerEvents:s.pointerEvents,style:f.style.cssText,computed:{font:s.font,boxSizing:s.boxSizing,maxWidth:s.maxWidth,maxHeight:s.maxHeight,overflow:s.overflow}};`);
+    const boundsFor=index=>sourceFor(index).evaluate((element,{kind,index})=>{
+        const rect=element.getBoundingClientRect(),scale=kind==='segments'?rect.height/element.naturalHeight:1;
+        return {x:rect.x,y:rect.y+(kind==='segments'?(index-1)*2048*scale:0),width:rect.width,height:kind==='segments'?2048*scale:rect.height};
+    },{kind,index});
+    const position=async index=>{
+        await sourceFor(index).evaluate((element,{kind,index})=>{
+            const rect=element.getBoundingClientRect(),offset=kind==='segments'?(index-1)*2048*rect.height/element.naturalHeight:0;
+            scrollTo({top:rect.top+scrollY+offset-40,behavior:'instant'});
+        },{kind,index});
+        await wait(async()=>!!await failed(),90000,true);
+        const m=await failed(),bounds=await boundsFor(index),viewport=await page.evaluate(()=>({width:innerWidth,height:innerHeight}));
+        // 在断言前保存，布局失败也能从完整位置和样式定位，而不是只留下 assertion 字符串。
+        (report.recoveryMetrics??=[]).push({page:index,surface:kind,...m,sourceBounds:bounds,viewport});
+        assert.ok(m.x>=bounds.x&&m.x+m.width<=bounds.x+bounds.width+1&&m.y>=Math.max(0,bounds.y)&&m.y+m.height<=Math.min(viewport.height,bounds.y+bounds.height),'Recovery stays inside the visible source page');
+        assert.ok(m.height<180&&m.width<=360,'Recovery uses a compact edge surface');
+        assert.equal(m.pointerEvents,'auto');assert.equal(await sourceFor(index).evaluate(i=>i.style.opacity==='0'),false,'Failure keeps original artwork visible');
+        assert.ok((await control('.fluent-read-image-translation-button'))?.visible);assert.ok((await control('.fr-image-dismiss'))?.visible);
+        await unchanged(index);
+    };
+    const visibleBitmaps=()=>kind==='background'?backgroundPresentations(originalBackgrounds):recoveryUi(`return [...this.querySelectorAll(${JSON.stringify(kind==='image'?'.fluent-read-image-translation-bitmap':'canvas')})].filter(e=>{const r=e.getBoundingClientRect();return e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})&&getComputedStyle(e).display!=='none'&&r.width>0&&r.height>0&&r.left<innerWidth&&r.right>0&&r.top<innerHeight&&r.bottom>0}).map(e=>({width:e.width||e.naturalWidth,height:e.height||e.naturalHeight,data:e.tagName==='CANVAS'?e.toDataURL('image/png'):e.src}));`);
+    const completed=async()=>kind==='image'?await sourceFor(1).evaluate(i=>i.style.opacity==='0'):(await visibleBitmaps())?.length>0;
+    const quiet=async()=>{await assertQuietReading();assert.notEqual(await recoveryUi(`return [...this.querySelectorAll('.fr-image-feedback')].some(e=>!e.hidden&&e.getBoundingClientRect().width>0)`),true,'Successful surface removes all failure prompts');};
+    report.currentCase='failed manga page exposes visible single-page recovery without automatic retry';
+    await toggle();await position(1);
+    const failedCount=await ops();await page.waitForTimeout(300);assert.equal(await ops(),failedCount);
+    await screenshot('recovery-error-visible');report.cases.push(report.currentCase);
+    report.currentCase='error details accept trusted keyboard input without reaching reader shortcuts';
+    await page.evaluate(()=>{globalThis.__recoveryHostKeys=0;document.addEventListener('keydown',()=>globalThis.__recoveryHostKeys++);});
+    await recoveryUi(`this.querySelector('.fr-image-feedback[data-phase="error"] summary').focus()`);
+    await page.keyboard.press('Enter');
+    assert.equal(await recoveryUi(`return this.querySelector('.fr-image-feedback[data-phase="error"] details').open`),true);
+    assert.equal(await page.evaluate(()=>globalThis.__recoveryHostKeys),0);
+    if(recoveryLongDetails){
+        const layout=()=>recoveryUi(`const f=this.querySelector('.fr-image-feedback[data-phase="error"]'),d=f.querySelector('details'),a=f.querySelector('.fr-image-actions');const rect=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};return {feedback:rect(f),actions:rect(a),details:rect(d),errorText:d.querySelector('p').textContent,direction:getComputedStyle(f).direction,documentDirection:document.documentElement.dir,viewport:{width:innerWidth,height:innerHeight},scrollTop:d.scrollTop,scrollHeight:d.scrollHeight,clientHeight:d.clientHeight,pageScroll:scrollY,actionsBeforeDetails:!!(a.compareDocumentPosition(d)&Node.DOCUMENT_POSITION_FOLLOWING),buttons:[...a.querySelectorAll('button')].map(e=>({className:e.className,hidden:e.hidden,visible:e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}),centerHit:this.elementFromPoint(...(()=>{const r=e.getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2];})())===e,...rect(e)}))};`);
+        const before=await layout();report.recoveryLongDetails={before};
+        assert.equal(before.actionsBeforeDetails,true,'Recovery actions precede diagnostic details in DOM and tab order');
+        assert.equal(before.errorText,recoveryError,'All 80 diagnostic lines remain available without truncation');
+        assert.deepEqual(before.viewport,report.recoveryEnvironment.viewport,'Recovery CSS viewport remains stable through trusted keyboard input');
+        if(recoveryRtl){assert.equal(before.documentDirection,'rtl');assert.equal(before.direction,'rtl','Feedback actually renders the RTL host direction');}
+        assert.ok(before.scrollHeight>before.clientHeight,'Long diagnostics have their own scrollable area');
+        const viewport=report.recoveryEnvironment.viewport;
+        for(const className of ['fluent-read-image-translation-button','fr-image-dismiss'])assert.ok(before.buttons.some(button=>button.className===className&&button.visible&&button.centerHit),'Required retry and dismiss actions are visible and hit-testable');
+        for(const button of before.buttons.filter(button=>!button.hidden))assert.ok(button.visible&&button.centerHit&&button.x>=before.feedback.x&&button.right<=before.feedback.right+1&&button.y>=before.feedback.y&&button.bottom<=before.feedback.bottom+1&&button.x>=0&&button.right<=viewport.width+1&&button.y>=0&&button.bottom<=viewport.height+1,'Every recovery action stays fully visible and hit-testable with diagnostics open');
+        await page.mouse.move(before.details.x+before.details.width/2,before.details.y+before.details.height/2);await page.mouse.wheel(0,400);
+        await wait(async()=>(await layout()).scrollTop>0,10000,true);
+        const after=await layout();report.recoveryLongDetails.after=after;
+        assert.deepEqual(after.actions,before.actions,'Scrolling diagnostics does not move recovery actions');assert.equal(after.pageScroll,before.pageScroll,'Diagnostic scrolling does not scroll the reader');
+        await recoveryUi(`this.querySelector('.fr-image-feedback[data-phase="error"] summary').focus({preventScroll:true})`);
+        await page.keyboard.press('Shift+Tab');
+        assert.equal(await recoveryUi(`return !!this.activeElement?.closest('.fr-image-actions')`),true,'Backward tab reaches a recovery action before details');
+        await page.keyboard.press('Tab');
+        assert.equal(await recoveryUi(`return this.activeElement?.tagName`),'SUMMARY');
+        assert.equal(await page.evaluate(()=>globalThis.__recoveryHostKeys),0,'Diagnostic keyboard input remains isolated from reader shortcuts');
+    }
+    await screenshot('recovery-keyboard-details');if(!recoveryLongDetails)await page.keyboard.press('Enter');report.cases.push(report.currentCase);
+    report.currentCase='trusted retry recovers only this page and removes error actions while loading';
+    await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__recoveryFixture.fail=false'});
+    await click('.fluent-read-image-translation-button');
+    await wait(async()=>await ops()===failedCount+1,10000);
+    assert.equal(await failed(),null);
+    assert.notEqual(await recoveryUi(`return [...this.querySelectorAll('.fr-image-feedback[data-phase="loading"] .fr-image-actions')].some(e=>getComputedStyle(e).display!=='none'&&e.getBoundingClientRect().width>0)`),true);
+    await wait(completed);
+    assert.equal(await ops(),failedCount+1);await unchanged(1,true);await quiet();await screenshot('recovery-retry-complete');report.cases.push(report.currentCase);
+    if(recoveryCanvasAlpha){
+        report.recoveryCanvasAlpha.presentation=await sourceFor(1).evaluate(element=>{const rect=element.getBoundingClientRect();return {bounds:{x:rect.x,y:rect.y,width:rect.width,height:rect.height},opacity:element.style.getPropertyValue('opacity'),opacityPriority:element.style.getPropertyPriority('opacity'),transitionProperty:element.style.getPropertyValue('transition-property'),transitionPriority:element.style.getPropertyPriority('transition-property'),background:getComputedStyle(document.body).backgroundColor,dpr:devicePixelRatio};});
+        const {opacity,opacityPriority,transitionProperty,transitionPriority}=report.recoveryCanvasAlpha.presentation;
+        assert.deepEqual({opacity,opacityPriority,transitionProperty,transitionPriority},{opacity:'0',opacityPriority:'important',transitionProperty:'none',transitionPriority:'important'},'The transparent source is hidden only by the two explicitly owned properties');
+        const translated=await visibleBitmaps();assert.equal(translated.length,1);
+        fs.writeFileSync(path.join(artifacts,'recovery-alpha-translated.png'),Buffer.from(translated[0].data.split(',')[1],'base64'));
+        report.recoveryCanvasAlpha.translated='recovery-alpha-translated.png';report.recoveryCanvasAlpha.screenshot='recovery-retry-complete.png';
+    }
+    if(recoveryBackgroundAlpha){
+        const describe=()=>sourceFor(1).evaluate(element=>{
+            const rect=element.getBoundingClientRect(),style=getComputedStyle(element),box=r=>({x:r.x,y:r.y,width:r.width,height:r.height});
+            const children=[...element.querySelectorAll('#recovery-host-caption,#recovery-host-action')].map(child=>{const bounds=child.getBoundingClientRect(),computed=getComputedStyle(child),hit=document.elementFromPoint(bounds.x+bounds.width/2,bounds.y+bounds.height/2);return {id:child.id,rect:box(bounds),background:computed.backgroundColor,color:computed.color,opacity:computed.opacity,hit:hit===child||child.contains(hit),text:child.textContent};});
+            return {bounds:box(rect),dpr:devicePixelRatio,background:style.backgroundColor,pageBackground:getComputedStyle(document.body).backgroundColor,backgroundImage:style.backgroundImage,imagePriority:element.style.getPropertyPriority('background-image'),children};
+        });
+        const presentation=await describe();report.recoveryBackgroundAlpha.presentation=presentation;
+        assert.equal(presentation.background,'rgb(29, 65, 83)');assert.equal(presentation.imagePriority,'important');assert.equal(presentation.children.length,2);
+        const region=report.recoveryBackgroundAlpha.wordlessChildRegion;
+        for(const child of presentation.children){
+            const x=(child.rect.x-presentation.bounds.x)*900/presentation.bounds.width,y=(child.rect.y-presentation.bounds.y)*900/presentation.bounds.height;
+            const width=child.rect.width*900/presentation.bounds.width,height=child.rect.height*900/presentation.bounds.height;
+            assert.ok(x>=region.x0&&y>=region.y0&&x+width<=region.x1&&y+height<=region.y1,'Host controls remain entirely inside the independently frozen wordless artwork region');
+        }
+        assert.equal((await recoveryUi('return this.querySelectorAll("canvas").length'))??0,0,'No fixed translated Canvas paints above the original host children');
+        const translated=await visibleBitmaps();assert.equal(translated.length,1);assert.equal(translated[0].width,900);assert.equal(translated[0].height,900);
+        fs.writeFileSync(path.join(artifacts,'recovery-background-alpha-translated.png'),Buffer.from(translated[0].data.split(',')[1],'base64'));
+        report.recoveryBackgroundAlpha.translated='recovery-background-alpha-translated.png';report.recoveryBackgroundAlpha.screenshot='recovery-retry-complete.png';report.recoveryBackgroundAlpha.translatedUrl=translated[0].url;
+        report.currentCase='background translation preserves visible host children and trusted clicks reach the original host';
+        const button=page.locator('#recovery-host-action');await button.scrollIntoViewIfNeeded();
+        const interactive=await describe();report.recoveryBackgroundAlpha.interaction=interactive;
+        assert.ok(interactive.children.every(child=>child.hit&&child.opacity==='1'),'Host foreground children remain hit-testable above the CSS background');
+        const clicksBefore=await page.evaluate(()=>globalThis.__recoveryHostClicks.length),point=await button.boundingBox();assert.ok(point&&point.width>0&&point.height>0);
+        await page.mouse.click(point.x+point.width/2,point.y+point.height/2);
+        const clicks=await page.evaluate(()=>globalThis.__recoveryHostClicks);assert.equal(clicks.length,clicksBefore+1);assert.deepEqual(clicks.at(-1),{trusted:true,target:'recovery-host-action'});report.recoveryBackgroundAlpha.hostClicks=clicks;
+        await unchanged(1,true);assert.equal(await ops(),failedCount+1);await screenshot('recovery-background-host-content');report.cases.push(report.currentCase);
+        await sourceFor(1).evaluate(element=>scrollTo({top:element.getBoundingClientRect().top+scrollY-40,behavior:'instant'}));
+    }
+    report.currentCase='recovered manga redisplays the cached translation without OCR';
+    const completedCount=await ops(),bitmapsBefore=await visibleBitmaps();assert.ok(bitmapsBefore?.length>0,'Recovered source has a visible translated bitmap');
+    await toggle();await wait(async()=>(await visibleBitmaps())?.length===0);await unchanged(1);
+    await toggle();await wait(completed);assert.equal(await ops(),completedCount);
+    assert.deepEqual(await visibleBitmaps(),bitmapsBefore,'Cached redisplay preserves exact translated pixels');await unchanged(1,true);report.cases.push(report.currentCase);
+    if(recoveryCanvasAlpha){
+        report.currentCase='real CSSOM preserves a host transition-duration change when the source visibility receipt is returned';
+        // 预期只从事先快照和明确的宿主改写构造，不用被测结果反推或放宽样式归还断言。
+        const plannedStyle=await page.evaluate(raw=>{const style=document.createElement('canvas').style;style.cssText=raw||'';style.setProperty('transition-duration','2s');const restored=style.cssText;style.setProperty('transition-property','none','important');style.setProperty('opacity','0','important');return {restored,leased:style.cssText};},originals[0].attributes.style);
+        await sourceFor(1).evaluate(element=>element.style.setProperty('transition-duration','2s'));
+        expectedOriginals[0].attributes.style=plannedStyle.restored;leasedStyles[0]=plannedStyle.leased;
+        await toggle();await wait(async()=>(await visibleBitmaps())?.length===0);await unchanged(1);
+        report.recoveryCanvasAlpha.hostTransitionAfterRestore=await snapshot(sourceFor(1));
+        await toggle();await wait(completed);assert.equal(await ops(),completedCount);await unchanged(1,true);
+        assert.deepEqual(await visibleBitmaps(),bitmapsBefore,'Host CSS changes do not rerun OCR or alter cached translated pixels');report.cases.push(report.currentCase);
+    }
+    report.currentCase='dismissing a later failed page removes its prompt without retrying it';
+    await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__recoveryFixture.fail=true'});
+    await position(2);const beforeDismiss=await ops();await click('.fr-image-dismiss');
+    assert.equal(await failed(),null);await page.waitForTimeout(300);assert.equal(await ops(),beforeDismiss);await unchanged(2);report.cases.push(report.currentCase);
+    report.currentCase='pausing continuous translation clears a failed page and its controls';
+    await position(3);await toggle();
+    await wait(async()=>await failed()===null,10000,true);
+    if(kind==='background')assert.equal((await visibleBitmaps()).length,0);else assert.equal(await recoveryUi(`return this.querySelectorAll(${JSON.stringify(kind==='image'?'.fluent-read-image-translation-bitmap':'canvas')}).length`),0);
+    for(let index=1;index<=3;index++)await unchanged(index);
+    const injected=await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__recoveryFixture.failures',returnByValue:true});
+    report.recoveryFailures=injected.result.value;
+    assert.equal(report.recoveryFailures.length,3);assert.ok(report.recoveryFailures.every(item=>item.texts.some(text=>text.trim())),'Every injected failure follows actual successful OCR');
+    report.cases.push(report.currentCase);auditPageErrors();assert.deepEqual(report.errors,[]);assert.deepEqual(report.consoleErrors,[]);focusGuard();
+}
 async function verifyPageFeedback() {
     const first=page.locator('#page-one'),second=page.locator('#page-two');
     const scroll=async image=>{await image.evaluate(i=>scrollTo({top:i.getBoundingClientRect().top+scrollY-40,behavior:'instant'}));await page.waitForTimeout(100);};
@@ -666,7 +1267,7 @@ function auditPageErrors() {
 }
 
 async function verifyPipelinePerformance(extensionId) {
-    assert.ok(pipelineRounds>=2 && pipelineRounds<=5,'Measure first use separately from bounded warm runs');
+    assert.ok(Number.isInteger(pipelineRounds)&&pipelineRounds>=(qualityManifest?1:2)&&pipelineRounds<=5,qualityManifest?'Quality scenes allow 1–5 bounded rounds':'Measure first use separately from bounded warm runs');
     await patch({animations:false});
     const chunks=fs.readdirSync(path.join(extensionDir,'chunks'));
     const ortFiles=chunks.filter(name=>/^ort\.(?:webgpu\.)?(?:bundle\.)?min-/.test(name));
@@ -677,9 +1278,19 @@ async function verifyPipelinePerformance(extensionId) {
         if(${forceCpu})Object.defineProperty(navigator,'gpu',{value:undefined,configurable:true});
         const samples=globalThis.__pipelineSamples={sessions:[],runs:[],encodes:[],reads:[],canvasCalls:{},yields:[],gpuSubmissions:0,adapters:[],userAgent:navigator.userAgent};
         samples.workers=[];
+        samples.ocrViews=[];
         const NativeWorker=globalThis.Worker;
         globalThis.Worker=class extends NativeWorker {
-            constructor(...args){super(...args);this.addEventListener('message',event=>{if(event.data?.diagnostics)globalThis.__pipelineSamples.workers.push(event.data.diagnostics);});}
+            constructor(...args){super(...args);this.addEventListener('message',event=>{
+                if(event.data?.diagnostics)globalThis.__pipelineSamples.workers.push(event.data.diagnostics);
+                const result=event.data?.result;
+                if(${process.argv.includes('--trace-ocr')}&&Array.isArray(result?.results)&&samples.ocrViews.length<32){
+                    const rows=items=>(items??[]).slice(0,4096).map(({text,confidence,box})=>({text,confidence,box}));
+                    samples.ocrViews.push({requestId:event.data.requestId,results:rows(result.results),
+                        bubbles:(result.bubbles??[]).slice(0,24).map(({bbox,results})=>({bbox,results:rows(results)})),
+                        layoutBubbles:result.layoutBubbles,paragraphProofs:result.imageParagraphGapProofs});
+                }
+            });}
         };
         const read=FileReader.prototype.readAsDataURL;
         FileReader.prototype.readAsDataURL=function(blob){const start=Date.now();this.addEventListener('loadend',()=>samples.reads.push({start,end:Date.now(),bytes:blob.size}),{once:true});return read.call(this,blob);};
@@ -723,22 +1334,29 @@ async function verifyPipelinePerformance(extensionId) {
     })()`,awaitPromise:true,returnByValue:true});
     report.pipeline=[];report.graphOverride=graphOverride;
     for(const input of pipelineInputs) for(let round=0;round<pipelineRounds;round++) {
-        report.currentCase=`pipeline ${path.basename(input)} round ${round+1}`;
+        const fixture=qualityFixtures?.find(fixture=>fixture.input===input);
+        const caseName=fixture?.name||path.basename(input,'.png');
+        report.currentCase=`${qualityManifest?'quality':'pipeline'} ${caseName} round ${round+1}`;
+        if(fixture)await patch({from:fixture.sourceLanguage});
         await gotoVisible(page,targetUrl,{waitUntil:'domcontentloaded'});
         const data='data:image/png;base64,'+fs.readFileSync(input).toString('base64');
         await page.evaluate(async data=>{
             const images=[...document.querySelectorAll('.zao-image')];images.slice(1).forEach(image=>image.parentElement.remove());
             const image=images[0];image.src=data;await image.decode();window.scrollTo(0,0);
         },data);
+        if(fixture)await page.locator('.zao-image').first().evaluate(image=>image.style.height='auto');
+        const sourceState=await page.locator('.zao-image').first().evaluate(image=>({src:image.src,srcset:image.getAttribute('srcset'),sizes:image.getAttribute('sizes'),style:image.getAttribute('style')}));
+        const batchStart=await worker.evaluate(()=>globalThis.__mangaTest.textBatches.length);
         await page.evaluate(()=>{
             globalThis.__pipelineDisplay={changes:[]};
             const image=document.querySelector('.zao-image');
             new MutationObserver(()=>{const change={at:Date.now(),opacity:image.style.opacity};globalThis.__pipelineDisplay.changes.push(change);if(change.opacity==='0')requestAnimationFrame(()=>change.presentedAt=Date.now());}).observe(image,{attributes:true,attributeFilter:['style']});
         });
-        await wait(async()=>!!await ball(`return this.querySelector('.floating-ball-manga')`),30000);
+        if(ordinaryImageQuality)await page.mouse.move(10,10);
+        else await wait(async()=>!!await ball(`return this.querySelector('.floating-ball-manga')`),30000);
         const before=await ops();const start=Date.now();
         await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__pipelineSamples.workers=[];globalThis.__pipelineSamples.runs=[];globalThis.__pipelineSamples.encodes=[];globalThis.__pipelineSamples.reads=[];globalThis.__pipelineSamples.sessions=[];globalThis.__pipelineSamples.canvasCalls={};globalThis.__pipelineSamples.yields=[];globalThis.__pipelineSamples.gpuSubmissions=0'});
-        const measured=await require('./local-model-browser-helpers.cjs').measureBrowser(launched.context,`manga-round-${round+1}`,artifacts,async()=>{
+        const measured=await require('./local-model-browser-helpers.cjs').measureBrowser(launched.context,`manga-case-${report.pipeline.length+1}-round-${round+1}`,artifacts,async()=>{
             await toggle();
             await wait(async()=>await imageUi(`return !!this.querySelector('.fr-image-feedback:not([hidden]) .fr-image-spinner:not([hidden])')`),10000);
             report.loadingFrames??=[];
@@ -747,8 +1365,14 @@ async function verifyPipelinePerformance(extensionId) {
             assert.ok(animation.height<40 && animation.width<280,'Status remains compact');
             if(!animation.reducedMotion)assert.ok(new Set(animation.frames.map(frame=>frame.transform)).size>1,'Spinner keeps rotating when decorative animations are disabled');
             assert.ok(animation.frames.every((frame,i,frames)=>!i || frame.at-frames[i-1].at<500),'Page heartbeat stays responsive during real inference');
-            await screenshot(`pipeline-loading-${round+1}`);
-            await wait(async()=>await page.locator('.zao-image').first().evaluate(i=>i.style.opacity==='0'),180000);
+            await screenshot(`${caseName}-loading-${round+1}`);
+            if(fixture) {
+                // 以真实响应决定是否保留原图：漏识别或只识别到无需改写的数字仍须完成全部质量统计。
+                await wait(async()=>await worker.evaluate(index=>{
+                    const id=globalThis.__mangaTest.operations[index];
+                    return !!id&&globalThis.__mangaTest.layoutResults?.some(result=>result.requestId===id);
+                },before)&&await imageUi(`return !!this.querySelector('.fr-image-feedback[data-phase="translated"]')`),180000);
+            } else await wait(async()=>await page.locator('.zao-image').first().evaluate(i=>i.style.opacity==='0'),180000);
         });
         assert.equal(measured.error,undefined,'Measured pipeline completes');
         assert.equal(await page.locator('.zao-image').first().evaluate(i=>i.src),data,'Source stays the exact benchmark image');
@@ -756,20 +1380,88 @@ async function verifyPipelinePerformance(extensionId) {
         await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(resolve)));
         const requestId=await worker.evaluate(index=>globalThis.__mangaTest.operations[index],before);
         const progress=await worker.evaluate(id=>globalThis.__mangaTest.progress.filter(p=>p.requestId===id),requestId);
-        const texts=await worker.evaluate(()=>globalThis.__mangaTest.textBatches.at(-1));
+        const textBatches=await worker.evaluate(index=>globalThis.__mangaTest.textBatches.slice(index),batchStart);
+        const texts=textBatches.flat();
+        const layout=fixture?await worker.evaluate(id=>globalThis.__mangaTest.layoutResults.find(result=>result.requestId===id),requestId):null;
+        const observedNoBitmap=layout?.noBitmap===true;
         const sampled=await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__pipelineSamples',returnByValue:true});
-        const translated=await imageUi(`const surface=this.querySelector('.fluent-read-image-translation-bitmap');return surface?.tagName==='CANVAS'?surface.toDataURL('image/png'):surface?.src`);
+        const displayedBitmap=await imageUi(`const surface=this.querySelector('.fluent-read-image-translation-bitmap');return surface?.tagName==='CANVAS'?surface.toDataURL('image/png'):surface?.src`);
+        const assertOriginalWithoutBitmap=async(bitmap)=>{
+            assert.ok(!bitmap,'A no-bitmap response leaves no translated surface');
+            assert.deepEqual(await page.locator('.zao-image').first().evaluate(image=>({src:image.src,srcset:image.getAttribute('srcset'),sizes:image.getAttribute('sizes'),style:image.getAttribute('style')})),sourceState,'A no-bitmap response preserves the visible original source and styles');
+            assert.equal(await page.locator('.zao-image').first().evaluate(image=>{const r=image.getBoundingClientRect(),s=getComputedStyle(image);return s.display!=='none'&&s.visibility==='visible'&&Number(s.opacity)>0&&r.width>0&&r.height>0&&r.left<innerWidth&&r.right>0&&r.top<innerHeight&&r.bottom>0;}),true,'The original remains visible in the viewport without a translated surface');
+        };
+        if(observedNoBitmap)await assertOriginalWithoutBitmap(displayedBitmap);
+        const translated=displayedBitmap||(observedNoBitmap?data:undefined);
         assert.ok(translated?.startsWith('data:image/png;base64,'),'Lossless translated output exists');
-        const output=path.join(artifacts,`${path.basename(input,'.png')}-round-${round+1}-translated.png`);
+        const output=path.join(artifacts,`${caseName}-round-${round+1}-translated.png`);
         fs.writeFileSync(output,Buffer.from(translated.split(',')[1],'base64'));
         const display=await page.evaluate(()=>globalThis.__pipelineDisplay);
-        report.pipeline.push({input,round,cold:report.pipeline.length===0,totalMs:end-start,start,display,requestId,progress,texts,...sampled.result.value,output,resources:measured});
-        assert.ok(texts.length>0,'Actual text recognition ran');await assertQuietReading();
+        const result={input,scene:caseName,sourceLanguage:fixture?.sourceLanguage||sourceLanguage,round,cold:report.pipeline.length===0,totalMs:end-start,start,display,requestId,progress,texts,...sampled.result.value,output,resources:measured};
+        report.pipeline.push(result);
+        if(!fixture)assert.ok(texts.length>0,'Actual text recognition ran');
+        if(fixture){
+            result.expectedSource=fixture.expectedSource;
+            assert.ok(layout,'Quality scene captures its actual offscreen OCR layout');result.ocrLines=layout.lines;result.observedNoBitmap=observedNoBitmap;
+            // 正锚点、重复次数、负区域与无字页均保留失败，再完成后续场景；不以期望文字代替识别值。
+            Object.assign(result,qualityRoles?evaluateCapturedQualityRoles(qualityRoles.get(fixture.name),layout.lines):evaluateCapturedQualityFixture(fixture,layout.lines));
+            if(fixture.expectedNoText) {
+                result.wordlessPage={noTextTransport:texts.length===0,noBitmap:!displayedBitmap,sourcePreserved:JSON.stringify(await page.locator('.zao-image').first().evaluate(image=>({src:image.src,srcset:image.getAttribute('srcset'),sizes:image.getAttribute('sizes'),style:image.getAttribute('style')})))===JSON.stringify(sourceState)};
+                if(!result.wordlessPage.noTextTransport||!result.wordlessPage.noBitmap||!result.wordlessPage.sourcePreserved)result.qualityFailures.push({type:'wordless-page-render',reason:'A wordless source must issue no text transport and remain visible without a translated bitmap',...result.wordlessPage});
+            }
+            const capturedPixels=await page.evaluate(async({source,translated,probes})=>{
+                const sample=async src=>{const image=new Image();image.src=src;await image.decode();const canvas=document.createElement('canvas');canvas.width=image.naturalWidth;canvas.height=image.naturalHeight;const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);return {width:canvas.width,height:canvas.height,pixels:probes.map(({x,y})=>Array.from(ctx.getImageData(x,y,1,1).data))};};
+                return {source:await sample(source),translated:await sample(translated)};
+            },{source:data,translated,probes:[...fixture.protectedProbes,...(fixture.protectedAlphaProbes??[])]});
+            const rgbCount=fixture.protectedProbes.length;
+            result.protectedPixels={source:{...capturedPixels.source,pixels:capturedPixels.source.pixels.slice(0,rgbCount)},translated:{...capturedPixels.translated,pixels:capturedPixels.translated.pixels.slice(0,rgbCount)}};
+            const {qualityFailures:alphaFailures,...alpha}=evaluateQualityAlphaProbes(fixture,{sourcePixels:capturedPixels.source.pixels.slice(rgbCount),translatedPixels:capturedPixels.translated.pixels.slice(rgbCount)});
+            Object.assign(result,alpha);result.qualityFailures.push(...alphaFailures);
+            // Declared nontext protection compares the same native source/output RGBA, not authored RGB.
+            for(let index=0;index<(fixture.protectedAlphaProbes?.length??0);index++){
+                assert.deepEqual(capturedPixels.translated.pixels[rgbCount+index],capturedPixels.source.pixels[rgbCount+index],`Protected nontext RGBA remains unchanged: ${caseName} probe ${index}`);
+            }
+            assert.equal(result.protectedPixels.source.width,fixture.width);assert.equal(result.protectedPixels.source.height,fixture.height);
+            assert.equal(result.protectedPixels.translated.width,fixture.width);assert.equal(result.protectedPixels.translated.height,fixture.height);
+            for(let index=0;index<fixture.protectedProbes.length;index++){
+                assert.deepEqual(result.protectedPixels.source.pixels[index].slice(0,3),fixture.protectedProbes[index].rgb,'Source probe agrees with reproducible fixture');
+                assert.deepEqual(result.protectedPixels.translated.pixels[index],result.protectedPixels.source.pixels[index],`Protected artwork survives source mask repair: ${caseName} probe ${index}`);
+            }
+        }
+        await assertQuietReading();
         await toggle();await wait(async()=>await page.locator('.zao-image').first().evaluate(i=>i.style.opacity!=='0'));
-        focusGuard();console.log(JSON.stringify({input:path.basename(input),round,totalMs:end-start,runs:sampled.result.value.runs.length}));
+        if(fixture){
+            assert.deepEqual(await page.locator('.zao-image').first().evaluate(image=>({src:image.src,srcset:image.getAttribute('srcset'),sizes:image.getAttribute('sizes'),style:image.getAttribute('style')})),sourceState,'Restoring original preserves source content and styles');
+            const operations=await ops(),requests=await worker.evaluate(()=>globalThis.__mangaTest.requests.length);
+            await toggle();await wait(async()=>observedNoBitmap?await imageUi(`return !!this.querySelector('.fr-image-feedback[data-phase="translated"]')`):await page.locator('.zao-image').first().evaluate(i=>i.style.opacity==='0'));
+            const redisplayedBitmap=await imageUi(`const surface=this.querySelector('.fluent-read-image-translation-bitmap');return surface?.tagName==='CANVAS'?surface.toDataURL('image/png'):surface?.src`);
+            if(observedNoBitmap)await assertOriginalWithoutBitmap(redisplayedBitmap);
+            const restored=redisplayedBitmap||(observedNoBitmap?data:undefined);
+            assert.equal(restored,translated,'Cached redisplay preserves exact translated bitmap');
+            assert.equal(await ops(),operations,'Cached redisplay issues no OCR operation');
+            assert.equal(await worker.evaluate(()=>globalThis.__mangaTest.requests.length),requests,'Cached redisplay issues no text transport');
+            result.restoreAndRedisplay={sourcePreserved:true,bitmapPreserved:true,additionalOcrOperations:0,additionalTextRequests:0};
+            await toggle();await wait(async()=>await page.locator('.zao-image').first().evaluate(i=>i.style.opacity!=='0'));
+        }
+        if(report.modelsPreloaded)assert.equal(report.modelRequests.length,report.modelRequestsAfterPreload,'Prepared models issue no new HTTP downloads during real inference');
+        focusGuard();console.log(JSON.stringify({input:path.basename(input),scene:caseName,sourceLanguage:result.sourceLanguage,round,totalMs:end-start,runs:sampled.result.value.runs.length}));
     }
-    report.cases.push('same-source uncached pipeline runs with real production OCR and inpainting');
+    report.cases.push(qualityManifest?'quality corpus with real production OCR, protected artwork pixels, original restore and cached redisplay':'same-source uncached pipeline runs with real production OCR and inpainting');
+    if(qualityManifest){
+        const anchors=report.pipeline.flatMap(result=>result.anchors||[]);
+        const failures=report.pipeline.flatMap(result=>(result.qualityFailures||[]).map(failure=>({scene:result.scene,round:result.round,...failure})));
+        report.qualitySummary={completedScenes:report.pipeline.length,expectedScenes:qualityFixtures.length*pipelineRounds,anchors:{total:anchors.length,matched:anchors.filter(anchor=>anchor.found).length,failed:anchors.filter(anchor=>!anchor.found).length},negativeRegions:{declared:qualityFixtures.reduce((sum,fixture)=>sum+(fixture.forbiddenRegions?.length||0),0)*pipelineRounds,falsePositives:report.pipeline.reduce((sum,result)=>sum+(result.negativeDetections?.length||0),0)},wordlessPages:report.pipeline.filter(result=>result.wordlessPage).map(result=>({scene:result.scene,...result.wordlessPage})),failures,
+            normalization:'NFKC, uppercase, retain Unicode letters/numbers; count overlapping substring anchors in all captured OCR sourceText including preserved/untranslated lines'+(qualityRoles?' and actual ruby metadata':'')+'; exact occurrence counts follow manifest metadata or source-proven unique anchors',
+            scope:'Exact OCR anchors, source occurrence counts, declared reading order, excess source-character counts and wordless artwork false positives are aggregated independently. Character inventories do not prove absence of omissions or preserve order. Protected pixels, source restoration, cached bitmap and request counts remain immediate structural assertions. No CER or translation-provider quality claim.'};
+        if(qualityRoles){
+            report.qualitySummary.legacyFailures=report.pipeline.flatMap(result=>(result.legacyQuality?.qualityFailures??[]).map(failure=>({scene:result.scene,round:result.round,...failure})));
+            report.qualitySummary.annotations=report.pipeline.flatMap(result=>result.annotationChecks??[]);
+            report.qualitySummary.visualRegions=report.pipeline.flatMap(result=>result.paragraphGroups??[]);
+            report.qualitySummary.semanticSourceGroups=report.pipeline.flatMap(result=>result.semanticSourceGroups??[]);
+        }
+    }
     auditPageErrors();assert.deepEqual(report.errors,[]);assert.deepEqual(report.consoleErrors,[]);
+    if(qualityManifest)assert.deepEqual(report.qualitySummary.failures,[],'All exact OCR anchors and declared source roles pass after completing every scene');
 }
 
 /** 仅此模式验证停留调度与初始化取消复用；真实模型推理，文字传输受控，不把返显时间当作 OCR 性能。 */
@@ -1158,6 +1850,13 @@ async function verifyReadAhead() {
     auditPageErrors();assert.deepEqual(report.errors,[]);assert.deepEqual(report.consoleErrors,[]);
 }
 (async()=>{
+    // 显式可选 CTD 在任何 profile、扩展副本或浏览器创建前验证；缺失/损坏不改缓存、不联网。
+    if(preloadTextSeg)await prepareModelFilesForTest();
+    // 先报告可选模型预检结果，再绑定原始构建指纹；缺少构建也进入统一报告和清理路径。
+    collectJavaScript(extensionDir);
+    const javascriptHash=createHash('sha256');
+    for(const file of javascriptFiles.sort())javascriptHash.update(path.relative(extensionDir,file)).update('\0').update(fs.readFileSync(file));
+    report.javascriptAssetsSha256=javascriptHash.digest('hex');
 if (process.argv.includes('--worker-diagnostics')) {
     diagnosticFixture=fs.mkdtempSync('/private/tmp/fluentread-manga-diagnostics-');
     fs.cpSync(extensionDir,diagnosticFixture,{recursive:true});extensionDir=diagnosticFixture;
@@ -1184,6 +1883,8 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
     assert.equal(report.windowPlacement.mode,'background-visible-no-focus');
     assert.equal(report.windowPlacement.browserFrontmost,false);
     const context=launched.context;
+    await diagnostics?.start(context);
+    diagnostics?.setPhase('image quality: model preparation and recognition');
     const system=await context.browser().newBrowserCDPSession();browserPid=(await system.send('SystemInfo.getProcessInfo')).processInfo.find(p=>p.type==='browser').id;if(extensionDebugging){report.extensionLoad=await system.send('Extensions.loadUnpacked',{path:extensionDir});loadedExtensionId=report.extensionLoad.id;}await system.detach();focusGuard();
     report.blockedOfficial=blockedOfficial;report.blockedAllModelSources=blockedAll;report.modelRequests=[];
     context.on('console',message=>{if(message.type()==='error'&&message.text().includes('FluentRead'))report.consoleErrors.push(message.text());});
@@ -1191,15 +1892,30 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
     const ownWorker=w=>w.url().startsWith(loadedExtensionId?`chrome-extension://${loadedExtensionId}/`:'chrome-extension://');
     worker=context.serviceWorkers().find(ownWorker)||await context.waitForEvent('serviceworker',{predicate:ownWorker,timeout:30000});
     const extensionId=new URL(worker.url()).host;
+    report.backgroundApiReadiness=[];
+    // 图片 wait 会读取内容脚本 UI；后台启动阶段尚未创建页面和 CDP，只用有界时钟轮询能力。
+    const backgroundApiDeadline=Date.now()+10000;
+    let backgroundApiReady=false;
+    while(Date.now()<backgroundApiDeadline){
+        const state=await worker.evaluate(function readMangaBackgroundApiState(){return {tabsGet:typeof globalThis.chrome?.tabs?.get==='function',storageGet:typeof globalThis.chrome?.storage?.local?.get==='function',runtimeId:globalThis.chrome?.runtime?.id??null};});
+        const previous=report.backgroundApiReadiness.at(-1);
+        if(!previous||JSON.stringify(previous.state)!==JSON.stringify(state))report.backgroundApiReadiness.push({at:Date.now(),state});
+        if(state.tabsGet&&state.storageGet&&state.runtimeId===extensionId){backgroundApiReady=true;break;}
+        await new Promise(resolve=>setTimeout(resolve,200));
+    }
+    assert.ok(backgroundApiReady,'Extension background APIs did not become ready before the startup deadline');
 
     popup=context.pages()[0];
+    diagnostics?.setExtensionId(extensionId);
+    await diagnostics?.attachPage(popup,'image-quality-extension-ui');
     const options=popup,reopened=popup,modelSettings=popup;
     await gotoVisible(popup,`chrome-extension://${extensionId}/popup.html`);
     await patch({on:true,uiLanguage:'zh-CN',uiLanguageSetupCompleted:true,disableImageTranslator:false,
-        imageTranslationMangaEnabled:true,imageTranslationMangaDownloadConfirmed:true,imageTranslationMangaPromptEnabled:false,imageTranslationHoverEnabled:false,disableFloatingBall:false,
+        imageTranslationMangaEnabled:!ordinaryImageQuality,imageTranslationMangaDownloadConfirmed:true,imageTranslationMangaPromptEnabled:false,imageTranslationHoverEnabled:ordinaryImageQuality,disableFloatingBall:ordinaryImageQuality,
+        ...(ordinaryImageQuality?{imageTranslationOcrEngine:'paddle'}:{}),
         imageTranslationMangaPrefetchPages:prefetchPages,
-        service:'google',from:sourceLanguage,to:targetLanguage,useCache:true,enableAIContext:false,animations:false});
-    await worker.evaluate(({live,trace,traceLayout})=>{
+        service:translationService,imageTranslationService,from:sourceLanguage,to:targetLanguage,useCache:true,enableAIContext:false,animations:false});
+    await worker.evaluate(({live,trace,traceLayout,layoutTraceLimit,translationMap,liveTextAllowlist})=>{
         const original=globalThis.fetch.bind(globalThis);
         const test=globalThis.__mangaTest={operations:[],inputs:[],requests:[],transportRequests:[],cancellations:[],textBatches:[],progress:[],sourceRequests:[]};
         if(traceLayout){
@@ -1207,8 +1923,8 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
             const send=chrome.runtime.sendMessage.bind(chrome.runtime);
             chrome.runtime.sendMessage=function(...args){
                 const message=args[0],observe=response=>{
-                    if(message?.type==='FLUENT_READ_IMAGE_TRANSLATE_OFFSCREEN'&&Array.isArray(response?.lines)&&test.layoutResults.length<10)
-                        test.layoutResults.push({requestId:message.requestId,lines:response.lines.map(({text,sourceText,bbox,fontSize,sourceBoxes,vertical})=>({text,sourceText,bbox,fontSize,sourceBoxes,vertical}))});
+                    if(message?.type==='FLUENT_READ_IMAGE_TRANSLATE_OFFSCREEN'&&Array.isArray(response?.lines)&&test.layoutResults.length<layoutTraceLimit)
+                        test.layoutResults.push({requestId:message.requestId,noBitmap:response.success===true&&(response.imageUnchanged===true||message.manga===true&&(Array.isArray(response.mangaPatches?.patches)&&response.mangaPatches.patches.length===0||response.lines.length===0&&typeof response.image==='string'&&response.image===message.image)),lines:response.lines.map(({text,sourceText,bbox,fontSize,sourceBoxes,vertical,ruby,renderSkipped,numericUncertain})=>({text,sourceText,bbox,fontSize,sourceBoxes,vertical,ruby,renderSkipped,numericUncertain}))});
                     return response;
                 };
                 const last=args.length-1,callback=args[last];
@@ -1236,26 +1952,57 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
         globalThis.fetch=async(input,options)=>{
             const url=String(typeof input==='string'?input:input.url||input);
             const endpoint=new URL(url);
+            if(!live&&endpoint.hostname==='edge.microsoft.com'&&endpoint.pathname.startsWith('/translate/'))
+                throw new Error('Unexpected Microsoft fixture transport');
             const html=endpoint.hostname==='translate-pa.googleapis.com'&&endpoint.pathname==='/v1/translateHtml';
             const list=endpoint.hostname==='translate.googleapis.com'&&endpoint.pathname==='/translate_a/t';
             const rpc=['translate.google.com','translate.google.co.uk'].includes(endpoint.hostname)&&endpoint.pathname==='/_/TranslateWebserverUi/data/batchexecute';
             if(html||list||rpc){
                 const entries=rpc?JSON.parse(new URLSearchParams(options.body).get('f.req'))[0]:null;
                 const texts=html?JSON.parse(options.body)[0][0]:list?new URLSearchParams(options.body).getAll('q'):entries.map(entry=>JSON.parse(entry[1])[0][0]);
-                test.requests.push(...texts);test.transportRequests.push({endpoint:html?'translateHtml':list?'translate_a/t':'batchexecute',items:texts.length,live});
-                if(live)return original(input,options);
+                const attempt={endpoint:html?'translateHtml':list?'translate_a/t':'batchexecute',items:texts.length,live};
+                test.requests.push(...texts);test.transportRequests.push(attempt);
+                if(live){
+                    if(liveTextAllowlist){
+                        const plain=text=>String(text).replace(/^<pre>([\s\S]*)<\/pre>$/u,'$1').replace(/\s+/gu,'');
+                        const allowed=new Set(liveTextAllowlist.map(plain));
+                        attempt.allowlistMatched=texts.every(text=>allowed.has(plain(text)));
+                        if(!attempt.allowlistMatched)throw new Error('Live image translation text is outside the explicit allowlist');
+                    }
+                    const startedAt=Date.now();
+                    try{
+                        const response=await original(input,options);attempt.status=response.status;attempt.durationMs=Date.now()-startedAt;return response;
+                    }catch(error){attempt.errorName=error?.name||'Error';attempt.durationMs=Date.now()-startedAt;throw error;}
+                }
                 if(test.holdNext) {test.holdNext=false;await new Promise(resolve=>{test.releaseHeld=()=>{delete test.releaseHeld;resolve();};});}
                 await new Promise(resolve=>setTimeout(resolve,250));
-                const translations=texts.map(()=> '流畅阅读：看懂每一页漫画');
+                const translations=texts.map(text=>{
+                    if(!translationMap)return '流畅阅读：看懂每一页漫画';
+                    const source=String(text).replace(/^<pre>([\s\S]*)<\/pre>$/u,'$1').trim();
+                    if(!Object.hasOwn(translationMap,source))throw new Error(`Missing controlled image translation: ${source}`);
+                    return translationMap[source];
+                });
                 if(html)return new Response(JSON.stringify([translations.map(text=>`<pre>${text}</pre>`)]),{status:200});
                 if(list)return new Response(JSON.stringify(translations),{status:200});
-                const entry=[null,null,null,null,null,[['流畅阅读：看懂每一页漫画']]];
-                return new Response(JSON.stringify(entries.map(request=>['wrb.fr','MkEWBc',JSON.stringify([null,[[entry]]]),null,null,null,request[3]])),{status:200});
+                return new Response(JSON.stringify(entries.map((request,index)=>['wrb.fr','MkEWBc',JSON.stringify([null,[[[null,null,null,null,null,[[translations[index]]]]]]]),null,null,null,request[3]])),{status:200});
+            }
+            if(endpoint.hostname==='edge.microsoft.com'&&endpoint.pathname==='/translate/translatetext'){
+                const startedAt=Date.now();let payload;
+                try{payload=typeof options?.body==='string'?JSON.parse(options.body):undefined;}catch{}
+                const items=Array.isArray(payload)?payload.length:0;
+                try{
+                    const response=await original(input,options);
+                    test.transportRequests.push({endpoint:'microsoft-translatetext',items,status:response.status,durationMs:Date.now()-startedAt});
+                    return response;
+                }catch(error){
+                    test.transportRequests.push({endpoint:'microsoft-translatetext',items,errorName:error?.name||'Error',durationMs:Date.now()-startedAt});
+                    throw error;
+                }
             }
             if(!live&&/^(?:translate(?:-pa)?\.googleapis\.com|translate\.google\.(?:com|co\.uk))$/.test(endpoint.hostname))throw new Error('Unexpected Google fixture transport');
             return original(input,options);
         };
-    },{live:liveTranslation,trace:traceReader,traceLayout});
+    },{live:liveTranslation,trace:traceReader,traceLayout,layoutTraceLimit,translationMap,liveTextAllowlist});
     await worker.evaluate(async()=>{await chrome.offscreen.createDocument({url:chrome.runtime.getURL('offscreen.html'),reasons:['DOM_PARSER'],justification:'Verify local manga processing in an isolated test profile'});});
     modelObserver=await observeModelDownloads(extensionId);
     if(scrollIntentTest)await modelObserver.command('Runtime.evaluate',{expression:`(()=>{
@@ -1275,35 +2022,73 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
             }
         };
     })()`});
-    if(preloadModels){
-        await gotoVisible(modelSettings,`chrome-extension://${extensionId}/options.html#settings-image-translation`);
-
-        await modelSettings.locator('.manga-model-settings').waitFor();
-        if(!baseline)await modelSettings.locator('.manga-download-settings > summary').click();
-        await modelSettings.locator('.manga-model-settings input[type=file]').setInputFiles(['PP-OCRv6_small_det.onnx','PP-OCRv6_small_rec.onnx','ppocrv6_dict.txt','lama-manga-dynamic.onnx'].map(name=>path.join(preloadModels,name)));
-        const until=Date.now()+60000;let prepared=false;while(Date.now()<until){const s=await modelSettings.evaluate(()=>chrome.runtime.sendMessage({type:'fluentReadMangaModelStatus'}));if(s.ready&&s.inpaintingReady){prepared=true;break;}await modelSettings.waitForTimeout(150);}assert.ok(prepared,'All four imported resources are ready before leaving settings');
-        const audit=async()=>{const cache=await caches.open('fluent-read-manga-ocr-v1');return Promise.all((await cache.keys()).map(async key=>{const response=await cache.match(key);const bytes=await response.arrayBuffer();return {url:key.url,status:response.status,bytes:bytes.byteLength,sha:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),n=>n.toString(16).padStart(2,'0')).join('')}}));};
-        report.preloadedCacheOptions=await modelSettings.evaluate(audit);assert.equal(report.preloadedCacheOptions.length,4,'All four validated files exist before navigation');
-        const audited=await modelObserver.command('Runtime.evaluate',{expression:`(${audit.toString()})()`,returnByValue:true,awaitPromise:true});report.preloadedCacheOffscreen=audited.result.value;
-        report.modelsPreloaded=true;await gotoVisible(popup,`chrome-extension://${extensionId}/popup.html`);
-    }
     if(traceLayout)await modelObserver.command('Runtime.evaluate',{expression:`(()=>{
         const samples=globalThis.__mangaLayoutTrace=[];
         const boxes=new WeakMap(),rect=CanvasRenderingContext2D.prototype.rect,draw=CanvasRenderingContext2D.prototype.fillText;
         CanvasRenderingContext2D.prototype.rect=function(x,y,width,height){boxes.set(this,{x,y,width,height});return rect.call(this,x,y,width,height);};
         CanvasRenderingContext2D.prototype.fillText=function(text,x,y,...args){
-            if(this.font.includes('Noto Sans')&&samples.length<1024)samples.push({text,x,y,font:this.font,canvas:{width:this.canvas.width,height:this.canvas.height},box:boxes.get(this)});
+            if(this.font.includes('Noto Sans')&&samples.length<1024){
+                const {a,b,c,d,e,f}=this.getTransform();
+                samples.push({text,x,y,font:this.font,direction:this.direction,textAlign:this.textAlign,textBaseline:this.textBaseline,transform:{a,b,c,d,e,f},fill:this.fillStyle,stroke:this.strokeStyle,lineWidth:this.lineWidth,canvas:{width:this.canvas.width,height:this.canvas.height},box:boxes.get(this)});
+            }
             return draw.call(this,text,x,y,...args);
         };
     })()`});
-    if(!liveSite)await context.route(targetUrl,route=>route.fulfill({status:200,contentType:'text/html',body:pipelineInputs?fixture.replace("canvas.toBlob(blob=>{image.src=URL.createObjectURL(blob)})","image.src=canvas.toDataURL('image/png')"):fixture}));
+    if(!liveSite)await context.route(targetUrl,route=>route.fulfill({status:200,contentType:'text/html',body:
+        errorRecoveryTest&&errorRecoverySurface!=='image'?recoverySurfaceFixture(errorRecoverySurface):
+            pipelineInputs?fixture.replace("canvas.toBlob(blob=>{image.src=URL.createObjectURL(blob)})","image.src=canvas.toDataURL('image/png')"):fixture}));
     page=await newPageWithoutForeground(context);page.on('pageerror',error=>{
         const stack=error.stack||'';
         report.pageErrors.push({message:error.message,stack});
         if(liveSite&&!stack.includes('chrome-extension://')&&/https?:\/\//.test(stack))report.hostErrors.push({message:error.message,stack});
         else report.errors.push(error.message);
     });
+    await diagnostics?.attachPage(page,'image-quality-content');
     await gotoVisible(page,targetUrl,{waitUntil:'domcontentloaded',timeout:60000});
+    if(errorRecoveryTest&&errorRecoverySurface!=='image'){
+        await page.waitForFunction(()=>!!globalThis.__recoverySurfaceFixture);
+        const setup=await page.evaluate(()=>globalThis.__recoverySurfaceFixture);report.errorRecovery.fixture=setup;
+        assert.equal(setup.error,undefined,'Controlled recovery fixture source generation succeeds');
+        assert.equal(setup.ready,true);assert.equal(await page.locator(readerSelector).count(),setup.sourceCount);
+    }
+    // 先建立浏览器/CDP 所有权并完成正文导航；只有实际可用的导入 UI 才准备模型，失败生命周期不触发文件或网络活动。
+    // 下载来源回退/离线导入保持原有负向语义，不能让自动缓存掩盖它们。
+    const useModelCache=!preloadModels&&!offlineModels&&!blockedOfficial&&!blockedAll&&!baseline;
+    if(preloadModels||useModelCache){
+        await gotoVisible(modelSettings,`chrome-extension://${extensionId}/options.html#settings-image-translation`);
+        const manager=modelSettings.locator('.manga-model-settings');
+        await manager.waitFor();
+        if(!baseline)await manager.locator('.manga-download-settings').evaluate(details=>details.open=true);
+        const importInput=manager.locator('input[type=file]');
+        await importInput.waitFor({state:'attached'});
+        if(useModelCache){
+            if(!preparedModels)await prepareModelFilesForTest();
+        }
+        const files=preparedModels?.files||readImageTranslationModelManifest().map(asset=>({...asset,path:path.join(preloadModels,asset.filename)}));
+        await setInputFilesUsingLocalPaths(importInput,modelSettings,files.map(file=>file.path),context);
+        const requiredOcr=files.some(file=>file.kind==='ocr'),requiredInpaint=files.some(file=>file.kind==='inpaint'),requiredSeg=files.some(file=>file.kind==='seg');
+        const until=Date.now()+60000;let status;
+        while(Date.now()<until){
+            status=await modelSettings.evaluate(()=>chrome.runtime.sendMessage({type:'fluentReadMangaModelStatus'}));
+            if(status.success&&(!requiredOcr||status.ready)&&(!requiredInpaint||status.inpaintingReady)&&(!requiredSeg||status.segmentationReady))break;
+            const failure=await manager.locator('[role=alert]').allTextContents();
+            assert.ok(!failure.some(text=>text.trim()),`Model import failed: ${failure.join('; ')}`);
+            await modelSettings.waitForTimeout(150);
+        }
+        assert.ok(status?.success&&(!requiredOcr||status.ready)&&(!requiredInpaint||status.inpaintingReady)&&(!requiredSeg||status.segmentationReady),'Required imported resources are ready before leaving settings');
+        report.preloadedModelStatus=status;
+        const audit=async()=>{const cache=await caches.open('fluent-read-manga-ocr-v1');return Promise.all((await cache.keys()).map(async key=>{const response=await cache.match(key);const bytes=await response.arrayBuffer();return {url:key.url,status:response.status,bytes:bytes.byteLength,sha:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),n=>n.toString(16).padStart(2,'0')).join('')}}));};
+        report.preloadedCacheOptions=await modelSettings.evaluate(audit);
+        const audited=await modelObserver.command('Runtime.evaluate',{expression:`(${audit.toString()})()`,returnByValue:true,awaitPromise:true});
+        assert.equal(audited.exceptionDetails,undefined,'Offscreen model cache audit executes');
+        report.preloadedCacheOffscreen=audited.result.value;
+        for(const entries of [report.preloadedCacheOptions,report.preloadedCacheOffscreen])for(const file of files){
+            const entry=entries.find(entry=>entry.url===file.url);
+            assert.ok(entry,`Imported model is visible before navigation: ${file.filename}`);
+            assert.equal(entry.status,200);assert.equal(entry.bytes,file.bytes);assert.equal(entry.sha,file.sha256);
+        }
+        report.modelsPreloaded=true;report.modelRequestsAfterPreload=report.modelRequests.length;await gotoVisible(popup,`chrome-extension://${extensionId}/popup.html`);
+    }else report.modelCache={directory:modelCacheDir,skipped:'explicit model-source, offline-import or baseline case'};
     if(readerOpenSelector)await page.locator(readerOpenSelector).click({timeout:15000});
     cdp=await context.newCDPSession(page);
     if(canvasContentPixels)cdp.on('Runtime.executionContextCreated',event=>{if(event.context.origin===`chrome-extension://${extensionId}`&&event.context.auxData?.type==='isolated')contentPixelContext=event.context.id;});
@@ -1368,11 +2153,12 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
         addEventListener('scroll',()=>capture('scroll'),true);
         document.addEventListener('load',event=>{if(event.target.matches?.(selector))capture('load:'+event.target.id);},true);
     },readerSelector);
-    await wait(async()=>!!await ball(`return this.querySelector('.floating-ball-manga')`),30000);
+    if(!ordinaryImageQuality)await wait(async()=>!!await ball(`return this.querySelector('.floating-ball-manga')`),30000);
     if(segmentReaderTest){await verifySegmentReader();report.status='passed';return;}
     if(surfaceReaderTest){await verifyCanvasReader();report.status='passed';return;}
     if(imageTurnKey){await verifyPagedImageReader();report.status='passed';return;}
     if(pipelineInputs){await verifyPipelinePerformance(extensionId);report.status='passed';return;}
+    if(errorRecoveryTest){await verifyErrorRecovery();report.status='passed';focusGuard();return;}
     if(pageFeedbackTest){await verifyPageFeedback();report.status='passed';focusGuard();return;}
     if(tieredCacheTest){await verifyTieredCache(extensionId);report.status='passed';focusGuard();return;}
     if(cacheNavigationTest){await verifyCacheNavigation();report.status='passed';focusGuard();return;}
@@ -1403,6 +2189,7 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
     await wait(async()=>(await ball(`return this.querySelector('.floating-ball-manga').getAttribute('aria-busy')`))==='false');
     assert.equal(await source.evaluate(i=>i.style.opacity),'0','The observed source has its translated bitmap displayed');
     assert.equal(await ball(`return this.querySelector('.floating-ball-manga').getAttribute('aria-pressed')`),'true');
+    await assertLatestLayoutHasNoSkippedTranslations();
     report.pageDurationsMs.push({page:1,ms:Date.now()-started,includesFirstModelPreparation:true});
     await toolScreenshot('active');assert.ok(report.buttonStates.active.badge>=19);
     if(!liveSite){assert.ok((await ops())<=2,'Only the visible page and its canceled preparation/retry run');
@@ -1424,6 +2211,7 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
     await wait(async()=>(await ball(`return this.querySelector('.floating-ball-manga').getAttribute('aria-busy')`))==='false');
     assert.ok((await imageUi(`return this.querySelectorAll('.fluent-read-image-translation-bitmap').length`))>0);
     assert.equal(await second.evaluate(i=>i.style.opacity),'0','The new observed page displays its own translated result');
+    await assertLatestLayoutHasNoSkippedTranslations();
     const afterScroll=await ops();assert.ok(afterScroll>=before);
     report.scrollOperationCounts={before,after:afterScroll,mode:afterScroll>before?'new-operation':'existing-result'};
     report.pageDurationsMs.push({page:2,ms:Date.now()-started,mayIncludeFirstInpaintingPreparation:true});
@@ -1438,6 +2226,7 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
         await wait(async()=>(await ball(`return this.querySelector('.floating-ball-manga').getAttribute('aria-busy')`))==='false');
         assert.ok((await imageUi(`return this.querySelectorAll('.fluent-read-image-translation-bitmap').length`))>0);
         assert.equal(await image.evaluate(i=>i.style.opacity),'0');
+        await assertLatestLayoutHasNoSkippedTranslations();
         (report.additionalScrollOperationCounts??=[]).push({page:index+1,before:previous,after:await ops()});
         report.pageDurationsMs.push({page:index+1,ms:Date.now()-started});
         await screenshot(`${String(index+1).padStart(2,'0')}-dialogue-translated`);report.cases.push(report.currentCase);
@@ -1527,7 +2316,8 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
     report.modelStatusAfter=await popup.evaluate(()=>chrome.runtime.sendMessage({type:'fluentReadMangaModelStatus'}));
     assert.deepEqual(report.modelStatusAfter,{success:true,ready:false,bytes:0,inpaintingReady:false,source:expectedModelSource});
     if(offlineModels){
-        await modelSettings.locator('.manga-model-settings input[type=file]').setInputFiles(['PP-OCRv6_small_det.onnx','PP-OCRv6_small_rec.onnx','ppocrv6_dict.txt','lama-manga-dynamic.onnx'].map(name=>path.join(offlineModels,name)));
+        await setInputFilesUsingLocalPaths(modelSettings.locator('.manga-model-settings input[type=file]'),modelSettings,
+            ['PP-OCRv6_small_det.onnx','PP-OCRv6_small_rec.onnx','ppocrv6_dict.txt','lama-manga-dynamic.onnx'].map(name=>path.join(offlineModels,name)),context);
         await modelSettings.locator('.manga-model-settings small').filter({hasText:'226 MB'}).waitFor({timeout:60000});
         report.offlineStatus=await popup.evaluate(()=>chrome.runtime.sendMessage({type:'fluentReadMangaModelStatus'}));
         assert.equal(report.offlineStatus.ready,true);assert.equal(report.offlineStatus.inpaintingReady,true);
@@ -1555,7 +2345,15 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
     if(blockedOfficial){assert.ok(report.modelRequests.some(r=>r.source==='huggingface.co'));assert.ok(report.modelRequests.some(r=>['hf-mirror.com','hf-mirror.net'].includes(r.source)));report.cases.push('actual Offscreen official-source block falls back to verified mirror files');}
     auditPageErrors();assert.deepEqual(report.errors,[]);assert.deepEqual(report.consoleErrors,[]);report.status='passed';
     focusGuard();
-})().catch(async error=>{report.status='failed';report.failure=error.stack;process.exitCode=1;console.error(error);if(cdp){report.lastImageUi=await imageUi('return [...this.querySelectorAll(".fr-image-feedback .fr-image-status")].map(s=>s.textContent)').catch(()=>null);report.lastCanvasUi=await canvasUi('return [...this.querySelectorAll("canvas")].map(c=>({width:c.width,height:c.height,style:c.style.cssText}))').catch(()=>null);report.lastProgress=await worker.evaluate(()=>globalThis.__mangaTest.progress).catch(()=>null);}if(page)await page.screenshot({path:path.join(artifacts,'failed-reader.png')}).catch(()=>{});})
+})().catch(async error=>{
+    report.status='failed';report.failure=error.stack;process.exitCode=1;console.error(error);
+    if(cdp){report.lastImageUi=await imageUi('return [...this.querySelectorAll(".fr-image-feedback .fr-image-status")].map(s=>s.textContent)').catch(()=>null);report.lastCanvasUi=await canvasUi('return [...this.querySelectorAll("canvas")].map(c=>({width:c.width,height:c.height,style:c.style.cssText}))').catch(()=>null);report.lastProgress=await worker.evaluate(()=>globalThis.__mangaTest.progress).catch(()=>null);}
+    if(page){
+        report.failureViewport=await page.evaluate(()=>({width:innerWidth,height:innerHeight,devicePixelRatio})).catch(()=>null);
+        if(errorRecoveryTest&&recoveryViewport&&cdp)await cdp.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false,fromSurface:true}).then(result=>fs.writeFileSync(path.join(artifacts,'failed-reader.png'),Buffer.from(result.data,'base64'))).catch(()=>{});
+        else await page.screenshot({path:path.join(artifacts,'failed-reader.png')}).catch(()=>{});
+    }
+})
 .finally(async()=>{
     report.cleanupErrors = [];
     try {
@@ -1569,6 +2367,14 @@ await import('./mangaInferenceWorker.real.js');self.removeEventListener('message
     }
     if(modelObserver && pipelineInputs)report.pipelineLast=(await modelObserver.command('Runtime.evaluate',{expression:'globalThis.__pipelineSamples',returnByValue:true}).catch(()=>({result:{value:null}}))).result.value;
     } catch (error) {report.cleanupErrors.push(`final diagnostics: ${error.message}`);}
+    if(diagnostics&&launched){
+        try{
+            await diagnostics.flush();report.runtimeDiagnostics=diagnostics.snapshot();
+            fs.writeFileSync(path.join(artifacts,'runtime-diagnostics.json'),JSON.stringify(report.runtimeDiagnostics,null,2));
+            if(!report.runtimeDiagnostics.passed){report.status='failed';process.exitCode=1;}
+        }catch(error){report.cleanupErrors.push(`runtime diagnostics: ${error.message}`);}
+        await diagnostics.stop().catch(error=>report.cleanupErrors.push(`runtime diagnostics detach: ${error.message}`));
+    }
     try {modelObserver?.close();} catch (error) {report.observerCleanupError = error.message; report.cleanupErrors.push(`observer close: ${error.message}`);}
     let closed = !launchAttempted;
     if (launched) {

@@ -8,6 +8,15 @@ import brandTaglines from '../../../src/core/i18n/messages/brand-taglines.json'
 const props = defineProps<{ en?: boolean }>()
 const t = (zh: string, english: string) => (props.en ? english : zh)
 const link = (path: string) => withBase((props.en ? '/en' : '') + path)
+const sponsors = [
+  {
+    name: t('哔哩哔哩', 'bilibili'),
+    project: 'Index-Translate',
+    icon: '/support/bilibili.svg',
+    href: 'https://index-translate.bilibili.com/',
+    recognition: t('首位赞助伙伴', 'First sponsor'),
+  },
+]
 const features = [
   {
     kind: 'webpage',
@@ -22,8 +31,8 @@ const features = [
     kind: 'selection',
     title: t('划词翻译', 'Selection translation'),
     description: t(
-      '选中文字即可查看译文并朗读原文或译文，还可通过卡片查音标、释义，理解句子结构。',
-      'Translate selected text and listen to both languages, with cards for word definitions, pronunciation and sentence structure.'
+      '选中文字后打开翻译卡片，查看译文、朗读原文或译文，还可查音标、释义，理解句子结构。',
+      'Select text and open its translation card to read or listen in both languages, check pronunciation and definitions, and explore sentence structure.'
     ),
     path: '/guide/deepseek-harness',
   },
@@ -199,6 +208,44 @@ const faqs = [
       </div>
       <FeatureDemo :kind="feature.kind" :en="en" />
     </section>
+    <section id="sponsors" class="bv-section bv-sponsors" aria-labelledby="bv-sponsors-title">
+      <div>
+        <span class="bv-section-number">{{ t('企业与项目赞助', 'SPONSOR FLUENTREAD') }}</span>
+        <h2 id="bv-sponsors-title">{{ t('支持开源，与流畅阅读同行', 'Support open source with FluentRead') }}</h2>
+        <p>{{
+          t(
+            '项目目前主要由个人支持，每月投入数百美元用于项目维护。我们相信，流畅阅读能为世界带来更多美好。',
+            'The project is currently funded mainly out of pocket, with a few hundred US dollars spent each month on maintenance. We believe FluentRead can make the world a little better.'
+          )
+        }}</p>
+      </div>
+      <div>
+        <ul class="fr-sponsor-grid" :aria-label="t('赞助伙伴', 'Sponsors')">
+          <li v-for="sponsor in sponsors" :key="sponsor.href">
+            <a
+              class="fr-sponsor-tile"
+              :href="sponsor.href"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <img :src="withBase(sponsor.icon)" alt="" width="38" height="38" />
+              <strong>{{ sponsor.name }}</strong>
+              <span>{{ sponsor.project }}</span>
+            </a>
+            <span v-if="sponsor.recognition" class="fr-sponsor-recognition">{{ sponsor.recognition }}</span>
+          </li>
+          <li>
+            <a class="fr-sponsor-tile fr-sponsor-invite" :href="link('/guide/support#sponsorship')">
+              <svg width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true">
+                <circle cx="16" cy="16" r="13" />
+                <path d="M16 10v12m-6-6h12" stroke-linecap="round" />
+              </svg>
+              <strong>{{ t('成为赞助伙伴', 'Become a sponsor') }}</strong>
+            </a>
+          </li>
+        </ul>
+      </div>
+    </section>
     <section class="bv-section bv-faq">
       <div>
         <span class="bv-section-number">{{ t('使用须知', 'GETTING STARTED') }}</span>
@@ -228,7 +275,7 @@ const faqs = [
         <a :href="link('/docs/')">{{ t('使用指南', 'User guide') }}</a
         ><a :href="link('/guide/privacy')">{{ t('隐私政策', 'Privacy policy') }}</a
         ><a href="https://github.com/FluentRead/FluentRead">GitHub</a
-        ><a href="https://github.com/FluentRead/FluentRead#support">{{
+        ><a :href="link('/guide/support')">{{
           t('支持项目', 'Support the project')
         }}</a>
       </div>
@@ -236,3 +283,74 @@ const faqs = [
     </footer>
   </div>
 </template>
+
+<style scoped>
+.fr-sponsor-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.fr-sponsor-grid > li {
+  width: 112px;
+  text-align: center;
+}
+.fr-sponsor-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  aspect-ratio: 1;
+  padding: 10px;
+  border: 1px solid #e4d8de;
+  border-radius: 14px;
+  background: #fcf9fa;
+  color: var(--vp-c-text-1);
+  line-height: 1.3;
+  text-decoration: none;
+  transition: border-color 160ms, background-color 160ms;
+}
+.fr-sponsor-tile:hover {
+  border-color: var(--vp-c-brand-1);
+  background: #fbf3f6;
+}
+.fr-sponsor-tile:focus-visible {
+  outline: 2px solid var(--vp-c-brand-1);
+  outline-offset: 4px;
+}
+.fr-sponsor-tile img {
+  margin-bottom: 2px;
+}
+.fr-sponsor-tile strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+.fr-sponsor-tile > span {
+  color: var(--fr-muted);
+  font-size: 11px;
+}
+.fr-sponsor-invite {
+  gap: 8px;
+  border-color: #d58ba5;
+  border-style: dashed;
+  background: #fff4f8;
+  color: var(--vp-c-brand-1);
+}
+.fr-sponsor-invite:hover {
+  background: #fceaf1;
+}
+.fr-sponsor-recognition {
+  display: block;
+  margin-top: 6px;
+  color: var(--vp-c-brand-1);
+  font-size: 12px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .fr-sponsor-tile {
+    transition: none;
+  }
+}
+</style>

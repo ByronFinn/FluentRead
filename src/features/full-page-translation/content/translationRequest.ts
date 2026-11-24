@@ -1,7 +1,8 @@
 /**
  * @file src/features/full-page-translation/content/translationRequest.ts
- * 文件职责：为单次全文翻译会话冻结请求配置，并执行文本槽的批量、原生数组和显式 AI 跨候选合并、分包、回退与会话级结果复用。
- * 主要内容：冻结组合与成员连接摘要，组合数组交由 broker 按真实成员调用并保留通用 AI 成员可消费的篇章上下文；冻结调用时的长段落换行与译文位置，操作身份区分展示设置而 provider 结果键仍只包含请求维度；在调用入口复制原文与服务/模型/语言/术语/排除列表快照，先过滤排除语言的文本槽再合批；缺失条目携带同次复制快照生成的逐槽键，保持键维度、512 条容量与整请求取消归属，避免登记结果时重复序列化；在本地保留尚未排版的三美元公式源码，构造显式 client 参数，按服务选择批译策略；标记内部单条槽协议，由 broker 按冻结术语和同一截止时间逐槽校验；为本地模型只构造一次整段语言样本，为 Chrome auto 逐槽翻译保留无哨兵整段检测样本，按冻结服务偏好自动原生数组合批，关闭后保留逐项请求，完整结构校验后才分发，AI 只合并同父直接相邻候选并在协议失败后停用同快照合批，严格隔离取消归属并维护有界会话缓存。
+ * 文件职责：为单次全文翻译会话冻结请求配置，并按独立 AI 段数/字符预算执行文本槽的批量、原生数组和显式 AI 跨候选合并、分包、回退与会话级结果复用；原生数组无论凑成几批均沿用捕获的缓存偏好。
+ * AI 批次降级时，各候选独立结算，使已译好的段落无需等待同批其他请求。
+ * 主要内容：按网站偏好捕获默认显示模式，并记录显式显示覆盖以隔离后续弹窗模式切换；冻结组合与成员连接摘要，组合数组交由 broker 按真实成员调用并保留通用 AI 成员可消费的篇章上下文；冻结调用时的长段落换行与译文位置，操作身份区分展示设置而 provider 结果键仍只包含请求维度；在调用入口复制原文与服务/模型/语言/术语/排除列表快照，先对原始文本槽执行可取消的目标及排除语言预检，再合批或组装内部包；显式传递同次排除快照到 client；缺失条目携带同次复制快照生成的逐槽键，保持键维度、512 条容量与整请求取消归属，避免登记结果时重复序列化；在本地保留尚未排版的三美元公式源码，构造显式 client 参数，按服务选择批译策略；标记内部单条槽协议，由 broker 按冻结术语和同一截止时间逐槽校验；为本地模型只构造一次整段语言样本，为 Chrome auto 逐槽翻译保留无哨兵整段检测样本，按冻结服务偏好自动原生数组合批，关闭后保留逐项请求，完整结构校验后才分发；AI 为低并发保留至少一批候选准备容量，实际传输仍受请求队列限额；以有界收集窗口等待异步准备和调度分片，按配置、章节与父节点隔离后恢复 DOM 顺序，只合并直接相邻候选，协议失败后停用同快照合批并跳过后续收集等待，严格隔离取消归属并维护有界会话缓存。
  * 模块边界：本文件不发现候选、不持有 DOM 翻译状态也不渲染译文；runtime 提供会话缓存和取消作用域，client 负责后台协议与队列执行。
  */
 import {preparePageDiscourseContext} from '@/src/services/translation/context/pageDiscourse';
@@ -15,16 +16,24 @@ import {
     serializeTranslationSlots,
 } from '@/src/core/translation/public';
 import {config} from '@/src/services/config/store';
+import {resolveSiteTranslationDisplay} from '@/src/core/site-rules/domain';
 import {normalizeMaxConcurrentTranslations} from '@/src/core/config/scheduling';
+import {normalizeAiMultiSegmentMaxCharacters, normalizeAiMultiSegmentMaxSegments} from '@/src/core/config/aiMultiSegment';
 import {normalizeExcludedLanguages} from '@/src/core/config/pageTranslation';
 import {isNativeTranslationBatchEnabled} from '@/src/core/config/nativeBatch';
 import {shouldSkipTranslationForTarget} from '@/src/core/language/detect';
+import {identifyTextLanguage} from '@/src/core/language/identify';
+import {getSupplementalLanguageCandidate} from '@/src/core/language/supplement';
 import {isModelThinkingEnabled} from '@/src/core/config/modelThinking';
-import {createGlossaryRevisionMemoizer} from '@/src/core/glossary';
+import {createGlossaryRevisionMemoizer, protectGlossaryText} from '@/src/core/glossary';
+import {matchCommonWebTerms} from '@/src/core/glossary/commonWebTerms';
 import {translateText, translateTextBatch, type TranslateOptions} from '@/src/services/translation/client';
+import {TranslationRequestError} from '@/src/services/translation/errors';
+import {shouldSkipTranslationWithEvidence} from '@/src/services/translation/languagePreflight';
 import {supportsNativeTranslationBatch, supportsTranslationBatch} from '@/src/services/translation/capabilities';
 import {validateNativeBatchResults} from '@/src/core/translation/nativeBatch';
 import {hasTranslationContent} from '@/src/core/translation/result';
+import {hasEmojiLiterals} from '@/src/core/translation/emojiLiterals';
 import {
     cancelTranslationQueueSession,
     createTranslationQueueSession,
@@ -36,12 +45,33 @@ import {copyFullPageTranslationConfigSnapshot, type FullPageTranslationConfigSna
 const FULL_PAGE_TRANSLATION_CACHE_LIMIT = 512;
 const FULL_PAGE_TRANSLATION_REQUEST_CACHE_LIMIT = 512;
 const FULL_PAGE_TRANSLATION_REMOUNT_GRACE_MS = 250;
-const CROSS_CANDIDATE_MAX_TEXT_SLOTS = 4;
-const CROSS_CANDIDATE_MAX_CHARACTERS = 2_000;
+const NATIVE_BATCH_MAX_TEXT_SLOTS = 4;
+const NATIVE_BATCH_MAX_CHARACTERS = 2_000;
+const INLINE_CODE_PROBE_MAX_BYTES = 450;
+const AI_BATCH_COLLECTION_MS = 32;
 // 悬浮手势的每次配置捕获仍同步冻结字段；只有全库摘要经原始标量复验后复用。
 const readGlossaryRevision = createGlossaryRevisionMemoizer();
 
 export type {FullPageTranslationConfigSnapshot, PageTranslationConfigOverrides} from './translationConfigSnapshot';
+
+function getAIMultiSegmentLimits(snapshot: FullPageTranslationConfigSnapshot) {
+    if (!snapshot.enableAIMultiSegment || supportsNativeTranslationBatch(snapshot.service)
+        || !servicesType.isUseAIContext(snapshot.service, snapshot.model)) return undefined;
+    return {
+        maxSegments: normalizeAiMultiSegmentMaxSegments(snapshot.aiMultiSegmentMaxSegments),
+        maxCharacters: normalizeAiMultiSegmentMaxCharacters(snapshot.aiMultiSegmentMaxCharacters),
+    };
+}
+
+/** 候选准备容量须容纳一批；真正的 provider 请求并发仍由 client 队列与后台调度器约束。 */
+export function getFullPageTranslationCandidateConcurrency(
+    snapshot: FullPageTranslationConfigSnapshot,
+    configuredConcurrency: unknown,
+): number {
+    const concurrency = normalizeMaxConcurrentTranslations(configuredConcurrency);
+    const aiLimits = getAIMultiSegmentLimits(snapshot);
+    return aiLimits ? Math.max(concurrency, aiLimits.maxSegments) : concurrency;
+}
 
 export function getTranslationInvocationIdentity(snapshot: FullPageTranslationConfigSnapshot): string {
     return JSON.stringify([
@@ -49,6 +79,7 @@ export function getTranslationInvocationIdentity(snapshot: FullPageTranslationCo
         snapshot.sourceLanguage, snapshot.targetLanguage, snapshot.displayMode, snapshot.style,
         snapshot.longParagraphLineBreak ?? false, snapshot.translationBeforeOriginal ?? false,
         snapshot.enableAIContext, snapshot.enableAIMultiSegment, snapshot.enableNativeBatch !== false,
+        getAIMultiSegmentLimits(snapshot),
         snapshot.glossaryRevision, snapshot.glossaryIds,
         snapshot.excludedLanguages,
         ...(snapshot.compositeConnectionFingerprint ? [snapshot.compositeConnectionFingerprint] : []),
@@ -75,7 +106,7 @@ export interface FullPageTranslationRequestCacheEntry {
 type SnapshotTranslateExecutionOptions = Pick<
     TranslateOptions,
     'aiMultiSegment' | 'queueSession' | 'signal' | 'skipLanguageDetection'
-    | 'sourceLanguageDetectionText' | 'useCache' | 'validateTranslationSlots' | 'discourseContext'
+    | 'sourceLanguageDetectionText' | 'useCache' | 'validateTranslationSlots' | 'validateInlineCodeTranslation' | 'discourseContext'
 >;
 
 export interface FullPageTranslationSessionCache {
@@ -116,10 +147,12 @@ interface TranslationBatchTask {
 interface TranslationBatchQueue {
     pending: TranslationBatchTask[];
     flushScheduled: boolean;
+    flushTimer?: ReturnType<typeof setTimeout>;
     disabledAIKeys: Set<string>;
 }
 
 const translationBatchQueues = new WeakMap<FullPageTranslationSessionCache, TranslationBatchQueue>();
+const nativeTranslationBatchQueues = new WeakMap<FullPageTranslationSessionCache, TranslationBatchQueue>();
 const aiBatchOwnerIds = new WeakMap<Element, number>();
 let nextAIBatchOwnerId = 0;
 
@@ -155,9 +188,12 @@ export function captureFullPageTranslationConfig(
         useCache: config.useCache,
         enableAIContext: config.enableAIContext,
         enableAIMultiSegment: config.enableAIMultiSegment,
+        aiMultiSegmentMaxSegments: normalizeAiMultiSegmentMaxSegments(config.aiMultiSegmentMaxSegments),
+        aiMultiSegmentMaxCharacters: normalizeAiMultiSegmentMaxCharacters(config.aiMultiSegmentMaxCharacters),
         enableNativeBatch: isNativeTranslationBatchEnabled(service, config.nativeBatchTranslationEnabled),
         displayMode: overrides.displayMode
-            ?? (config.display === styles.bilingualTranslation ? 'bilingual' : 'single'),
+            ?? (resolveSiteTranslationDisplay(config, typeof location === 'undefined' ? '' : location.href) === styles.bilingualTranslation ? 'bilingual' : 'single'),
+        ...(overrides.displayMode ? {displayModeOverridden: true as const} : {}),
         style: config.style,
         longParagraphLineBreak: Boolean(config.longParagraphLineBreakEnabled),
         translationBeforeOriginal: Boolean(config.translationBeforeOriginal),
@@ -179,9 +215,10 @@ export function createSnapshotTranslateOptions(
         thinkingOverride: snapshot.thinking,
         sourceLanguage: snapshot.sourceLanguage,
         targetLanguage: snapshot.targetLanguage,
+        excludedLanguages: snapshot.excludedLanguages,
         enableAIContext: snapshot.enableAIContext,
         enableNativeBatch: snapshot.enableNativeBatch !== false,
-        // 非会话 batch 需要显式禁用 broker 缓存；其余调用继续使用冻结的会话值。
+        // 显式调用偏好优先，否则沿用冻结值；前端短期复用与后台持久缓存独立。
         useCache: options.useCache ?? snapshot.useCache,
     };
 }
@@ -221,6 +258,90 @@ function restoreSkippedSlots(
 
 function isAbortError(error: unknown): boolean {
     return error instanceof Error && error.name === 'AbortError';
+}
+
+/**
+ * 受保护行内代码的整句试探。只发送调用方提供的标记化正文，不读取 DOM、
+ * 页面上下文或代码文字。结果必须经调用方的当前骨架与标记校验后才能使用。
+ * 这条路径不参与会话槽缓存，后台只缓存经同一标记协议验证的结果；不符合条件时沿用逐槽路径。
+ */
+export async function tryTranslateInlineCodeSentence(
+    source: string,
+    decode: (result: string) => string[] | null,
+    snapshot: FullPageTranslationConfigSnapshot,
+    signal?: AbortSignal,
+    queueSession?: TranslationQueueSession,
+    isCurrent?: () => boolean,
+): Promise<string[] | null> {
+    throwIfAborted(signal);
+    snapshot = copyFullPageTranslationConfigSnapshot(snapshot);
+    // 隐式正文或篇章上下文可能包含受保护代码，不能用于这次试探。
+    // 部分免费线路按 UTF-8 字节限制请求；保留 50 字节余量，避免试探被拆开标记。
+    if (snapshot.enableAIContext || source.length > INLINE_CODE_PROBE_MAX_BYTES ||
+        new TextEncoder().encode(source).length > INLINE_CODE_PROBE_MAX_BYTES || hasEmojiLiterals(source) ||
+        (isCurrent && !isCurrent())) return null;
+    const markerPattern = /__FRCODE_([a-f0-9]{16})_(0|[1-9]\d*)__/gu;
+    const matches = [...source.matchAll(markerPattern)];
+    if (!matches.length || matches.some((match, index) =>
+        match[1] !== matches[0]![1] || Number(match[2]) !== index)) return null;
+    const detectionText = source.replace(markerPattern, ' ');
+    if (/__FRCODE/iu.test(detectionText) || !detectionText.trim()) return null;
+    // 按叠加默认术语占位符后的载荷检查上游预算和 auto 识别，仍用原文构造实际请求。
+    const terms = matchCommonWebTerms(detectionText);
+    const providerSource = terms.length ? protectGlossaryText(source, terms).text : source;
+    if (terms.length && new TextEncoder().encode(providerSource).length > INLINE_CODE_PROBE_MAX_BYTES) return null;
+
+    // 部分 provider（如 MyMemory）会对标记化请求重新自动识别源语言。
+    // 只有标记前后都可靠且一致时才试探，不能更改用户的 auto 设置来掩盖差异。
+    if (snapshot.sourceLanguage.trim().toLowerCase() === 'auto') {
+        const plainLanguage = identifyTextLanguage(detectionText);
+        const taggedLanguage = identifyTextLanguage(providerSource);
+        if (plainLanguage.status !== 'identified' || taggedLanguage.status !== 'identified' ||
+            plainLanguage.languages.length !== 1 || taggedLanguage.languages.length !== 1 ||
+            plainLanguage.languages[0] !== taggedLanguage.languages[0]) return null;
+    }
+
+    // 术语占位会扩张请求，可能使供应商拆开代码标记；若任一启用词条
+    // 可能命中，保守沿用现有逐槽请求。版本变化同样禁止试探。
+    const glossaryRequiresProtection = (): boolean => {
+        if (!snapshot.glossaryRevision || snapshot.glossaryRevision !==
+            readGlossaryRevision(config.glossaryLibraries, config.glossaryEnabled)) return true;
+        if (!config.glossaryEnabled) return false;
+        const entries = config.glossaryLibraries.filter(library => library.enabled)
+            .flatMap(library => library.entries.map(entry => ({source: entry.source, target: entry.target,
+                caseSensitive: entry.caseSensitive})));
+        // 为避免长词遮蔽，逐条使用后台相同的保护算法；大词库直接回退。
+        if (entries.length > 64) return true;
+        return entries.some(entry => protectGlossaryText(source, [entry]).tokens.length > 0);
+    };
+    if (glossaryRequiresProtection() || shouldSkipTranslationForTarget(detectionText, snapshot.targetLanguage, snapshot.excludedLanguages)) return null;
+    if (await shouldSkipTranslationWithEvidence(detectionText, snapshot.targetLanguage, snapshot.excludedLanguages, signal)) {
+        throwIfAborted(signal);
+        return null;
+    }
+    throwIfAborted(signal);
+    if ((isCurrent && !isCurrent()) || glossaryRequiresProtection()) return null;
+    // 不复用普通 session 缓存；后台使用独立协议键并在读取与写入时验证结果。
+    let translated: string;
+    try {
+        translated = await translateText(source, '', createSnapshotTranslateOptions(snapshot, {
+            signal, queueSession, validateInlineCodeTranslation: true, skipLanguageDetection: true,
+            sourceLanguageDetectionText: detectionText,
+        }));
+    } catch (error) {
+        throwIfAborted(signal);
+        // 仅已跨后台协议确认的内容校验错误可退回逐槽；网络、鉴权、配额、
+        // 不明确的错误以及取消必须原样传播，不能伪装成结构不兼容。
+        if (error instanceof TranslationRequestError && (
+            (error.kind === 'response' && ['UNTRANSLATED_RESPONSE', 'WRONG_LANGUAGE_RESPONSE',
+                'TRANSLATION_SLOT_RESPONSE_INVALID'].includes(error.code ?? '')) ||
+            ((error.kind === 'unknown' || error.kind === 'response') && error.code === 'GLOSSARY_PLACEHOLDER_INVALID')
+        )) return null;
+        throw error;
+    }
+    throwIfAborted(signal);
+    if (isCurrent && !isCurrent()) return null;
+    return decode(translated);
 }
 
 async function translateSlotsIndividually(
@@ -325,6 +446,7 @@ function createRequestCacheKey(
         useCache: snapshot.useCache,
         enableAIContext: snapshot.enableAIContext,
         enableAIMultiSegment: snapshot.enableAIMultiSegment,
+        aiMultiSegmentLimits: getAIMultiSegmentLimits(snapshot),
         enableNativeBatch: snapshot.enableNativeBatch !== false,
         context: document.title,
         pageUrl: document.location?.href ?? document.URL ?? '',
@@ -335,8 +457,13 @@ function createRequestCacheKey(
     });
 }
 
-function waitForCaller<T>(result: Promise<T>, signal?: AbortSignal): Promise<T> {
-    throwIfAborted(signal);
+/** 可取消地等待异步工作，调用者退出时及时解除监听且消费迟到的结果。 */
+export function waitForCaller<T>(result: Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) {
+        // 调用方可能在创建 result 的同步过程里取消；仍需消费已创建任务的迟到拒绝。
+        void result.catch(() => undefined);
+        return Promise.reject(createAbortError());
+    }
     if (!signal) return result;
     return new Promise<T>((resolve, reject) => {
         let settled = false;
@@ -441,7 +568,7 @@ function retireTranslationRequest(
     key: string,
     entry: FullPageTranslationRequestCacheEntry,
 ): void {
-    if (cache.get(key) === entry) cache.delete(key);
+    cache.delete(key);
     clearTranslationRequestCancelTimer(entry);
     clearTranslationRequestSettledExpiryTimer(entry);
     if (entry.waiters === 0) cancelTranslationRequest(entry);
@@ -538,6 +665,7 @@ function createTranslationBatchSnapshotKey(snapshot: FullPageTranslationConfigSn
         excludedLanguages: snapshot.excludedLanguages,
         useCache: snapshot.useCache,
         enableAIContext: snapshot.enableAIContext,
+        aiMultiSegmentLimits: getAIMultiSegmentLimits(snapshot),
         enableNativeBatch: snapshot.enableNativeBatch !== false,
     });
 }
@@ -581,9 +709,14 @@ function takeTranslationBatch(queue: TranslationBatchQueue): TranslationBatchTas
                 || next.owner.previousElementSibling !== previous.owner)) break;
         const nextCharacters = next.origins.reduce((total, origin) => total + (origin?.length ?? 0), 0);
         const nextTextSlots = next.origins.length;
+        const nativeBatch = supportsNativeTranslationBatch(next.snapshot.service);
+        const maxTextSlots = nativeBatch ? NATIVE_BATCH_MAX_TEXT_SLOTS
+            : normalizeAiMultiSegmentMaxSegments(next.snapshot.aiMultiSegmentMaxSegments);
+        const maxCharacters = nativeBatch ? NATIVE_BATCH_MAX_CHARACTERS
+            : normalizeAiMultiSegmentMaxCharacters(next.snapshot.aiMultiSegmentMaxCharacters);
         if (batch.length > 0 && (
-            textSlots + nextTextSlots > CROSS_CANDIDATE_MAX_TEXT_SLOTS
-            || characters + nextCharacters > CROSS_CANDIDATE_MAX_CHARACTERS
+            textSlots + nextTextSlots > maxTextSlots
+            || characters + nextCharacters > maxCharacters
         )) break;
         queue.pending.shift();
         batch.push(next);
@@ -596,21 +729,17 @@ function takeTranslationBatch(queue: TranslationBatchQueue): TranslationBatchTas
 
 async function fallbackTranslationBatchTasks(tasks: readonly TranslationBatchTask[]): Promise<void> {
     const activeTasks = tasks.filter((task) => !task.settled && !task.signal?.aborted);
-    // 多段协议已失败时直接逐槽降级，不再为每个候选重试一次相同结构化协议。
-    const outcomes = await Promise.allSettled(activeTasks.map((task) => translateSlotsIndividually(
-        task.origins,
-        task.snapshot,
-        task.signal,
-        task.queueSession,
-        task.context,
-        task.discourseContext,
-    )));
-    outcomes.forEach((outcome, index) => {
-        const task = activeTasks[index];
-        if (!task) return;
-        if (outcome.status === 'fulfilled') resolveTranslationBatchTask(task, outcome.value);
-        else rejectTranslationBatchTask(task, outcome.reason);
-    });
+    // 逐槽请求相互独立，保留每个候选自己的取消与结果交付时序。
+    await Promise.all(activeTasks.map(async task => {
+        try {
+            const translations = await translateSlotsIndividually(
+                task.origins, task.snapshot, task.signal, task.queueSession, task.context, task.discourseContext,
+            );
+            resolveTranslationBatchTask(task, translations);
+        } catch (error) {
+            rejectTranslationBatchTask(task, error);
+        }
+    }));
 }
 
 async function executeTranslationBatch(tasks: TranslationBatchTask[], queue: TranslationBatchQueue): Promise<void> {
@@ -697,8 +826,32 @@ async function executeTranslationBatch(tasks: TranslationBatchTask[], queue: Tra
     }
 }
 
-function flushTranslationBatchQueue(queue: TranslationBatchQueue): void {
+/** 异步预检可能乱序完成；同配置、章节与父节点内恢复阅读顺序后再检查直接相邻。 */
+function orderAITranslationBatchTasks(tasks: readonly TranslationBatchTask[]): TranslationBatchTask[] {
+    const scopes = new Map<string, Map<Node | undefined, TranslationBatchTask[]>>();
+    for (const task of tasks) {
+        if (task.settled || task.signal?.aborted) continue;
+        let parents = scopes.get(task.batchKey);
+        if (!parents) scopes.set(task.batchKey, parents = new Map());
+        const parent = task.owner?.parentNode ?? task.owner;
+        let siblings = parents.get(parent);
+        if (!siblings) parents.set(parent, siblings = []);
+        siblings.push(task);
+    }
+    return [...scopes.values()].flatMap(parents => [...parents.values()].flatMap(siblings => {
+        // 无 DOM owner 的显式调用保持提交顺序；同父元素的比较关系始终可传递。
+        if (siblings[0]!.owner) siblings.sort((left, right) => {
+            const position = left.owner!.compareDocumentPosition(right.owner!);
+            return position & 4 ? -1 : position & 2 ? 1 : 0;
+        });
+        return siblings;
+    }));
+}
+
+function flushTranslationBatchQueue(queue: TranslationBatchQueue, native: boolean): void {
     queue.flushScheduled = false;
+    queue.flushTimer = undefined;
+    if (!native) queue.pending = orderAITranslationBatchTasks(queue.pending);
     while (queue.pending.length > 0) {
         const batch = takeTranslationBatch(queue);
         if (batch.length === 0) continue;
@@ -716,10 +869,17 @@ function enqueueTranslationBatchTask(
     discourseContext?: string,
 ): Promise<string[]> {
     throwIfAborted(signal);
-    let queue = translationBatchQueues.get(session);
+    const native = supportsNativeTranslationBatch(snapshot.service);
+    const queues = native ? nativeTranslationBatchQueues : translationBatchQueues;
+    let queue = queues.get(session);
     if (!queue) {
         queue = {pending: [], flushScheduled: false, disabledAIKeys: new Set()};
-        translationBatchQueues.set(session, queue);
+        queues.set(session, queue);
+    }
+
+    // 同配置的协议已熔断时无需再凑批；逐槽请求仍使用本次快照与取消作用域。
+    if (!native && queue.disabledAIKeys.has(createAIBatchCircuitKey(snapshot))) {
+        return translateSlotsIndividually(origins, snapshot, signal, queueSession, document.title, discourseContext);
     }
 
     return new Promise<string[]>((resolve, reject) => {
@@ -741,6 +901,12 @@ function enqueueTranslationBatchTask(
         const onAbort = () => {
             rejectTranslationBatchTask(task, createAbortError());
             task.abortSharedBatch?.();
+            if (queue!.flushTimer !== undefined && queue!.pending.every(pending => pending.settled)) {
+                clearTimeout(queue!.flushTimer);
+                queue!.flushTimer = undefined;
+                queue!.flushScheduled = false;
+                queue!.pending = [];
+            }
         };
         if (signal) {
             signal.addEventListener('abort', onAbort, {once: true});
@@ -749,9 +915,15 @@ function enqueueTranslationBatchTask(
         queue!.pending.push(task);
         if (!queue!.flushScheduled) {
             queue!.flushScheduled = true;
-            const schedule = globalThis.queueMicrotask
-                ?? ((callback: VoidFunction) => void Promise.resolve().then(callback));
-            schedule(() => flushTranslationBatchQueue(queue!));
+            if (native) {
+                const schedule = globalThis.queueMicrotask
+                    ?? ((callback: VoidFunction) => void Promise.resolve().then(callback));
+                schedule(() => flushTranslationBatchQueue(queue!, true));
+            } else {
+                // 富文本校订查询、语言预检及全文 8ms 分片会跨微任务/浏览器任务完成。
+                // 从首个候选开始固定计时，后续入队不续期，孤立段落也能及时发出。
+                queue!.flushTimer = setTimeout(() => flushTranslationBatchQueue(queue!, false), AI_BATCH_COLLECTION_MS);
+            }
         }
     });
 }
@@ -793,7 +965,7 @@ async function translateTextSlotsDirectly(
         || (servicesType.isMachine(snapshot.service) && supportsTranslationBatch(snapshot.service));
     if (batchFriendly) {
         if (!fullPageSession?.active || fullPageSession.retainSettledResults === false) {
-            return translateArrayWithValidation(origins, snapshot, {useCache: false, signal, queueSession}, context, discourseContext);
+            return translateArrayWithValidation(origins, snapshot, {signal, queueSession}, context, discourseContext);
         }
 
         const resultPromises = new Array<Promise<string | undefined>>(origins.length);
@@ -914,10 +1086,21 @@ async function translateTextSlotsInternal(
         if (translations.length !== prose.length) return [];
         return parts.map(pieces => pieces.map(piece => typeof piece === 'number' ? translations[piece] : piece).join(''));
     }
-    const translatedIndexes = origins
+    let translatedIndexes = origins
         .map((origin, index) => shouldKeepOriginalSlot(origin ?? '', snapshot) ? -1 : index)
         .filter((index) => index >= 0);
     if (translatedIndexes.length === 0) return [...origins];
+    // 内部槽包必须绕过 client 检测，因此补充证据只检查组包前的原文。
+    // 空槽沿用既有协议，由供应商回传占位，不把它当作语言证据。
+    const supplementalIndexes = translatedIndexes.filter(index => getSupplementalLanguageCandidate(origins[index] ?? '') !== undefined);
+    if (supplementalIndexes.length > 0) {
+        const keepOriginal = await Promise.all(supplementalIndexes.map(index =>
+            shouldSkipTranslationWithEvidence(origins[index]!, snapshot.targetLanguage, snapshot.excludedLanguages, signal)));
+        throwIfAborted(signal);
+        const skipped = new Set(supplementalIndexes.filter((_index, position) => keepOriginal[position]));
+        translatedIndexes = translatedIndexes.filter(index => !skipped.has(index));
+        if (translatedIndexes.length === 0) return [...origins];
+    }
     // 全量路径复用入口自己的快照；只有跳过语言槽时才创建回填所需的子集。
     const requestOrigins = translatedIndexes.length === origins.length
         ? origins

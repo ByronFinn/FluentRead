@@ -7,6 +7,7 @@ import ts from 'typescript';
 import * as vue from 'vue';
 import {Config} from '@/src/core/config/model';
 import * as compositeTranslation from '@/src/core/config/compositeTranslation';
+import * as serviceAvailability from '@/src/core/config/serviceAvailability';
 import * as catalog from '@/src/core/config/catalog';
 import * as documentCore from '@/src/features/document-translation/core/document';
 import * as presentation from '@/src/features/document-translation/ui/presentation';
@@ -15,11 +16,21 @@ import * as richPreviewSync from '@/src/features/document-translation/ui/richPre
 import * as pdfOcr from '@/src/features/document-translation/services/pdfOcr';
 import * as documentTasks from '@/src/features/document-translation/ui/useDocumentTasks';
 import * as downloadCopy from '@/src/app/document-translation/downloadCopy';
+import * as glossaryCopy from '@/src/app/document-translation/glossaryCopy';
+import * as materialResume from '@/src/app/document-translation/materialResume';
+import {asArrayBufferBytes} from '@/src/shared/function/arrayBufferBytes';
 import {useConfigEditor} from '@/src/features/settings/model/useConfigEditor';
-import {createDocumentFileLoadGuard} from '@/src/features/document-translation/services/translation';
+import {createDocumentImportWorkflow} from '@/src/features/document-translation/services/importWorkflow';
+import {createDocumentRecognitionWorkflow} from '@/src/features/document-translation/services/recognitionWorkflow';
+import {createDocumentExportWorkflow} from '@/src/features/document-translation/services/exportWorkflow';
 import {generateDocumentArchive} from '@/src/features/document-translation/services/archive';
 import {createDocumentHistoryCommitter} from '@/src/features/document-translation/services/historyCommitter';
 import {TranslationRequestError, serializeTranslationError} from '@/src/services/translation/errors';
+import * as materialPorts from '@/src/features/vocabulary/material/public';
+import * as glossary from '@/src/core/glossary';
+
+const materialTransport = vi.hoisted(() => ({sendMessage: vi.fn()}));
+vi.mock('webextension-polyfill', () => ({default: {runtime: {sendMessage: materialTransport.sendMessage}, extension: {inIncognitoContext: false}}}));
 
 // 编译真实页面 setup，注入可控解析/翻译边界；可见控件与下载文件另由真实浏览器套件验证。
 const require = createRequire(import.meta.url);
@@ -44,24 +55,25 @@ const deferred = <T,>() => {
 
 beforeEach(async () => {
   unload = [];
+  materialTransport.sendMessage.mockReset().mockImplementation(async (message: any) => ({success: true, data: message.action === 'generation' ? 0 : message.action === 'capture' ? {id: 'document-material', source: message.input.source, locator: message.input.locator} : null}));
   vi.stubGlobal('window', {matchMedia: () => ({matches: false}), removeEventListener: () => {}, setTimeout,
     document: {createElement: () => ({click: vi.fn()})}});
   parseFile = vi.fn(async (input: File) => documentCore.parseDocument(input.name, await input.text()));
   translate = vi.fn(async (segments, options) => {
-    for (const segment of segments) if (!options.initialTranslations[segment.id]) {
+    for (const segment of segments) if ((!options.segmentIds || options.segmentIds.has(segment.id)) && !options.initialTranslations[segment.id]) {
       options.onSegment({id: segment.id, translation: `translated ${segment.source}`});
     }
   });
   download = vi.fn(async (document, translations, mode) => ({data: documentCore.renderDocument(document, translations, mode),
     fileName: documentCore.createDocumentDownloadName(document.fileName, mode), mimeType: 'text/plain'}));
   persist = vi.fn().mockResolvedValue(undefined);
-  const api = {...catalog, ...compositeTranslation, ...documentCore, ...presentation, ...preview, ...richPreviewSync, ...pdfOcr, ...documentTasks, useConfigEditor, createPdfPageRecognizer: () => async () => [], hasDistinctTranslation, Config, TranslationRequestError, serializeTranslationError, createDocumentFileLoadGuard,
+  const api = {...materialPorts, ...catalog, ...compositeTranslation, ...serviceAvailability, ...documentCore, ...presentation, ...preview, ...richPreviewSync, ...pdfOcr, ...documentTasks, ...glossary, useConfigEditor, createPdfPageRecognizer: () => async () => [], hasDistinctTranslation, Config, TranslationRequestError, serializeTranslationError, createDocumentImportWorkflow, createDocumentRecognitionWorkflow, createDocumentExportWorkflow,
     documentRetryBackoff: {maxWaitMs: 0}, createDocumentHistoryCommitter,
-    createDocumentHistory: () => ({list: async () => [], load: async () => null, save: async () => false, remove: async () => {}, clear: async () => {}}), documentHistoryId: async () => '',
-    parseDocumentFile: parseFile, translateDocumentSegments: translate, createDocumentDownload: download, generateDocumentArchive,
+    createDocumentHistory: () => ({list: async () => [], listChecked: async () => ({status: 'ok', entries: []}), load: async () => null, loadChecked: async () => ({status: 'ok', record: null}), save: async () => false, saveChecked: async () => ({status: 'unavailable'}), remove: async () => false, removeChecked: async () => ({status: 'unavailable'}), clear: async () => false}), documentHistoryId: async () => '',
+    parseDocumentFile: parseFile, translateDocumentSegments: translate, createDocumentDownload: download, generateDocumentArchive, asArrayBufferBytes,
     buildGlossaryRevision: () => '', runtimeConfig: new Config(), configReady: Promise.resolve(),
     subscribeConfig: () => () => {}, requestConfigPatch: persist,
-    getMissingCredentialMessage: () => '', getTranslationServiceUnavailableMessage: () => '',
+    getMissingCredentialMessage: () => '', getTranslationServiceUnavailableMessage: () => '', supportsTranslationGlossary: () => false,
     getCustomOpenAIProvider: () => undefined, filterAvailableTranslationServices: (items: unknown) => items,
     withCustomOpenAIServiceOptions: (items: unknown) => items,
     useUiI18n: () => ({language: vue.ref('zh-CN'), t: (key: string) => key, translateLegacy: (text: string) => text}),
@@ -69,9 +81,11 @@ beforeEach(async () => {
   const exports: Record<string, any> = {};
   new Function('require', 'exports', compiled)((id: string) => {
     if (id === 'vue') return {...vue, onMounted: () => {}, onUnmounted: (fn: () => void) => unload.push(fn)};
-    if (id === '@/src/app/document-translation' || id === '@/src/core/translation/result') return api;
+    if (id === './index' || id === '@/src/app/document-translation' || id === '@/src/core/translation/result') return api;
     if (id === './downloadCopy') return downloadCopy;
-    if (id === 'webextension-polyfill') return {runtime: {sendMessage: vi.fn()}};
+    if (id === './glossaryCopy') return glossaryCopy;
+    if (id === './materialResume') return materialResume;
+    if (id === 'webextension-polyfill') return {runtime: {sendMessage: materialTransport.sendMessage}, extension: {inIncognitoContext: false}};
     if (id.startsWith('element-plus') || id.endsWith('.css') || id.endsWith('.vue')) return {};
     return require(id);
   }, exports);
@@ -87,6 +101,42 @@ afterEach(() => {
 });
 
 describe('document batch page lifecycle', () => {
+  it('updates spreadsheet progress and exports against the current column selection while keeping other edits', async () => {
+    await state.loadFiles([file('labels.csv', 'Name,Description\nPrivate label,Visible description')]);
+    state.updateDelimitedColumns([1]);
+    expect(state.activeSegments.map((segment: {id: number}) => segment.id)).toEqual([1, 3]);
+    await state.startTranslation();
+    expect(translate.mock.calls[0][1].segmentIds).toEqual(new Set([1, 3]));
+    state.editSegment(3, '人工修订');
+    state.updateDelimitedColumns([0]);
+    expect(state.progress).toBe(0);
+    await state.startTranslation();
+    state.editSegment(0, '另一列的修订');
+    state.updateDelimitedColumns([1]);
+    expect(state.progress).toBe(100);
+    expect(state.hasTranslation).toBe(true);
+    await state.downloadDocument();
+    expect(download.mock.calls[0][1]).toEqual(['', 'translated Description', '', '人工修订']);
+    await state.startTranslation(true);
+    expect(translate.mock.calls[2][1].initialTranslations[0]).toBe('另一列的修订');
+    expect(state.translatedSegments[0]).toBe('另一列的修订');
+  });
+
+  it('saves a material only after a document has a persisted file identity through the public material port', async () => {
+    await state.loadFiles([file('material.txt', 'An original paragraph stays with its document.')]);
+    await state.saveDocumentMaterial();
+    expect(materialTransport.sendMessage).not.toHaveBeenCalled();
+    state.documentQueue[0].historyId = 'a'.repeat(32);
+    await state.saveDocumentMaterial();
+    expect(materialTransport.sendMessage).toHaveBeenCalledWith({type: 'fluentReadMaterials', action: 'generation'});
+    expect(materialTransport.sendMessage).toHaveBeenLastCalledWith(expect.objectContaining({type: 'fluentReadMaterials', action: 'capture', input: expect.objectContaining({
+      source: {kind: 'document', fingerprint: 'a'.repeat(32), title: 'material.txt'},
+      locator: expect.objectContaining({kind: 'document', fingerprint: 'a'.repeat(32), page: 1, quote: 'An original paragraph stays with its document.'}), generation: 0,
+    })}));
+    expect(state.documentMaterialId).toBe('document-material');
+    expect(translate).not.toHaveBeenCalled();
+  });
+
   it('reports a fatal failure immediately while still accepting successful results already requested', async () => {
     await state.loadFiles([file('partial.txt', 'First.\n\nSecond.')]);
     const pending = deferred<void>();
@@ -317,18 +367,15 @@ describe('document batch page lifecycle', () => {
     expect(state.parsedDocument).toBe(null);
   });
 
-  it('opens subtitle export in the reading mode and downloads the reviewed translation', async () => {
+  it('downloads the explicitly chosen subtitle version and preserves reading state', async () => {
     await state.loadFiles([file('episode.srt', '1\n00:00:01,000 --> 00:00:03,000\nHello there.\n')]);
     state.editSegment(0, '校订后的字幕');
     state.previewMode = 'translated';
     // 本套件只运行 setup；模拟真实 dialog 的 @close="downloadOpen = false" 事件。
     state.downloadDialog = {showModal: vi.fn(), close: vi.fn(() => {state.downloadOpen = false;})};
     state.openDownload();
-    expect(state.outputMode).toBe('translated');
-    expect(state.downloadFileName).toBe('episode.translated.srt');
-    expect(state.downloadPreview).toContain('校订后的字幕');
-    expect(state.downloadPreview).not.toContain('Hello there.');
-    await state.downloadDocument();
+    await state.requestDownload('translated');
+    expect(state.previewMode).toBe('translated');
     expect(download).toHaveBeenCalledWith(state.parsedDocument, ['校订后的字幕'], 'translated', {
       pdfPresentation: 'layout', signal: expect.any(AbortSignal), onPdfProgress: expect.any(Function), onArchiveProgress: expect.any(Function),
     });
@@ -338,7 +385,7 @@ describe('document batch page lifecycle', () => {
     expect(state.downloadOpen).toBe(false);
     state.previewMode = 'bilingual';
     state.openDownload();
-    expect(state.outputMode).toBe('bilingual');
+    expect(state.outputMode).toBe('translated');
     state.downloadDialog.close();
     state.previewMode = 'source';
     state.outputMode = 'translated';
@@ -402,7 +449,7 @@ describe('document batch page lifecycle', () => {
     expect(state.sidebarOpen).toBe(true); expect(state.sidebarTab).toBe('files');
     state.selectDocument(state.documentQueue[0]);
     expect(state.translatedSegments).toEqual(['第一份校订']);
-    expect(state.downloadPreview).toBe('');
+    expect(state.downloadOpen).toBe(false);
   });
 
   it('shows a failed settings save and prevents a late older failure replacing a newer success', async () => {

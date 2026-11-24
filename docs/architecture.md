@@ -2,7 +2,7 @@
 
 > 本文描述当前架构、依赖规则和后续演进约束。迁移清单用于区分本轮已经验证的结果与仍需继续偿还的历史复杂度。
 
-FluentRead 继续使用 WXT 0.20、Vue 3、TypeScript 和 pnpm。架构目标不是简单移动文件，而是建立可由编译、单测、功能测试和真实浏览器回归持续验证的模块边界。
+FluentRead 继续使用 WXT 0.21、Vue 3、TypeScript 和 pnpm。架构目标不是简单移动文件，而是建立可由编译、单测、功能测试和真实浏览器回归持续验证的模块边界。
 
 ## 设计目标
 
@@ -194,6 +194,7 @@ WXT 会把 `entrypoints/` 下零层或一层的入口作为构建输入，并在
 - Harness 模型调用（阅读/写作/评论）经宿主开关分流：默认 `harnessCallHost='offscreen'` 时后台只构建代理 LanguageModel，`doGenerate`/`doStream` 经协议（`modelCallProtocol`）、执行器（`modelExecutor`）、宿主（`modelExecutorHost`）三层转发到常驻 DOM 运行时执行，执行器内建心跳防中断；`harnessCallHost='background'` 回滚为后台直连，无原生 Offscreen 能力的环境（Firefox MV2、node 测试、未知浏览器）也强制直连兜底。直连工厂 `createHarnessLanguageModelDirect` 同时是 Offscreen 执行器的模型构建器——Offscreen 内不得注入带切换的入口，否则会再次代理回后台形成递归。
 - 代理不信任回传的不透明载荷：错误经 `restoreModelCallError` 按 name/message/url/statusCode/responseBody 重建，结果契约中的 Date 字段（`doGenerate` 的 `response.timestamp` 与流式 `'response-metadata'` 分片的 `timestamp`）经 `restoreModelCallTimestamps` 落地还原——通道任一跳若把 Date JSON 化成字符串，AI SDK 遥测属性构造（急切求值，未配置遥测也执行）会以裸 TypeError 崩溃。归一层 `normalizeHarnessModelError` 另把契约类内部 TypeError（`is not a function` 结尾）映射为可执行的中文提示。
 - content 生命周期使用 WXT `ContentScriptContext` 与 `AbortSignal`，扩展失效后不得继续回写页面。上下文失效核查在可见页每秒运行，后台页降为每 5 秒，往返缓存暂停时停止，恢复前先核查；受支持 iframe 的状态通知合并为单个在途读取，并以失效代次拒绝迟到响应。默认关闭的输入翻译和段落复制不挂载监听器，由独立子 signal 随配置启停；图片悬浮的连续 pointermove 每帧仅检测最新事件，关闭和卸载时取消待处理帧。
+- 全文翻译的根公共出口只提供控制与状态，进度面板由 `full-page-translation/ui/public.ts` 单独公开，防止不显示面板的 frame 收集其 Vue 样式。网易邮件的 app 装配器静态导入划词 UI 并注入共享邮件运行时；QQ 与其他受限 frame 只使用控制能力及原有 inline 网页样式。WXT 入口仍只调用 app 装配器，不直接依赖 feature UI。
 
 参考：[WXT Entrypoints](https://wxt.dev/guide/essentials/entrypoints)、[Content Scripts](https://wxt.dev/guide/essentials/content-scripts)、[Project Structure](https://wxt.dev/guide/essentials/project-structure)。
 
@@ -323,9 +324,10 @@ feature
 - **手势有效性**：按键集合必须与当前配置精确匹配，部分释放期间不再响应移动。额外按键、选区接管、失焦或卸载取消当前悬浮手势；被取消的组合不能在下一次鼠标移动时自行恢复。
 - **请求复用**：相同请求按完整调用身份去重。共享结果的等待者仍保留自己的取消和截止时间；页面路由提交代次与内容缓存代次分开，过期结果不能回写新页面。
 - **队列位置读取**：一次同步只读的优先级收集内，共用锚点复用成功且有限的位置读数；断开连接和无布局 API 仍先检查，失败或非有限值不缓存。下一次计划重新读取，位置表不进入计划游标或队列状态；候选身份、等待序号、可见优先与后台公平配额保持原语义。
-- **字幕片段读取**：原生片段优先于 fallback，每次用候选身份集合与父链排除嵌套内层，保留外层完整文本及 DOM 顺序；容器自身和候选集外的祖先不参与排除。没有跨调用节点缓存，滚动窗口的裁剪和位置读取保持原规则，下一次读取立即采用新的 DOM 关系。
+- **字幕片段读取**：原生片段优先于 fallback，每次用候选身份集合与父链排除嵌套内层，保留外层完整文本及 DOM 顺序；容器自身和候选集外的祖先不参与排除。没有跨调用节点缓存，滚动窗口的裁剪和位置读取保持原规则，下一次读取立即采用新的 DOM 关系。片段边界不等于字幕行或台词边界，不以文本前后两半相同为由截断；强调、歌词和整句重复均保留。实际被滚动窗口裁掉的旧行由几何过滤排除；渐进字幕显示在匹配当前时间轴时使用对应 cue 的完整文本，没有时间轴依据时保留全部可见原文。
+- **字幕响应交接**：YouTube MAIN-world 桥先于等待配置与 DOM 就绪的字幕 runtime 启动，使用现有回放缓存暂存早到响应；消费方完成监听和页面状态初始化后请求回放，再按媒体时钟选择当前 cue。缓存最多 16 个资源、合计 200 万字符，只回放捕获时地址与当前地址一致的响应，停用桥时清空；仍沿用 URL 与视频身份校验。回放不重发原生网络请求，也不按同文截断字幕。
 - **提交校验**：异步返回后同时检查当前 owner、generation、候选资格及每个文本槽的原文。Text 对象相同或整段拼接原文相同都不足以证明结果有效。等价 Text 重建可以重绑，但必须同步更新恢复原文的快照，并使用当前空白前后缀。
-- **翻译单元**：正文双语的多槽候选若只被链接、加粗、斜体等内联包装与 `<br>` 切开（上下标仅限 `[1]` 这类脚注标记），作为一次整块请求送出：整段原文按渲染骨架重建，内联格式无缝拼接、源码空白折叠，`<br>` 以及 pre 系列宿主里的文本换行保留为换行。整段译文落在首个槽位、其余槽位留空，渲染为纯译文（换行还原为 `<br>`）而不是塞进首个内联元素；整段请求以整段原文为缓存身份，行内文本变化会重译整段。含行内代码、notranslate 术语、公式、图片、删除线或块级结构的段落无法用纯文本无损表达，继续逐槽请求并保留原骨架。仅译文、悬浮与控件路径不受影响。
+- **翻译单元**：正文双语的多槽候选若只被链接、加粗、斜体等内联包装与 `<br>` 切开（上下标仅限 `[1]` 这类脚注标记），作为一次整块请求送出：整段原文按渲染骨架重建，内联格式无缝拼接、源码空白折叠，`<br>` 以及 pre 系列宿主里的文本换行保留为换行。整段译文落在首个槽位、其余槽位留空，渲染为纯译文（换行还原为 `<br>`）而不是塞进首个内联元素；整段请求以整段原文为缓存身份，行内文本变化会重译整段。严格交替的普通正文和简单行内代码可先用不含代码内容的标记试探整句翻译；只有标记完整且顺序不变、来源与保护状态仍一致时才按原骨架回填，无法确认时继续逐槽请求。启用缓存时，这类请求使用独立身份，并在缓存写入和读取时校验标记与译文。术语、公式、图片、复杂代码及其他无法无损表达的结构继续保留原骨架逐槽翻译。首次仅译文和控件仍使用原有槽路径。
 - **DOM 所有权**：MutationObserver 根据精确目标和最后写入值识别扩展自己的事务。同值属性写入是无操作；后代的 class/style 改动不能拿祖先快照抵消。真正的原文、保护区或候选资格变化仍会失效并重新发现。
 - **其他翻译器共存**：页面已有的译文节点及其直属原文单元作为外部翻译边界；正文与全部节点范围都避免叠加译文。该边界进入来源与提交校验，后出现的外部译文会使 FluentRead 释放自身译文；移除外部译文后，活动全文会话可重新发现原文。快照省略已被接管的单元，避免净化 HTML 时去掉对方标记又复制其译文；恢复只清理 FluentRead 的工件，普通 `notranslate` 术语、代码和未翻译的相邻段落不受影响。
 - **原文保全**：仅译文的轻 DOM 槽保存宿主原文。宿主克隆槽后会丢失闭合 ShadowRoot，清理必须先解包其中的原文，再删除失去所有权的容器，且不能拆掉其他活动翻译拥有的槽。
@@ -337,13 +339,36 @@ feature
 
 配置分为三层：
 
-- `core/config`：类型、默认值、纯 normalize/validate/migrate。
+- `core/config`：类型、默认值、纯 normalize/validate/migrate 与字段补丁规则。
 - `services/config`：latest-write-wins、历史记录、保存队列、凭据协调。
 - `platform/storage`：后台专属加密 IndexedDB、旧 WXT storage/会话凭据迁移与跨上下文只读代理。
 
-设置页、Popup 与文档页通过 `services/config/editor.ts` 管理独立草稿、权威快照和在途字段所有权，Vue 观察由 `features/settings/model/useConfigEditor.ts` 适配。页面只决定提交字段、`sync/post` 时机和保存反馈，不重复实现水合 guard、dirty 基线或迟到反馈代次。提交解除字段所有权后，必须协调请求期间收到的新权威快照，并保留后继编辑；没有新确认时不能用请求前的旧快照回滚草稿。模型删除使用 `core/config/modelEditing.ts` 的同一条领域命令，扩展与精简 Userscript 均清理选择、思考、凭据要求及请求限制。
+### 配置实例与编辑会话
 
-文档队列中的每个任务是译文、人工确认、设置指纹和修订的唯一状态来源，`useDocumentTasks` 仅切换当前任务引用，不在页面与队列之间复制这些字段。阅读预览仍可维护独立的已结算快照，导入错误与当前文档的翻译错误各自保存。历史保存由 `historyCommitter` 按文件串行协调；只有数据库事务实际提交才推进 `savedRevision`，拒绝或失败后相同修订仍可重试。存储操作超时会撤销后续写入资格并中止活动写事务，旧操作不能迟到覆盖新校订。最后一段返回后，任务及完成计数仍等待整个翻译调用结算。
+每个运行上下文由 `services/config/application.ts` 组装一个配置应用。工厂构造不读写存储；`start()` 才注册权威端观察并开始水合，重复启动复用同一就绪结果。默认 `store.ts` 绑定平台端口后立即启动，保留已有消费者的“导入即启动”语义；需要控制生命周期的测试和编排使用工厂显式启动。
+
+| 模块 | 状态与职责 |
+| --- | --- |
+| `services/config/authority.ts` | 唯一公开 `config`、revision、已提交影子及持久化队列；负责水合、凭据、原子提交和存储观察，通过受限端口与客户端协作。 |
+| `services/config/mutationClient.ts` | 实例私有的提交队列、pending 字段、ACK 代次、失败回读和关闭交接；读取同一权威视图，不创建另一份公开配置。 |
+| `services/config/historyRuntime.ts` | 独立的历史快照、游标、去抖及写队列；首次等待或订阅时水合，恢复通过 `ports.commit` 回到权威提交路径。 |
+| `services/config/application.ts`、`store.ts` | 前者通过显式端口组装实例，后者只绑定默认运行环境和稳定服务出口。 |
+| `services/config/protocol.ts` | 配置消息、请求和保存选项的纯契约。 |
+| `core/config/mutations.ts` | 字段筛选、旧 token 协调、凭据目的地和 CAS 的共享纯策略；规范字段集合由 authority 从初始 `Config` 固定后传入，不再额外构造默认配置或读取全局状态。 |
+
+设置页、Popup 与文档页通过 `services/config/editor.ts` 管理独立草稿、权威快照和在途字段所有权，Vue 观察由 `features/settings/model/useConfigEditor.ts` 适配。精简 Userscript 直接使用同一纯 editor，保留手动保存，提交期间仍可编辑或恢复默认；保存成功只应用已接受的运行时配置，后继草稿继续等待下一次提交。页面只决定提交字段、`sync/post` 时机和保存反馈，不重复实现水合 guard、dirty 基线或迟到反馈代次。提交解除字段所有权后，必须协调请求期间收到的新权威快照，并保留后继编辑；没有新确认时不能用请求前的旧快照回滚草稿。模型删除使用 `core/config/modelEditing.ts` 的同一条领域命令，扩展与精简 Userscript 均清理选择、思考、凭据要求及请求限制。
+
+### 文档工作流
+
+文档队列中的每个任务是译文、人工确认、设置指纹和修订的唯一状态来源，`useDocumentTasks` 仅切换当前任务引用，不在页面与队列之间复制这些字段。`DocumentApp.vue` 连接阅读器、翻译会话与展示交互，异步文件操作由 feature 的三个独立控制器管理：
+
+- `services/importWorkflow.ts`：统一文件、在线 PDF 与历史重新打开的导入代次和取消信号；校验格式/大小，解析后恢复 OCR 与旧校订，再交接完整任务。失败导入独立入队，不清除已有译文或改写当前任务的翻译错误。
+- `services/recognitionWorkflow.ts`：持有 OCR 子信号并清理父翻译会话监听，使用调用时的原文和语言；进度与结果必须仍属于捕获的翻译会话，才可交回页面。
+- `services/exportWorkflow.ts`：持有单文件/ZIP 导出的代次、取消和下载资源；捕获任务、文档、译文与修订，编码完成及下载交接时复核资格，只确认实际导出的修订，并清理对象 URL 与提示计时器。
+
+控制器通过任务读取、提交、进度展示和格式适配端口协作，不维护另一份队列、进度或 revision。切换、重置、取消和卸载显式撤销操作资格，迟到读取不能新增旧任务，迟到 OCR 不能改新文档，迟到导出不能下载旧内容。格式解析/编码仍在既有服务中，PDF 绘制与 OCR 运行时适配仍由 app `runtime.ts` 注入。
+
+阅读预览可维护独立的已结算快照，导入错误与翻译错误分别保存。文档历史仍只由 `historyCommitter` 按文件串行提交；只有数据库事务实际提交才推进 `savedRevision`，拒绝或失败后相同修订仍可重试。存储操作超时会撤销后续写入资格并中止活动写事务，旧操作不能迟到覆盖新校订。最后一段返回后，任务及完成计数仍等待整个翻译调用结算。
 
 全文会话的初始化与资源释放配对位于 `fullPageSession.ts`，每次会话有独立的候选索引、取消域、结果缓存与计时器，销毁首先撤销提交资格，且重复销毁不会重复结束进度。视频 AI 字幕的缓存/完整生成所有权由 `video-ai/subtitleSession.ts` 持有；直播与完整采集保留各自 PCM 生命周期，并由 `video-ai/requestSession.ts` 映射到同一 stream 内单调递增的后台请求代次，旧取消不能命中新请求。
 
@@ -371,6 +396,16 @@ userscript 没有跨站点共享的原子后台，因此计数采用每个顶层
 同时安全自动压缩旧副本，因此不得用有竞争的读改写“优化”掉这些键。
 
 消息必须使用版本化、可解析的 discriminated union。禁止在多个 feature 中散落同名字符串和 `any` payload。隐私或本机 bridge 协议还必须定义大小上限、TTL、URL 清洗、错误码和 stale-version 防护。
+
+### 本地推理 IPC 与 Worker
+
+本地视频转写、翻译和 TTS 复用现有消息名称与 Offscreen client。`core/messaging/inference.ts`、`video.ts`、`offscreen.ts` 定义序列化 DTO、按消息 type 关联的请求/响应及解析器；`validation.ts` 的字段表在类型层覆盖 DTO 的全部键，运行时检查必需/可选字段、枚举和有限数值。视频 content 只读取视频公共契约，避免仅为发消息加载翻译和 TTS 实现。
+
+`platform/offscreen/requests.ts` 在发送前和接收实际 `unknown` 回包后校验关联契约，也校验取消消息。文档准备、截止时间、取消、重建及 absent 时不创建文档的语义仍由同一个 `OffscreenClient` 持有。视频 `content/backgroundClient.ts` 只适配注入的 runtime 发送端口和回包解析；后台 handler 与 offscreen router 消费相同 DTO，并继续使用已有请求所有者和代次，不另建消息系统或 pending 缓存。
+
+本地翻译、TTS、Whisper 的 Worker 契约分别位于 `local-translation/workerProtocol.ts`、`local-tts/protocol.ts`、`video-subtitle/workerProtocol.ts`。拥有者和执行端共用请求、回复解析器，实际事件载荷从 `unknown` 开始，先校验请求编号并定位在途任务，再解析响应；非法或已结束的编号不关联请求，损坏的已知请求回包走拒绝和清理路径。契约模块不创建 Worker、不加载模型或拥有取消状态。可选诊断与语音时间标记沿用已有规范化规则，业务结果与生命周期继续由各自运行时处理。
+
+普通 Tesseract OCR 在自身串行队列内复用同一 Offscreen 推理预算，避免独立 Worker 绕过全局并发上限。可选图片文字分割只把本帧有界 RGBA 快照交给现有漫画 Worker；低通缩放和 12 MiB 张量构造都在该 Worker 中完成，离屏主线程不扫描浮点张量。原像素不转移所有权，继续用于原图保护、绘字与单次 CPU 重试；消息额外像素快照最多 64 MiB，返回的量化分割结果仍转移所有权。
 
 ## CSS 与 Vue
 

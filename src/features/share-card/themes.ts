@@ -9,14 +9,14 @@ import type {ShareCardTheme} from '@/src/core/config/shareCard';
 const SANS = '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
 const SERIF = 'Georgia, "Songti SC", "Noto Serif CJK SC", "SimSun", serif';
 export const CARD_THEMES = {
-    coral: {background: '#eb4635', ink: '#fff8ea', secondary: '#573a30', accent: '#c53325', muted: '#8b6854', font: `500 {size}px ${SERIF}`, inset: 48, uiAccent: '#c53325'},
-    sky: {background: '#eaf5ff', ink: '#153d65', secondary: '#315e80', accent: '#306fa3', muted: '#47728f', font: `600 {size}px ${SANS}`, inset: 48, uiAccent: '#22689e'},
-    prism: {background: '#12131a', ink: '#b6b7ff', secondary: '#e1e2e9', accent: '#bcb4e7', muted: '#a8aabf', font: `600 {size}px ${SANS}`, inset: 48, uiAccent: '#5653b8'},
-    pearl: {background: '#eaeaf0', ink: '#292b34', secondary: '#5e6270', accent: '#777d96', muted: '#7b7e8c', font: `600 {size}px ${SANS}`, inset: 48, uiAccent: '#4a4e5c'},
-    moss: {background: '#edf3e6', ink: '#2d4935', secondary: '#4b6351', accent: '#54734a', muted: '#62735d', font: `500 {size}px ${SERIF}`, inset: 56, uiAccent: '#54734a'},
-    linen: {background: '#faf4e8', ink: '#493b30', secondary: '#6b5948', accent: '#9a6740', muted: '#857361', font: `500 {size}px ${SERIF}`, inset: 56, uiAccent: '#9a6740'},
-    sunset: {background: '#ffe5d6', ink: '#63372e', secondary: '#774e43', accent: '#a35242', muted: '#8d6254', font: `600 {size}px ${SANS}`, inset: 48, uiAccent: '#a35242'},
-    blueprint: {background: '#15324d', ink: '#eef7ff', secondary: '#c7dceb', accent: '#b5d9ed', muted: '#a5c1d4', font: `500 {size}px ${SANS}`, inset: 48, uiAccent: '#306fa3'},
+    coral: {background: '#eb4635', ink: '#fff8ea', secondary: '#573a30', accent: '#c53325', muted: '#8b6854', font: `500 {size}px ${SERIF}`, inset: 48},
+    sky: {background: '#eaf5ff', ink: '#153d65', secondary: '#315e80', accent: '#306fa3', muted: '#47728f', font: `600 {size}px ${SANS}`, inset: 48},
+    prism: {background: '#12131a', ink: '#b6b7ff', secondary: '#e1e2e9', accent: '#bcb4e7', muted: '#a8aabf', font: `600 {size}px ${SANS}`, inset: 48},
+    pearl: {background: '#eaeaf0', ink: '#292b34', secondary: '#5e6270', accent: '#777d96', muted: '#7b7e8c', font: `600 {size}px ${SANS}`, inset: 48},
+    moss: {background: '#edf3e6', ink: '#2d4935', secondary: '#4b6351', accent: '#54734a', muted: '#62735d', font: `500 {size}px ${SERIF}`, inset: 56},
+    linen: {background: '#faf4e8', ink: '#493b30', secondary: '#6b5948', accent: '#9a6740', muted: '#857361', font: `500 {size}px ${SERIF}`, inset: 56},
+    sunset: {background: '#ffe5d6', ink: '#63372e', secondary: '#774e43', accent: '#a35242', muted: '#8d6254', font: `600 {size}px ${SANS}`, inset: 48},
+    blueprint: {background: '#15324d', ink: '#eef7ff', secondary: '#c7dceb', accent: '#b5d9ed', muted: '#a5c1d4', font: `500 {size}px ${SANS}`, inset: 48},
 } as const satisfies Record<ShareCardTheme, unknown>;
 export const CARD_SECONDARY_FONT = SANS;
 
@@ -78,7 +78,8 @@ export function paintCardBackground(context: CanvasRenderingContext2D, theme: Sh
         context.fillStyle = gradient; context.fillRect(0, 0, width, height);
         glow(context, width / 2, -100, 240, '#ffffff', width, height);
         context.fillStyle = '#ffffff26'; context.beginPath(); context.arc(width + 12, height + 100, 170, 0, Math.PI * 2); context.fill();
-    } else if (theme === 'blueprint') {
+    } else {
+        // CARD_THEMES 的穷尽类型已在入口取色；剩余主题必为 blueprint。
         context.strokeStyle = '#aacde012'; context.lineWidth = .5;
         for (let x = 16; x < width; x += 32) { context.beginPath(); context.moveTo(x, 0); context.lineTo(x, height); context.stroke(); }
         for (let y = 16; y < height; y += 32) { context.beginPath(); context.moveTo(0, y); context.lineTo(width, y); context.stroke(); }

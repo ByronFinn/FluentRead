@@ -12,6 +12,10 @@ afterEach(() => {
 });
 
 describe('getPageTranslationContext', () => {
+    it('without a document returns no page context', async () => {
+        Object.defineProperty(globalThis, 'document', {value: undefined, configurable: true});
+        expect(await getPageTranslationContext()).toBe('');
+    });
     it('提取标题、描述和正文，并移除插件生成内容', async () => {
         const removed: string[] = [];
         const clone = {
@@ -29,7 +33,7 @@ describe('getPageTranslationContext', () => {
         Object.defineProperty(globalThis, 'document', {
             value: {
                 title: 'An article',
-                body: {cloneNode: () => clone},
+                body: {closest: () => null, cloneNode: () => clone},
                 querySelector: (selector: string) => selector === 'meta[name="description"]'
                     ? {getAttribute: () => 'A short description'}
                     : null,
@@ -60,7 +64,7 @@ describe('getPageTranslationContext', () => {
         Object.defineProperty(globalThis, 'document', {
             value: {
                 title: '',
-                body: {cloneNode: () => clone},
+                body: {closest: () => null, cloneNode: () => clone},
                 querySelector: () => null,
             },
             configurable: true,

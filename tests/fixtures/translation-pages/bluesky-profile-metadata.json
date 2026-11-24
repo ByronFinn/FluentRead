@@ -1,0 +1,88 @@
+{
+  "id": "bluesky-profile-metadata",
+  "url": "https://bsky.app/profile/example.test",
+  "html": "<main>\n<div id=\"profile-identity\"><div><div data-testid=\"profileHeaderDisplayName\" id=\"profile-name\">Fixture Social Account</div></div><div><div dir=\"auto\" id=\"profile-header-handle\">@fixture.account</div></div></div>\n<div id=\"profile-details\"><div id=\"profile-counts\"><a data-testid=\"profileHeaderFollowersButton\" href=\"/profile/fixture.account/followers\">987 followers</a><a data-testid=\"profileHeaderFollowsButton\" href=\"/profile/fixture.account/follows\">23 following</a><div dir=\"auto\" id=\"profile-post-count\">321 posts</div></div><div><div data-testid=\"profileHeaderDescription\" id=\"profile-bio\">This public profile describes an independent reading project and its latest updates.</div></div></div>\n<div data-testid=\"feedItem-by-fixture.example\" role=\"link\" tabindex=\"0\" id=\"card\">\n  <div>\n    <a id=\"author\" href=\"/profile/fixture.example\" aria-label=\"View profile\" dir=\"auto\">A Fixture Author With A Long Name</a>\n    <a id=\"handle\" href=\"/profile/fixture.example\" aria-label=\"View profile\" dir=\"auto\">@fixture.example</a>\n    <a id=\"post-time\" href=\"/profile/fixture.example/post/example\" data-tooltip=\"Earlier this week\" aria-label=\"Earlier this week\">Earlier this week</a>\n  </div>\n  <div data-testid=\"contentHider-post\"><div>\n    <div data-testid=\"postText\" id=\"body1\">This first post explains <span id=\"dirty\">an important example of ordinary readable prose</span> and keeps <code id=\"code\">ORIGINAL_CODE_TOKEN</code> intact.</div>\n    <div data-testid=\"postText\" id=\"body2\">This second post thanks <a id=\"mention\" aria-label=\"View profile\" dir=\"auto\" href=\"/profile/reader.example\">@reader.example</a> for sharing <a id=\"reading-link\" href=\"https://example.test/reading\">an ordinary reading reference</a> with the community.</div>\n  </div></div>\n  <div id=\"count-actions\">\n    <div><button data-testid=\"replyBtn\" id=\"reply\"><span>348</span></button></div>\n    <div><button><span data-testid=\"repostCount\" id=\"reposts\">2万</span></button></div>\n    <div><button data-testid=\"likeBtn\"><div><span data-testid=\"likeCount\" id=\"likes\">8万</span></div></button></div>\n  </div>\n</div>\n<section><div id=\"outside-prose\">This independent explanation remains readable outside the feed metadata.</div>\n<a id=\"outside-profile-reference\" href=\"/profile/other.example\" aria-label=\"View profile\" dir=\"auto\">An ordinary profile reference outside a feed item</a>\n<div id=\"outside-count-lookalike\"><div><button data-testid=\"replyBtn\">A general reply operation</button></div><div><span data-testid=\"likeCount\">A prose label outside the observed feed card</span></div></div></section>\n<input id=\"search\" type=\"search\" value=\"A private search value\">\n<div contenteditable=\"true\" id=\"editor\">A private editable draft remains original</div>\n</main>",
+  "required": [
+    "#profile-bio",
+    "#body1",
+    "#body2",
+    "#outside-prose",
+    "#outside-profile-reference"
+  ],
+  "forbidden": [
+    "#profile-name",
+    "#author",
+    "#handle",
+    "#post-time",
+    "#count-actions",
+    "#reply",
+    "#reposts",
+    "#likes",
+    "#code",
+    "#editor",
+    "#search",
+    "#profile-header-handle",
+    "#profile-counts",
+    "#profile-post-count"
+  ],
+  "sourceAssertions": {
+    "required": [
+      "This public profile describes",
+      "This first post explains",
+      "an important example",
+      "This second post thanks",
+      "@reader.example",
+      "an ordinary reading reference",
+      "This independent explanation",
+      "An ordinary profile reference outside a feed item"
+    ],
+    "forbidden": [
+      "Fixture Social Account",
+      "A Fixture Author With A Long Name",
+      "@fixture.example",
+      "Earlier this week",
+      "2万",
+      "8万",
+      "ORIGINAL_CODE_TOKEN",
+      "A private editable draft",
+      "A private search value",
+      "@fixture.account",
+      "987 followers",
+      "23 following",
+      "321 posts"
+    ]
+  },
+  "dynamic": {
+    "inlineText": [
+      {
+        "selector": "#dirty",
+        "owner": "#body1",
+        "from": "an important example of ordinary readable prose",
+        "to": "a newly updated example of ordinary readable prose"
+      }
+    ],
+    "appendHtml": [
+      {
+        "selector": "main",
+        "html": "<div data-testid=\"feedItem-by-new.example\" role=\"link\" tabindex=\"0\" id=\"new-card\">\n<a id=\"new-author\" href=\"/profile/new.example\" aria-label=\"View profile\" dir=\"auto\">Another Fixture Author With A Long Name</a>\n<a id=\"new-handle\" href=\"/profile/new.example\" aria-label=\"View profile\" dir=\"auto\">@new.example</a>\n<a id=\"new-time\" href=\"/profile/new.example/post/new\" data-tooltip=\"A recent fixture timestamp\">A recent fixture timestamp</a>\n<div data-testid=\"postText\" id=\"new-body\">A newly appended post explains another useful reading example with enough English context.</div>\n<div id=\"new-count-actions\"><div><button data-testid=\"replyBtn\"><span>291</span></button></div><div><button><span data-testid=\"repostCount\">3万</span></button></div><div><button><span data-testid=\"likeCount\">7万</span></button></div></div>\n</div>",
+        "required": [
+          "#new-body"
+        ],
+        "forbidden": [
+          "#new-author",
+          "#new-handle",
+          "#new-time",
+          "#new-count-actions"
+        ]
+      }
+    ],
+    "noiseSelector": "#reposts"
+  },
+  "provenance": {
+    "kind": "original-authored-reproduction",
+    "evidence": "social-next/dom-report.json and baseline full failure; component-boundary attributes only. All prose, names, handles, IDs, dates, counts and URLs independently authored; no page text or reference implementation copied.",
+    "limitations": [
+      "Fixture tests are not live provider quality, authenticated editor, private messaging or infinite-feed acceptance."
+    ]
+  }
+}

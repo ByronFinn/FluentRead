@@ -1,0 +1,1 @@
+Read web pages in two languages, translate selected text, and choose from multiple translation services.

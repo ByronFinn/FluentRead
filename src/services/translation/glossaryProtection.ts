@@ -1,14 +1,18 @@
 /**
  * @file src/services/translation/glossaryProtection.ts
  * 文件职责：在统一翻译调用边界保护术语，使机器翻译、AI 与批量请求共用相同的本地回填规则。
- * 主要内容：按冻结范围一次选取用户与自动条目，文档入口保护地址、代码式名称及有限相邻数学表达式，复用首次匹配身份而不重复扫描；内部 g 标签原样送翻并避开用户短词匹配，保持消息和内部槽协议，按实际目标语言校验批量形状、行内结构和未翻译正文；纯术语判断比较 NFC 写法，实际回填保留原文 Unicode；userscript 编译时移除不支持的文档专属路径。
+ * 主要内容：按冻结范围选取用户与自动条目，网页保留常用技术术语，文档保护地址、代码式名称及有限相邻数学表达式；内部 g 标签原样送翻并避开用户短词匹配，保持消息和内部槽协议，按实际目标语言校验批量形状、行内结构和未翻译正文；纯术语判断比较 NFC 写法，实际回填保留原文 Unicode；userscript 编译时移除不支持的文档专属路径。
  * 模块边界：不自行调用网络或修改配置；缓存、取消、超时与最终结果验证仍由 broker 管理。
+ * 字素保护：先处理用户与自动术语，普通单行正文两端的完整 emoji 与间距留在本地原位回填，正文内部的 emoji 叠加同一占位符协议；摘要不强制保留，用户译法优先且未配置词库的翻译也受保护。兼容重试仅接受无用户术语和结构标记的单行正文，检查 emoji 字素顺序及默认术语的原写法和次数。
  */
-import {GlossaryPlaceholderError, protectGlossaryText, resolveGlossaryEntries, type GlossaryProtectionEntry} from '@/src/core/glossary';
+import {findGlossaryMatches, GlossaryPlaceholderError, protectGlossaryText, resolveGlossaryEntries, type GlossaryProtectionEntry} from '@/src/core/glossary';
+import {hasOnlyCommonWebTerms, matchCommonWebTerms} from '@/src/core/glossary/commonWebTerms';
 import {DocumentInlineMarkerError, documentInlineMarkerRanges, normalizeDocumentInlineMarkers, validateDocumentInlineMarkers} from '@/src/core/translation/documentInlineMarkers';
 import {findDocumentLiteralTerms} from '@/src/core/translation/documentLiterals';
 import {protectDocumentMathText} from '@/src/core/translation/documentMathProtection';
+import {findEmojiLiteralRanges, hasEmojiLiterals, splitBoundaryEmojiLiterals} from '@/src/core/translation/emojiLiterals';
 import {parseTranslationSlots, serializeTranslationSlots} from '@/src/core/translation/slotProtocol';
+import {hasTranslationContent} from '@/src/core/translation/result';
 import {attachTranslationProviderConfig, getTranslationGlossarySourceSlots, getTranslationGlossarySourceText} from './requestSnapshot';
 import type {TranslationProviderConfigSnapshot, TranslationRequestMessage} from './types';
 
@@ -22,8 +26,9 @@ function getGlossaryProtectionPlan(current: TranslationProviderConfigSnapshot, o
         glossaryIds: context.glossaryIds ? [...context.glossaryIds] : null,
         text: source,
     }).terms : [];
-    const automatic = import.meta.env.BROWSER !== 'userscript' && context.context === 'document'
-        ? findDocumentLiteralTerms(source, entries) : [];
+    const automatic = context.preserveCommonWebTerms ? matchCommonWebTerms(source, entries)
+        : import.meta.env.BROWSER !== 'userscript' && context.context === 'document'
+            ? findDocumentLiteralTerms(source, entries) : [];
     return {entries: [...entries, ...automatic], automatic};
 }
 
@@ -31,19 +36,39 @@ export function getGlossaryProtectionEntries(current: TranslationProviderConfigS
     return getGlossaryProtectionPlan(current, origin).entries;
 }
 
+/** 独立术语直接复用原文；显式用户译法仍走原有翻译路径。 */
+export function shouldKeepCommonWebTermLabel(current: TranslationProviderConfigSnapshot, origin: string): boolean {
+    return Boolean(current.glossaryMatchContext?.preserveCommonWebTerms && hasOnlyCommonWebTerms(origin)
+        && (!current.glossaryTerms?.length || isGlossaryOnlyResult(current, origin, origin)));
+}
+
 export function prepareGlossaryRequest(message: TranslationRequestMessage, current: TranslationProviderConfigSnapshot) {
     const targetLanguage = message.targetLanguage?.trim() || current.to;
     const documentContext = import.meta.env.BROWSER !== 'userscript' && current.glossaryMatchContext?.context === 'document';
-    const plan = ('summaryPrompt' in message && message.summaryPrompt) ? {entries: [], automatic: []} : getGlossaryProtectionPlan(current, message.origin);
-    if (!plan.entries.length) return {message: documentContext
+    const summary = Boolean('summaryPrompt' in message && message.summaryPrompt);
+    const plan = summary ? {entries: [], automatic: []} : getGlossaryProtectionPlan(current, message.origin);
+    if (!plan.entries.length && (summary || !hasEmojiLiterals(message.origin))) return {message: documentContext
         ? attachTranslationProviderConfig({...message}, current) : message,
         restore: (result: unknown) => validateDocumentTranslationResult(current, message.origin, result, targetLanguage)};
     const originals = Array.isArray(message.origin) ? message.origin : [message.origin];
-    const packets = originals.map((text, index) => documentContext
-        ? protectDocumentMathText(text, plan.entries, plan.automatic, String(index), documentInlineMarkerRanges(text))
-        : protectGlossaryText(text, plan.entries, String(index)));
+    const packets = originals.map((text, index) => {
+        const terms = documentContext
+            ? protectDocumentMathText(text, plan.entries, plan.automatic, String(index), documentInlineMarkerRanges(text))
+            : protectGlossaryText(text, plan.entries, String(index));
+        const ranges = findEmojiLiteralRanges(terms.text);
+        if (!ranges.length) return terms;
+        const boundary = !documentContext && !reservedProtectionMarker.test(text)
+            ? splitBoundaryEmojiLiterals(terms.text, ranges) : {text: terms.text, prefix: '', suffix: ''};
+        const literals = protectGlossaryText(boundary.text, [], `emoji-${index}`, [], undefined, findEmojiLiteralRanges(boundary.text));
+        return {text: literals.text, tokens: [...terms.tokens, ...literals.tokens],
+            restore(result: unknown) {
+                const restored = terms.restore(literals.restore(result));
+                // 本地表情不能把服务的空译文伪装成有内容的成功响应。
+                return hasTranslationContent(restored) ? boundary.prefix + restored + boundary.suffix : restored;
+            }};
+    });
     const tokens = Object.freeze(packets.flatMap(packet => packet.tokens));
-    const providerConfig = Object.freeze({...current, glossaryProtectedTokens: tokens});
+    const providerConfig = Object.freeze({...current, glossaryProtectedTokens: Object.freeze([...(current.glossaryProtectedTokens ?? []), ...tokens])});
     return {
         message: attachTranslationProviderConfig({...message,
             origin: Array.isArray(message.origin) ? packets.map(packet => packet.text) : packets[0].text,
@@ -60,6 +85,34 @@ export function prepareGlossaryRequest(message: TranslationRequestMessage, curre
                 return packets[index].restore(value);
             });
         },
+    };
+}
+
+const reservedProtectionMarker = /FRTERM|FRCODE|___FLUENTREAD_|<\/?g[1-9]\d*(?:\s|\/?>)/iu;
+
+/** 占位符校验失败时只允许普通正文使用原始 emoji 再试，结构与术语仍走原有严格校验。 */
+export function prepareLiteralEmojiRetry(message: TranslationRequestMessage, current: TranslationProviderConfigSnapshot) {
+    const {origin} = message;
+    if (typeof origin !== 'string' || current.glossaryMatchContext?.context === 'document'
+        || /[\r\n]/u.test(origin) || reservedProtectionMarker.test(origin)) return undefined;
+    const original = findEmojiLiteralRanges(origin).map(range => origin.slice(range.start, range.end));
+    if (!original.length || !/\p{L}/u.test(origin)) return undefined;
+    const {entries, automatic} = getGlossaryProtectionPlan(current, origin);
+    if (entries.length !== automatic.length) return undefined;
+    const commonTerms = (value: string) => automatic.length
+        ? findGlossaryMatches(value, automatic).map(match => match.entry.source).sort().join(' ') : '';
+    const expectedTerms = commonTerms(origin);
+    return (result: unknown): string => {
+        if (typeof result !== 'string' || !/\p{L}/u.test(result) || reservedProtectionMarker.test(result)) {
+            throw new GlossaryPlaceholderError();
+        }
+        const actual = findEmojiLiteralRanges(result);
+        if (actual.length !== original.length
+            || actual.some((range, index) => result.slice(range.start, range.end) !== original[index])
+            || commonTerms(result) !== expectedTerms) {
+            throw new GlossaryPlaceholderError();
+        }
+        return result;
     };
 }
 

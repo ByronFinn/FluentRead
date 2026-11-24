@@ -1,11 +1,16 @@
 /**
  * @file src/ui/styles/interface-skins/minimal.css
  * 文件职责：实现 FluentRead 真正的简约风格，用独立、可移除的样式模块重排 Popup 与 Options 的视觉密度。
- * 主要内容：使用大块留白、浅灰控件和无装饰标签的圆角功能入口；主操作与其他控件一样是中性浅灰底配深色文字，不带品牌色的底色，只有左侧的字形保留品牌色；同时为长标题、长按钮文案与窄屏布局保留自然换行空间。
+ * 主要内容：使用大块留白、浅灰控件和无装饰标签的圆角功能入口；主操作与其他控件一样是中性浅灰底配深色文字，不带品牌色的底色，只有左侧的字形保留品牌色；同时为长标题、长按钮文案与窄屏布局保留自然换行空间；快捷入口的局部间距变量供 Safari 触摸两列布局共用。
  * 模块边界：本文件只服务 data-interface-skin="minimal"，不隐藏用户选择保留的栏目、不修改配置和翻译行为，也不影响默认风格。
  */
 
 /* Popup：保留 FluentRead 的功能结构，采用参考风格中的留白、浅灰表面和圆角入口。 */
+:root[data-interface-skin="minimal"] {
+  --fr-card-radius: 9px;
+  --fr-card-shadow: none;
+}
+
 :root[data-interface-skin="minimal"] body.popup-page,
 :root[data-interface-skin="minimal"] body.popup-page #app {
   background: var(--surface);
@@ -295,7 +300,8 @@
 }
 
 :root[data-interface-skin="minimal"] .feature-grid {
-  gap: 5px;
+  --fluentread-popup-feature-gap: 5px;
+  gap: var(--fluentread-popup-feature-gap);
   overflow: visible;
   border: 0;
   border-radius: 0;
@@ -417,7 +423,6 @@
 }
 
 :root[data-interface-skin="minimal"] .search-box,
-:root[data-interface-skin="minimal"] .settings-group-body,
 :root[data-interface-skin="minimal"] .settings-card .settings-control-row,
 :root[data-interface-skin="minimal"] .settings-card .el-collapse,
 :root[data-interface-skin="minimal"] .settings-card,
@@ -427,8 +432,7 @@
   box-shadow: none;
 }
 
-:root[data-interface-skin="minimal"] .settings-card .settings-control-row:hover,
-:root[data-interface-skin="minimal"] .settings-group-body {
+:root[data-interface-skin="minimal"] .settings-card .settings-control-row:hover {
   box-shadow: none;
 }
 

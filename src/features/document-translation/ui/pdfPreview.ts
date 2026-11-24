@@ -1,11 +1,12 @@
 /**
  * @file src/features/document-translation/ui/pdfPreview.ts
  * 文件职责：在浏览器 Canvas 环境中生成 PDF 预览和原版译页；显式重排导出按嵌入字体分页，仅公式图表编码为图像，由二进制服务绘制可复制文字。
- * 主要内容：共用 PDF.js 与有界单页 Canvas；每页一次像素读回复用阅读器的保护筛选、表格裁剪和有界拟合，超长译文返回完整批注；下载分批绘制并优先 JPEG 编码，预览和重排图表使用 PNG；取消、失败与完成释放画布，租约隔离阅读器与导出，迟到加载不能复活已释放资源。
- * 模块边界：这里负责视觉光栅化而不决定片段翻译或文件结构；PDF 文本块来自 binary 服务，领域类型来自 core，Canvas/PDF.js 仅应在文档 UI 环境调用，不能进入通用纯算法层。
+ * 主要内容：共用 PDF.js 与有界单页 Canvas；扫描文档使用独立的 300 dpi、九百万像素渲染预算，并从有界缩略图中补足图形边界；导出每页一次像素读回，阅读器每个新段只读回包含取样边缘的局部快照；重排的光栅与文字导出共用原图旋转裁剪，复用保护筛选、表格裁剪和有界拟合，超长译文返回完整批注与逐行搜索层，缺字或离线时可用带相同 Unicode 文字层的有界光栅续页；下载分批绘制并优先 JPEG 编码，预览和重排图表使用 PNG；取消、失败与完成释放画布，租约隔离阅读器与导出，迟到加载不能复活已释放资源。
+ * 模块边界：这里负责视觉光栅化而不决定片段翻译或文件结构；单元格与图文卡片沿用解析边界，PDF 文本块来自 binary 服务，静态地址来自 pdfResources，Canvas/PDF.js 仅在文档 UI 环境调用。
  */
 import {hasDistinctTranslation} from '@/src/core/translation/result';
-import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
+import {pdfFallbackBidiLine, withPdfFallbackBidiDirection} from '../core/pdfFallbackBidi';
+import {getPdfResources} from '../services/pdfResources';
 import type {PDFDocumentProxy, PDFPageProxy} from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 import type {
@@ -18,10 +19,13 @@ import type {
     PdfReadingRasterizer,
     PdfOverflowNote,
     PdfRasterPageResult,
+    PdfRasterTextItem,
     PdfReadingRenderer,
 } from '@/src/features/document-translation/services/binary';
 import {paginatePdfReadingPlan, type PdfReadingRegionDraw} from '../core/pdfTextLayout';
 import {fitPdfBlockText, pdfOverlayBlocks} from '../core/pdfBlockFit';
+import {readPdfScanGraphics, cropPdfScanRegions, type PdfScanRegionImage} from './pdfScanPreview';
+import type {PdfScanGraphic} from '../core/pdfScanGraphics';
 
 export type {PdfPageRasterizer, PdfRasterPageInput};
 
@@ -36,7 +40,7 @@ function median(values: number[]): number {
     return sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
 }
 
-function canvasToImageBytes(canvas: HTMLCanvasElement, signal?: AbortSignal, format: 'png' | 'jpeg' = 'png'): Promise<Uint8Array> {
+export function canvasToImageBytes(canvas: HTMLCanvasElement, signal?: AbortSignal, format: 'png' | 'jpeg' = 'png'): Promise<Uint8Array> {
     return new Promise((resolve, reject) => {
         let finished = false;
         const finish = (error: unknown, bytes?: Uint8Array) => {
@@ -64,7 +68,7 @@ function canvasToImageBytes(canvas: HTMLCanvasElement, signal?: AbortSignal, for
     });
 }
 
-interface PdfPixelSnapshot {data: Uint8ClampedArray; width: number; height: number}
+interface PdfPixelSnapshot {data: Uint8ClampedArray; width: number; height: number; x?: number; y?: number}
 
 interface BrowserPdfResource {
     promise: Promise<PDFDocumentProxy>;
@@ -88,22 +92,23 @@ export function releasePdfDocument(bytes: Uint8Array, reason?: unknown): void {
 function browserPdfDocument(bytes: Uint8Array): BrowserPdfResource {
     const cached = browserPdfCache.get(bytes);
     if (cached) return cached;
-    const pdfAssetRoot = `${window.location.origin}/pdfjs`;
+    const {assetRoot: pdfAssetRoot, workerUrl} = getPdfResources();
     const resource: BrowserPdfResource = {
         promise: undefined!, controller: new AbortController(), users: 0,
         unload: () => releasePdfDocument(bytes),
     };
     const promise = import('pdfjs-dist/legacy/build/pdf.mjs').then(({getDocument, GlobalWorkerOptions}) => {
         resource.controller.signal.throwIfAborted();
-        GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+        GlobalWorkerOptions.workerSrc = workerUrl;
         resource.task = getDocument({
             data: new Uint8Array(bytes),
             disableFontFace: false,
-            isEvalSupported: false,
+            disableWorkerRendering: true,
             useWorkerFetch: false,
             cMapPacked: true,
             cMapUrl: `${pdfAssetRoot}/cmaps/`,
             standardFontDataUrl: `${pdfAssetRoot}/standard_fonts/`,
+            wasmUrl: `${pdfAssetRoot}/wasm/`,
         });
         return resource.task.promise;
     }).catch((error) => {
@@ -152,7 +157,7 @@ function awaitPdfTask<T>(promise: Promise<T>, signal: AbortSignal, releaseLateVa
     });
 }
 
-async function renderPdfSourceCanvas(bytes: Uint8Array, pageNumber: number, width: number, signal?: AbortSignal): Promise<HTMLCanvasElement> {
+export async function renderPdfSourceCanvas(bytes: Uint8Array, pageNumber: number, width: number, signal?: AbortSignal, forOcr = false): Promise<HTMLCanvasElement> {
     if (typeof globalThis.document === 'undefined' || typeof globalThis.window === 'undefined') {
         throw new Error('当前环境无法渲染 PDF 页面，请在浏览器扩展中打开');
     }
@@ -175,9 +180,9 @@ async function renderPdfSourceCanvas(bytes: Uint8Array, pageNumber: number, widt
         const base = page.getViewport({scale: 1});
         // 常规 A4 保持原有清晰度；海报/超长页不能按最低 1.45 倍无限分配像素。
         const scale = Math.min(
-            Math.min(2.4, Math.max(1.45, 1440 / Math.max(1, width))),
-            Math.sqrt(4_000_000 / Math.max(1, base.width * base.height)),
-            8192 / Math.max(1, base.width, base.height),
+            forOcr ? 300 / 72 : Math.min(2.4, Math.max(1.45, 1440 / Math.max(1, width))),
+            Math.sqrt((forOcr ? 9_000_000 : 4_000_000) / Math.max(1, base.width * base.height)),
+            (forOcr ? 4096 : 8192) / Math.max(1, base.width, base.height),
         );
         const viewport = page.getViewport({scale});
         canvas.width = Math.max(1, Math.floor(viewport.width));
@@ -186,7 +191,7 @@ async function renderPdfSourceCanvas(bytes: Uint8Array, pageNumber: number, widt
         if (!context) throw new Error('浏览器 Canvas 初始化失败');
         context.fillStyle = '#ffffff';
         context.fillRect(0, 0, canvas.width, canvas.height);
-        const task = page.render({canvasContext: context, viewport});
+        const task = page.render({canvas: null, canvasContext: context, viewport});
         const cancel = () => task.cancel();
         controller.signal.addEventListener('abort', cancel, {once: true});
         if (controller.signal.aborted) cancel();
@@ -236,7 +241,8 @@ export function sampledBackgroundRgb(
     points.forEach(([pointX, pointY]) => {
         const safeX = Math.max(0, Math.min(context.canvas.width - 1, Math.round(pointX)));
         const safeY = Math.max(0, Math.min(context.canvas.height - 1, Math.round(pointY)));
-        const pixel = snapshot ? snapshot.data.subarray((safeY * snapshot.width + safeX) * 4, (safeY * snapshot.width + safeX) * 4 + 4) : context.getImageData(safeX, safeY, 1, 1).data;
+        const offset = snapshot ? ((safeY - (snapshot.y ?? 0)) * snapshot.width + safeX - (snapshot.x ?? 0)) * 4 : 0;
+        const pixel = snapshot ? snapshot.data.subarray(offset, offset + 4) : context.getImageData(safeX, safeY, 1, 1).data;
         if (pixel[3] > 0) colors.push([pixel[0], pixel[1], pixel[2]]);
     });
     if (colors.length === 0) return [255, 255, 255];
@@ -266,7 +272,9 @@ export function sampledForegroundColor(
     const candidates: Array<{color: [number, number, number]; distance: number}> = [];
     for (let pointY = 0; pointY < safeHeight; pointY += stride) {
         for (let pointX = 0; pointX < safeWidth; pointX += stride) {
-            const offset = snapshot ? ((safeY + pointY) * snapshot.width + safeX + pointX) * 4 : (pointY * safeWidth + pointX) * 4;
+            const localX = safeX + pointX - (snapshot?.x ?? 0), localY = safeY + pointY - (snapshot?.y ?? 0);
+            if (snapshot && (localX < 0 || localY < 0 || localX >= snapshot.width || localY >= snapshot.height)) continue;
+            const offset = snapshot ? (localY * snapshot.width + localX) * 4 : (pointY * safeWidth + pointX) * 4;
             if (pixels[offset + 3] === 0) continue;
             const color: [number, number, number] = [pixels[offset], pixels[offset + 1], pixels[offset + 2]];
             const distance = Math.hypot(
@@ -284,10 +292,25 @@ export function sampledForegroundColor(
     return `rgb(${channel(0)}, ${channel(1)}, ${channel(2)})`;
 }
 
+/** 阅读器按段落一次读回局部像素；边界包含背景的两像素外沿与原有前景裁剪，不保存整页快照。 */
+export function sampledPdfBlockColors(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): {background: [number, number, number]; foreground: string} {
+    const foregroundX = Math.max(0, Math.floor(x)), foregroundY = Math.max(0, Math.floor(y));
+    const foregroundRight = foregroundX + Math.max(1, Math.min(context.canvas.width - foregroundX, Math.ceil(width)));
+    const foregroundBottom = foregroundY + Math.max(1, Math.min(context.canvas.height - foregroundY, Math.ceil(height)));
+    const left = Math.max(0, Math.min(context.canvas.width - 1, Math.floor(x - 2)));
+    const top = Math.max(0, Math.min(context.canvas.height - 1, Math.floor(y - 2)));
+    const right = Math.max(left + 1, Math.min(context.canvas.width, Math.ceil(Math.max(x + width + 2, foregroundRight - 1)) + 1));
+    const bottom = Math.max(top + 1, Math.min(context.canvas.height, Math.ceil(Math.max(y + height + 2, foregroundBottom - 1)) + 1));
+    const snapshot: PdfPixelSnapshot = {data: context.getImageData(left, top, right - left, bottom - top).data,
+        width: right - left, height: bottom - top, x: left, y: top};
+    const background = sampledBackgroundRgb(context, x, y, width, height, snapshot);
+    return {background, foreground: sampledForegroundColor(context, x, y, width, height, background, snapshot)};
+}
+
 function* paintPdfTranslationSteps(
     sourceCanvas: HTMLCanvasElement,
     input: PdfRasterPageInput,
-): Generator<void, {canvas: HTMLCanvasElement; overflowNotes: PdfOverflowNote[]}> {
+): Generator<void, {canvas: HTMLCanvasElement; overflowNotes: PdfOverflowNote[]; textItems: PdfRasterTextItem[]}> {
     // 原图编码完毕后可以原位绘制；导出不再同时保留两张全尺寸画布。
     const canvas = sourceCanvas;
     const context = canvas.getContext('2d', {alpha: false});
@@ -307,6 +330,7 @@ function* paintPdfTranslationSteps(
     };
 
     const overflowNotes: PdfOverflowNote[] = [];
+    const textItems: PdfRasterTextItem[] = [];
     if (rotation) context.save();
     try {
         const overlays = pdfOverlayBlocks({...input, segmentIndexes: input.blocks.map(block => block.segmentIndex)});
@@ -342,6 +366,7 @@ function* paintPdfTranslationSteps(
             fontSize: number;
             lines: string[];
             lineHeight: number;
+            direction?: 'ltr' | 'rtl';
         };
 
         const layout: MeasuredBlock[] = [];
@@ -350,12 +375,20 @@ function* paintPdfTranslationSteps(
             const family = familyForBlock(painted.block);
             const maxWidth = Math.max(1, painted.width * 0.985);
             const scale = Math.min(scaleX, scaleY);
-            const fit = fitPdfBlockText({
+            const fitting = () => fitPdfBlockText({
                 text: painted.translation, width: maxWidth, height: painted.height,
                 fontSize: painted.block.fontSize * scale,
                 lineHeight: (painted.block.lineCount <= 1 ? painted.block.fontSize : painted.block.lineHeight) * scale,
                 minFontSize: Math.max(6 * scale, painted.block.fontSize * scale * 0.5), weight: painted.block.fontWeight,
             }, (text, size, weight) => {context.font = `${weight} ${size}px ${family}`; return context.measureText(text).width;});
+            let fit = fitting(), direction: 'ltr' | 'rtl' | undefined;
+            if (!fit.overflow && fit.lines.length === 1) {
+                const bidi = pdfFallbackBidiLine(fit.lines[0], painted.translation);
+                if (bidi) {
+                    const directed = withPdfFallbackBidiDirection(context, bidi.direction, fitting);
+                    if (!directed.overflow && directed.lines.length === 1 && directed.lines[0] === painted.translation) {fit = directed; direction = bidi.direction;}
+                }
+            }
             let lines = fit.lines;
             if (fit.overflow) {
                 overflowNotes.push({segmentIndex: painted.block.segmentIndex, text: painted.translation,
@@ -372,7 +405,7 @@ function* paintPdfTranslationSteps(
                 }
                 lines[lines.length - 1] = characters.slice(0, low).join('') + '…';
             }
-            layout.push({...painted, fontSize: fit.fontSize, lines, lineHeight: fit.lineHeight});
+            layout.push({...painted, fontSize: fit.fontSize, lines, lineHeight: fit.lineHeight, ...(direction ? {direction} : {})});
             if (layout.length % 8 === 0) yield;
         }
 
@@ -385,20 +418,20 @@ function* paintPdfTranslationSteps(
             context.fillStyle = `rgb(${background[0]}, ${background[1]}, ${background[2]})`;
             const rectangles = block.lines?.flatMap(line => line.runs?.length ? line.runs : [line]);
             const erase = rectangles?.length ? rectangles.map(rect => ({x: rect.x * scaleX, y: rect.y * scaleY, width: rect.width * scaleX, height: rect.height * scaleY})) : [{x, y, width: block.width * scaleX, height: block.height * scaleY}];
-            const cell = block.cellBounds;
+            const boundary = block.cellBounds ?? block.panelBounds;
             erase.forEach(rect => {
-                // 分数像素的 fillRect 边缘会混入原字形的抗锯齿颜色；向外覆盖整像素，单元格边界仍向内约束以保留表格线。
-                const left = Math.max(0, Math.floor(rect.x - padding), cell ? Math.ceil((cell.x + 0.5) * scaleX) : 0);
-                const top = Math.max(0, Math.floor(rect.y - padding), cell ? Math.ceil((cell.y + 0.5) * scaleY) : 0);
-                const right = Math.min(virtualWidth, Math.ceil(rect.x + rect.width + padding), cell ? Math.floor((cell.x + cell.width - 0.5) * scaleX) : virtualWidth);
-                const bottom = Math.min(virtualHeight, Math.ceil(rect.y + rect.height + padding), cell ? Math.floor((cell.y + cell.height - 0.5) * scaleY) : virtualHeight);
+                // 擦除向外覆盖整像素，遇到单元格或卡片边界时向内约束。
+                const left = Math.max(0, Math.floor(rect.x - padding), boundary ? Math.ceil((boundary.x + 0.5) * scaleX) : 0);
+                const top = Math.max(0, Math.floor(rect.y - padding), boundary ? Math.ceil((boundary.y + 0.5) * scaleY) : 0);
+                const right = Math.min(virtualWidth, Math.ceil(rect.x + rect.width + padding), boundary ? Math.floor((boundary.x + boundary.width - 0.5) * scaleX) : virtualWidth);
+                const bottom = Math.min(virtualHeight, Math.ceil(rect.y + rect.height + padding), boundary ? Math.floor((boundary.y + boundary.height - 0.5) * scaleY) : virtualHeight);
                 if (right > left && bottom > top) context.fillRect(left, top, right - left, bottom - top);
             });
             if ((index + 1) % 16 === 0) yield;
         }
 
         // 步骤 3：在裁剪后的原坐标区域中绘制译文，保证多栏与图文混排不串位。
-        for (const [index, {block, x, y, width, height, foreground, fontSize, lines, lineHeight}] of layout.entries()) {
+        for (const [index, {block, x, y, width, height, foreground, fontSize, lines, lineHeight, direction}] of layout.entries()) {
             input.signal?.throwIfAborted();
             const family = familyForBlock(block);
             const maxWidth = Math.max(1, width * 0.985);
@@ -409,19 +442,26 @@ function* paintPdfTranslationSteps(
                 context.clip();
                 context.fillStyle = foreground;
                 context.textBaseline = 'top';
+                if (direction) context.direction = direction;
                 context.textAlign = block.textAlign;
                 context.font = `${block.fontWeight} ${fontSize}px ${family}`;
                 const textX = block.textAlign === 'center' ? x + width / 2 : block.textAlign === 'right' ? x + width : x;
                 let textY = y;
                 lines.forEach((line) => {
                     context.fillText(line, textX, textY, maxWidth);
+                    if (line.trim()) {
+                        const measuredWidth = Math.min(context.measureText(line).width, maxWidth);
+                        const left = block.textAlign === 'center' ? textX - measuredWidth / 2 : block.textAlign === 'right' ? textX - measuredWidth : textX;
+                        textItems.push({segmentIndex: block.segmentIndex, text: line, x: left / scaleX, y: textY / scaleY,
+                            width: measuredWidth / scaleX, fontSize: fontSize / Math.min(scaleX, scaleY), ...(direction ? {direction} : {})});
+                    }
                     textY += lineHeight;
                 });
             } finally {context.restore();}
             if ((index + 1) % 16 === 0) yield;
         }
     } finally {if (rotation) context.restore();}
-    return {canvas, overflowNotes};
+    return {canvas, overflowNotes, textItems};
 }
 
 /** 同步预览端口；下载端口分批推进相同绘制步骤，允许处理输入与取消。 */
@@ -458,11 +498,16 @@ export async function createPdfPagePreview(
     }
 }
 
-/** 把一页渲染成图像供文字识别使用；画布用完立即释放，只返回编码后的图像与它的像素尺寸。 */
-export async function renderPdfPageImage(bytes: Uint8Array, pageNumber: number, width: number, signal?: AbortSignal): Promise<{image: string; width: number; height: number}> {
-    const canvas = await renderPdfSourceCanvas(bytes, pageNumber, width, signal);
+/** 以 300 dpi 渲染论文小字，限制九百万像素及 4096 长边；在有界缩略图上补图形边界，用完释放画布。 */
+export async function renderPdfPageImage(bytes: Uint8Array, pageNumber: number, width: number, signal?: AbortSignal): Promise<{image: string; width: number; height: number; graphics: PdfScanGraphic[]; regions: PdfScanRegionImage[]}> {
+    const canvas = await renderPdfSourceCanvas(bytes, pageNumber, width, signal, true);
     try {
-        return {image: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height};
+        // 渲染 Promise 结算后仍可能收到取消，避免继续同步编码数百万像素的过期页面。
+        signal?.throwIfAborted();
+        const graphics = await readPdfScanGraphics(canvas, width, signal);
+        signal?.throwIfAborted();
+        const regions = cropPdfScanRegions(canvas, graphics, width, signal);
+        return {image: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height, graphics, regions};
     } finally {
         canvas.width = canvas.height = 0;
     }
@@ -485,19 +530,20 @@ export async function rasterizePdfTranslationPage(input: PdfRasterPageInput): Pr
         const format = input.imageFormat ?? 'png';
         const data = await canvasToImageBytes(sourceCanvas, input.signal, format);
         input.signal?.throwIfAborted();
-        return format === 'jpeg' || step.value.overflowNotes.length ? {data, format, overflowNotes: step.value.overflowNotes} : data;
+        return {data, format, overflowNotes: step.value.overflowNotes, textItems: step.value.textItems};
     } finally {
-        steps.return({canvas: sourceCanvas, overflowNotes: []});
+        steps.return({canvas: sourceCanvas, overflowNotes: [], textItems: []});
         sourceCanvas.width = sourceCanvas.height = 0;
     }
 }
 
-/** 固定字号逐页编码；只保留一张源图和一张输出 Canvas，译文长短不会扩大画布。 */
+/** 固定字号逐页编码；原版译文续页按最后一张的内容缩短页高，只保留一张源图和一张输出 Canvas。 */
 export const rasterizePdfReadingPages: PdfReadingRasterizer = async function* (input) {
     if (typeof globalThis.document === 'undefined') throw new Error('当前环境无法生成 PDF 译文页面，请在浏览器扩展中下载');
     input.signal?.throwIfAborted();
     const canvas = document.createElement('canvas');
     let source: HTMLCanvasElement | undefined;
+    let sourceLease: ReturnType<typeof acquirePdfDocument> | undefined;
     try {
         const context = canvas.getContext('2d', {alpha: false});
         if (!context) throw new Error('浏览器 Canvas 初始化失败');
@@ -505,17 +551,22 @@ export const rasterizePdfReadingPages: PdfReadingRasterizer = async function* (i
         const pages = paginatePdfReadingPlan(input.plan, (text, font) => {
             context.font = `${font.weight} ${font.size}px ${family}`;
             return context.measureText(text).width;
-        });
+        }, {compactLastPage: Boolean(input.footerLabel)});
+        const lineCounts = new Map<number, number>();
+        for (const page of pages) for (const item of page.items) if (item.kind === 'text') lineCounts.set(item.segmentIndex, (lineCounts.get(item.segmentIndex) ?? 0) + 1);
         if (pages.some(page => page.items.some(item => item.kind === 'region'))) {
+            // 外部自定义 renderer 也可能因缺字进入内建回退；回退自身必须持有并释放源文档，不能依赖组合根的默认租约。
+            sourceLease = acquirePdfDocument(input.sourceBytes);
             source = await renderPdfSourceCanvas(input.sourceBytes, input.pageNumber, input.width, input.signal);
         }
-        for (const page of pages) {
+        for (const [pageIndex, page] of pages.entries()) {
             input.signal?.throwIfAborted();
             canvas.width = page.width * 2;
             canvas.height = page.height * 2;
             context.fillStyle = '#ffffff';
             context.fillRect(0, 0, canvas.width, canvas.height);
             context.save();
+            const textItems: PdfRasterTextItem[] = [];
             try {
                 context.scale(2, 2);
                 context.textBaseline = 'top';
@@ -524,36 +575,37 @@ export const rasterizePdfReadingPages: PdfReadingRasterizer = async function* (i
                 for (const item of page.items) {
                     if (item.kind === 'text') {
                         context.font = `${item.font.weight} ${item.font.size}px ${family}`;
-                        context.fillText(item.text, item.x, item.y);
+                        const candidate = lineCounts.get(item.segmentIndex) === 1 ? pdfFallbackBidiLine(item.text, input.translations[item.segmentIndex] ?? '') : undefined;
+                        const measured = candidate ? withPdfFallbackBidiDirection(context, candidate.direction, () => context.measureText(item.text).width) : undefined;
+                        const bidi = candidate && measured !== undefined && Number.isFinite(measured) && measured <= item.width ? candidate : undefined;
+                        const paint = () => {context.fillText(item.text, item.x, item.y); return context.measureText(item.text).width;};
+                        const width = bidi ? withPdfFallbackBidiDirection(context, bidi.direction, paint) : paint();
+                        textItems.push({segmentIndex: item.segmentIndex, text: item.text,
+                            x: item.x, y: item.y, width, fontSize: item.font.size, ...(bidi ? {direction: bidi.direction} : {})});
                     } else if (source) {
-                        const r = item.sourceRect, rotation = input.rotation ?? 0;
-                        const sx = source.width / input.width, sy = source.height / input.height;
-                        const sample = rotation === 90 ? {x: input.width - r.y - r.height, y: r.x, width: r.height, height: r.width}
-                            : rotation === 180 ? {x: input.width - r.x - r.width, y: input.height - r.y - r.height, width: r.width, height: r.height}
-                                : rotation === 270 ? {x: r.y, y: input.height - r.x - r.width, width: r.height, height: r.width} : r;
-                        context.save();
-                        try {
-                            context.translate(item.x, item.y);
-                            if (rotation === 90) {context.translate(0, item.height); context.rotate(-Math.PI / 2);}
-                            else if (rotation === 180) {context.translate(item.width, item.height); context.rotate(-Math.PI);}
-                            else if (rotation === 270) {context.translate(item.width, 0); context.rotate(Math.PI / 2);}
-                            const quarterTurn = rotation === 90 || rotation === 270;
-                            context.drawImage(source, sample.x * sx, sample.y * sy, sample.width * sx, sample.height * sy,
-                                0, 0, quarterTurn ? item.height : item.width, quarterTurn ? item.width : item.height);
-                        } finally {context.restore();}
+                        paintPdfReadingRegion(context, source, item, input);
                     }
+                }
+                if (input.footerLabel) {
+                    const label = `${input.footerLabel} · ${pageIndex + 1}/${pages.length}`;
+                    context.font = `400 9px ${family}`;
+                    context.fillStyle = '#6b7280';
+                    context.fillText(label, 44, page.height - 25);
+                    textItems.push({segmentIndex: -1, text: label, x: 44, y: page.height - 25,
+                        width: context.measureText(label).width, fontSize: 9});
                 }
             } finally {context.restore();}
             const format = input.imageFormat ?? 'png';
             const bytes = await canvasToImageBytes(canvas, input.signal, format);
             input.signal?.throwIfAborted();
-            yield {bytes, width: page.width, height: page.height, format};
+            yield {bytes, width: page.width, height: page.height, format, textItems, items: page.items};
             input.signal?.throwIfAborted();
             await new Promise<void>(resolve => setTimeout(resolve, 0));
         }
     } finally {
         canvas.width = canvas.height = 0;
         if (source) source.width = source.height = 0;
+        sourceLease?.release();
     }
 };
 

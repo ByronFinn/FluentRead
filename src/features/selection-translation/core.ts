@@ -1,12 +1,12 @@
 /**
  * @file src/features/selection-translation/core.ts
  * 文件职责：集中划词翻译的纯交互与内容算法，包括请求代次、词典回退、触发展示状态、选区过滤、上下文摘要、弹窗锚点和语音语言规范化。
- * 主要内容：定义 SelectionRequestTokenGate、Presentation 状态机、选区/视口类型，处理中英划词反向目标、同语种判断、文本清理、公式单份文本提取、正文中的行内代码片段保护、主动代码选区提取、敏感区域排除（img 不再排除，跨内联图片的文字选区仍出卡）、多矩形选择、按页面缩放补偿的弹窗定位及选区入口抑制判定及仅用于朗读的普通话语言别名。
+ * 主要内容：定义 SelectionRequestTokenGate、Presentation 状态机、选区/视口类型，处理中英划词反向目标、同语种判断、文本清理、公式单份文本提取、正文中的行内代码片段保护、主动代码选区提取、文档根禁译外壳放行、同一编辑区内显式选区放行、按实际 Range 边界遍历的敏感区域排除（img 不再排除，跨内联图片的文字选区仍出卡）、无文本装饰图标放行及单遍祖先保护检查（不扫描未选中的共同祖先子树）、多矩形选择与完整选区避让、按页面缩放补偿并在空间不足时约束高度的弹窗定位、选区入口抑制判定及仅用于朗读的普通话语言别名。
  * 模块边界：本模块不监听 document selection、不发消息、不渲染 Vue 或播放音频；组件负责连接 DOM，词典和 TTS 由 services/background 提供，函数保持确定性以供单元测试。DOM 安全判断直接复用 translation/dom 的同一实现，不初始化翻译候选或站点规则 registry。
  */
-import {getElementTagName, isTopLevelApplicationShell} from '@/src/core/translation/dom';
+import {getElementTagName, isDocumentSurfaceNoTranslateShell, isTopLevelApplicationShell} from '@/src/core/translation/dom';
 import {getChineseScript, normalizeChineseLanguageCode} from '@/src/core/language/chinese';
-import {isLanguageCodeMatch} from '@/src/core/language/codes';
+import {isLanguageCodeMatch, normalizeDetectedLanguageCode} from '@/src/core/language/codes';
 import {isTextInLanguage, shouldSkipChineseSelection} from '@/src/core/language/detect';
 
 export interface SelectionRect {
@@ -26,12 +26,16 @@ export interface PopupSize {
 export interface ViewportSize {
     width: number;
     height: number;
+    left?: number;
+    top?: number;
 }
 
 export interface PopupPosition {
     left: number;
     top: number;
     placement: 'top' | 'bottom';
+    /** 两侧都无法容纳原高度时，返回所选一侧的可用高度，避免弹窗夹边后覆盖选区。 */
+    maxHeight?: number;
 }
 
 export interface SelectionContentRequest {
@@ -39,11 +43,6 @@ export interface SelectionContentRequest {
     sourceLanguage?: string;
     targetLanguage: string;
     generation: number;
-}
-
-/** 中英双向入口仅用于默认目标为英语或中文的划词卡片。 */
-export function isChineseEnglishTarget(language: string): boolean {
-    return language === 'en' || Boolean(getChineseScript(language));
 }
 
 /** 只在选区可信地属于当前目标语言时反向；不对短歧义词或其他语言猜测方向。 */
@@ -208,6 +207,7 @@ export function summarizeSelectionContext(
 
 // 只把有明确渲染器身份的数学子树视为原子，不能放开普通 aria-hidden/SVG 控件。
 const selectionFormulaSelector = 'math, mjx-container, .MathJax, .MathJax_Display, .MathJax_SVG, .MathJax_CHTML, .katex';
+const selectionSemanticSelector = `${selectionFormulaSelector}, code`;
 
 export interface SelectionTextPart {
     kind: 'text' | 'code';
@@ -221,7 +221,7 @@ export function readSelectionParts(range: Range, browserText: string): Selection
     const plainText = () => [{kind: 'text' as const, text: normalizeSelectionText(browserText)}];
     // 用户主动选中的代码文字可以翻译；正文跨行内代码时仍保留代码快照。
     if (ancestor?.closest('pre, code')) return plainText();
-    if (!ancestor?.querySelector(`${selectionFormulaSelector}, code`)) return plainText();
+    if (!ancestor || !hasSelectionSemanticParts(range)) return plainText();
     const fragment = ancestor.ownerDocument.createElement('div');
     fragment.append(range.cloneContents());
     const formulas = Array.from(fragment.querySelectorAll(selectionFormulaSelector))
@@ -312,14 +312,18 @@ const selectionExcludedRoles = new Set([
     'switch', 'tab', 'textbox',
 ]);
 
-const selectionExcludedSelector = [
+const selectionEditableMarkerSelector = [
+    '[role="textbox"]',
+    '[contenteditable=""]',
+    '[contenteditable="true"]',
+    '[contenteditable="plaintext-only"]',
+].join(',');
+const selectionProtectedMarkerSelector = [
     '.fluent-read-bilingual-content',
     '.fluent-read-loading',
     '.fluent-read-retry-wrapper',
-    '.notranslate',
     '[aria-hidden="true"]',
     '[data-fluent-read-ui]',
-    '[data-notranslate="true"]',
     '[role="button"]',
     '[role="checkbox"]',
     '[role="combobox"]',
@@ -334,13 +338,11 @@ const selectionExcludedSelector = [
     '[role="spinbutton"]',
     '[role="switch"]',
     '[role="tab"]',
-    '[role="textbox"]',
-    '[translate="no"]',
-    '[contenteditable=""]',
-    '[contenteditable="true"]',
-    '[contenteditable="plaintext-only"]',
     ...Array.from(selectionExcludedTagNames),
 ].join(',');
+const selectionNonMarkerExcludedSelector = `${selectionProtectedMarkerSelector},${selectionEditableMarkerSelector}`;
+const selectionExcludedSelector = `${selectionNonMarkerExcludedSelector},.notranslate,[translate="no"],[data-notranslate="true"]`;
+const selectionExcludedDescendantSelector = `${selectionExcludedSelector},[role]`;
 export function isSelectionExcludedTagName(tagName: string): boolean {
     return selectionExcludedTagNames.has(tagName.trim().toLowerCase());
 }
@@ -358,27 +360,41 @@ function isEditableSelectionElement(element: Element): boolean {
     return false;
 }
 
-function isIntrinsicallyExcludedSelectionElement(element: Element): boolean {
+function isIntrinsicallyExcludedSelectionElement(element: Element, editableRoot: Element | null): boolean {
     if (isSelectionExcludedTagName(getElementTagName(element))) return true;
 
     const role = element.getAttribute('role')?.trim().toLowerCase();
-    if (role && selectionExcludedRoles.has(role)) return true;
-    return isEditableSelectionElement(element);
+    if (role && selectionExcludedRoles.has(role)
+        && !(role === 'textbox' && isWithinEditableSelectionRoot(element, editableRoot))) return true;
+    return isEditableSelectionElement(element) && !isWithinEditableSelectionRoot(element, editableRoot);
 }
 
-function isSelectionExcludedElement(element: Element | null): boolean {
+function isSelectionExcludedElement(element: Element | null, editableRoot: Element | null = null): boolean {
     if (!element) return false;
     let current: Element | null = element;
     while (current) {
-        if (isIntrinsicallyExcludedSelectionElement(current)) return true;
+        // 每层只检查自身，不能为每个祖先再次向上寻找编辑状态；仅共享的局部宿主可放行。
+        const role = current.getAttribute('role')?.trim().toLowerCase();
+        const insideEditableRoot = isWithinEditableSelectionRoot(current, editableRoot);
+        if (isSelectionExcludedTagName(getElementTagName(current))
+            || role && selectionExcludedRoles.has(role) && !(role === 'textbox' && insideEditableRoot)
+            || ((current as HTMLElement).isContentEditable
+                || current.hasAttribute('contenteditable') && current.getAttribute('contenteditable')?.trim().toLowerCase() !== 'false')
+                && !insideEditableRoot) return true;
         current = current.parentElement;
     }
 
-    const excluded = element.closest(selectionExcludedSelector);
-    if (!excluded) return false;
-    // A broad marker on a body-level SPA shell should not suppress a direct user
-    // selection, while the boundary element itself and nested protected regions remain excluded.
-    return excluded === element || !isTopLevelApplicationShell(excluded);
+    let excluded = element.closest(selectionExcludedSelector);
+    while (excluded) {
+        // DeepSeek 等页面在 html/body 上禁止浏览器整页翻译；显式划词仍可读取正文。
+        // 文档根禁译标记可放行；UI、隐藏、本地禁译标记和授权编辑宿主之外的编辑边界仍逐层检查。
+        const shell = isDocumentSurfaceNoTranslateShell(excluded) ||
+            excluded !== element && isTopLevelApplicationShell(excluded);
+        if ((!shell && !isAllowedEditableSelectionMarker(excluded, editableRoot))
+            || isSelectionNonMarkerExcluded(excluded, editableRoot)) return true;
+        excluded = excluded.parentElement?.closest(selectionExcludedSelector) ?? null;
+    }
+    return false;
 }
 
 function elementFromSelectionNode(node: Node | null): Element | null {
@@ -386,11 +402,109 @@ function elementFromSelectionNode(node: Node | null): Element | null {
     return node.nodeType === 1 ? node as Element : node.parentElement;
 }
 
-function selectionExcludedDescendants(range: Range): Element[] {
-    const commonAncestor = range.commonAncestorContainer;
-    const queryRoot = commonAncestor.nodeType === 3 ? commonAncestor.parentElement : commonAncestor;
-    if (!queryRoot || !('querySelectorAll' in queryRoot)) return [];
-    return Array.from((queryRoot as ParentNode).querySelectorAll(`${selectionExcludedSelector},[role]`));
+/** 只把两个边界共享的同一个局部编辑宿主视为可放行范围；文档根编辑模式仍保持排除。 */
+export function getEditableSelectionRoot(node: Node | null): Element | null {
+    const document = node?.nodeType === 9 ? node as Document : node?.ownerDocument ?? null;
+    const documentRoot = document?.documentElement ?? null;
+    const body = document?.body ?? null;
+    let current = elementFromSelectionNode(node);
+    let root: Element | null = null;
+    while (current) {
+        const editable = current.getAttribute('contenteditable');
+        const isDocumentRoot = current === documentRoot || current === body;
+        if (editable !== null) {
+            if (editable.trim().toLowerCase() === 'false') return root;
+            if (!isDocumentRoot) root = current;
+        } else {
+            const role = current.getAttribute('role')?.trim().toLowerCase();
+            if (!isDocumentRoot && role === 'textbox') root = current;
+            else if (!isDocumentRoot && (current as HTMLElement).isContentEditable
+                && !(current.parentElement as HTMLElement | null)?.isContentEditable) root = current;
+        }
+        current = current.parentElement;
+    }
+    return root;
+}
+
+function isWithinEditableSelectionRoot(element: Element, root: Element | null): boolean {
+    if (!root) return false;
+    if (element === root) return true;
+    if (typeof root.contains === 'function') {
+        try {return root.contains(element);}
+        catch {/* 使用父链回退，单个宿主代理异常不能放宽选区校验。 */}
+    }
+    for (let current: Element | null = element; current; current = current.parentElement) {
+        if (current === root) return true;
+    }
+    return false;
+}
+
+function isAllowedEditableSelectionMarker(element: Element, root: Element | null): boolean {
+    if (!root || !isWithinEditableSelectionRoot(element, root) || !element.matches(selectionEditableMarkerSelector)) return false;
+    const editable = element.getAttribute('contenteditable');
+    return !(editable !== null && editable.trim().toLowerCase() === 'false')
+        && !element.matches(selectionProtectedMarkerSelector)
+        && !element.matches('.notranslate,[translate="no"],[data-notranslate="true"]');
+}
+
+function isSelectionNonMarkerExcluded(element: Element, root: Element | null): boolean {
+    return element.matches(selectionNonMarkerExcludedSelector) && !isAllowedEditableSelectionMarker(element, root);
+}
+
+function getSharedEditableSelectionRoot(range: Range): Element | null {
+    const start = getEditableSelectionRoot(range.startContainer);
+    return start && start === getEditableSelectionRoot(range.endContainer) ? start : null;
+}
+
+/** 跳过已访问的子树；只沿祖先回退，绝不越过当前选区的共同祖先。 */
+function nextSelectionSibling(node: Node, root: Node): Node | null {
+    let current: Node | null = node;
+    while (current && current !== root) {
+        if (current.nextSibling) return current.nextSibling;
+        current = current.parentNode;
+    }
+    return null;
+}
+
+/** 浏览器选中段落时可能将结束点落在下一代码块的起点；跳过完全未选中的分支。 */
+function firstUnselectedSelectionEnd(range: Range): Node | null {
+    let node = range.endContainer;
+    const root = range.commonAncestorContainer;
+    if (range.endOffset !== 0 || node === root || !node?.parentNode || !elementFromSelectionNode(node)?.closest('pre')) return null;
+    while (node.parentNode && node.parentNode !== root && !node.previousSibling) {
+        node = node.parentNode;
+    }
+    return node;
+}
+
+/** 由原生 Range 的半开边界定位遍历区间，不枚举共同祖先内未选中的前后兄弟树。 */
+function* selectionRangeNodes(range: Range, unselectedEnd = firstUnselectedSelectionEnd(range)): Generator<Node> {
+    const root = range.commonAncestorContainer;
+    const start = range.startContainer;
+    const end = range.endContainer;
+    const stop = unselectedEnd ?? (end.nodeType === 3 ? nextSelectionSibling(end, root)
+        : end.childNodes[range.endOffset] ?? nextSelectionSibling(end, root));
+    let node: Node | null = start.nodeType === 3 ? start
+        : start.childNodes[range.startOffset] ?? nextSelectionSibling(start, root);
+    while (node && node !== stop) {
+        yield node;
+        node = node.firstChild ?? nextSelectionSibling(node, root);
+    }
+}
+
+/** 部分选区从 code/公式内部起步时，祖先包装不在向前遍历中，须先审核两端语义。 */
+function hasSelectionSemanticParts(range: Range): boolean {
+    if ([range.startContainer, range.endContainer].some(node => elementFromSelectionNode(node)?.closest(selectionSemanticSelector))) return true;
+    for (const node of selectionRangeNodes(range)) {
+        if (node.nodeType === 1 && (node as Element).matches(selectionSemanticSelector)) return true;
+    }
+    return false;
+}
+
+function* selectionExcludedDescendants(range: Range, unselectedEnd: Node | null): Generator<Element> {
+    for (const node of selectionRangeNodes(range, unselectedEnd)) {
+        if (node.nodeType === 1 && node !== range.commonAncestorContainer && (node as Element).matches(selectionExcludedDescendantSelector)) yield node as Element;
+    }
 }
 
 function containsNonZeroClientRect(rects: DOMRectList): boolean {
@@ -406,30 +520,46 @@ function hasNonZeroClientRect(element: Element): boolean {
     return containsNonZeroClientRect(contentRange.getClientRects());
 }
 
+/** 跨段选区经过的空 SVG/隐藏装饰不代表选中了受保护文字；控件和编辑宿主仍严格排除。 */
+function isTextlessSelectionDecoration(element: Element): boolean {
+    const tag = getElementTagName(element);
+    return (tag === 'svg' || element.getAttribute('aria-hidden') === 'true' && !isSelectionExcludedTagName(tag))
+        && !selectionExcludedRoles.has(element.getAttribute('role')?.trim().toLowerCase() ?? '')
+        && !isEditableSelectionElement(element)
+        && !element.textContent?.trim();
+}
+
 /**
- * 划词翻译处理用户主动选中的正文与代码文字，不处理交互控件；内联图片与 emoji 图片不算原子内容，跨越它们的文字选区仍会出卡。这里同时检查选区两端
- * 与实时 DOM 中相交且具有可见几何的排除元素，避免隐藏控件误伤浏览器生成的段落选区。
+ * 划词翻译处理用户主动选中的正文与代码文字，不处理交互控件；显式启用编辑区时只放行
+ * 完整位于同一宿主内的选区；内联图片与 emoji 图片不算原子内容，跨越它们的文字选区仍会出卡。
+ * 检查两端与实时 DOM 中相交且具有可见几何的排除元素，跳过空装饰图标，避免隐藏控件误伤浏览器生成的段落选区。
  */
-export function shouldIgnoreSelection(range: Range): boolean {
+export function shouldIgnoreSelection(range: Range, allowEditableSelection = false): boolean {
+    const editableRoot = allowEditableSelection ? getSharedEditableSelectionRoot(range) : null;
+    const unselectedEnd = firstUnselectedSelectionEnd(range);
     const boundaries = [
         elementFromSelectionNode(range.startContainer),
-        elementFromSelectionNode(range.endContainer),
+        elementFromSelectionNode(unselectedEnd ? unselectedEnd.parentNode : range.endContainer),
     ];
-    if (boundaries.some(element => isSelectionExcludedElement(element) &&
+    if (boundaries.some(element => isSelectionExcludedElement(element, editableRoot) &&
         !(element && isInlineSelectionFormulaPart(element)))) return true;
 
     try {
-        return selectionExcludedDescendants(range).some((element) => {
+        for (const element of selectionExcludedDescendants(range, unselectedEnd)) {
             try {
-                if (!isIntrinsicallyExcludedSelectionElement(element) &&
-                    isTopLevelApplicationShell(element)) return false;
-                if (!isSelectionExcludedElement(element)) return false;
-                if (isInlineSelectionFormulaPart(element)) return false;
-                return range.intersectsNode(element) && hasNonZeroClientRect(element);
+                if (!isIntrinsicallyExcludedSelectionElement(element, editableRoot) &&
+                    (isDocumentSurfaceNoTranslateShell(element) || isTopLevelApplicationShell(element)
+                        || isAllowedEditableSelectionMarker(element, editableRoot)) &&
+                    !isSelectionNonMarkerExcluded(element, editableRoot)) continue;
+                if (!isSelectionExcludedElement(element, editableRoot)) continue;
+                if (isInlineSelectionFormulaPart(element)) continue;
+                if (isTextlessSelectionDecoration(element)) continue;
+                if (range.intersectsNode(element) && hasNonZeroClientRect(element)) return true;
             } catch {
-                return false;
+                // 单个失效节点不能阻止后续仍有效的受保护内容被识别。
             }
-        });
+        }
+        return false;
     } catch {
         return false;
     }
@@ -443,6 +573,15 @@ export function chooseSelectionRect(rects: SelectionRect[], isForward = true): S
     return isForward ? rects[rects.length - 1] : rects[0];
 }
 
+/** 卡片避让完整选区的纵向范围，横向仍对齐选择方向的端点行。 */
+export function getSelectionPopupAnchor(rects: SelectionRect[], isForward = true): SelectionRect | null {
+    const anchor = chooseSelectionRect(rects, isForward);
+    if (!anchor) return null;
+    let {top, bottom} = anchor;
+    for (const rect of rects) {top = Math.min(top, rect.top); bottom = Math.max(bottom, rect.bottom);}
+    return {...anchor, top, bottom, height: bottom - top};
+}
+
 /**
  * 以当前选中行作为弹层锚点并限制在视口内。计算保持为纯函数，使滚动和缩放行为
  * 无需挂载 Vue、也不依赖宿主页面 CSS 即可测试。
@@ -454,34 +593,40 @@ export function calculateSelectionPopupPosition(
     padding = DEFAULT_PADDING,
     gap = DEFAULT_GAP,
 ): PopupPosition {
-    const maxLeft = Math.max(padding, viewport.width - popup.width - padding);
-    const left = clamp(anchor.left, padding, maxLeft);
-    const fitsAbove = anchor.top - popup.height - gap >= padding;
-    const placement = fitsAbove ? 'top' : 'bottom';
-    const rawTop = fitsAbove ? anchor.top - popup.height - gap : anchor.bottom + gap;
-    const maxTop = Math.max(padding, viewport.height - popup.height - padding);
+    const viewportLeft = viewport.left ?? 0;
+    const viewportTop = viewport.top ?? 0;
+    const minLeft = viewportLeft + padding;
+    const minTop = viewportTop + padding;
+    const maxLeft = Math.max(minLeft, viewportLeft + viewport.width - popup.width - padding);
+    const left = clamp(anchor.left, minLeft, maxLeft);
+    const viewportBottom = viewportTop + viewport.height - padding;
+    const aboveBottom = Math.min(anchor.top - gap, viewportBottom);
+    const belowTop = Math.max(anchor.bottom + gap, minTop);
+    const availableAbove = Math.max(0, aboveBottom - minTop);
+    const availableBelow = Math.max(0, viewportBottom - belowTop);
+    // 两侧都放不下时，优先较宽裕的一侧并限高；离开可见区的旧锚点也不能放大可用空间。
+    const placement = popup.height <= availableAbove ? 'top' : popup.height <= availableBelow ? 'bottom'
+        : availableAbove >= availableBelow ? 'top' : 'bottom';
+    const height = Math.min(popup.height, Math.max(1, placement === 'top' ? availableAbove : availableBelow));
+    const top = placement === 'top' ? aboveBottom - height : belowTop;
 
     return {
         left,
-        top: clamp(rawTop, padding, maxTop),
+        top: clamp(top, minTop, Math.max(minTop, viewportBottom - height)),
         placement,
-    };
-}
-
-/** 阅读卡先预留固定屏幕尺寸，再以补偿后的可见尺寸定位。 */
-export function calculateReadingPopupLayout(anchor: SelectionRect, viewport: ViewportSize, scale = 1): PopupPosition & PopupSize {
-    const safeScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
-    const visibleWidth = Math.max(0, Math.min(388 * safeScale, viewport.width - 2 * DEFAULT_PADDING));
-    const visibleHeight = Math.max(0, Math.min(520 * safeScale, viewport.height - 2 * DEFAULT_PADDING));
-    return {
-        ...calculateSelectionPopupPosition(anchor, {width: visibleWidth, height: visibleHeight}, viewport),
-        width: visibleWidth / safeScale,
-        height: visibleHeight / safeScale,
+        ...(height < popup.height ? {maxHeight: height} : {}),
     };
 }
 
 export function normalizeSpeechLanguage(language: string | undefined, fallback = 'en-US'): string {
-    const normalized = String(language ?? '').trim().replace(/_/g, '-');
+    let normalized = String(language ?? '').trim().replace(/_/g, '-');
+    // 词书导入和语言检测可能保存 ISO 639-3（如 eng、jpn）；只归一化主语言子标签，
+    // 再拼回原来的脚本和地区，避免 zho-Hant 被扩展成 zh-Hant-Hant。
+    if (/^[a-z]{3}(?:-|$)/iu.test(normalized)) {
+        const [primary, ...subtags] = normalized.split('-');
+        const canonical = normalizeDetectedLanguageCode(primary);
+        if (canonical) normalized = [canonical, ...subtags].join('-');
+    }
     const lower = normalized.toLowerCase();
     if (!normalized || ['auto', 'detect', 'unknown', 'und'].includes(lower)) return fallback;
 

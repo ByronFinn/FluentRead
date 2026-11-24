@@ -72,7 +72,7 @@ vi.mock('element-plus', async () => {
     }});
     const Option = defineComponent({props: ['value', 'label'], setup: props => () => h('option', {value: props.value}, props.label)});
     const Slot = defineComponent({setup: (_, {slots}) => () => h('span', slots.default?.())});
-    const Dialog = defineComponent({props: ['modelValue'], emits: ['closed'], setup(props, {slots, emit}) {
+    const Dialog = defineComponent({props: ['modelValue'], emits: ['closed', 'update:modelValue'], setup(props, {slots, emit}) {
         const rendered = ref(Boolean(props.modelValue));
         let closing: (() => void) | undefined;
         watch(() => props.modelValue, value => {
@@ -82,7 +82,8 @@ vi.mock('element-plus', async () => {
             if (ports.delayDialogClosed) {closing = closed; ports.pendingDialogClosed.add(closed);} else closed();
         });
         onUnmounted(() => {if (closing) ports.pendingDialogClosed.delete(closing);});
-        return () => rendered.value ? h('div', {'data-dialog-visible': String(Boolean(props.modelValue)), 'aria-hidden': !props.modelValue}, [...slots.default?.() ?? [], ...slots.footer?.() ?? []]) : null;
+        return () => rendered.value ? h('div', {'data-dialog-visible': String(Boolean(props.modelValue)), 'aria-hidden': !props.modelValue}, [...slots.default?.() ?? [], ...slots.footer?.() ?? [],
+            h('button', {'data-dialog-close': '', onClick: () => emit('update:modelValue', false)}, 'Close')]) : null;
     }});
     const Button = defineComponent({props: ['disabled', 'loading', 'nativeType', 'type'], setup: (props, {attrs, slots}) => () => h('button', {...attrs, disabled: props.disabled || props.loading, type: props.nativeType || 'button'}, slots.default?.())});
     const NumberInput = defineComponent({props: ['modelValue', 'disabled'], emits: ['update:modelValue'], setup: (props, {attrs, emit}) => () => h('input', {...attrs, type: 'number', value: props.modelValue, disabled: props.disabled,
@@ -120,6 +121,7 @@ import {VIDEO_LOCAL_TRANSCRIPTION_STATE_KEY, VIDEO_LOCAL_TRANSCRIPTION_STATE_MES
 import {getVideoAiModelFileUrl, VIDEO_AI_Q4_MODEL_FILES, VIDEO_AI_SMALL_MODEL_FILES} from '@/src/features/video-subtitle/offscreen/modelCache';
 import {VIDEO_AI_SUBTITLE_CACHE_CLEAR_MESSAGE, VIDEO_AI_SUBTITLE_CACHE_STATS_MESSAGE} from '@/src/features/video-subtitle/transcriptionCache';
 import {createVideoSubtitleBackgroundHandlers} from '@/src/features/video-subtitle/background/handlers';
+import type {OffscreenResponseMap, VideoTranscriptionModel} from '@/src/core/messaging/offscreen';
 import {createBackgroundMessageRouter, createBackgroundRuntimeMessageListener} from '@/src/services/messaging/backgroundRouter';
 import {downloadProgressKey, videoModelDownloadId} from '@/src/core/download/progress';
 import {appendConfigHistorySnapshot, toRestorableConfig} from '@/src/services/config/history';
@@ -141,16 +143,21 @@ function deferred<T>() {
     return {promise, resolve, reject};
 }
 async function settle() {for (let index = 0; index < 12; index++) {await Promise.resolve(); await nextTick();}}
-async function mount(component: Component, props: Record<string, unknown> = {}) {
+async function mount(component: Component, props: Record<string, unknown> = {}, keepAlive = false) {
     const host = dom.document.createElement('div'); dom.document.body.append(host);
-    const state = reactive(props); const app = createApp({setup: () => () => h(component, state)});
+    const state = reactive(props), shown = ref(true);
+    const app = createApp({setup: () => () => keepAlive
+        ? h(KeepAlive, null, {default: () => shown.value ? h(component, state) : h('div', {key: 'other'})})
+        : h(component, state)});
     const elementPlus = await import('element-plus');
     app.component('el-select', elementPlus.ElSelect); app.component('el-option', elementPlus.ElOption); app.component('el-dialog', elementPlus.ElDialog);
     app.component('el-button', elementPlus.ElButton); app.component('el-input-number', elementPlus.ElInputNumber); app.component('el-switch', elementPlus.ElSwitch);
-    // 本组不操作粘贴输入；文件读取与导出路径只需注册此输入端口，避免解析警告。
-    app.component('el-input', {render: () => null});
+    // 真实 textarea 只实现输入控件公开的 v-model 端口；JSON 解析、预览和归属规则由产品 SFC 执行。
+    app.component('el-input', defineComponent({props: ['modelValue', 'type', 'rows'], emits: ['update:modelValue'], setup: (props, {attrs, emit}) => () => h('textarea', {
+        ...attrs, rows: props.rows, value: props.modelValue, onInput: (event: Event) => emit('update:modelValue', (event.target as HTMLTextAreaElement).value),
+    })}));
     apps.add(app); app.mount(host); await settle();
-    return {host, state, stop: () => {app.unmount(); apps.delete(app);}};
+    return {host, state, shown, stop: () => {app.unmount(); apps.delete(app);}};
 }
 function input(host: HTMLElement, selector: string, value: string, change = true) {
     const field = host.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)!;
@@ -189,7 +196,7 @@ function authFixture() {
     const identity = {getAuthToken: vi.fn(async () => ({token: 'token-A', grantedScopes: [...GOOGLE_DRIVE_SCOPES]})),
         removeCachedAuthToken: vi.fn(async (_details: {token: string}) => undefined), clearAllCachedAuthTokens: vi.fn(async () => undefined)};
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({user: {permissionId: 'A'}})));
-    const authPorts: DriveAuthPorts = {userAgent: () => 'Chrome/142.0', identity, fetch: fetcher,
+    const authPorts: DriveAuthPorts = {userAgent: () => 'Chrome/142.0', userAgentData: () => ({brands: [{brand: 'Google Chrome'}], mobile: false}), identity, fetch: fetcher,
         runtime: {id: GOOGLE_DRIVE_EXTENSION_ID, getManifest: () => ({oauth2: {client_id: GOOGLE_DRIVE_DEFAULT_CLIENT_ID, scopes: [...GOOGLE_DRIVE_SCOPES]}})}};
     return {identity, fetcher, auth: createDriveAuth(authPorts)};
 }
@@ -374,51 +381,58 @@ describe('audit49C local TTS lifecycle through real controls and backend message
     });
 });
 
-describe('audit49C learning-memory confirmation lifetime', () => {
-    it('does not send a clear mutation after the requesting component is unmounted', async () => {
-        const confirm = deferred<void>(); ports.confirm.mockImplementationOnce(() => confirm.promise);
-        ports.send.mockResolvedValue({success: true, memories: [{id: '12345678-1234-4234-8234-123456789abc', kind: 'note', content: 'Retained fixture', updatedAt: 1, createdAt: 1}]});
-        const {host, stop} = await mount(LearningMemoryManager, {enabled: true});
-        const clear = Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(button => button.textContent === 'learning.memoryClear')!;
-        expect(clear).not.toBeUndefined(); clear.click(); await settle(); stop(); confirm.resolve(); await settle();
-        expect(ports.send.mock.calls.map(([message]) => message.action)).not.toContain('memory-clear');
+describe.each(['history','memory'] as const)('audit49C %s 清空确认归属', kind => {
+    const reply = () => kind==='history'
+        ? {success:true,sessions:[{id:'session-fixture',text:'Retained reading fixture',intent:'meaning',updatedAt:1,turnCount:1}],hasMore:false}
+        : {success:true,memories:[{id:'12345678-1234-4234-8234-123456789abc',kind:'note',content:'Retained fixture',updatedAt:1,createdAt:1}]};
+    const action = () => kind==='history'?'sessions-clear':'memory-clear';
+    const clearButton = (host:HTMLElement) => [...host.querySelectorAll<HTMLButtonElement>('button')].find(button=>button.textContent===(kind==='history'?'清空记录':'learning.memoryClear'))!;
+    const dialog = (host:HTMLElement) => host.querySelector<HTMLElement>('[data-dialog-visible="true"]');
+    const button = (host:HTMLElement, label:string) => [...dialog(host)!.querySelectorAll<HTMLButtonElement>('button')].find(item=>item.textContent===label)!;
+    const calls = () => ports.send.mock.calls.filter(([message])=>message.action===action());
+    it('连续触发只打开一个确认，重复旧事件不会再次清空', async () => {
+        ports.send.mockResolvedValue(reply());const {host}=await mount(kind==='history'?HarnessReadingHistory:LearningMemoryManager,{enabled:true});
+        const clear=clearButton(host);clear.click();clear.click();await settle();expect(host.querySelectorAll('[data-dialog-visible="true"]')).toHaveLength(1);
+        const accept=button(host,'common.confirm');accept.click();await settle();expect(calls()).toHaveLength(1);
+        accept.click();await settle();expect(calls()).toHaveLength(1);
     });
-    it('still clears after confirmation while mounted and keeps data when confirmation is cancelled', async () => {
-        ports.send.mockResolvedValue({success: true, memories: [{id: '12345678-1234-4234-8234-123456789abc', kind: 'note', content: 'Retained fixture', updatedAt: 1, createdAt: 1}]});
-        const {host} = await mount(LearningMemoryManager, {enabled: true});
-        const findClear = () => Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(button => button.textContent === 'learning.memoryClear')!;
-        ports.confirm.mockRejectedValueOnce('cancel'); findClear().click(); await settle(); expect(host.textContent).toContain('Retained fixture');
-        expect(ports.send.mock.calls.map(([message]) => message.action)).not.toContain('memory-clear');
-        findClear().click(); await settle(); expect(ports.send.mock.calls.map(([message]) => message.action)).toContain('memory-clear');
-        expect(host.textContent).not.toContain('Retained fixture'); expect(host.textContent).toContain('learning.memoryCleared');
+    it('取消后保留数据，重新确认可清空', async () => {
+        ports.send.mockResolvedValue(reply());const {host}=await mount(kind==='history'?HarnessReadingHistory:LearningMemoryManager,{enabled:true});
+        clearButton(host).click();await settle();button(host,'common.cancel').click();await settle();expect(dialog(host)).toBeNull();expect(calls()).toHaveLength(0);
+        expect(host.textContent).toContain(kind==='history'?'Retained reading fixture':'Retained fixture');
+        clearButton(host).click();await settle();button(host,'common.confirm').click();await settle();expect(calls()).toHaveLength(1);
+        expect(host.textContent).not.toContain(kind==='history'?'Retained reading fixture':'Retained fixture');
     });
-});
-
-describe('audit49C reading-history confirmation lifetime', () => {
-    const history = () => ({success: true, sessions: [{id: 'session-fixture', text: 'Retained reading fixture', intent: 'meaning', updatedAt: 1, turnCount: 1}], hasMore: false});
-    const findClear = (host: HTMLElement) => Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(button => button.textContent === '清空记录')!;
-
-    it('keeps reading history when a pending confirmation resolves after its owner unmounts', async () => {
-        const confirm = deferred<void>(); ports.confirm.mockImplementationOnce(() => confirm.promise);
-        ports.send.mockResolvedValue(history());
-        const {host, stop} = await mount(HarnessReadingHistory);
-        expect(host.textContent).toContain('Retained reading fixture');
-        findClear(host).click(); await settle();
-        expect(ports.confirm).toHaveBeenCalledTimes(1);
-        stop(); confirm.resolve(); await settle();
-        expect(ports.send.mock.calls.map(([message]) => message.action)).not.toContain('sessions-clear');
+    it('缓存面板隐藏时关闭遮罩，旧确认不能清空当前数据', async () => {
+        ports.send.mockResolvedValue(reply());const {host,shown}=await mount(kind==='history'?HarnessReadingHistory:LearningMemoryManager,{enabled:true},true);
+        clearButton(host).click();await settle();const old=button(host,'common.confirm');shown.value=false;await settle();expect(dialog(host)).toBeNull();
+        shown.value=true;await settle();old.click();await settle();expect(calls()).toHaveLength(0);
     });
-
-    it('preserves cancellation and clears the list after confirmation while its owner is mounted', async () => {
-        ports.send.mockResolvedValue(history());
-        const {host} = await mount(HarnessReadingHistory);
-        ports.confirm.mockRejectedValueOnce('cancel'); findClear(host).click(); await settle();
-        expect(host.textContent).toContain('Retained reading fixture');
-        expect(ports.send.mock.calls.map(([message]) => message.action)).not.toContain('sessions-clear');
-        findClear(host).click(); await settle();
-        expect(ports.send.mock.calls.map(([message]) => message.action).filter(action => action === 'sessions-clear')).toHaveLength(1);
-        expect(host.textContent).not.toContain('Retained reading fixture');
-        expect(host.textContent).toContain('还没有阅读记录');
+    it('导航可见性同步关闭再恢复后，旧确认不能清空数据', async () => {
+        const visible=ref(true);ports.send.mockResolvedValue(reply());const {host}=await mount(kind==='history'?HarnessReadingHistory:LearningMemoryManager,{enabled:true,isVisible:()=>visible.value});
+        clearButton(host).click();await settle();const old=button(host,'common.confirm');visible.value=false;visible.value=true;await settle();expect(dialog(host)).toBeNull();old.click();await settle();expect(calls()).toHaveLength(0);
+    });
+    it('旧确认迟到不能关闭新确认，当前确认仍能清空一次', async () => {
+        ports.send.mockResolvedValue(reply());const {host,shown}=await mount(kind==='history'?HarnessReadingHistory:LearningMemoryManager,{enabled:true},true);
+        clearButton(host).click();await settle();const old=button(host,'common.confirm');shown.value=false;await settle();shown.value=true;await settle();clearButton(host).click();await settle();
+        old.click();await settle();expect(dialog(host)).not.toBeNull();expect(calls()).toHaveLength(0);button(host,'common.confirm').click();await settle();expect(calls()).toHaveLength(1);
+    });
+    it('旧对话框关闭事件不会关闭新确认', async () => {
+        ports.send.mockResolvedValue(reply());const {host,shown}=await mount(kind==='history'?HarnessReadingHistory:LearningMemoryManager,{enabled:true},true);
+        clearButton(host).click();await settle();
+        const old=host.querySelector<HTMLButtonElement>('[data-dialog-close]')!;
+        shown.value=false;await settle();shown.value=true;await settle();clearButton(host).click();await settle();old.click();await settle();
+        expect(dialog(host)).not.toBeNull();expect(calls()).toHaveLength(0);host.querySelector<HTMLButtonElement>('[data-dialog-close]')!.click();await settle();expect(dialog(host)).toBeNull();
+    });
+    it('卸载后旧确认不能清空', async () => {
+        ports.send.mockResolvedValue(reply());const {host,stop}=await mount(kind==='history'?HarnessReadingHistory:LearningMemoryManager,{enabled:true});
+        clearButton(host).click();await settle();const old=button(host,'common.confirm');stop();old.click();await settle();expect(calls()).toHaveLength(0);
+    });
+    it('确认已提交后隐藏不会撤销用户已接受的清空', async () => {
+        const pending=deferred<unknown>();ports.send.mockImplementation((message:any)=>message.action===action()?pending.promise:Promise.resolve(reply()));
+        const {host,shown}=await mount(kind==='history'?HarnessReadingHistory:LearningMemoryManager,{enabled:true},true);
+        clearButton(host).click();await settle();button(host,'common.confirm').click();await settle();expect(calls()).toHaveLength(1);
+        shown.value=false;await settle();pending.resolve({success:true});await settle();shown.value=true;await settle();expect(calls()).toHaveLength(1);
     });
 });
 
@@ -476,6 +490,9 @@ describe('audit49C video model and cache lifecycle in the client template', () =
 
 // 实际后台 handler + 实际路由/失败回复纪律。这里只控制 Offscreen、storage 和回包传输端口，
 // 不生成业务 snapshot；捕获的 models 完全由生产 handler 的串行写入产生。
+function videoPrepared(model: VideoTranscriptionModel): Extract<OffscreenResponseMap['VIDEO_AI_PREPARE'], {success: true}> {
+    return {success: true, model};
+}
 function videoHandlerFixture(initial: string[] = []) {
     let values: Record<string, unknown> = {[VIDEO_LOCAL_TRANSCRIPTION_STATE_KEY]: [...initial]};
     const events: unknown[] = [];
@@ -493,7 +510,14 @@ function videoHandlerFixture(initial: string[] = []) {
             }}, 'local');
         }),
     };
-    const offscreen = {send: vi.fn(async (_message: any) => ({success: true})), sendIfPresent: vi.fn(async () => ({success: true}))};
+    const offscreen = {
+        send: vi.fn(async (message: {type: string; model?: VideoTranscriptionModel}): Promise<OffscreenResponseMap['VIDEO_AI_PREPARE'] | OffscreenResponseMap['VIDEO_AI_REMOVE_MODEL']> => {
+            if (message.type === 'VIDEO_AI_PREPARE') return videoPrepared(message.model ?? 'tiny');
+            if (message.type === 'VIDEO_AI_REMOVE_MODEL') return {success: true};
+            throw new Error(`Unexpected Offscreen fixture request: ${message.type}`);
+        }),
+        sendIfPresent: vi.fn(async () => ({success: true})),
+    };
     const listener = createBackgroundRuntimeMessageListener(createBackgroundMessageRouter(
         createVideoSubtitleBackgroundHandlers({offscreen: offscreen as any, storage}),
     ), () => ({}));
@@ -593,7 +617,7 @@ describe('video settings real template recovery boundaries', () => {
         expect(host.querySelector('[data-video-model-progress="small"] progress')!.getAttribute('value')).toBe('20');
         emitVideoProgress('small'); await settle();
         expect(videoCard(host, 'small').querySelector('.video-model-availability')!.textContent).toContain('尚未下载');
-        fixture.offscreen.send.mockImplementationOnce(async () => {fixture.cacheUrls.add(tokenizer); return {success: true};});
+        fixture.offscreen.send.mockImplementationOnce(async () => {fixture.cacheUrls.add(tokenizer); return videoPrepared('small');});
         await clickVideoModel(host, 'small');
         expect(videoCard(host, 'small').querySelector('.video-model-availability')!.textContent).toContain('可离线使用');
         const oldProgress = [...ports.storageListeners]; state.active = false; await settle();
@@ -653,7 +677,7 @@ describe('video settings real template recovery boundaries', () => {
         });
         const {host} = await mount(VideoLocalModelSettings, {config: normalizeConfig({videoTranslationEnabled: true})});
         expect(host.querySelector('.video-ai-cache-panel [role="alert"]')!.textContent).toContain('无法读取已识别字幕缓存');
-        expect(host.querySelector('.video-ai-cache-status')!.textContent).toContain('读取失败');
+        expect(host.querySelector('.video-ai-cache-panel .video-ai-cache-status')!.textContent).toContain('读取失败');
     });
     it.each(['empty', 'Error', 'non-Error', 'reported'])('preserves visible cache entries and allows retry after %s clear failure', async mode => {
         installReplies(async () => {
@@ -683,14 +707,14 @@ describe('video settings real template recovery boundaries', () => {
 });
 describe('audit49C followup1 cross-model convergence through public handlers and real client buttons', () => {
     it('keeps both successful concurrent downloads when the earlier captured reply is delivered last', async () => {
-        const fixture = videoHandlerFixture(); const tinyWorker = deferred<{success: boolean}>(); const baseWorker = deferred<{success: boolean}>();
+        const fixture = videoHandlerFixture(); const tinyWorker = deferred<OffscreenResponseMap['VIDEO_AI_PREPARE']>(); const baseWorker = deferred<OffscreenResponseMap['VIDEO_AI_PREPARE']>();
         fixture.offscreen.send.mockImplementation((message: any) => message.model === 'tiny' ? tinyWorker.promise : baseWorker.promise);
         const tinyReply = fixture.hold('fluentReadPrepareLocalVideoModel', 'tiny');
         const {host} = await mount(VideoLocalModelSettings, {config: normalizeConfig({videoTranslationEnabled: true})});
         await clickVideoModel(host, 'tiny'); await clickVideoModel(host, 'base');
         expect(fixture.offscreen.send.mock.calls.map(([message]) => message.model)).toEqual(['tiny', 'base']);
-        tinyWorker.resolve({success: true}); expect((await tinyReply.captured.promise).models).toEqual(['tiny']);
-        baseWorker.resolve({success: true}); await settle();
+        tinyWorker.resolve(videoPrepared('tiny')); expect((await tinyReply.captured.promise).models).toEqual(['tiny']);
+        baseWorker.resolve(videoPrepared('base')); await settle();
         expect(fixture.models()).toEqual(['tiny', 'base']);
         tinyReply.release.resolve(); await settle(); expectVideoModels(host, ['tiny', 'base']);
     });
@@ -716,7 +740,7 @@ describe('audit49C followup1 cross-model convergence through public handlers and
         tinyReply.release.resolve(); await settle(); expectVideoModels(host, ['base']);
     });
     it('re-reads external changes after a failed command and retains the independent command error', async () => {
-        const fixture = videoHandlerFixture(); const worker = deferred<{success: boolean; error: string}>();
+        const fixture = videoHandlerFixture(); const worker = deferred<OffscreenResponseMap['VIDEO_AI_PREPARE']>();
         fixture.offscreen.send.mockImplementationOnce(() => worker.promise);
         const {host} = await mount(VideoLocalModelSettings, {config: normalizeConfig({videoTranslationEnabled: true})});
         await clickVideoModel(host, 'tiny');
@@ -728,8 +752,8 @@ describe('audit49C followup1 cross-model convergence through public handlers and
         expect(host.querySelector('.video-model-management [role="alert"]')).toBeNull();
     });
     it('keeps one concurrent download success when the other command fails', async () => {
-        const fixture = videoHandlerFixture(); const tinyWorker = deferred<{success: boolean; error?: string}>();
-        fixture.offscreen.send.mockImplementation((message: any) => message.model === 'tiny' ? tinyWorker.promise : Promise.resolve({success: true}));
+        const fixture = videoHandlerFixture(); const tinyWorker = deferred<OffscreenResponseMap['VIDEO_AI_PREPARE']>();
+        fixture.offscreen.send.mockImplementation(message => message.model === 'tiny' ? tinyWorker.promise : Promise.resolve(videoPrepared('base')));
         const {host} = await mount(VideoLocalModelSettings, {config: normalizeConfig({videoTranslationEnabled: true})});
         await clickVideoModel(host, 'tiny'); await clickVideoModel(host, 'base');
         tinyWorker.resolve({success: false, error: 'tiny failed'}); await settle();
@@ -762,19 +786,19 @@ describe('audit49C followup1 cross-model convergence through public handlers and
     });
     it('keeps a command error after a failed terminal read is later recovered', async () => {
         const fixture = videoHandlerFixture(); const {host} = await mount(VideoLocalModelSettings, {config: normalizeConfig({videoTranslationEnabled: true})});
-        fixture.offscreen.send.mockResolvedValueOnce({success: false});
+        fixture.offscreen.send.mockResolvedValueOnce({success: false, error: 'controlled failed download'});
         fixture.failState(new Error('read failed after command failure'));
         await clickVideoModel(host, 'tiny');
         await fixture.storage.set({[VIDEO_LOCAL_TRANSCRIPTION_STATE_KEY]: ['base']}); await settle();
         expectVideoModels(host, ['base']); expect(host.querySelector('.video-model-management [role="alert"]')!.textContent).toContain('模型下载失败，请检查网络后重试');
     });
     it('preserves external state after an actual remove handler rejects and permits retry', async () => {
-        const fixture = videoHandlerFixture(['tiny']); const worker = deferred<{success: boolean}>();
+        const fixture = videoHandlerFixture(['tiny']); const worker = deferred<OffscreenResponseMap['VIDEO_AI_REMOVE_MODEL']>();
         fixture.offscreen.send.mockImplementationOnce(() => worker.promise);
         const {host} = await mount(VideoLocalModelSettings, {config: normalizeConfig({videoTranslationEnabled: true})});
         await clickVideoModel(host, 'tiny');
         await fixture.storage.set({[VIDEO_LOCAL_TRANSCRIPTION_STATE_KEY]: ['tiny', 'base']});
-        worker.resolve({success: false}); await settle();
+        worker.resolve({success: false, error: '模型清除失败'}); await settle();
         expectVideoModels(host, ['tiny', 'base']); expect(host.querySelector('.video-model-management [role="alert"]')!.textContent).toContain('模型清除失败');
         await clickVideoModel(host, 'tiny'); expect(fixture.models()).toEqual(['base']); expectVideoModels(host, ['base']);
         expect(host.querySelector('.video-model-management [role="alert"]')).toBeNull();
@@ -806,7 +830,7 @@ describe('audit49C followup1 cross-model convergence through public handlers and
         expect(page.host.querySelector('[data-video-model-source]')).toBeNull();
     });
     it('renders real download byte progress while keeping connection and fallback sources internal, then permits retry', async () => {
-        const gate = deferred<{success: boolean; error?: string}>(), fixture = videoHandlerFixture(); fixture.offscreen.send.mockReturnValueOnce(gate.promise);
+        const gate = deferred<OffscreenResponseMap['VIDEO_AI_PREPARE']>(), fixture = videoHandlerFixture(); fixture.offscreen.send.mockReturnValueOnce(gate.promise);
         const {host} = await mount(VideoLocalModelSettings, {config: normalizeConfig({videoTranslationEnabled: true})});
         await clickVideoModel(host, 'small');
         const progress = () => host.querySelector('[data-video-model-progress="small"]')!;
@@ -838,7 +862,7 @@ describe('audit49C followup1 cross-model convergence through public handlers and
         const current = state as {config: Config};
         const requests = ports.send.mock.calls.length;
         expect(host.querySelector('.video-model-source-links')).toBeNull(); expect(host.querySelector('[data-video-model-source]')).toBeNull();
-        expect([...host.querySelectorAll('input[type="radio"]')].map(input => input.getAttribute('value'))).toEqual(['tiny', 'base', 'small']);
+        expect([...host.querySelectorAll('.video-model-list input[type="radio"]')].map(input => input.getAttribute('value'))).toEqual(['tiny', 'base', 'small']);
         let bubbled = 0; host.addEventListener('click', () => bubbled++);
         videoCard(host, 'base').dispatchEvent(new Event('click', {bubbles: true})); await settle();
         expect(current.config.videoLocalModel).toBe('base'); expect(ports.send).toHaveBeenCalledTimes(requests); expect(bubbled).toBe(1);
@@ -941,6 +965,181 @@ describe('audit49C followup2 restore visibility during the dialog closing transi
 
 describe('audit49C followup1 cache-limit draft and authoritative configuration', () => {
     const stats = {success: true, stats: {bytes: 0, entries: 0, maxBytes: 10 * 1024 * 1024, maxEntries: 10000}};
+    it.each(['panel', 'keep-alive'] as const)('[cache-draft-owner] %s departure settles old authoritative limits without replacing a later failed draft', async reason => {
+        for (const oldOutcome of ['success', 'failure'] as const) for (const oldTiming of ['before', 'after'] as const) {
+            ports.send.mockReset();ports.patch.mockReset();ports.send.mockResolvedValue(stats);
+            const old = deferred<void>(), latest = deferred<void>();
+            ports.patch.mockReturnValueOnce(old.promise).mockReturnValueOnce(latest.promise).mockResolvedValue(undefined);
+            const page = await mount(TranslationCacheSettings, {config: normalizeConfig({}), active: true}, true);
+            const fields = () => Array.from(page.host.querySelectorAll<HTMLInputElement>('input[type="number"]')).map(field => field.value);
+            const edit = async (size: string, entries: string) => {
+                input(page.host, 'input[aria-label="settings.cache.maxSize"]', size);
+                input(page.host, 'input[aria-label="settings.cache.maxEntries"]', entries);await settle();
+            };
+            const submit = async () => {page.host.querySelector('form')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));await settle();};
+            await edit('2', '300');await submit();
+            Object.assign(page.state.config as object, {translationCacheMaxBytes: 3 * 1024 * 1024, translationCacheMaxEntries: 500});await settle();
+            if (reason === 'panel') page.state.active = false;else page.shown.value = false;
+            await settle();
+            if (reason === 'panel') page.state.active = true;else page.shown.value = true;
+            await settle();expect.soft(fields()).toEqual(['3', '500']);
+            await edit('4', '600');await submit();
+            const reads = ports.send.mock.calls.length;
+            const settleOld = async () => {if (oldOutcome === 'success') old.resolve();else old.reject(new Error('old departed save'));await settle();};
+            if (oldTiming === 'before') {
+                await settleOld();expect(namedButton(page.host, 'common.save').disabled).toBe(true);
+                expect(page.host.querySelector('[role="status"]')).toBeNull();
+            }
+            latest.reject(new Error('fresh save failed'));await settle();
+            if (oldTiming === 'after') await settleOld();
+            expect.soft(fields()).toEqual(['4', '600']);
+            expect(page.host.querySelector('[role="alert"]')!.textContent).toContain('settings.cache.saveFailed');
+            expect(namedButton(page.host, 'common.save').disabled).toBe(false);expect(ports.send).toHaveBeenCalledTimes(reads);
+            await submit();expect(ports.patch.mock.calls[2][0]).toEqual({translationCacheMaxBytes: 4 * 1024 * 1024, translationCacheMaxEntries: 600});
+            page.stop();
+        }
+    });
+    it('[cache-recovery] clear timeout is unconfirmed and releases the button', async () => {
+        vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout', 'performance']});
+        ports.send.mockResolvedValue(stats); const page = await mount(TranslationCacheSettings, {config: normalizeConfig({})});
+        const clear = deferred<unknown>();ports.send.mockReturnValueOnce(clear.promise);
+        const trigger = namedButton(page.host, 'settings.cache.clear');trigger.click();await settle();
+        await vi.advanceTimersByTimeAsync(15000);await settle();
+        expect(trigger.disabled).toBe(false);
+        expect(page.host.querySelector('[role="status"]')!.textContent).toBe('settings.cache.clearUnconfirmed');
+        expect(page.host.querySelector('[role="alert"]')).toBeNull();
+        clear.resolve({success: true});await settle();
+        expect(page.host.querySelector('[role="status"]')!.textContent).toBe('settings.cache.clearUnconfirmed');
+    });
+    it('[cache-recovery] clear ACK and following statistics share one deadline', async () => {
+        vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout', 'performance']});
+        ports.send.mockResolvedValue(stats); const page = await mount(TranslationCacheSettings, {config: normalizeConfig({})});
+        const clear = deferred<unknown>(), read = deferred<unknown>();ports.send.mockReturnValueOnce(clear.promise).mockReturnValueOnce(read.promise);
+        const trigger = namedButton(page.host, 'settings.cache.clear');trigger.click();await settle();
+        await vi.advanceTimersByTimeAsync(9000);clear.resolve({success: true});await settle();
+        await vi.advanceTimersByTimeAsync(5999);expect(trigger.disabled).toBe(true);
+        await vi.advanceTimersByTimeAsync(1);await settle();expect(trigger.disabled).toBe(false);
+        expect(page.host.querySelector('[role="status"]')!.textContent).toBe('settings.cache.cleared');
+        expect(page.host.querySelector('[role="alert"]')!.textContent).toBe('settings.cache.readFailed');
+        read.resolve(stats);await settle();expect(page.host.querySelector('[role="alert"]')!.textContent).toBe('settings.cache.readFailed');
+    });
+    it('[cache-recovery] reports pending pages without claiming full completion', async () => {
+        ports.send.mockResolvedValue(stats); const page = await mount(TranslationCacheSettings, {config: normalizeConfig({})});
+        ports.send.mockResolvedValueOnce({success: true, invalidationPending: true});
+        namedButton(page.host, 'settings.cache.clear').click();await settle();
+        expect(page.host.querySelector('[role="status"]')!.textContent).toBe('settings.cache.clearedPendingPages');
+    });
+    it.each(['success', 'failure'] as const)('[cache-recovery] timed-out %s cannot release or complete a new clear', async outcome => {
+        vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout', 'performance']});
+        ports.send.mockResolvedValue(stats); const page = await mount(TranslationCacheSettings, {config: normalizeConfig({})});
+        const first = deferred<unknown>(), second = deferred<unknown>();ports.send.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+        const trigger = namedButton(page.host, 'settings.cache.clear');trigger.click();await settle();
+        await vi.advanceTimersByTimeAsync(15000);await settle();expect(trigger.disabled).toBe(false);
+        trigger.click();await settle();expect(trigger.disabled).toBe(true);
+        if (outcome === 'success') first.resolve({success: true});else first.reject(new Error('late fixture'));
+        await settle();expect(trigger.disabled).toBe(true);expect(page.host.querySelector('[role="status"]')).toBeNull();
+        second.resolve({success: true});await settle();expect(trigger.disabled).toBe(false);
+        expect(page.host.querySelector('[role="status"]')!.textContent).toBe('settings.cache.cleared');
+        expect(ports.send.mock.calls.map(([message]) => message.type)).toEqual(['getTranslationCacheStats', 'clearTranslationCache', 'clearTranslationCache', 'getTranslationCacheStats']);
+    });
+    it.each(['read', 'clear', 'following-stats'] as const)('[cache-recovery] unmount releases the pending %s timer', async phase => {
+        vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout', 'performance']});
+        const pending = deferred<unknown>();ports.send.mockResolvedValue(stats);
+        if (phase === 'read') ports.send.mockReturnValueOnce(pending.promise);
+        const page = await mount(TranslationCacheSettings, {config: normalizeConfig({})});
+        if (phase !== 'read') {
+            if (phase === 'following-stats') ports.send.mockResolvedValueOnce({success: true});
+            ports.send.mockReturnValueOnce(pending.promise);namedButton(page.host, 'settings.cache.clear').click();await settle();
+        }
+        expect(vi.getTimerCount()).toBe(1);page.stop();await settle();expect(vi.getTimerCount()).toBe(0);
+        const calls = ports.send.mock.calls.length;pending.reject(new Error('late unmounted fixture'));await settle();expect(ports.send).toHaveBeenCalledTimes(calls);
+    });
+    it.each(['panel', 'keep-alive'] as const)('[cache-recovery] %s inactivity preserves draft limits and rejects old clear/save followups', async reason => {
+        vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout', 'performance']});
+        for (const phase of ['clear', 'clear-stats', 'save', 'save-stats'] as const) {
+            ports.send.mockReset();ports.send.mockResolvedValue(stats);
+            const page = await mount(TranslationCacheSettings, {config: normalizeConfig({}), active: true}, true);
+            input(page.host, 'input[aria-label="settings.cache.maxEntries"]', '300');await settle();
+            const old = deferred<unknown>(), latest = deferred<unknown>();
+            if (phase === 'clear' || phase === 'clear-stats') {
+                if (phase === 'clear-stats') ports.send.mockResolvedValueOnce({success: true});
+                ports.send.mockReturnValueOnce(old.promise);namedButton(page.host, 'settings.cache.clear').click();
+            } else {
+                if (phase === 'save') ports.patch.mockReturnValueOnce(old.promise);
+                else ports.send.mockReturnValueOnce(old.promise);
+                page.host.querySelector('form')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));
+            }
+            await settle();
+            if (reason === 'panel') page.state.active = false;else page.shown.value = false;
+            await settle();expect(vi.getTimerCount()).toBe(0);
+            const before = ports.send.mock.calls.length;ports.send.mockReturnValueOnce(latest.promise);
+            if (reason === 'panel') page.state.active = true;else page.shown.value = true;
+            await settle();expect(ports.send).toHaveBeenCalledTimes(before + 1);
+            old.resolve(phase === 'clear' ? {success: true} : phase === 'save' ? undefined : {...stats, stats: {...stats.stats, entries: 99}});
+            await settle();expect(ports.send).toHaveBeenCalledTimes(before + 1);
+            expect(namedButton(page.host, 'settings.cache.clear').disabled).toBe(true);
+            expect(page.host.querySelector('[role="status"]')).toBeNull();
+            latest.resolve({...stats, stats: {...stats.stats, entries: 7}});await settle();
+            expect(page.host.querySelector('[data-cache-entries]')!.textContent).toContain('7');
+            expect(page.host.querySelector<HTMLInputElement>('input[aria-label="settings.cache.maxEntries"]')!.value).toBe('300');
+            expect(namedButton(page.host, 'settings.cache.clear').disabled).toBe(false);page.stop();
+        }
+    });
+    it('[cache-recovery] an ACK already queued before leaving cannot launch a late stats read', async () => {
+        ports.send.mockResolvedValue(stats);const page = await mount(TranslationCacheSettings, {config: normalizeConfig({}), active: true});
+        const clear = deferred<unknown>();ports.send.mockReturnValueOnce(clear.promise);
+        namedButton(page.host, 'settings.cache.clear').click();await settle();
+        clear.resolve({success: true});await Promise.resolve();page.state.active = false;await settle();
+        expect(ports.send.mock.calls.map(([message]) => message.type)).toEqual(['getTranslationCacheStats', 'clearTranslationCache']);
+    });
+    it('[cache-recovery] renders measured KiB usage and adopts idle external limit updates', async () => {
+        ports.send.mockResolvedValue({...stats, stats: {...stats.stats, bytes: 2048, entries: 2}});
+        const page = await mount(TranslationCacheSettings, {config: normalizeConfig({})});
+        expect(page.host.querySelector('[data-cache-bytes]')!.textContent).toContain('2 KiB');
+        Object.assign(page.state.config as object, {translationCacheMaxBytes: 3 * 1024 * 1024, translationCacheMaxEntries: 300});await settle();
+        expect(Array.from(page.host.querySelectorAll<HTMLInputElement>('input[type="number"]')).map(field => field.value)).toEqual(['3', '300']);
+    });
+    it('[cache-recovery] delayed disabled-control events cannot overlap a pending cache read', async () => {
+        const read = deferred<unknown>();ports.send.mockReturnValueOnce(read.promise);
+        const page = await mount(TranslationCacheSettings, {config: normalizeConfig({})});
+        namedButton(page.host, 'settings.cache.refresh').dispatchEvent(new Event('click', {bubbles: true}));
+        page.host.querySelector('input[type="checkbox"]')!.dispatchEvent(new Event('change', {bubbles: true}));
+        page.host.querySelector('form')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true}));await settle();
+        expect(ports.patch).not.toHaveBeenCalled();expect(ports.send).toHaveBeenCalledOnce();
+        expect(ports.send).toHaveBeenCalledWith({type: 'getTranslationCacheStats'});
+        read.resolve(stats);await settle();expect(namedButton(page.host, 'settings.cache.refresh').disabled).toBe(false);
+    });
+    it.each(['success', 'failure', 'unmount'] as const)('keeps cache clearing single-flight and handles its %s receipt', async outcome => {
+        ports.send.mockResolvedValue(stats); const page = await mount(TranslationCacheSettings, {config: normalizeConfig({})});
+        const clear = deferred<any>(); ports.send.mockImplementationOnce(() => clear.promise); ports.send.mockClear();
+        const trigger = namedButton(page.host, 'settings.cache.clear');
+        trigger.click(); await settle();
+        expect(trigger.disabled).toBe(true);
+        trigger.dispatchEvent(new Event('click', {bubbles: true})); await settle();
+        expect(ports.send.mock.calls.map(([message]) => message)).toEqual([{type: 'clearTranslationCache'}]);
+        if (outcome === 'unmount') page.stop();
+        clear.resolve(outcome === 'failure' ? {success: false} : {success: true}); await settle();
+        if (outcome === 'unmount') {
+            expect(ports.send).toHaveBeenCalledOnce(); return;
+        }
+        expect(trigger.disabled).toBe(false);
+        if (outcome === 'failure') {
+            expect(page.host.querySelector('[role="alert"]')!.textContent).toBe('settings.cache.clearFailed');
+            trigger.click(); await settle();
+        }
+        expect(page.host.querySelector('[role="status"]')!.textContent).toBe('settings.cache.cleared');
+        expect(ports.send.mock.calls.map(([message]) => message.type)).toEqual(outcome === 'failure'
+            ? ['clearTranslationCache', 'clearTranslationCache', 'getTranslationCacheStats']
+            : ['clearTranslationCache', 'getTranslationCacheStats']);
+    });
+    it('saves both numeric cache limits from the rendered inputs in one patch', async () => {
+        ports.send.mockResolvedValue(stats); const page = await mount(TranslationCacheSettings, {config: normalizeConfig({})});
+        input(page.host, 'input[aria-label="settings.cache.maxSize"]', '3');
+        input(page.host, 'input[aria-label="settings.cache.maxEntries"]', '500'); await settle();
+        page.host.querySelector('form')!.dispatchEvent(new Event('submit', {bubbles: true, cancelable: true})); await settle();
+        expect(ports.patch.mock.calls.map(([patch]) => patch)).toEqual([{translationCacheMaxBytes: 3 * 1024 * 1024, translationCacheMaxEntries: 500}]);
+        expect(page.host.querySelector('[role="status"]')!.textContent).toBe('settings.cache.saved');
+    });
     it('reconciles limits received from the real parent prop while the cache toggle save is pending', async () => {
         ports.send.mockResolvedValue(stats); const page = await mount(TranslationCacheSettings, {config: normalizeConfig({})});
         const save = deferred<void>(); ports.patch.mockImplementationOnce(() => save.promise);
@@ -1009,8 +1208,8 @@ describe('audit49C single-site preferences public preview', () => {
             elapsedMs: performance.now() - start, output: outputs, outputSHA256,
             }, null, 2));
         }
-        expect(outputs[0]).toEqual({url: 'https://docs.site7.com/article', domain: 'site7.com', extension: 'enabled', translation: 'site', floatingBall: 'hidden-site'});
-        expect(outputSHA256).toBe('0d6eb2f1949a7aee972ecce47af20ed2376dbe72847748e369ad8f09ecbd6829');
+        expect(outputs[0]).toEqual({url: 'https://docs.site7.com/article', domain: 'site7.com', extension: 'enabled', display: 'bilingual', translation: 'site', floatingBall: 'hidden-site'});
+        expect(outputSHA256).toBe('8ad77cb9c3128aac61b1a3ce74cf198faf00dc7bb4886c13126f5d3e20cc9fda');
         expect(comparisons).toBe(0);
     });
 });
@@ -1088,22 +1287,29 @@ describe('audit49C local backup confirmation ownership', () => {
         }};
     }
 
-    it.each(['confirm', 'cancel', 'close'] as const)('preserves the %s privacy choice with default-true active compatibility', async choice => {
+    it.each(['confirm', 'include', 'cancel', 'close'] as const)('requires an explicit export and preserves the %s context choice', async choice => {
         const f = await fixture(true);
         try {
-            if (choice !== 'confirm') ports.confirm.mockRejectedValueOnce(choice);
+            ports.confirm.mockImplementationOnce(async (message: {children: Array<{children: unknown}>}) => {
+                const option = message.children[1] as {children: Array<{props: {checked: boolean; onChange(event: unknown): void}}>};
+                const checkbox = option.children[0];
+                expect(checkbox.props.checked).toBe(false);
+                if (choice === 'include') checkbox.props.onChange({target: {checked: true}});
+                if (choice === 'cancel' || choice === 'close') throw choice;
+            });
             f.button().click(); await settle();
             expect(ports.confirm).toHaveBeenCalledOnce();
-            expect(ports.confirm.mock.calls[0][2]).toMatchObject({confirmButtonText: '不包含并导出', cancelButtonText: '包含并导出', distinguishCancelAndClose: true});
-            expect(f.create).toHaveBeenCalledTimes(choice === 'close' ? 0 : 1);
-            expect(f.download).toHaveBeenCalledTimes(choice === 'close' ? 0 : 1);
-            expect(ports.exportConfig).toHaveBeenCalledTimes(choice === 'close' ? 0 : 1);
-            if (choice === 'close') expect(ports.send).not.toHaveBeenCalled();
+            expect(ports.confirm.mock.calls[0][2]).toMatchObject({confirmButtonText: '导出备份', cancelButtonText: 'common.cancel', closeOnClickModal: false});
+            const cancelled = choice === 'cancel' || choice === 'close';
+            expect(f.create).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+            expect(f.download).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+            expect(ports.exportConfig).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+            if (cancelled) expect(ports.send).not.toHaveBeenCalled();
             else {
                 expect(ports.send.mock.calls.map(([message]) => [message.type, message.action])).toEqual([[VOCABULARY_BOOK_MESSAGE, 'exportData'], ['modelUsage', 'export']]);
                 const backup = JSON.parse(await [...f.blobs.values()][0].text());
                 expect(backup).toMatchObject({format: 'fluentread-data-backup', version: 2, configCredentialMode: 'exact-replace',
-                    vocabulary: {includesPrivateContext: choice === 'cancel'}, modelUsage: {events: []}});
+                    vocabulary: {includesPrivateContext: choice === 'include'}, modelUsage: {events: []}});
                 expect(ports.messages).toHaveBeenCalledOnce(); expect(f.focus).toHaveBeenCalledOnce();
             }
             expect(f.button().disabled).toBe(false);
@@ -1144,6 +1350,37 @@ describe('audit49C local backup confirmation ownership', () => {
         } finally {io.resolve(prepareConfigForExport(ports.config as Config)); await settle(); await f.close();}
     });
 
+    it.each(['click', 'timer'] as const)('releases the sensitive backup object URL when download %s throws', async failure => {
+        const f = await fixture();
+        let timer: {mockRestore(): void} | undefined;
+        try {
+            if (failure === 'click') f.download.mockImplementationOnce(() => {throw new Error('download unavailable');});
+            else timer = vi.spyOn(window, 'setTimeout').mockImplementationOnce(() => {throw new Error('timer unavailable');});
+            f.button().click(); await settle();
+            expect(f.create).toHaveBeenCalledOnce();expect(f.download).toHaveBeenCalledOnce();
+            expect(f.revoke).toHaveBeenCalledWith('blob:owned-backup-1');expect(f.blobs.size).toBe(0);
+            expect(ports.messages).toHaveBeenCalledOnce();expect(f.button().disabled).toBe(false);
+        } finally {
+            timer?.mockRestore();
+            for (const url of f.blobs.keys()) URL.revokeObjectURL(url);
+            await f.close();
+        }
+    });
+
+    it('retains the download error when object URL cleanup also throws', async () => {
+        const f = await fixture();
+        try {
+            f.download.mockImplementationOnce(() => {throw new Error('download unavailable');});
+            f.revoke.mockImplementationOnce(() => {throw new Error('cleanup unavailable');});
+            f.button().click();await settle();
+            expect(ports.messages).toHaveBeenCalledWith('error', '导出失败：download unavailable');
+            expect(f.revoke).toHaveBeenCalledOnce();expect(f.button().disabled).toBe(false);
+        } finally {
+            for (const url of f.blobs.keys()) URL.revokeObjectURL(url);
+            await f.close();
+        }
+    });
+
     it('releases busy after a stale accepted IO failure and allows a fresh export on reactivation', async () => {
         const f = await fixture(); const io = deferred<Record<string, unknown>>();
         ports.exportConfig.mockImplementationOnce(() => io.promise);
@@ -1181,6 +1418,86 @@ describe('audit49C local backup confirmation ownership', () => {
     const fileJson = () => JSON.stringify({...prepareConfigForExport(ports.config as Config), round22FileMarker: 'controlled-local-import'});
     const filePort = (text: () => Promise<string>, size = 100): Pick<File, 'name' | 'size' | 'text'> => ({name: 'controlled-local-import.json', size, text});
     const preview = (host: HTMLElement) => host.querySelector('[data-testid="local-data-import-dialog"]');
+
+    const openPaste = async (f: Awaited<ReturnType<typeof fixture>>, payload: string) => {
+        f.page.host.querySelectorAll<HTMLButtonElement>('.transfer-actions button')[1].click(); await settle();
+        input(f.page.host, '[data-testid="restore-source-dialog"] textarea', payload, false); await settle();
+        return namedButton(f.page.host.querySelector('[data-testid="restore-source-dialog"]') as HTMLElement, '预览恢复内容');
+    };
+
+    it('previews pasted configuration without writing and recovers from invalid JSON in the same source dialog', async () => {
+        const f = await fixture();
+        try {
+            const button = await openPaste(f, '{invalid'); button.click(); await settle();
+            expect(ports.messages).toHaveBeenCalledWith('error', expect.stringContaining('无法读取 JSON'));
+            expect(preview(f.page.host)).toBeNull(); expect(button.disabled).toBe(false);
+            input(f.page.host, '[data-testid="restore-source-dialog"] textarea', fileJson(), false); await settle();
+            button.click(); await settle(); expect(preview(f.page.host)?.textContent).toContain('粘贴的旧版 JSON');
+            expect(preview(f.page.host)?.textContent).toContain('只恢复设置');
+            expect(ports.send).not.toHaveBeenCalled(); expect(ports.patch).not.toHaveBeenCalled();
+            preview(f.page.host)?.querySelector<HTMLButtonElement>('[data-dialog-close]')!.click(); await settle();
+            expect(preview(f.page.host)).toBeNull(); expect(f.restoreFocus).toHaveBeenCalledOnce();
+        } finally {await f.close();}
+    });
+
+    it.each(['inactive', 'reopen', 'keepalive', 'unmount'] as const)('rejects a queued pasted-preview action after its view becomes %s', async kind => {
+        const f = await fixture();
+        try {
+            const button = await openPaste(f, fileJson());
+            const event = ports.renderedEvents.findLast(item => typeof item.props.onClick === 'function'
+                && item.node.children?.default?.().some((child: any) => child.children === '预览恢复内容'))!;
+            expect(event).toBeDefined(); const queued = event.props.onClick;
+            await f.leave(kind); await queued({currentTarget: button}); await settle();
+            expect(preview(f.page.host)).toBeNull(); expect(ports.messages).not.toHaveBeenCalled();
+            expect(ports.send).not.toHaveBeenCalled(); expect(ports.patch).not.toHaveBeenCalled();
+            if (kind !== 'unmount') {
+                await f.reactivate();
+                const fresh = await openPaste(f, fileJson()); fresh.click(); await settle();
+                expect(preview(f.page.host)?.textContent).toContain('粘贴的旧版 JSON');
+            }
+        } finally {await f.close();}
+    });
+
+    it('ignores old textarea, file, close and preview receipts after the restore dialog reopens', async () => {
+        const f = await fixture(); const fileClick = vi.spyOn(window.HTMLInputElement.prototype, 'click').mockImplementation(() => undefined);
+        try {
+            const oldButton = await openPaste(f, fileJson());
+            const source = ports.renderedEvents.findLast(item => item.props['data-testid'] === 'restore-source-dialog')!.props;
+            const oldInput = ports.renderedEvents.findLast(item => item.props.type === 'textarea')!.props['onUpdate:modelValue'];
+            const action = (label: string) => ports.renderedEvents.findLast(item => typeof item.props.onClick === 'function'
+                && item.node.children?.default?.().some((child: any) => child.children === label))!.props.onClick;
+            const oldChoose = action('选择文件'), oldPreview = action('预览恢复内容');
+            f.page.host.querySelector<HTMLButtonElement>('[data-testid="restore-source-dialog"] [data-dialog-close]')!.click(); await settle();
+            const payload = fileJson(), fresh = await openPaste(f, payload);
+            oldInput('{stale-invalid'); source['onUpdate:modelValue'](false);
+            oldChoose({currentTarget: oldButton}); await oldPreview({currentTarget: oldButton}); await settle();
+            expect(f.page.host.querySelector<HTMLTextAreaElement>('[data-testid="restore-source-dialog"] textarea')?.value).toBe(payload);
+            expect(preview(f.page.host)).toBeNull(); expect(fileClick).not.toHaveBeenCalled(); expect(ports.messages).not.toHaveBeenCalled();
+            fresh.click(); await settle(); expect(preview(f.page.host)?.textContent).toContain('粘贴的旧版 JSON');
+        } finally {fileClick.mockRestore(); await f.close();}
+    });
+
+    it.each(['source', 'preview'] as const)('does not read a file from an old chooser after a new %s opens', async boundary => {
+        const f = await fixture();
+        try {
+            await openPaste(f, fileJson());
+            const oldInput = f.page.host.querySelector<HTMLInputElement>('input[type="file"]')!;
+            const oldChange = ports.renderedEvents.findLast(item => item.tag === 'input' && item.props.type === 'file')!.props.onChange;
+            f.page.host.querySelector<HTMLButtonElement>('[data-testid="restore-source-dialog"] [data-dialog-close]')!.click(); await settle();
+            const payload = fileJson(), currentPreview = await openPaste(f, payload);
+            if (boundary === 'preview') {currentPreview.click(); await settle();}
+            const text = vi.fn(async () => fileJson());
+            Object.defineProperty(oldInput, 'files', {configurable: true, value: [filePort(text)]});
+            await oldChange({target: oldInput}); oldInput.dispatchEvent(new Event('change', {bubbles: true})); await settle();
+            expect(text).not.toHaveBeenCalled(); expect(ports.send).not.toHaveBeenCalled(); expect(ports.messages).not.toHaveBeenCalled();
+            expect(oldInput.isConnected).toBe(false);
+            if (boundary === 'source') {
+                expect(f.page.host.querySelector<HTMLTextAreaElement>('[data-testid="restore-source-dialog"] textarea')?.value).toBe(payload);
+                expect(preview(f.page.host)).toBeNull(); currentPreview.click(); await settle();
+            }
+            expect(preview(f.page.host)?.textContent).toContain('粘贴的旧版 JSON');
+        } finally {await f.close();}
+    });
 
     it('continues a confirmed large file in its current view and previews it before any imported write', async () => {
         const f = await fixture(); const confirmation = deferred<void>(); const payload = fileJson();
@@ -1305,8 +1622,12 @@ describe('audit49C local backup confirmation ownership', () => {
         const f = await fixture(); const text = vi.fn(async () => fileJson());
         try {
             f.page.state.active = false; await settle();
-            const selected = await f.chooseFile(filePort(text, 20 * 1024 * 1024 + 1));
-            expect(selected.input.value).toBe(''); expect(ports.confirm).not.toHaveBeenCalled(); expect(text).not.toHaveBeenCalled();
+            f.page.host.querySelectorAll<HTMLButtonElement>('.transfer-actions button')[1].click(); await settle();
+            expect(f.page.host.querySelector('[data-testid="restore-source-dialog"]')).toBeNull();
+            const input = f.page.host.querySelector<HTMLInputElement>('input[type="file"]')!;
+            Object.defineProperty(input, 'files', {configurable: true, value: [filePort(text, 20 * 1024 * 1024 + 1)]});
+            input.dispatchEvent(new Event('change', {bubbles: true})); await settle();
+            expect(input.value).toBe(''); expect(ports.confirm).not.toHaveBeenCalled(); expect(text).not.toHaveBeenCalled();
             expect(f.button().disabled).toBe(false); await f.reactivate();
             await f.chooseFile(filePort(text)); expect(text).toHaveBeenCalledOnce(); expect(preview(f.page.host)).not.toBeNull();
         } finally {await f.close();}
@@ -1317,6 +1638,28 @@ describe('audit49C local backup confirmation ownership', () => {
     const vocabularyReceipt = {success: true, data: {inserted: 0, updated: 0, skipped: 0}};
     type ImportOutcome = 'success' | 'model-failure' | 'vocabulary-failure' | 'config-failure';
     let completionRevision = 1000;
+    it.each(['config', 'model-usage', 'vocabulary'] as const)('applies an accepted standalone legacy %s import through only its owned domain', async kind => {
+        const f = await fixture();
+        const document = kind === 'config' ? JSON.parse(fileJson()) : kind === 'model-usage'
+            ? {format: 'fluentread-model-usage', version: 1, exportedAt: 1, events: []}
+            : {format: 'fluentread-vocabulary-book', version: 1, exportedAt: 1, includesPrivateContext: false, entries: [], reviewLogs: []};
+        ports.send.mockImplementation(async (message: {type: string; action?: string}) => {
+            if (message.type === 'persistConfig') return {success: true, revision: ++completionRevision};
+            if (message.type === 'modelUsage' && message.action === 'import') return modelReceipt;
+            if (message.type === VOCABULARY_BOOK_MESSAGE && message.action === 'importData') return vocabularyReceipt;
+            throw new Error('Unexpected standalone import IO port');
+        });
+        try {
+            await f.chooseFile(filePort(async () => JSON.stringify(document)));
+            expect(ports.send).not.toHaveBeenCalled();
+            namedButton(preview(f.page.host) as HTMLElement, '确认导入').click(); await settle();
+            expect(ports.send).toHaveBeenCalledOnce();
+            expect(ports.send.mock.calls[0][0].type).toBe(kind === 'config' ? 'persistConfig' : kind === 'model-usage' ? 'modelUsage' : VOCABULARY_BOOK_MESSAGE);
+            expect(ports.messages).toHaveBeenCalledWith('success', expect.stringContaining('导入完成'));
+            expect(preview(f.page.host)).toBeNull(); expect(f.restoreFocus).toHaveBeenCalledOnce();
+        } finally {await f.close();}
+    });
+
     async function completionFixture(outcome: ImportOutcome = 'success', delaySourceClosed = false) {
         const f = await fixture(); const model = deferred<unknown>(); const vocabulary = deferred<unknown>();
         const importedConfig = prepareConfigForExport(normalizeConfig({...ports.config, to: 'ja',
@@ -1459,6 +1802,35 @@ describe('audit49C local backup confirmation ownership', () => {
             expect(preview(f.page.host)).toBeNull(); expect(f.restoreFocus).toHaveBeenCalledOnce(); expect(ports.send).not.toHaveBeenCalled();
             await f.chooseFile({...filePort(async () => fileJson()), name: 'fresh-after-cancel.json'});
             expect(preview(f.page.host)?.textContent).toContain('fresh-after-cancel.json'); expect(f.confirm().disabled).toBe(false);
+        } finally {await f.close();}
+    });
+
+    it.each((['replace', 'reactivate', 'keepalive'] as const).flatMap(boundary =>
+        (['confirm', 'cancel', 'visibility'] as const).map(action => ({boundary, action})),
+    ))('rejects old preview $action after $boundary while keeping the current preview usable', async ({boundary, action}) => {
+        const f = await fixture();
+        ports.send.mockResolvedValue({success: true, revision: ++completionRevision});
+        try {
+            await f.chooseFile(filePort(async () => fileJson()));
+            const dialog = ports.renderedEvents.findLast(item => item.props['data-testid'] === 'local-data-import-dialog')!.props;
+            const label = action === 'confirm' ? '确认导入' : '取消';
+            const oldAction = action === 'visibility' ? dialog['onUpdate:modelValue']
+                : ports.renderedEvents.findLast(item => typeof item.props.onClick === 'function'
+                    && item.node.children?.default?.().some((child: any) => child.children === label))!.props.onClick;
+            if (boundary === 'replace') {
+                namedButton(preview(f.page.host) as HTMLElement, '取消').click(); await settle();
+                await f.chooseFile({...filePort(async () => fileJson()), name: 'current-preview.json'});
+            } else {
+                await f.leave(boundary === 'reactivate' ? 'reopen' : 'keepalive'); await f.reactivate();
+            }
+            const currentText = preview(f.page.host)!.textContent, focusCount = f.restoreFocus.mock.calls.length;
+            await oldAction(false); await settle();
+            expect(ports.send).not.toHaveBeenCalled(); expect(ports.messages).not.toHaveBeenCalled();
+            expect(preview(f.page.host)?.textContent).toBe(currentText);
+            expect(f.restoreFocus.mock.calls.length).toBe(focusCount);
+            namedButton(preview(f.page.host) as HTMLElement, '确认导入').click(); await settle();
+            expect(ports.send).toHaveBeenCalledOnce(); expect(ports.send.mock.calls[0][0].type).toBe('persistConfig');
+            expect(preview(f.page.host)).toBeNull();
         } finally {await f.close();}
     });
 

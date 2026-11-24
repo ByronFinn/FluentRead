@@ -1,24 +1,28 @@
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
 import {composeMangaPage} from '@/src/features/image-translation/content/mangaCompositor';
-const draw=vi.fn(),decode=vi.fn();let canvas:{width:number;height:number;getContext:ReturnType<typeof vi.fn>};
+const draw=vi.fn(),clear=vi.fn(),decode=vi.fn();let canvas:{width:number;height:number;getContext:ReturnType<typeof vi.fn>};
 const source={} as HTMLImageElement;
 const page={width:400,height:300,patches:[{x:10,y:20,width:50,height:30,bytes:new Uint8Array([1])}],lines:[]};
 const flush=async()=>{for(let i=0;i<8;i++)await Promise.resolve();};
-beforeEach(()=>{vi.useFakeTimers({toFake:['setTimeout','clearTimeout','performance']});vi.resetAllMocks();canvas={width:0,height:0,getContext:vi.fn(()=>({drawImage:draw}))};vi.stubGlobal('document',{createElement:()=>canvas});vi.stubGlobal('createImageBitmap',decode);});
+beforeEach(()=>{vi.useFakeTimers({toFake:['setTimeout','clearTimeout','performance']});vi.resetAllMocks();canvas={width:0,height:0,getContext:vi.fn(()=>({drawImage:draw,clearRect:clear}))};vi.stubGlobal('document',{createElement:()=>canvas});vi.stubGlobal('createImageBitmap',decode);});
 afterEach(()=>{vi.useRealTimers();vi.unstubAllGlobals();});
 describe('直接合成漫画画布的生命周期',()=>{
     it('绘制原图及局部结果并立即关闭解码位图，不进行 PNG 再编码',async()=>{
         const bitmap={width:50,height:30,close:vi.fn()};decode.mockResolvedValue(bitmap);
         const c=await composeMangaPage(source,page,new AbortController().signal);expect(c).toBe(canvas);expect([c.width,c.height]).toEqual([400,300]);
         expect(draw.mock.calls).toEqual([[source,0,0,400,300],[bitmap,10,20]]);expect(bitmap.close).toHaveBeenCalledOnce();expect(decode.mock.calls[0][0].size).toBe(1);expect(vi.getTimerCount()).toBe(0);
+        expect(clear).toHaveBeenCalledOnce();expect(clear).toHaveBeenCalledWith(10,20,50,30);
+        expect(clear.mock.invocationCallOrder[0]).toBeGreaterThan(draw.mock.invocationCallOrder[0]);
+        expect(clear.mock.invocationCallOrder[0]).toBeLessThan(draw.mock.invocationCallOrder[1]);
     });
-    it('无图块仍可合成原图，不启动任何解码',async()=>{await composeMangaPage(source,{...page,patches:[]},new AbortController().signal);expect(decode).not.toHaveBeenCalled();});
+    it('无图块仍可合成原图，不启动任何解码或清除原图',async()=>{await composeMangaPage(source,{...page,patches:[]},new AbortController().signal);expect(decode).not.toHaveBeenCalled();expect(clear).not.toHaveBeenCalled();});
     it('预取消不绘图，清理画布',async()=>{const c=new AbortController();c.abort();await expect(composeMangaPage(source,page,c.signal)).rejects.toMatchObject({name:'AbortError'});expect(draw).not.toHaveBeenCalled();expect(canvas.width).toBe(0);});
     it('浏览器缺少 Canvas 时释放画布',async()=>{canvas.getContext.mockReturnValue(null);await expect(composeMangaPage(source,page,new AbortController().signal)).rejects.toThrow('不支持');expect(canvas.height).toBe(0);});
-    it.each(['sync','reject','wrong-width','wrong-height','draw'] as const)('失败释放图块和画布：%s',async mode=>{
+    it.each(['sync','reject','wrong-width','wrong-height','clear','draw'] as const)('失败释放图块和画布：%s',async mode=>{
         const bitmap={width:mode==='wrong-width'?1:50,height:mode==='wrong-height'?1:30,close:vi.fn()};
         if(mode==='sync')decode.mockImplementation(()=>{throw new Error('decode');});else if(mode==='reject')decode.mockRejectedValue(new Error('decode'));else decode.mockResolvedValue(bitmap);
         if(mode==='draw')draw.mockImplementationOnce(()=>undefined).mockImplementationOnce(()=>{throw new Error('draw');});
+        if(mode==='clear')clear.mockImplementationOnce(()=>{throw new Error('clear');});
         await expect(composeMangaPage(source,page,new AbortController().signal)).rejects.toThrow();expect(canvas.width).toBe(0);
         if(!['sync','reject'].includes(mode))expect(bitmap.close).toHaveBeenCalledOnce();expect(vi.getTimerCount()).toBe(0);
     });
@@ -71,5 +75,37 @@ describe('直接合成漫画画布的生命周期',()=>{
             await expect(task).resolves.toBe(canvas); expect(vi.getTimerCount()).toBe(0);
         }
         expect(bitmap.close).toHaveBeenCalledTimes(2); expect(decode).toHaveBeenCalledTimes(2);
+    });
+    it.each([0,24,128,255])('最终图块 alpha=%i 完整替换旧像素，透明孔洞和矩形外原画不累积',async alpha=>{
+        const original=new Uint8ClampedArray(6*5*4);
+        for(let i=0;i<original.length;i+=4)original.set([13+i%200,40,90,160],i);
+        const before=original.slice(),surface=new Uint8ClampedArray(original.length);
+        const final=new Uint8ClampedArray([200,80,30,alpha,0,0,0,0,1,200,90,255,15,25,35,64]);
+        const bitmap={width:2,height:2,close:vi.fn(),pixels:final};
+        clear.mockImplementation((x,y,w,h)=>{for(let row=y;row<y+h;row++)for(let col=x;col<x+w;col++)surface.fill(0,(row*6+col)*4,(row*6+col+1)*4);});
+        draw.mockImplementation((image:unknown,x:number,y:number)=>{
+            if(image===source){surface.set(original);return;}
+            for(let row=0;row<2;row++)for(let col=0;col<2;col++){
+                const from=(row*2+col)*4,to=((row+y)*6+col+x)*4;
+                // 明确模拟默认 source-over；没有先清空时，透明孔洞会留下原图。
+                const a=final[from+3]/255,b=surface[to+3]/255,out=a+b*(1-a);
+                for(let c=0;c<3;c++)surface[to+c]=out?Math.round((final[from+c]*a+surface[to+c]*b*(1-a))/out):0;
+                surface[to+3]=Math.round(out*255);
+            }
+        });
+        decode.mockResolvedValue(bitmap);
+        const packet={width:6,height:5,patches:[{x:2,y:1,width:2,height:2,bytes:new Uint8Array([1])}],lines:[]};
+        for(let attempt=0;attempt<2;attempt++){
+            await composeMangaPage(source,packet,new AbortController().signal);
+            for(let y=0;y<5;y++)for(let x=0;x<6;x++){
+                const offset=(y*6+x)*4;
+                if(x>=2&&x<4&&y>=1&&y<3){
+                    const at=((y-1)*2+x-2)*4,expected=final.slice(at,at+4);
+                    if(expected[3]===0)expected.fill(0);
+                    expect(surface.slice(offset,offset+4)).toEqual(expected);
+                }else expect(surface.slice(offset,offset+4)).toEqual(before.slice(offset,offset+4));
+            }
+        }
+        expect(original).toEqual(before);expect(bitmap.close).toHaveBeenCalledTimes(2);
     });
 });

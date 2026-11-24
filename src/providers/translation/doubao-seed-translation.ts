@@ -13,7 +13,7 @@ import {resolveDoubaoSeedTranslationLanguage} from '@/src/core/config/doubaoSeed
 import {currentConfiguredModel} from '@/src/services/translation/templates';
 import {getTranslationProviderLanguages} from '@/src/services/translation/requestSnapshot';
 import {createHttpStatusError, readJsonResponse} from '@/src/platform/http/errors';
-import {abortErrorFromSignal, runtimeFetch} from '@/src/platform/http/runtime';
+import {abortErrorFromSignal, cancelUnreadResponseBody, runtimeFetch} from '@/src/platform/http/runtime';
 import {appendOptionalBearer} from './auth';
 import {buildOpenAIApiEndpoint, readResponsesApiText} from './responses-api';
 import {requireTranslationProviderConfig, reportTranslationModelUsage, reportTranslationModelUsageFailure} from '@/src/services/translation/requestSnapshot';
@@ -90,10 +90,11 @@ async function translateSingle(
         if (!response.ok) {
             reportTranslationModelUsageFailure(message, undefined, startedAt, configuredModel, response.status);
             attemptReported = true;
+            cancelUnreadResponseBody(response);
             throw createHttpStatusError(response, '火山方舟翻译请求失败');
         }
 
-        const result = await readJsonResponse<any>(response, '火山方舟返回的不是有效 JSON');
+        const result = await readJsonResponse<any>(response, '火山方舟返回的不是有效 JSON', message.abortSignal);
         if (message.abortSignal?.aborted) throw abortErrorFromSignal(message.abortSignal);
         const actualModel = typeof result?.model === 'string' && result.model.trim()
             ? result.model

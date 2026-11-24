@@ -1,7 +1,7 @@
 <!--
  * @file src/features/settings/ui/LearningCenter.vue
- * 文件职责：把单词与句子、最近 30 天的阅读记录和长期学习笔记组织成统一的学习中心。
- * 主要内容：即时展示收藏，首次打开时加载记录与笔记，提供等待和页面重载提示，集中展示本地保存说明和备份入口。
+ * 文件职责：把阅读材料、轻量收藏、最近 30 天的阅读记录和长期学习笔记组织成统一的学习中心。
+ * 主要内容：保留默认收藏入口，按平台能力开放材料入口与直达参数，按需加载材料、记录与笔记，提供等待和页面重载提示，集中展示本地保存说明和备份入口；向收藏与材料面板传递稳定的可见状态，异步面板在学习中心隐藏后才挂载时也延后普通刷新。
  * 模块边界：只组合 vocabulary 和 reading-assistant 的公开 UI；各 feature 拥有数据操作生命周期，页面重载由设置入口处理。
  -->
 <template>
@@ -10,9 +10,10 @@
       <SegmentedControl v-model="activeTab" :options="tabs" :label="t('learning.content')" />
     </header>
     <p v-if="activeTab === 'saved'" class="fr-learning-center-purpose">{{ t(`learning.${activeTab}Description`) }}</p>
-    <VocabularyBook v-if="activeTab === 'saved'" @navigate="emit('navigate', $event)" />
-    <HarnessReadingHistory v-else-if="activeTab === 'history'" />
-    <LearningMemoryManager v-else :enabled="memoryEnabled" @navigate="emit('navigate', $event)" />
+    <VocabularyBook v-if="activeTab === 'saved'" :is-visible="isPanelVisible" @navigate="emit('navigate', $event)" />
+    <MaterialWorkspace v-else-if="materialWorkspaceAvailable && activeTab === 'materials'" :is-visible="isPanelVisible" @navigate="emit('navigate', $event)" @open-tab="activeTab = $event" />
+    <HarnessReadingHistory v-else-if="activeTab === 'history'" :is-visible="isPanelVisible" />
+    <LearningMemoryManager v-else :enabled="memoryEnabled" :is-visible="isPanelVisible" @navigate="emit('navigate', $event)" />
     <footer class="fr-learning-local">
       <details class="fr-learning-storage" @keydown.esc.stop.prevent="($event.currentTarget as HTMLDetailsElement).open = false">
         <summary><UiIcon name="shield" :size="14" />{{ t('learning.localStorage') }}<UiIcon name="chevron-down" :size="12" /></summary>
@@ -23,18 +24,29 @@
   </div>
 </template>
 <script setup lang="ts">
-import {computed, defineAsyncComponent, h, onBeforeUnmount, ref, watch} from 'vue'
+import {computed, defineAsyncComponent, h, onActivated, onBeforeUnmount, onDeactivated, ref, watch} from 'vue'
 import {VocabularyBook} from '@/src/features/vocabulary/ui/public'
 import {useUiI18n} from '@/src/ui/i18n'
 import SegmentedControl from './components/SegmentedControl.vue'
 import UiIcon from '@/src/ui/components/UiIcon.vue'
 import {config, configReady, subscribeConfig} from '@/src/services/config/store'
+import {browserCapabilities} from '@/src/platform/browser/capabilities'
 
 const emit = defineEmits<{navigate: [section: string]; reload: [tab: string]}>()
 const {t} = useUiI18n()
-const props = defineProps<{initialTab?: string}>()
-const activeTab = ref(['saved', 'history', 'memory'].includes(props.initialTab || '') ? props.initialTab! : 'saved')
-watch(() => props.initialTab, tab => { if (tab && ['saved', 'history', 'memory'].includes(tab)) activeTab.value = tab })
+const props = defineProps<{initialTab?: string; isVisible?: () => boolean}>()
+const keptAliveVisible = ref(true)
+const viewActive = computed(() => (props.isVisible?.() ?? true) && keptAliveVisible.value)
+function isPanelVisible(): boolean {return viewActive.value}
+onActivated(() => {keptAliveVisible.value = true})
+onDeactivated(() => {keptAliveVisible.value = false})
+const materialWorkspaceAvailable = browserCapabilities.browser !== 'userscript'
+function resolveTab(tab?: string): string | undefined {
+  if (tab === 'materials' && !materialWorkspaceAvailable) return 'saved'
+  return tab && ['saved', 'materials', 'history', 'memory'].includes(tab) ? tab : undefined
+}
+const activeTab = ref(resolveTab(props.initialTab) ?? 'saved')
+watch(() => props.initialTab, tab => { const nextTab = resolveTab(tab); if (nextTab) activeTab.value = nextTab })
 const PanelLoading = () => h('p', {class: 'fr-learning-load', role: 'status'}, t('common.loading'))
 const PanelLoadError = () => h('div', {class: 'fr-learning-load', role: 'alert'}, [
   h('p', t('learning.panelLoadError')),
@@ -42,6 +54,11 @@ const PanelLoadError = () => h('div', {class: 'fr-learning-load', role: 'alert'}
 ])
 const HarnessReadingHistory = defineAsyncComponent({
   loader: () => import('@/src/features/reading-assistant/ui/public').then(module => module.HarnessReadingHistory),
+  loadingComponent: PanelLoading,
+  errorComponent: PanelLoadError,
+})
+const MaterialWorkspace = defineAsyncComponent({
+  loader: () => import('@/src/features/vocabulary/ui/public').then(module => module.MaterialWorkspace),
   loadingComponent: PanelLoading,
   errorComponent: PanelLoadError,
 })
@@ -57,6 +74,7 @@ void configReady.then(() => { if (mounted) memoryEnabled.value = config.harness.
 onBeforeUnmount(() => { mounted = false; unsubscribe() })
 const tabs = computed(() => [
   {value: 'saved', label: t('learning.saved')},
+  ...(materialWorkspaceAvailable ? [{value: 'materials', label: '阅读材料'}] : []),
   {value: 'history', label: t('learning.history')},
   {value: 'memory', label: t('learning.memory')},
 ])
@@ -81,7 +99,7 @@ const tabs = computed(() => [
 .fr-learning-storage p { margin:8px 0 0; font-size:11px; line-height:1.8; }
 .fr-learning-local button:focus-visible,.fr-learning-storage summary:focus-visible { outline:2px solid var(--brand); outline-offset:3px; }
 @media (max-width:600px) {
-  .fr-learning-center-header :deep(.segmented-control) { width:100%; gap:14px; }
+  .fr-learning-center-header :deep(.segmented-control) { width:100%; gap:12px; flex-wrap:wrap; }
   .fr-learning-center-header :deep(.segmented-control button) { font-size:12px; }
 }
 </style>

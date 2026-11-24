@@ -1,0 +1,1706 @@
+{
+  "version": 1,
+  "generator": "scripts/testing/generate-manga-alpha-fixtures.py",
+  "designSha256": "0a576bb798af2ae15632ac9a3e1576fe9dfc84c35e34756e4f01efd48afd5de7",
+  "pillowVersion": "12.3.0",
+  "fonts": [
+    {
+      "key": "bold",
+      "sha256": "d72db21f9242aedd6b917d8549ad5921766b24d5f8d0becfda2ff4c620b3c2e0"
+    },
+    {
+      "key": "regular",
+      "sha256": "525979822591a3447cfc49d943d6f7683508e25543407871c0ed8fed05fd2bd9"
+    },
+    {
+      "key": "cjk",
+      "sha256": "cf8cf2c882e1e344ac2e6207fe172657a30dc2c6e1ee65a9e29a7b582c4d4154"
+    }
+  ],
+  "notes": [
+    "Independent six-scene RGBA stress suite. Source text, geometry and paragraph groups froze before any OCR; no results-based selection.",
+    "protectedProbes retains the existing opaque RGB contract. protectedAlphaProbes and sourceAlphaHoles are additional full-RGBA source truth, not an assertion of current browser-harness support.",
+    "Source alpha holes are inside complete physical text bboxes but have zero source glyph coverage. No source letters are erased to manufacture a repair case.",
+    "No fonts, model weights, external artwork or AI image assets are bundled."
+  ],
+  "fixtures": [
+    {
+      "name": "transparent-lantern-bridge-balloons",
+      "file": "transparent-lantern-bridge-balloons.png",
+      "mime": "image/png",
+      "width": 1200,
+      "height": 1000,
+      "sourceLanguage": "ja",
+      "scene": "Two pale semitransparent speech balloons float over transparent space; original lantern bridge and birds remain independent illustration.",
+      "regions": [
+        {
+          "id": "left-first",
+          "text": "FOLLOW THE LANTERNS",
+          "anchor": "FOLLOW THE LANTERNS",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 112,
+            "y0": 175,
+            "x1": 505,
+            "y1": 198
+          },
+          "vertical": false,
+          "fontSize": 32,
+          "fontKey": "bold",
+          "paragraphId": "left",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "6bc05ec81a78a0a462a5fe94d6a0bdfe5ce073a59a95bcbdffdc52d51c3800b7"
+        },
+        {
+          "id": "left-second",
+          "text": "THE PATH IS STILL OPEN",
+          "anchor": "THE PATH IS STILL OPEN",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 110,
+            "y0": 235,
+            "x1": 505,
+            "y1": 258
+          },
+          "vertical": false,
+          "fontSize": 32,
+          "fontKey": "bold",
+          "paragraphId": "left",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "3534acbf432731b242d295ba4816c748837eb0f83298df0eb391f3e3b61fb555"
+        },
+        {
+          "id": "right-first",
+          "text": "橋のそばで待っていて。",
+          "anchor": "橋のそばで待っていて。",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 665,
+            "y0": 230,
+            "x1": 976,
+            "y1": 261
+          },
+          "vertical": false,
+          "fontSize": 30,
+          "fontKey": "cjk",
+          "paragraphId": "right",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "c3e2e8151ebb632cc9d973bd99a859321c6bb22ff549ba533d609a6f894d133b"
+        },
+        {
+          "id": "right-second",
+          "text": "地図を持って戻るよ。",
+          "anchor": "地図を持って戻るよ。",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 666,
+            "y0": 290,
+            "x1": 946,
+            "y1": 319
+          },
+          "vertical": false,
+          "fontSize": 30,
+          "fontKey": "cjk",
+          "paragraphId": "right",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "f31b6e59dd91f37299594cf07c2f8a479b1ac4854544f94a0f930d7f3d440fd3"
+        }
+      ],
+      "expectedSource": [
+        "FOLLOW THE LANTERNS",
+        "THE PATH IS STILL OPEN",
+        "橋のそばで待っていて。",
+        "地図を持って戻るよ。"
+      ],
+      "expectedAnchors": [
+        "FOLLOW THE LANTERNS",
+        "THE PATH IS STILL OPEN",
+        "橋のそばで待っていて。",
+        "地図を持って戻るよ。"
+      ],
+      "anchorOccurrences": {
+        "FOLLOW THE LANTERNS": 1,
+        "THE PATH IS STILL OPEN": 1,
+        "橋のそばで待っていて。": 1,
+        "地図を持って戻るよ。": 1
+      },
+      "paragraphGroups": [
+        [
+          "left-first",
+          "left-second"
+        ],
+        [
+          "right-first",
+          "right-second"
+        ]
+      ],
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 70,
+            "y0": 560,
+            "x1": 1130,
+            "y1": 940
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 600,
+          "y": 820,
+          "rgb": [
+            70,
+            100,
+            90
+          ]
+        },
+        {
+          "x": 300,
+          "y": 740,
+          "rgb": [
+            255,
+            190,
+            65
+          ]
+        },
+        {
+          "x": 900,
+          "y": 740,
+          "rgb": [
+            255,
+            190,
+            65
+          ]
+        }
+      ],
+      "protectedAlphaProbes": [
+        {
+          "x": 0,
+          "y": 0,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 1150,
+          "y": 500,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 85,
+          "y": 190,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 620,
+          "y": 250,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "sourceAlphaHoles": [],
+      "alphaCoverage": {
+        "transparentPixels": 842321,
+        "partialPixels": 274463,
+        "opaquePixels": 83216
+      },
+      "imageMode": "RGBA",
+      "decodedRgbaSha256": "37963b85b5a147cf74e770d019962de54ff675b3bb556294315b1c4b85e167eb",
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "0a576bb798af2ae15632ac9a3e1576fe9dfc84c35e34756e4f01efd48afd5de7",
+        "existing51Unmodified": true
+      },
+      "sha256": "fdce5d1a79f6dfe558abdbb1e3307ebcaccca09d7307a0b06a3aa6d621a4bc16",
+      "bytes": 43345
+    },
+    {
+      "name": "translucent-riverside-notice",
+      "file": "translucent-riverside-notice.png",
+      "mime": "image/png",
+      "width": 1400,
+      "height": 1000,
+      "sourceLanguage": "en",
+      "scene": "An alpha-white notice overlays deterministic market awnings, produce and a textured photographic-style background; title, wrapped notice and platform label are separate.",
+      "regions": [
+        {
+          "id": "title",
+          "text": "RIVERSIDE NOTICE",
+          "anchor": "RIVERSIDE NOTICE",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 213,
+            "y0": 190,
+            "x1": 661,
+            "y1": 227
+          },
+          "vertical": false,
+          "fontSize": 48,
+          "fontKey": "bold",
+          "paragraphId": "title",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "7d2f2d8b880453df9f299ea56259bbaf8bd84dfb7373321d33b7f64268989354"
+        },
+        {
+          "id": "notice-first",
+          "text": "The last ferry leaves at eight.",
+          "anchor": "The last ferry leaves at eight.",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 210,
+            "y0": 330,
+            "x1": 669,
+            "y1": 363
+          },
+          "vertical": false,
+          "fontSize": 36,
+          "fontKey": "regular",
+          "paragraphId": "notice",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "c8346be193cdf6082cccf215f54317e3bd63b9a05eeb5ffa5c38235f2093f15b"
+        },
+        {
+          "id": "notice-second",
+          "text": "Please keep the riverside gate clear.",
+          "anchor": "Please keep the riverside gate clear.",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 212,
+            "y0": 395,
+            "x1": 789,
+            "y1": 428
+          },
+          "vertical": false,
+          "fontSize": 36,
+          "fontKey": "regular",
+          "paragraphId": "notice",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "3d8f7ac55bff7f783ec86ce6d8c09221c0e0909f08b979fbff82b4c0e167afe4"
+        },
+        {
+          "id": "platform",
+          "text": "PLATFORM 3",
+          "anchor": "PLATFORM 3",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 212,
+            "y0": 545,
+            "x1": 400,
+            "y1": 567
+          },
+          "vertical": false,
+          "fontSize": 30,
+          "fontKey": "bold",
+          "paragraphId": "platform",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "9d093cf870f9b8f1f751dcbeeccc9ef983ad50a88bbe247597d1839dfe0784a2"
+        }
+      ],
+      "expectedSource": [
+        "RIVERSIDE NOTICE",
+        "The last ferry leaves at eight.",
+        "Please keep the riverside gate clear.",
+        "PLATFORM 3"
+      ],
+      "expectedAnchors": [
+        "RIVERSIDE NOTICE",
+        "The last ferry leaves at eight.",
+        "Please keep the riverside gate clear.",
+        "PLATFORM 3"
+      ],
+      "anchorOccurrences": {
+        "RIVERSIDE NOTICE": 1,
+        "The last ferry leaves at eight.": 1,
+        "Please keep the riverside gate clear.": 1,
+        "PLATFORM 3": 1
+      },
+      "paragraphGroups": [
+        [
+          "title"
+        ],
+        [
+          "notice-first",
+          "notice-second"
+        ],
+        [
+          "platform"
+        ]
+      ],
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 40,
+            "y0": 700,
+            "x1": 1360,
+            "y1": 950
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 250,
+          "y": 800,
+          "rgb": [
+            180,
+            74,
+            57
+          ]
+        },
+        {
+          "x": 700,
+          "y": 800,
+          "rgb": [
+            209,
+            165,
+            62
+          ]
+        },
+        {
+          "x": 1150,
+          "y": 800,
+          "rgb": [
+            78,
+            145,
+            91
+          ]
+        }
+      ],
+      "protectedAlphaProbes": [
+        {
+          "x": 0,
+          "y": 0,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 10,
+          "y": 500,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 150,
+          "y": 200,
+          "rgba": [
+            102,
+            127,
+            142,
+            255
+          ]
+        },
+        {
+          "x": 700,
+          "y": 950,
+          "rgba": [
+            88,
+            107,
+            92,
+            255
+          ]
+        }
+      ],
+      "sourceAlphaHoles": [],
+      "alphaCoverage": {
+        "transparentPixels": 94400,
+        "partialPixels": 0,
+        "opaquePixels": 1305600
+      },
+      "imageMode": "RGBA",
+      "decodedRgbaSha256": "6d2da96e30f7cfabc28d4558f4c0a5471a29274399e8483e9cc84412007a25f2",
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "0a576bb798af2ae15632ac9a3e1576fe9dfc84c35e34756e4f01efd48afd5de7",
+        "existing51Unmodified": true
+      },
+      "sha256": "941fe820142c24644e6d1d8a5085d38c9812c25edc85c57452cab6530360d1de",
+      "bytes": 375877
+    },
+    {
+      "name": "perforated-alpha-dock-note",
+      "file": "perforated-alpha-dock-note.png",
+      "mime": "image/png",
+      "width": 1200,
+      "height": 1000,
+      "sourceLanguage": "en",
+      "scene": "A floating cream dock note contains zero-alpha and partial-alpha perforations inside the bounding boxes of complete text, confined to interword whitespace; no source glyph is cut.",
+      "regions": [
+        {
+          "id": "dock-first",
+          "text": "THE DOCK IS QUIET",
+          "anchor": "THE DOCK IS QUIET",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 240,
+            "y0": 225,
+            "x1": 651,
+            "y1": 257
+          },
+          "vertical": false,
+          "fontSize": 42,
+          "fontKey": "bold",
+          "paragraphId": "dock",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "8a7778b5106f4ef3553945435d18df955333720e1ae851d27fe29037076a63e8"
+        },
+        {
+          "id": "dock-second",
+          "text": "KEEP A LIGHT ON",
+          "anchor": "KEEP A LIGHT ON",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 243,
+            "y0": 335,
+            "x1": 607,
+            "y1": 365
+          },
+          "vertical": false,
+          "fontSize": 42,
+          "fontKey": "bold",
+          "paragraphId": "dock",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "6c0560b6bd04258633dfce58d397f61e524d6b4947f69e48e8ba24909b181b86"
+        },
+        {
+          "id": "port",
+          "text": "PORT 12",
+          "anchor": "PORT 12",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 242,
+            "y0": 565,
+            "x1": 364,
+            "y1": 587
+          },
+          "vertical": false,
+          "fontSize": 30,
+          "fontKey": "bold",
+          "paragraphId": "port",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "4bac939f3319003cf8480f8eeac542ae76337cb90b516dafa2eed4577e5860cc"
+        }
+      ],
+      "expectedSource": [
+        "THE DOCK IS QUIET",
+        "KEEP A LIGHT ON",
+        "PORT 12"
+      ],
+      "expectedAnchors": [
+        "THE DOCK IS QUIET",
+        "KEEP A LIGHT ON",
+        "PORT 12"
+      ],
+      "anchorOccurrences": {
+        "THE DOCK IS QUIET": 1,
+        "KEEP A LIGHT ON": 1,
+        "PORT 12": 1
+      },
+      "paragraphGroups": [
+        [
+          "dock-first",
+          "dock-second"
+        ],
+        [
+          "port"
+        ]
+      ],
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 80,
+            "y0": 720,
+            "x1": 1120,
+            "y1": 950
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 140,
+          "y": 160,
+          "rgb": [
+            255,
+            250,
+            230
+          ]
+        },
+        {
+          "x": 600,
+          "y": 830,
+          "rgb": [
+            79,
+            122,
+            133
+          ]
+        },
+        {
+          "x": 1030,
+          "y": 870,
+          "rgb": [
+            102,
+            88,
+            71
+          ]
+        }
+      ],
+      "protectedAlphaProbes": [
+        {
+          "x": 0,
+          "y": 0,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 1190,
+          "y": 990,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 110,
+          "y": 400,
+          "rgba": [
+            255,
+            250,
+            230,
+            255
+          ]
+        },
+        {
+          "x": 330,
+          "y": 241,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ],
+          "regionId": "dock-first",
+          "purpose": "Interword alpha perforation inside physical text bbox; no source glyph removed"
+        },
+        {
+          "x": 360,
+          "y": 350,
+          "rgba": [
+            255,
+            250,
+            230,
+            96
+          ],
+          "regionId": "dock-second",
+          "purpose": "Interword alpha perforation inside physical text bbox; no source glyph removed"
+        }
+      ],
+      "sourceAlphaHoles": [
+        {
+          "regionId": "dock-first",
+          "bbox": {
+            "x0": 327,
+            "y0": 232,
+            "x1": 333,
+            "y1": 250
+          },
+          "alpha": 0,
+          "sourceGlyphMaskCoverage": 0,
+          "probe": {
+            "x": 330,
+            "y": 241
+          }
+        },
+        {
+          "regionId": "dock-second",
+          "bbox": {
+            "x0": 357,
+            "y0": 341,
+            "x1": 363,
+            "y1": 359
+          },
+          "alpha": 96,
+          "sourceGlyphMaskCoverage": 0,
+          "probe": {
+            "x": 360,
+            "y": 350
+          }
+        }
+      ],
+      "alphaCoverage": {
+        "transparentPixels": 582689,
+        "partialPixels": 7334,
+        "opaquePixels": 609977
+      },
+      "imageMode": "RGBA",
+      "decodedRgbaSha256": "950c0fa8eee4f7ddf5246267c8a965c517254f41ba628d66cab6daa8c44b7ee3",
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "0a576bb798af2ae15632ac9a3e1576fe9dfc84c35e34756e4f01efd48afd5de7",
+        "existing51Unmodified": true
+      },
+      "sha256": "7ee6fc9e7cb9199e33d22390780836c7203f7162067c028d9e7f0f94d0309fc9",
+      "bytes": 20962
+    },
+    {
+      "name": "same-tone-cabin-controls",
+      "file": "same-tone-cabin-controls.png",
+      "mime": "image/png",
+      "width": 1200,
+      "height": 1000,
+      "sourceLanguage": "en",
+      "scene": "One continuous dark panel contains a wrapped instruction and two independent same-font status labels, with equal baseline spacing and a blank shared background. Colored switch indicators distinguish label roles without adding a dividing frame.",
+      "regions": [
+        {
+          "id": "body-first",
+          "text": "KEEP THE CABIN CLOSED",
+          "anchor": "KEEP THE CABIN CLOSED",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 72,
+            "y0": 150,
+            "x1": 495,
+            "y1": 174
+          },
+          "vertical": false,
+          "fontSize": 33,
+          "fontKey": "bold",
+          "paragraphId": "body",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              210,
+              240,
+              250
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "52501a7d2d3110d2697c3729adbd7968d59a4caec43f3ce4323044a023aef025"
+        },
+        {
+          "id": "body-second",
+          "text": "THE CREW RETURNS AT DAWN",
+          "anchor": "THE CREW RETURNS AT DAWN",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 70,
+            "y0": 220,
+            "x1": 578,
+            "y1": 244
+          },
+          "vertical": false,
+          "fontSize": 33,
+          "fontKey": "bold",
+          "paragraphId": "body",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              210,
+              240,
+              250
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "1fdf09648cc1584d3b7404b9507c7307d1d0124a03484ea42bf019c8f9194092"
+        },
+        {
+          "id": "lights",
+          "text": "CABIN LIGHTS",
+          "anchor": "CABIN LIGHTS",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 781,
+            "y0": 150,
+            "x1": 1014,
+            "y1": 174
+          },
+          "vertical": false,
+          "fontSize": 33,
+          "fontKey": "bold",
+          "paragraphId": "lights",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              210,
+              240,
+              250
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "7e50c950dafbc3d1249538232d529a32951b168388b5cbb3f7b620b0670d4d89"
+        },
+        {
+          "id": "reserve",
+          "text": "RESERVE POWER",
+          "anchor": "RESERVE POWER",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 782,
+            "y0": 220,
+            "x1": 1072,
+            "y1": 244
+          },
+          "vertical": false,
+          "fontSize": 33,
+          "fontKey": "bold",
+          "paragraphId": "reserve",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              210,
+              240,
+              250
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "20cb6daf17d2f0dee64ea16694f5f4113e7afc3ebb28f5fa8c66b614543e28d4"
+        },
+        {
+          "id": "cabin",
+          "text": "CABIN 04",
+          "anchor": "CABIN 04",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 71,
+            "y0": 440,
+            "x1": 207,
+            "y1": 462
+          },
+          "vertical": false,
+          "fontSize": 30,
+          "fontKey": "bold",
+          "paragraphId": "cabin",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              255,
+              193,
+              80
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "2186a9e5f36294fb417ed0efd4aead46d45a416e7390d0099e5c1cd48acf2e70"
+        }
+      ],
+      "expectedSource": [
+        "KEEP THE CABIN CLOSED",
+        "THE CREW RETURNS AT DAWN",
+        "CABIN LIGHTS",
+        "RESERVE POWER",
+        "CABIN 04"
+      ],
+      "expectedAnchors": [
+        "KEEP THE CABIN CLOSED",
+        "THE CREW RETURNS AT DAWN",
+        "CABIN LIGHTS",
+        "RESERVE POWER",
+        "CABIN 04"
+      ],
+      "anchorOccurrences": {
+        "KEEP THE CABIN CLOSED": 1,
+        "THE CREW RETURNS AT DAWN": 1,
+        "CABIN LIGHTS": 1,
+        "RESERVE POWER": 1,
+        "CABIN 04": 1
+      },
+      "paragraphGroups": [
+        [
+          "body-first",
+          "body-second"
+        ],
+        [
+          "lights"
+        ],
+        [
+          "reserve"
+        ],
+        [
+          "cabin"
+        ]
+      ],
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 80,
+            "y0": 620,
+            "x1": 1120,
+            "y1": 930
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 250,
+          "y": 800,
+          "rgb": [
+            255,
+            193,
+            80
+          ]
+        },
+        {
+          "x": 600,
+          "y": 800,
+          "rgb": [
+            255,
+            193,
+            80
+          ]
+        },
+        {
+          "x": 950,
+          "y": 800,
+          "rgb": [
+            255,
+            193,
+            80
+          ]
+        }
+      ],
+      "protectedAlphaProbes": [
+        {
+          "x": 0,
+          "y": 0,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 1190,
+          "y": 500,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 40,
+          "y": 60,
+          "rgba": [
+            24,
+            44,
+            68,
+            255
+          ]
+        },
+        {
+          "x": 400,
+          "y": 500,
+          "rgba": [
+            24,
+            44,
+            68,
+            255
+          ]
+        }
+      ],
+      "sourceAlphaHoles": [],
+      "alphaCoverage": {
+        "transparentPixels": 84279,
+        "partialPixels": 0,
+        "opaquePixels": 1115721
+      },
+      "imageMode": "RGBA",
+      "decodedRgbaSha256": "c72a87c8184f66a22470b52882bd82feb2ad728c36e93c2a22ef4b0e619e7e29",
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "0a576bb798af2ae15632ac9a3e1576fe9dfc84c35e34756e4f01efd48afd5de7",
+        "existing51Unmodified": true
+      },
+      "sha256": "a936c32bd80d647928968850feec0dfaa0e3e9708633223cf325b8c5a17c9422",
+      "bytes": 28190
+    },
+    {
+      "name": "inverse-neighbor-tidal-balloons",
+      "file": "inverse-neighbor-tidal-balloons.png",
+      "mime": "image/png",
+      "width": 1400,
+      "height": 1000,
+      "sourceLanguage": "en",
+      "scene": "A black balloon with white lettering and a pale balloon with black lettering sit close together above original tide illustration; independent lower caption must remain separate.",
+      "regions": [
+        {
+          "id": "dark-first",
+          "text": "WE CAN CROSS NOW",
+          "anchor": "WE CAN CROSS NOW",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 130,
+            "y0": 195,
+            "x1": 556,
+            "y1": 224
+          },
+          "vertical": false,
+          "fontSize": 40,
+          "fontKey": "bold",
+          "paragraphId": "dark",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              255,
+              255,
+              255
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "806ed6846a1d993dc2314edeb5187b09953ced3458e8f7fbf5b3d1de4b7ed871"
+        },
+        {
+          "id": "dark-second",
+          "text": "THE TIDE IS FALLING",
+          "anchor": "THE TIDE IS FALLING",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 130,
+            "y0": 265,
+            "x1": 542,
+            "y1": 294
+          },
+          "vertical": false,
+          "fontSize": 40,
+          "fontKey": "bold",
+          "paragraphId": "dark",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              255,
+              255,
+              255
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "61d0a894ee5c3536663cb384d37be8163fb01a4f911d4503eeea369d07e78e28"
+        },
+        {
+          "id": "pale-first",
+          "text": "HOLD THE ROPE",
+          "anchor": "HOLD THE ROPE",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 802,
+            "y0": 215,
+            "x1": 1127,
+            "y1": 244
+          },
+          "vertical": false,
+          "fontSize": 40,
+          "fontKey": "bold",
+          "paragraphId": "pale",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "7b96790f1b2ad42dfec628d01dffc8481d629e29b3b393be4dfab2b7e8f7f375"
+        },
+        {
+          "id": "pale-second",
+          "text": "I WILL GO FIRST",
+          "anchor": "I WILL GO FIRST",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 802,
+            "y0": 285,
+            "x1": 1118,
+            "y1": 314
+          },
+          "vertical": false,
+          "fontSize": 40,
+          "fontKey": "bold",
+          "paragraphId": "pale",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "8b14e3200d53d2eadbda5ae62385133999aac67158161e24b846f9d663d46f6f"
+        },
+        {
+          "id": "caption",
+          "text": "The channel before sunrise.",
+          "anchor": "The channel before sunrise.",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 110,
+            "y0": 610,
+            "x1": 483,
+            "y1": 632
+          },
+          "vertical": false,
+          "fontSize": 30,
+          "fontKey": "regular",
+          "paragraphId": "caption",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              255,
+              255,
+              255
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "4c62f2bbe07a3e55e37e5eff2bdabd4d045f663ab0069ddc6184a4c52d277bb4"
+        }
+      ],
+      "expectedSource": [
+        "WE CAN CROSS NOW",
+        "THE TIDE IS FALLING",
+        "HOLD THE ROPE",
+        "I WILL GO FIRST",
+        "The channel before sunrise."
+      ],
+      "expectedAnchors": [
+        "WE CAN CROSS NOW",
+        "THE TIDE IS FALLING",
+        "HOLD THE ROPE",
+        "I WILL GO FIRST",
+        "The channel before sunrise."
+      ],
+      "anchorOccurrences": {
+        "WE CAN CROSS NOW": 1,
+        "THE TIDE IS FALLING": 1,
+        "HOLD THE ROPE": 1,
+        "I WILL GO FIRST": 1,
+        "The channel before sunrise.": 1
+      },
+      "paragraphGroups": [
+        [
+          "dark-first",
+          "dark-second"
+        ],
+        [
+          "pale-first",
+          "pale-second"
+        ],
+        [
+          "caption"
+        ]
+      ],
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 60,
+            "y0": 730,
+            "x1": 1340,
+            "y1": 950
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 250,
+          "y": 830,
+          "rgb": [
+            109,
+            178,
+            162
+          ]
+        },
+        {
+          "x": 700,
+          "y": 850,
+          "rgb": [
+            186,
+            136,
+            87
+          ]
+        },
+        {
+          "x": 1150,
+          "y": 830,
+          "rgb": [
+            109,
+            178,
+            162
+          ]
+        }
+      ],
+      "protectedAlphaProbes": [
+        {
+          "x": 0,
+          "y": 0,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 700,
+          "y": 50,
+          "rgba": [
+            48,
+            104,
+            124,
+            224
+          ]
+        },
+        {
+          "x": 85,
+          "y": 150,
+          "rgba": [
+            48,
+            104,
+            124,
+            224
+          ]
+        },
+        {
+          "x": 1320,
+          "y": 250,
+          "rgba": [
+            48,
+            104,
+            124,
+            224
+          ]
+        }
+      ],
+      "sourceAlphaHoles": [],
+      "alphaCoverage": {
+        "transparentPixels": 160839,
+        "partialPixels": 848703,
+        "opaquePixels": 390458
+      },
+      "imageMode": "RGBA",
+      "decodedRgbaSha256": "e3d48a00afa9f4683d54e2e2bc97f93a550f550ac87067e283c626a08d86d2da",
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "0a576bb798af2ae15632ac9a3e1576fe9dfc84c35e34756e4f01efd48afd5de7",
+        "existing51Unmodified": true
+      },
+      "sha256": "8cd55c1b36d7c92f6f8a241e64695fa455ac3289adccf379d6fce6889e227dfb",
+      "bytes": 41520
+    },
+    {
+      "name": "bound-atlas-rule-and-inset-card",
+      "file": "bound-atlas-rule-and-inset-card.png",
+      "mime": "image/png",
+      "width": 1600,
+      "height": 1100,
+      "sourceLanguage": "en",
+      "scene": "A semitransparent bound atlas has a cross-spine heading, two separate text columns, a one-pixel rule, an inset legend card and an independently rotated spine index.",
+      "regions": [
+        {
+          "id": "title",
+          "text": "ATLAS OF THE INNER COAST",
+          "anchor": "ATLAS OF THE INNER COAST",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 360,
+            "y0": 100,
+            "x1": 1025,
+            "y1": 135
+          },
+          "vertical": false,
+          "fontSize": 46,
+          "fontKey": "bold",
+          "paragraphId": "title",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "b62485f29098101f54d7a077154f352eb6ac4060acf32f5aab6f90ce1286d874"
+        },
+        {
+          "id": "left-first",
+          "text": "Turn toward the old lighthouse.",
+          "anchor": "Turn toward the old lighthouse.",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 140,
+            "y0": 300,
+            "x1": 582,
+            "y1": 329
+          },
+          "vertical": false,
+          "fontSize": 32,
+          "fontKey": "regular",
+          "paragraphId": "left",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "0b41639a2658892c6af399cbc701f7b37968c0b36c4af0109e99823f421f2a58"
+        },
+        {
+          "id": "left-second",
+          "text": "The narrow path follows the sea.",
+          "anchor": "The narrow path follows the sea.",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 140,
+            "y0": 365,
+            "x1": 605,
+            "y1": 394
+          },
+          "vertical": false,
+          "fontSize": 32,
+          "fontKey": "regular",
+          "paragraphId": "left",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "f8452c677570751453f2981be4ebf7fe2acebfc37bdd40521b3f84059bb54edc"
+        },
+        {
+          "id": "right-first",
+          "text": "Wait until the bells are quiet.",
+          "anchor": "Wait until the bells are quiet.",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 925,
+            "y0": 300,
+            "x1": 1328,
+            "y1": 329
+          },
+          "vertical": false,
+          "fontSize": 32,
+          "fontKey": "regular",
+          "paragraphId": "right",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "12e9240ec171d42e82eddd59d0c23bc062e0a7811920e47432390730fe75d0c3"
+        },
+        {
+          "id": "right-second",
+          "text": "Then take the eastern stairs.",
+          "anchor": "Then take the eastern stairs.",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 925,
+            "y0": 365,
+            "x1": 1333,
+            "y1": 388
+          },
+          "vertical": false,
+          "fontSize": 32,
+          "fontKey": "regular",
+          "paragraphId": "right",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "f7d4bd2ccaff909f878a0932bed4bd4daf7a23008262e88f50c275b91c8e6eac"
+        },
+        {
+          "id": "key",
+          "text": "MAP KEY",
+          "anchor": "MAP KEY",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 142,
+            "y0": 465,
+            "x1": 277,
+            "y1": 487
+          },
+          "vertical": false,
+          "fontSize": 30,
+          "fontKey": "bold",
+          "paragraphId": "key",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "0b161c54fa3bd663fdc1c8c6a4d936c2a6f0a75ba1ad52065417e3b9dc054c06"
+        },
+        {
+          "id": "card",
+          "text": "NORTH PIER",
+          "anchor": "NORTH PIER",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 1042,
+            "y0": 485,
+            "x1": 1225,
+            "y1": 507
+          },
+          "vertical": false,
+          "fontSize": 30,
+          "fontKey": "bold",
+          "paragraphId": "card",
+          "rotationDegrees": 0,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "9a2dc93608f230fcb30ee3cbdfa75ea0413c5dc2af23d9fe1878582b8490d064"
+        },
+        {
+          "id": "spine",
+          "text": "INDEX 09",
+          "anchor": "INDEX 09",
+          "translation": "受控译文用于透明度与分段回归。",
+          "bbox": {
+            "x0": 780,
+            "y0": 665,
+            "x1": 797,
+            "y1": 770
+          },
+          "vertical": false,
+          "fontSize": 24,
+          "fontKey": "bold",
+          "paragraphId": "spine",
+          "rotationDegrees": 90,
+          "sourceStyle": {
+            "fill": [
+              18,
+              28,
+              34
+            ],
+            "alpha": 255
+          },
+          "glyphAlphaSha256": "56a7f1943be531fcb81635eff5350b32aa32740afafb6f2c0c805cba21a62201"
+        }
+      ],
+      "expectedSource": [
+        "ATLAS OF THE INNER COAST",
+        "Turn toward the old lighthouse.",
+        "The narrow path follows the sea.",
+        "Wait until the bells are quiet.",
+        "Then take the eastern stairs.",
+        "MAP KEY",
+        "NORTH PIER",
+        "INDEX 09"
+      ],
+      "expectedAnchors": [
+        "ATLAS OF THE INNER COAST",
+        "Turn toward the old lighthouse.",
+        "The narrow path follows the sea.",
+        "Wait until the bells are quiet.",
+        "Then take the eastern stairs.",
+        "MAP KEY",
+        "NORTH PIER",
+        "INDEX 09"
+      ],
+      "anchorOccurrences": {
+        "ATLAS OF THE INNER COAST": 1,
+        "Turn toward the old lighthouse.": 1,
+        "The narrow path follows the sea.": 1,
+        "Wait until the bells are quiet.": 1,
+        "Then take the eastern stairs.": 1,
+        "MAP KEY": 1,
+        "NORTH PIER": 1,
+        "INDEX 09": 1
+      },
+      "paragraphGroups": [
+        [
+          "title"
+        ],
+        [
+          "left-first",
+          "left-second"
+        ],
+        [
+          "right-first",
+          "right-second"
+        ],
+        [
+          "key"
+        ],
+        [
+          "card"
+        ],
+        [
+          "spine"
+        ]
+      ],
+      "forbiddenRegions": [
+        {
+          "id": "wordless-art-1",
+          "bbox": {
+            "x0": 90,
+            "y0": 700,
+            "x1": 680,
+            "y1": 1010
+          }
+        },
+        {
+          "id": "wordless-art-2",
+          "bbox": {
+            "x0": 960,
+            "y0": 700,
+            "x1": 1500,
+            "y1": 1010
+          }
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 300,
+          "y": 860,
+          "rgb": [
+            86,
+            130,
+            105
+          ]
+        },
+        {
+          "x": 1250,
+          "y": 860,
+          "rgb": [
+            67,
+            123,
+            142
+          ]
+        },
+        {
+          "x": 800,
+          "y": 1010,
+          "rgb": [
+            60,
+            56,
+            50
+          ]
+        }
+      ],
+      "protectedAlphaProbes": [
+        {
+          "x": 0,
+          "y": 0,
+          "rgba": [
+            0,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "x": 1550,
+          "y": 1050,
+          "rgba": [
+            70,
+            65,
+            59,
+            235
+          ]
+        },
+        {
+          "x": 110,
+          "y": 630,
+          "rgba": [
+            249,
+            244,
+            224,
+            235
+          ]
+        },
+        {
+          "x": 1500,
+          "y": 600,
+          "rgba": [
+            243,
+            240,
+            221,
+            235
+          ]
+        }
+      ],
+      "sourceAlphaHoles": [],
+      "alphaCoverage": {
+        "transparentPixels": 232379,
+        "partialPixels": 1293598,
+        "opaquePixels": 234023
+      },
+      "imageMode": "RGBA",
+      "decodedRgbaSha256": "b6e7061ea653cb11633ff995d2253093ce94c452194098d99acb903d0fe3dafe",
+      "tileBoundaryCrossings": [],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "selectionByOcrResult": false,
+        "designSha256": "0a576bb798af2ae15632ac9a3e1576fe9dfc84c35e34756e4f01efd48afd5de7",
+        "existing51Unmodified": true
+      },
+      "sha256": "f85c12942c8f681b03ba8e80afb6c52c373b76908d583099c30ca4cb69c39169",
+      "bytes": 57445
+    }
+  ]
+}

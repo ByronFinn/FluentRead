@@ -1,6 +1,6 @@
 <!-- 操作位置由 capture-docs-ui.cjs 从真实生产扩展的 DOM 提取；图片为同一版本的无损截图。 -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { withBase } from 'vitepress'
 import DemoSteps from './DemoSteps.vue'
 import captures from './guide-ui.json'
@@ -8,7 +8,7 @@ import { useDemoPlayback } from './useDemoPlayback'
 const props = defineProps<{ kind: string; en?: boolean }>()
 const t = (zh: string, en: string) => (props.en ? en : zh)
 const root = ref<HTMLElement | null>(null)
-const { step, playing, running, reduced, select, replay } = useDemoPlayback(root, 3, true, 3000)
+const { step, playing, running, reduced, select, replay } = useDemoPlayback(root, 3, true, 4500)
 const plans = computed<
   Record<string, { image: string; title: string; steps: string[]; descriptions: string[] }>
 >(() => ({
@@ -28,7 +28,7 @@ const plans = computed<
   },
   provider: {
     image: 'settings-provider',
-    title: t('配置翻译服务', 'Configure a translation provider'),
+    title: t('配置翻译服务：API Key 示例', 'Configure a provider: API key example'),
     steps: [
       t('选择服务', 'Choose a provider'),
       t('填写连接信息', 'Configure connection'),
@@ -36,7 +36,7 @@ const plans = computed<
     ],
     descriptions: [
       t('选择要配置的服务', 'Choose a provider to configure'),
-      t('填写此服务的 API Key', 'Enter the provider’s API key'),
+      t('此图以需要 API Key 的服务为例；填写所选服务要求的连接信息', 'This example uses an API key provider. Enter the connection details required by your chosen provider.'),
       t('返回通用设置选择默认服务', 'Return to General to choose your default'),
     ],
   },
@@ -88,12 +88,12 @@ const plans = computed<
     steps: [
       t('打开术语库', 'Open Glossary'),
       t('添加词条', 'Add a term'),
-      t('使用内置词库', 'Use a built-in glossary'),
+      t('开启术语库', 'Enable the glossary'),
     ],
     descriptions: [
       t('点击术语库', 'Open Glossary'),
       t('添加原词和希望使用的译法', 'Add a term and its preferred translation'),
-      t('也可以预览并添加内置词库', 'Preview and add a built-in glossary'),
+      t('开启术语库总开关，让已启用的词库参与翻译', 'Turn on the glossary so enabled libraries can apply to translations'),
     ],
   },
   rules: {
@@ -107,7 +107,7 @@ const plans = computed<
     descriptions: [
       t('点击网站规则', 'Open Site rules'),
       t('填写域名并选择初始偏好', 'Enter a domain and choose its preferences'),
-      t('输入完整网址检查生效规则', 'Enter a full URL to preview the applied rules'),
+      t('打开生效预览，输入完整网址检查规则', 'Open the applied-rules preview and enter a full URL'),
     ],
   },
   stats: {
@@ -123,6 +123,12 @@ const plans = computed<
       t('切换今日、7 天或 30 天', 'Choose Today, 7 days or 30 days'),
       t('查看请求量、文本量和耗时', 'Review requests, text volume and timing'),
     ],
+  },
+  webdav: {
+    image: 'settings-webdav-connection',
+    title: t('用坚果云连接 WebDAV', 'Connect Nutstore with WebDAV'),
+    steps: [t('填写目录地址', 'Enter the directory URL'), t('填写账号', 'Enter your account'), t('测试并保存连接', 'Test and save')],
+    descriptions: [t('目录地址填 https://dav.jianguoyun.com/dav/', 'Use https://dav.jianguoyun.com/dav/ for Nutstore'), t('用户名填坚果云账号邮箱', 'Use your Nutstore account email'), t('填入应用密码，测试并保存本机连接；之后还需手动同步并确认上传', 'Enter the app password and test and save this device’s connection. Uploading a backup requires a separate sync and confirmation.')],
   },
   learning: {
     image: 'settings-vocabulary',
@@ -144,198 +150,70 @@ const capture = computed(
   () => captures[props.en ? 'en-US' : 'zh-CN'][plan.value.image as keyof (typeof captures)['zh-CN']]
 )
 const point = computed(() => capture.value.points[step.value])
-const numbers = ['①', '②', '③']
+const fullPage = ref(false)
+const frameWidth = ref(600)
+let resize: ResizeObserver | undefined
+onMounted(() => {
+  if (!root.value) return
+  frameWidth.value = root.value.clientWidth
+  resize = new ResizeObserver(([entry]) => { frameWidth.value = entry.contentRect.width })
+  resize.observe(root.value)
+})
+onBeforeUnmount(() => resize?.disconnect())
+const crop = computed(() => {
+  const { width, height } = capture.value
+  const cropWidth = Math.min(width, frameWidth.value < 430 ? 640 : 1080)
+  const cropHeight = Math.min(height, cropWidth * 0.46)
+  const x = Math.max(0, Math.min(width - cropWidth, point.value.x * width / 100 - cropWidth / 2))
+  const y = Math.max(0, Math.min(height - cropHeight, point.value.y * height / 100 - cropHeight / 2))
+  return `${x} ${y} ${cropWidth} ${cropHeight}`
+})
 </script>
 <template>
-  <div
-    ref="root"
-    class="sg"
-    :data-visual="kind"
-    :data-step="step"
-    :data-playing="playing"
-    :data-running="running"
-  >
-    <div class="sg-heading">
-      <strong>{{ plan.title }}</strong
-      ><small>{{ t('操作演示', 'Walkthrough') }}</small>
-    </div>
-    <DemoSteps
-      :labels="plan.steps"
-      :active="step"
-      :label="t('操作流程', 'Workflow')"
-      :playing="playing"
-      :reduced="reduced"
-      :en="en"
-      @select="select"
-    />
-    <div class="sg-frame">
-      <a
-        :href="withBase(capture.src)"
-        target="_blank"
-        rel="noopener"
-        :aria-label="t('查看真实界面大图', 'Open the full-size interface')"
-        ><img
-          :src="withBase(capture.src)"
-          :width="capture.width"
-          :height="capture.height"
-          :alt="plan.title"
-          loading="lazy"
-      /></a>
-      <svg class="sg-overlay" viewBox="0 0 1000 625" aria-hidden="true">
-        <defs>
-          <marker
-            :id="`sg-arrow-${kind}`"
-            viewBox="0 0 10 10"
-            refX="9"
-            refY="5"
-            markerWidth="5"
-            markerHeight="5"
-            orient="auto-start-reverse"
-          >
-            <path d="M0 0 10 5 0 10Z" />
-          </marker>
-        </defs>
-        <circle :cx="point.x * 10" :cy="point.y * 6.25" r="15" />
-        <path
-          :d="`M500 650 L${point.x * 10} ${point.y * 6.25}`"
-          :marker-end="`url(#sg-arrow-${kind})`"
-        />
+  <section ref="root" class="sg" :data-visual="kind" :data-step="step" :data-playing="playing" :data-running="running">
+    <header class="sg-heading">
+      <strong>{{ plan.title }}</strong>
+      <button type="button" class="sg-view" :aria-pressed="fullPage" @click="fullPage = !fullPage">
+        {{ fullPage ? t('放大操作位置', 'Zoom to the control') : t('查看整个页面', 'Show the full page') }}
+      </button>
+    </header>
+    <DemoSteps :labels="plan.steps" :active="step" :label="t('操作步骤', 'Steps')" :playing="playing" :reduced="reduced" :en="en" @select="select" />
+    <a class="sg-frame" :class="{'sg-full': fullPage}" :href="withBase(capture.src)" target="_blank" rel="noopener" :aria-label="t('在新标签页查看界面原图', 'Open the original screenshot in a new tab')">
+      <img v-if="fullPage" :src="withBase(capture.src)" :width="capture.width" :height="capture.height" :alt="plan.title" loading="lazy" />
+      <svg v-else :viewBox="crop" role="img" :aria-label="plan.descriptions[step]" class="sg-zoom">
+        <image :href="withBase(capture.src)" :width="capture.width" :height="capture.height" />
+        <circle :cx="point.x * capture.width / 100" :cy="point.y * capture.height / 100" r="22" class="sg-ring" />
       </svg>
+      <span v-if="fullPage" class="sg-full-ring" :style="{left: point.x + '%', top: point.y + '%'}" aria-hidden="true"></span>
+    </a>
+    <div class="sg-description" :data-callout-step="step + 1" :aria-live="playing ? 'off' : 'polite'">
+      <span class="sg-step-number">{{ step + 1 }}</span><p>{{ plan.descriptions[step] }}</p>
     </div>
-    <div
-      class="sg-description"
-      :data-callout-step="step + 1"
-      :aria-live="playing ? 'off' : 'polite'"
-    >
-      <b>{{ numbers[step] }}</b
-      ><span>{{ plan.descriptions[step] }}</span>
-    </div>
-    <div class="sg-controls">
-      <small>{{
-        t('真实扩展界面 · 点击图片查看大图', 'Real extension interface · click to enlarge')
-      }}</small>
+    <footer class="sg-controls">
+      <small>{{ kind === 'webdav' ? t('真实界面 · 示例账号', 'Real interface · example account') : t('真实扩展界面', 'Actual extension interface') }}</small>
       <div>
-        <button v-if="!reduced" type="button" @click="playing = !playing">
-          {{ playing ? t('Ⅱ 暂停', 'Ⅱ Pause') : t('▷ 播放', '▷ Play') }}</button
-        ><button type="button" @click="replay">{{ t('↻ 重播', '↻ Replay') }}</button>
+        <button v-if="!reduced" type="button" :aria-pressed="playing" @click="playing = !playing">{{ playing ? t('暂停', 'Pause') : t('播放', 'Play') }}</button>
+        <button type="button" @click="replay">{{ t('重播', 'Replay') }}</button>
       </div>
-    </div>
-  </div>
+    </footer>
+  </section>
 </template>
 <style scoped>
-.sg {
-  container-type: inline-size;
-  margin: 24px 0;
-  overflow: hidden;
-  border: 1px solid var(--fr-line);
-  border-radius: 12px;
-  background: white;
-  color: var(--fr-ink);
-}
-.sg-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 20px;
-  border-bottom: 1px solid var(--fr-line);
-  font-size: 12px;
-}
-.sg-heading small,
-.sg-controls small {
-  color: var(--fr-muted);
-  font-size: 10px;
-}
-.sg-frame {
-  position: relative;
-  margin: 0 12px;
-  border: 1px solid var(--fr-line);
-  border-radius: 8px;
-}
-.sg-frame img {
-  display: block;
-  width: 100%;
-  height: auto;
-  border-radius: 8px;
-}
-.sg-overlay {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-  pointer-events: none;
-}
-.sg-overlay circle {
-  fill: #fff4f855;
-  stroke: #b92252;
-  stroke-width: 3;
-}
-.sg-overlay > path {
-  fill: none;
-  stroke: #b92252;
-  stroke-width: 3;
-}
-.sg-overlay marker path {
-  fill: #b92252;
-}
-.sg-description {
-  position: relative;
-  z-index: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-height: 52px;
-  margin: 10px 12px 12px;
-  padding: 8px 12px;
-  border: 1px solid #eed3dc;
-  border-radius: 7px;
-  background: #fff7fa;
-  color: #b92252;
-  font-size: 12px;
-  line-height: 1.5;
-}
-.sg-description b {
-  flex: none;
-  font-size: 20px;
-}
-.sg-controls {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 16px;
-  border-top: 1px solid var(--fr-line);
-}
-.sg-controls > div {
-  display: flex;
-  gap: 16px;
-  flex-shrink: 0;
-}
-.sg-controls button {
-  border: 0;
-  background: none;
-  color: #b92252;
-  font-size: 11px;
-  cursor: pointer;
-}
-@container (max-width:480px) {
-  .sg-heading {
-    padding: 12px;
-  }
-  .sg-frame {
-    margin: 0 8px;
-  }
-  .sg-description {
-    font-size: 11px;
-  }
-  .sg-controls {
-    padding: 12px;
-    flex-wrap: wrap;
-  }
-  .sg-controls small {
-    font-size: 9px;
-  }
-}
+.sg {container-type:inline-size;margin:24px 0;border:1px solid var(--fr-line);border-radius:14px;overflow:hidden;background:var(--vp-c-bg);color:var(--fr-ink)}
+.sg-heading {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid var(--fr-line);font-size:14px}
+.sg-view,.sg-controls button {min-height:34px;padding:5px 8px;border:1px solid var(--fr-line);border-radius:7px;background:var(--vp-c-bg);color:var(--vp-c-brand-1);font:inherit;font-size:12px;cursor:pointer}
+.sg-view {flex-shrink:0}
+.sg-frame {position:relative;display:block;margin:0 12px;overflow:hidden;border:1px solid var(--fr-line);border-radius:9px;background:#fff}
+.sg-frame img {display:block;width:100%;height:auto}
+.sg-zoom {display:block;width:100%;aspect-ratio:1 / .46}
+.sg-ring {fill:#ed3d7322;stroke:#b92252;stroke-width:5;vector-effect:non-scaling-stroke}
+.sg-full-ring {position:absolute;width:28px;height:28px;border:3px solid #b92252;border-radius:50%;background:#ed3d7322;transform:translate(-50%,-50%);pointer-events:none}
+.sg-description {display:flex;align-items:center;gap:10px;min-height:64px;margin:0;padding:12px 18px;font-size:13px;line-height:1.65}
+.sg-description p {margin:0}
+.sg-step-number {display:grid;place-items:center;flex:none;width:27px;height:27px;border-radius:50%;background:var(--vp-c-brand-soft);color:var(--vp-c-brand-1);font-weight:650}
+.sg-controls {display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 16px;border-top:1px solid var(--fr-line)}
+.sg-controls small {color:var(--fr-muted);font-size:11px}
+.sg-controls > div {display:flex;gap:8px;flex:none}
+.sg button:focus-visible,.sg-frame:focus-visible {outline:2px solid var(--vp-c-brand-1);outline-offset:2px}
+@container(max-width:430px) {.sg-heading{align-items:flex-start;padding:12px}.sg-heading strong{font-size:13px}.sg-view{font-size:11px}.sg-frame{margin:0 8px}.sg-description{padding:10px 12px;min-height:76px}.sg-controls{padding:8px 12px}}
 </style>

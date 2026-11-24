@@ -21,6 +21,43 @@ function fixture(shared={remote:null as CloudSyncRemote|null}) {
     return {service,ports,records,connections,shared,get state(){return state as DriveSyncState;},get local(){return local;},set local(value){local=value;}};
 }
 describe('WebDAV 配置云备份事务',()=>{
+    it('切换备份子目录生成新连接修订并废弃旧预览，省略子目录时保留原位置', async () => {
+        const f = fixture();
+        const saved = await f.service.save(input, 7, 'fixture-page');
+        const pending = await f.service.prepare(password, 7, 'fixture-page', true);
+        const changed = await f.service.save({...saved, password: '', backupPath: ''}, 7, 'fixture-page');
+        expect(changed.backupPath).toBe('');
+        expect(changed.revision).not.toBe(saved.revision);
+        await expect(f.service.commit(pending.id, password, 'upload', {}, 7, 'fixture-page')).rejects.toThrow();
+        expect(f.ports.api.write).not.toHaveBeenCalled();
+        const same = await f.service.save({...changed, password: '', backupPath: undefined}, 7, 'fixture-page');
+        expect(same.backupPath).toBe('');
+        expect(same.revision).toBe(changed.revision);
+    });
+    it.each(['download', 'merge'] as const)('普通备份跨设备%s网站规则及正文标签，保留本机连接', async direction => {
+        const source = fixture(); await source.service.save(input);
+        source.local = config({...source.local, siteAdaptation: {enabled: true, disabledRuleIds: ['reddit'], custom: {
+            version: 1, profiles: {article: {mode: 'focus', content: [{css: ['article p'], key: 'article-body'}]}},
+            rules: [{id: 'mine', name: 'My rule', match: {hosts: ['example.com']}, profile: 'article'}],
+        }}});
+        let preview = await source.service.prepare(password);
+        await createWebDavBackup(source.ports).commit(preview.id, password, 'upload', {});
+        const saved = source.shared.remote!.content;
+        const payload = await decryptDriveConfig(saved, password) as {config: Record<string, unknown>};
+        expect(payload.config.siteAdaptation).toEqual(source.local.siteAdaptation);
+        expect(payload.config).not.toHaveProperty('token');
+        const target = fixture(source.shared); await target.service.save(input);
+        const original = structuredClone(target.local);
+        preview = await target.service.prepare(password);
+        expect(preview.changes).toContainEqual(expect.objectContaining({label: '网站规则', sensitive: true}));
+        await createWebDavBackup(target.ports).commit(preview.id, password, direction,
+            Object.fromEntries(preview.changes.map(change => [change.id, 'remote'])));
+        expect(target.local.siteAdaptation).toEqual(source.local.siteAdaptation);
+        expect(target.local.token).toEqual(original.token);
+        expect(target.local.proxy).toEqual(original.proxy);
+        expect(target.shared.remote!.content).toBe(saved);
+        expect(target.ports.api.write).not.toHaveBeenCalled();
+    });
     it.each(['upload','merge'] as const)('无 ETag 兼容预览允许 %s，worker 重启后仍可提交且保护本机密钥',async direction=>{
         const f=fixture();await f.service.save(input);
         const initial=await f.service.prepare(password);await f.service.commit(initial.id,password,'upload',{});
@@ -187,4 +224,107 @@ it('WebDAV 默认普通范围经 worker 休眠仍去密，单次同意完整备�
     expect(restore.local.token).toEqual({});
     expect(restore.local.apiKeys).toEqual({});
     expect(restore.ports.api.write).not.toHaveBeenCalled();
+});
+
+describe('cancel pending WebDAV preview', () => {
+    it('releases cancellation and ignores late read before accepting a new preview', async () => {
+        const f=fixture(); await f.service.save(input);
+        let release!: (value: CloudSyncRemote | null) => void;
+        vi.mocked(f.ports.api.read).mockImplementationOnce(() => new Promise(resolve=>{release=resolve;}));
+        const old=f.service.prepare(password, 7, 'old-page').catch(error=>error);
+        await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
+        const closed=f.service.cancelTab(7);
+        const result=await Promise.race([closed.then(()=>true),new Promise<boolean>(resolve=>setTimeout(()=>resolve(false),100))]);
+        expect(result).toBe(true);
+        const fresh=await f.service.prepare(password,8,'new-page');
+        release(null);await old;
+        expect(f.state.prepared?.id).toBe(fresh.id);
+        expect(f.state.prepared?.tabId).toBe(8);
+    });
+});
+
+it('does not cancel another tab preview and ignores a late rejected network response after owner closes', async () => {
+    const f=fixture();await f.service.save(input);
+    let reject!: (error:Error)=>void;
+    vi.mocked(f.ports.api.read).mockImplementationOnce(()=>new Promise((_resolve,fail)=>{reject=fail;}));
+    const old=f.service.prepareDelete(7,'owner').catch(error=>error);
+    await vi.waitFor(()=>expect(reject).toBeTypeOf('function'));
+    const unrelated=f.service.cancelTab(8);
+    const owner=f.service.cancelTab(7);
+    await Promise.all([unrelated,owner]);
+    const fresh=await f.service.prepare(password,8,'next');
+    reject(new Error('late fixture error'));await old;
+    expect(f.state.prepared?.id).toBe(fresh.id);
+    expect(f.state.prepared?.tabId).toBe(8);
+});
+
+it('does not start a queued preview after its tab closes', async () => {
+    const f=fixture();await f.service.save(input);
+    let release!:()=>void;
+    vi.mocked(f.ports.readState).mockImplementationOnce(async()=>{await new Promise<void>(resolve=>{release=resolve;});return f.state;});
+    const status=f.service.status();await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
+    const old=f.service.prepare(password,7,'closed').catch(error=>error);
+    const close=f.service.cancelTab(7);
+    release();await Promise.all([status,close]);
+    expect(await old).toMatchObject({name:'AbortError'});
+    expect(f.ports.api.read).not.toHaveBeenCalled();
+});
+
+it('closes promptly during a pending connection test and ignores the late result', async () => {
+    const f=fixture();await f.service.save(input);
+    let release!:()=>void;
+    vi.mocked(f.ports.api.test).mockImplementationOnce(()=>new Promise<void>(resolve=>{release=resolve;}));
+    const old=f.service.prepare(password,7,'old-page').catch(error=>error);
+    await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
+    const closed=f.service.cancelTab(7);
+    expect(await Promise.race([closed.then(()=>true),new Promise<boolean>(resolve=>setTimeout(()=>resolve(false),100))])).toBe(true);
+    const fresh=await f.service.prepare(password,8,'new-page');
+    release();await old;
+    expect(f.state.prepared?.id).toBe(fresh.id);
+    expect(f.ports.api.read).toHaveBeenCalledTimes(1);
+});
+
+it('cancels the matching page client when a read synchronously requests cancellation', async () => {
+    const f=fixture();await f.service.save(input);
+    let closed!:Promise<void>;
+    vi.mocked(f.ports.api.read).mockImplementationOnce(async (_session,signal)=>{
+        closed=f.service.cancel(undefined,7,'owner');
+        expect(signal?.aborted).toBe(true);
+        return null;
+    });
+    const old=await f.service.prepare(password,7,'owner').catch(error=>error);
+    await closed;
+    expect(old).toMatchObject({name:'AbortError'});
+    expect(f.state?.prepared).toBeUndefined();
+    const fresh=await f.service.prepare(password,8,'new-page');
+    expect(f.state.prepared?.id).toBe(fresh.id);
+});
+
+it.each(['availability', 'snapshot'] as const)('releases cancellation while local %s is suspended and ignores its late result', async stage => {
+    const f=fixture();await f.service.save(input);
+    let release!:()=>void;
+    if(stage==='availability') vi.mocked(f.ports.readState).mockImplementationOnce(async()=>{await new Promise<void>(resolve=>{release=resolve;});return f.state;});
+    else vi.mocked(f.ports.snapshot).mockImplementationOnce(async()=>{await new Promise<void>(resolve=>{release=resolve;});return f.local;});
+    const old=f.service.prepare(password,7,'old').catch(error=>error);
+    await vi.waitFor(()=>expect(release).toBeTypeOf('function'));
+    const close=f.service.cancelTab(7);
+    const promptly=await Promise.race([close.then(()=>true),new Promise<boolean>(resolve=>setTimeout(()=>resolve(false),100))]);
+    if(!promptly) {release();await Promise.all([old,close]);}
+    expect(promptly).toBe(true);
+    const fresh=await f.service.prepare(password,8,'new');
+    release();expect(await old).toMatchObject({name:'AbortError'});
+    expect(f.state.prepared?.id).toBe(fresh.id);
+});
+
+it.each(['sync', 'delete'] as const)('ignores a late rejected local state read during %s preview', async kind => {
+    const f=fixture();await f.service.save(input);let reject!: (error:Error)=>void;
+    vi.mocked(f.ports.readState).mockResolvedValueOnce(f.state).mockImplementationOnce(()=>new Promise((_resolve,fail)=>{reject=fail;}));
+    const old=(kind==='sync'?f.service.prepare(password,7,'old'):f.service.prepareDelete(7,'old')).catch(error=>error);
+    await vi.waitFor(()=>expect(reject).toBeTypeOf('function'));
+    const close=f.service.cancelTab(7);
+    expect(await Promise.race([close.then(()=>true),new Promise<boolean>(resolve=>setTimeout(()=>resolve(false),100))])).toBe(true);
+    const fresh=await f.service.prepare(password,8,'new');
+    reject(new Error('late local read failure'));expect(await old).toMatchObject({name:'AbortError'});
+    await new Promise(resolve=>setTimeout(resolve,0));
+    expect(f.state.prepared?.id).toBe(fresh.id);
 });

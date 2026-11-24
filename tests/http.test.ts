@@ -2,6 +2,7 @@ import {afterEach, describe, expect, it, vi} from 'vitest';
 import {
     abortErrorFromSignal,
     createRuntimeAbortContext,
+    cancelResponseReader, cancelUnreadResponseBody,
     runtimeFetch,
     setRuntimeFetch,
 } from '@/src/platform/http/runtime';
@@ -32,6 +33,19 @@ describe('runtime HTTP transport', () => {
         });
         expect(result.status).toBe(201);
         expect(await result.json()).toEqual({ok: true});
+    });
+
+    it('passes an explicit local error-body policy only to the installed transport', async () => {
+        const transport = vi.fn(async () => new Response('ok'));
+        setRuntimeFetch(transport);
+        const policy = {errorBodyLimit: {maxBytes: 32, replacement: 'bounded'}};
+        await runtimeFetch('https://example.com/translate', {method: 'POST'}, policy);
+        expect(transport).toHaveBeenCalledWith('https://example.com/translate', {method: 'POST'}, policy);
+        const native = vi.fn(async () => new Response('native'));
+        vi.spyOn(globalThis, 'fetch').mockImplementation(native);
+        setRuntimeFetch();
+        await runtimeFetch('https://example.com/translate', {method: 'POST'}, policy);
+        expect(native).toHaveBeenCalledWith('https://example.com/translate', {method: 'POST'});
     });
 
     it('reset 后恢复调用运行环境的原生 fetch', async () => {
@@ -122,5 +136,58 @@ describe('runtime HTTP transport', () => {
         caller.abort(new Error('late caller cancellation'));
         expect(context.didTimeout()).toBe(true);
         context.cleanup();
+    });
+});
+
+
+describe('unused HTTP response disposal', () => {
+    it('cancels the original unread body without tee clones or waiting for its handshake', async () => {
+        const cancel = vi.fn(() => new Promise<void>(() => {}));
+        const response = new Response(new ReadableStream({cancel}));
+        const clone = vi.spyOn(response, 'clone');
+        expect(cancelUnreadResponseBody(response)).toBeUndefined();
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(response.bodyUsed).toBe(true);
+        expect(clone).not.toHaveBeenCalled();
+    });
+
+    it('keeps consumed responses and tolerates missing bodies, throws and rejected cleanup', async () => {
+        const consumed = new Response('completed');
+        await consumed.text();
+        const cancel = vi.spyOn(consumed.body!, 'cancel');
+        cancelUnreadResponseBody(consumed);
+        expect(cancel).not.toHaveBeenCalled();
+        cancelUnreadResponseBody(new Response(null, {status: 204}));
+        cancelUnreadResponseBody({});
+        for (const cancel of [() => {throw new Error('sync cleanup');}, () => Promise.reject(new Error('async cleanup'))]) {
+            const body = new ReadableStream();
+            vi.spyOn(body, 'cancel').mockImplementation(cancel);
+            expect(() => cancelUnreadResponseBody({body})).not.toThrow();
+        }
+        await Promise.resolve();
+    });
+});
+
+describe('abandoned HTTP reader disposal', () => {
+    it('releases a locked stream without waiting for cancellation', () => {
+        const cancel = vi.fn(() => new Promise<void>(() => {}));
+        const body = new ReadableStream({cancel});
+        expect(cancelResponseReader(body.getReader())).toBeUndefined();
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(body.locked).toBe(false);
+    });
+
+    it('preserves the caller error and releases the lock for throwing or rejected cancellation', async () => {
+        for (const cancel of [() => {throw new Error('sync cleanup');}, () => Promise.reject(new Error('async cleanup'))]) {
+            const body = new ReadableStream();
+            const reader = body.getReader();
+            vi.spyOn(reader, 'cancel').mockImplementation(cancel);
+            expect(() => cancelResponseReader(reader)).not.toThrow();
+            expect(body.locked).toBe(false);
+        }
+        const reader = new ReadableStream().getReader();
+        vi.spyOn(reader, 'releaseLock').mockImplementation(() => {throw new Error('lock cleanup');});
+        expect(() => cancelResponseReader(reader)).not.toThrow();
+        await Promise.resolve();
     });
 });

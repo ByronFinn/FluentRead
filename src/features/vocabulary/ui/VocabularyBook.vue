@@ -1,7 +1,9 @@
 <!--
  * @file src/features/vocabulary/ui/VocabularyBook.vue
+ * 导出呈现：Anki 采用默认关闭的上下文选项和明确的导出按钮，取消或关闭均放弃导出，与完整备份保持一致。
+ * 撤销归属：后台事务保存删除快照并保留 24 小时的恢复期限，页面只持票据；失败时提示未确认，不自动重放。
  * 文件职责：组织内容优先的学习收藏列表与主动复习，协调句子听读、解释保存、筛选与文件操作。
- * 主要内容：相同译文保留原文且不重复展示；把复习作为列表主操作，收藏开关与文件动作收进管理菜单；搜索与类型筛选合为一行，每条收藏直接提供学习入口，配置、数据和朗读沿用已有消息协议；确认开始即占用操作状态，等待、菜单让步及响应后校验生命周期，拒绝迟到请求、文件下载和已卸载界面更新。
+ * 主要内容：相同译文保留原文且不重复展示；把复习作为列表主操作，收藏开关与文件动作收进管理菜单；搜索与类型筛选合为一行，每条收藏直接提供学习入口；筛选排序独立于搜索输入，正文索引按需建立并限制文本字符总量，超预算词条继续完整匹配；界面文案订阅共享语言与资源修订，缓存期间首次加载的语言也能自动更新。配置、数据和朗读沿用已有消息协议，后台进度保持播放状态、结束或停止才释放，页面音频失败按在线与浏览器两级有限回退并合并重复错误通知；音频恢复后复验代次再解码，浏览器语音只接受当前话语的开始事件；收藏面板或文档隐藏时延后普通读取并停止到期扫描，恢复可见后串行读取，已接受的保存继续结算；确认开始即占用操作状态，等待、菜单让步及响应后校验生命周期，拒绝迟到请求、文件下载和已卸载界面更新。
  * 模块边界：UI 不直接访问 Dexie 或上传学习数据；完整备份进入备份与恢复页，收藏文件只包含本领域数据，数据库操作集中在后台 repository/handler，上下文和来源只有用户明确选择时才导出。
  -->
 <template>
@@ -78,14 +80,27 @@
                 <button type="button" :disabled="actionBusy || loading" @click="closeMoreMenuAndFocus(); importInput?.click()">导入收藏</button>
                 <button type="button" :disabled="actionBusy || loading || !filteredEntries.length" @click="closeMoreMenuAndFocus(); exportCollection()">导出当前列表</button>
                 <button type="button" :disabled="actionBusy || !entries.length" @click="exportAnki">导出到 Anki</button>
-                <button type="button" :disabled="loading" @click="closeMoreMenuAndFocus(); loadEntries()">{{ loading ? '读取中…' : '刷新列表' }}</button>
-                <button type="button" class="danger" :disabled="actionBusy || entries.length === 0" @click="clearVocabulary">{{ t('learning.collection.clear') }}</button>
+                <button type="button" :disabled="loading" @click="closeMoreMenuAndFocus(); loadEntries(); loadUndoTickets()">{{ loading ? '读取中…' : '刷新列表' }}</button>
+                <button type="button" class="danger" :disabled="actionBusy || (entries.length === 0 && undoTickets.length === 0)" @click="clearVocabulary">{{ t('learning.collection.clear') }}</button>
               </div>
             </details>
           </div>
           <input ref="importInput" type="file" accept=".json,application/json" hidden aria-label="导入收藏文件" @change="importCollection" />
         </section>
 
+        <section v-if="undoTickets.length" class="recent-deletions" :aria-label="t('learning.collection.recentDeleted', {count: undoTickets.length})">
+          <div class="recent-deletions-heading">
+            <h3>{{ t('learning.collection.recentDeleted', {count: undoTickets.length}) }}</h3>
+            <p>{{ t(isUserscriptBuild ? 'learning.collection.undoScriptNotice' : 'learning.collection.undoExtensionNotice') }}</p>
+          </div>
+          <div v-for="ticket in undoTickets" :key="ticket.id" class="recent-deletion-row">
+            <span class="recent-deletion-term" data-i18n-ignore>{{ ticket.term }}</span>
+            <div class="recent-deletion-actions">
+              <button class="recent-deletion-restore" type="button" :disabled="actionBusy" @click="undoRemove(ticket)">{{ t('learning.collection.restoreDeleted') }}</button>
+              <button type="button" :disabled="actionBusy" @click="discardUndo(ticket)">{{ t('learning.collection.discardUndo') }}</button>
+            </div>
+          </div>
+        </section>
         <section v-if="entries.length" class="toolbar" aria-label="搜索与筛选收藏">
           <label class="search-field"><span aria-hidden="true"><UiIcon name="search" :size="16" /></span><input v-model.trim="query" type="search" aria-label="搜索收藏" placeholder="搜索原文、译文或解释" /></label>
           <UiSelect v-model="kindFilter" class="collection-type" :aria-label="t('learning.collection.type')">
@@ -126,7 +141,7 @@
         <section v-else-if="filteredEntries.length === 0" class="empty-state"><span aria-hidden="true"><UiIcon name="search" :size="28" /></span><h3>没有匹配的词条</h3><p>{{ t('learning.collection.noMatchesHelp') }}</p><button type="button" @click="resetFilters">{{ t('learning.collection.reset') }}</button></section>
 
         <section v-else class="word-list" aria-label="收藏的单词与句子">
-          <CollectionEntry v-for="entry in pagedEntries" :key="entry.id" :entry="entry" :translation="entryTranslation(entry)" :playing="playingEntryId === entry.id" :busy="actionBusy" :status="entry.status === 'new' && isVocabularySentence(entry) ? '新收藏' : statusLabel(entry.status)" :review="nextReviewLabel(entry)" @study="openStudy(entry)" @speak="toggleEntrySpeech(entry)" @copy="copyEntry(entry, $event)" @mastery="entry.status === 'mastered' ? relearn(entry) : setMastered(entry)" @remove="removeEntry(entry)" @updated="replaceEntry" />
+          <CollectionEntry v-for="entry in pagedEntries" :key="entry.id" :entry="entry" :translation="entryTranslation(entry)" :playing="playingEntryId === entry.id" :speech-phase="playingEntryId === entry.id ? speechPhase : 'idle'" :busy="actionBusy" :status="entry.status === 'new' && isVocabularySentence(entry) ? '新收藏' : statusLabel(entry.status)" :review="nextReviewLabel(entry)" @study="openStudy(entry)" @speak="toggleEntrySpeech(entry)" @copy="copyEntry(entry, $event)" @mastery="entry.status === 'mastered' ? relearn(entry) : setMastered(entry)" @remove="removeEntry(entry)" @updated="replaceEntry" />
 
           <nav v-if="pageCount > 1" class="pagination" aria-label="单词本分页">
             <button type="button" :disabled="page <= 1" @click="page -= 1">上一页</button>
@@ -141,19 +156,22 @@
     </template>
 
     <div v-if="toastMessage" class="book-toast" role="status">
-      <span>{{ toastMessage }}</span><button v-if="undoExport" type="button" @click="undoRemove">撤销</button>
+      <span>{{ toastMessage }}</span>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import {asArrayBufferBytes} from '@/src/shared/function/arrayBufferBytes';
+import {downloadTextFile as downloadFile} from '@/src/shared/dom/downloadTextFile';
 import {hasDistinctTranslation} from '@/src/core/translation/result';
 import UiIcon from '@/src/ui/components/UiIcon.vue'
+import {confirmExport} from '@/src/ui/confirmExport';
 import FeatureEnableCard from '@/src/ui/components/FeatureEnableCard.vue';
 import UiSelect from '@/src/ui/components/UiSelect.vue';
 import {applyInterfaceTheme} from '@/src/ui/interfaceAppearance'
+import {useUiI18n} from '@/src/ui/i18n';
 import {ElOption} from 'element-plus';
-function translateControlLabel(value: string): string { return translateLegacyText(value, normalizeUiLanguage(runtimeConfig.uiLanguage)); }
 
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, shallowRef, watch } from 'vue';
 import VocabularyStudy from './VocabularyStudy.vue';
@@ -163,9 +181,10 @@ import {vocabularySourceContext, vocabularySourceLink} from '../source';
 import {ReadingAnswer} from '@/src/features/reading-assistant/ui/answer/public';
 import {ElMessageBox} from 'element-plus';
 import browser from 'webextension-polyfill';
-import {normalizeUiLanguage, translate, translateLegacyText, type TranslationParams} from '@/src/core/i18n';
+import {normalizeUiLanguage, translateLegacyText} from '@/src/core/i18n';
 import {browserCapabilities} from '@/src/platform/browser/capabilities';
 import {createSelectionTtsClientRequestId, createSelectionTtsContentController, normalizeSpeechLanguage} from '@/src/features/selection-translation/speech/public';
+import {normalizeLocalTtsMode} from '@/src/core/config/localTts';
 import {
   config as runtimeConfig,
   configReady,
@@ -183,8 +202,6 @@ import {
   reconcileVocabularyReviewSession,
   vocabularyReviewSessionProgress,
   VOCABULARY_BOOK_CHANGED_MESSAGE,
-  VOCABULARY_BOOK_EXPORT_FORMAT,
-  VOCABULARY_BOOK_EXPORT_VERSION,
   VOCABULARY_BOOK_MESSAGE,
   type VocabularyBookChangedMessage,
   type VocabularyBookExport,
@@ -193,16 +210,20 @@ import {
   type VocabularyContext,
   type VocabularyEntry,
   type VocabularyImportResult,
-  type VocabularyRemovalSnapshot,
+  type VocabularyUndoTicket,
   type VocabularyReviewResult,
   type VocabularyReviewSessionState,
   type VocabularyScheduledReviewRating,
   type VocabularyStatus,
 } from '@/src/features/vocabulary/learningModel';
 
+const props = defineProps<{isVisible?: () => boolean}>();
+const keptAliveVisible = ref(true);
+const documentVisible = ref(true);
+const viewVisible = computed(() => (props.isVisible?.() ?? true) && keptAliveVisible.value && documentVisible.value);
 const emit = defineEmits<{ navigate: [section: string] }>();
-const uiLanguage = ref(normalizeUiLanguage(runtimeConfig.uiLanguage));
-const t = (key: string, params?: TranslationParams): string => translate(key, uiLanguage.value, params);
+const {t, translateLegacy: translateControlLabel} = useUiI18n();
+const isUserscriptBuild = import.meta.env.BROWSER === 'userscript' || browserCapabilities.browser === 'userscript';
 const reencounterSupported = browserCapabilities.browser !== 'userscript';
 const betaEnabled = ref(false);
 const reencounterEnabled = ref(false);
@@ -237,25 +258,34 @@ const reviewAnswerVisible = ref(false);
 const reviewStarted = ref(false);
 const reviewStats = ref({ reviewed: 0, good: 0, again: 0 });
 const toastMessage = ref('');
-// 保持可结构化克隆的快照为原始对象，避免 browser.runtime.sendMessage 收到 Vue Proxy。
-const undoExport = shallowRef<VocabularyBookExport | null>(null);
+const undoTickets = shallowRef<VocabularyUndoTicket[]>([]);
+let undoReadEpoch = 0;
+let undoRefreshPending = false;
+let undoReadsInFlight = 0;
 const moreMenu = ref<HTMLDetailsElement | null>(null);
 const currentTime = ref(Date.now());
 const lifecycle = createVocabularyLifecycleGuard();
 const playingEntryId = ref('');
+const speechPhase = ref<'idle' | 'requesting' | 'playing'>('idle');
 const speechController = createSelectionTtsContentController({
   createClientRequestId: () => createSelectionTtsClientRequestId(),
   stopRemote: clientRequestId => browser.runtime.sendMessage({type: 'selectionTtsStop', clientRequestId}),
 });
 let entryAudio: HTMLAudioElement | null = null;
 let entryAudioUrl = '';
+let entryAudioContext: AudioContext | null = null;
+let entryAudioSource: AudioBufferSourceNode | null = null;
 let entryUtterance: SpeechSynthesisUtterance | null = null;
+let speechRequestGeneration = 0;
+let entrySpeechWatchdog: number | null = null;
 let toastTimer: number | null = null;
 let timeRefreshTimer: number | null = null;
 let darkMedia: MediaQueryList | null = null;
 let loadRequestGeneration = 0;
 let completedLoadGeneration = 0;
 let loadLoopPromise: Promise<void> | null = null;
+let configured = false;
+let readEpoch = 0;
 
 const reviewActive = computed(() => reviewStarted.value);
 const reviewSessionProgress = computed(() => vocabularyReviewSessionProgress(reviewSessionState()));
@@ -276,22 +306,13 @@ const statusCounts = computed(() => entries.value.reduce((counts, entry) => {
   counts[entry.status] += 1;
   return counts;
 }, { new: 0, learning: 0, familiar: 0, mastered: 0 }));
-const filteredEntries = computed(() => {
-  const keyword = query.value.toLocaleLowerCase();
+const orderedEntries = computed(() => {
   const filtered = entries.value.filter(entry => {
     if (kindFilter.value === 'sentence' && !isVocabularySentence(entry)) return false;
     if (kindFilter.value === 'expression' && isVocabularySentence(entry)) return false;
     if (statusFilter.value === 'due' && !(entry.nextReviewAt !== null && entry.nextReviewAt <= currentTime.value)) return false;
     if (statusFilter.value !== 'all' && statusFilter.value !== 'due' && entry.status !== statusFilter.value) return false;
-    if (!keyword) return true;
-    const searchable = [
-      entry.term,
-      entry.normalizedTerm,
-      entry.note || '',
-      ...Object.values(entry.translations).map(item => item.text),
-      ...entry.contexts.map(context => `${context.text} ${context.pageTitle || ''}`),
-    ].join(' ').toLocaleLowerCase();
-    return searchable.includes(keyword);
+    return true;
   });
   return filtered.sort((left, right) => {
     if (sortOrder.value === 'term') return left.normalizedTerm.localeCompare(right.normalizedTerm);
@@ -300,10 +321,42 @@ const filteredEntries = computed(() => {
       || left.createdAt - right.createdAt;
   });
 });
+function entrySearchText(entry: VocabularyEntry): string {
+  return [
+    entry.term,
+    entry.normalizedTerm,
+    entry.note || '',
+    ...Object.values(entry.translations).map(item => item.text),
+    ...entry.contexts.map(context => `${context.text} ${context.pageTitle || ''}`),
+  ].join(' ').toLocaleLowerCase();
+}
+// 只限制额外保留的小写文本，不限制可搜索的数据。UTF-16 文本载荷最多约 8 MiB，Map 自身另计。
+const SEARCH_INDEX_CHARACTER_LIMIT = 4 * 1024 * 1024;
+const searchActive = computed(() => Boolean(query.value));
+const searchIndex = computed(() => {
+  const indexed = new Map<VocabularyEntry, string>();
+  if (!searchActive.value) return indexed;
+  let remaining = SEARCH_INDEX_CHARACTER_LIMIT;
+  for (const entry of orderedEntries.value) {
+    if (remaining === 0) break;
+    const text = entrySearchText(entry);
+    if (text.length > remaining) break;
+    indexed.set(entry, text);
+    remaining -= text.length;
+  }
+  return indexed;
+});
+const filteredEntries = computed(() => {
+  const keyword = query.value.toLocaleLowerCase();
+  // 空搜索也读取空索引，释放上一次搜索保留的文本和词条引用；非空输入仅依赖布尔态。
+  const indexed = searchIndex.value;
+  if (!keyword) return orderedEntries.value;
+  return orderedEntries.value.filter(entry => (indexed.get(entry) ?? entrySearchText(entry)).includes(keyword));
+});
 const pageCount = computed(() => Math.max(1, Math.ceil(filteredEntries.value.length / pageSize)));
 const pagedEntries = computed(() => filteredEntries.value.slice((page.value - 1) * pageSize, page.value * pageSize));
 const currentClozeContext = computed(() => currentReview.value ? vocabularyReviewCloze(currentReview.value) : '');
-watch(() => [currentReview.value?.id, currentReview.value?.updatedAt], () => { recallDraft.value = ''; });
+watch([() => currentReview.value?.id, () => currentReview.value?.updatedAt], () => { recallDraft.value = ''; });
 watch(selectedEntryId, () => stopEntrySpeech());
 function openStudy(entry: VocabularyEntry): void {
   finishReview();
@@ -317,61 +370,196 @@ watch([query, statusFilter, sortOrder, kindFilter, page, reviewStarted], () => s
 watch(entries, items => { if (playingEntryId.value && !items.some(entry => entry.id === playingEntryId.value)) stopEntrySpeech(); });
 
 function releaseEntryAudio(): void {
+  if (entryAudioSource) { try { entryAudioSource.stop(); } catch { /* 音源可能已经结束 */ } entryAudioSource.disconnect(); entryAudioSource = null; }
   if (entryAudio) { entryAudio.pause(); entryAudio.removeAttribute('src'); entryAudio = null; }
   if (entryAudioUrl) URL.revokeObjectURL(entryAudioUrl);
   entryAudioUrl = '';
 }
 
+function prepareEntryAudioContext(): AudioContext | null {
+  try {
+    if (!entryAudioContext || entryAudioContext.state === 'closed') entryAudioContext = new window.AudioContext();
+    // 必须在用户点击的同步调用栈内 resume；合成网络请求完成后再创建上下文会失去手势授权。
+    void entryAudioContext.resume().catch(() => undefined);
+    return entryAudioContext;
+  } catch { return null; }
+}
+
+async function playEntryAudioBytes(bytes: Uint8Array, contentType: string, generation: number, fallback: 'google' | 'browser' = 'google'): Promise<'playing' | 'stale' | 'fallback'> {
+  if (generation !== speechRequestGeneration) return 'stale';
+  if (entryAudioContext && entryAudioContext.state !== 'closed') {
+    await entryAudioContext.resume();
+    if (generation !== speechRequestGeneration) return 'stale';
+    const encoded = new Uint8Array(bytes.byteLength);
+    encoded.set(bytes);
+    const buffer = await entryAudioContext.decodeAudioData(encoded.buffer as ArrayBuffer);
+    if (generation !== speechRequestGeneration) return 'stale';
+    const source = entryAudioContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(entryAudioContext.destination);
+    source.onended = () => { if (entryAudioSource === source) stopEntrySpeech(false); };
+    entryAudioSource = source;
+    source.start();
+    speechPhase.value = 'playing';
+    return 'playing';
+  }
+  const audioUrl = URL.createObjectURL(new Blob([asArrayBufferBytes(bytes)], {type: contentType || 'audio/mpeg'}));
+  entryAudioUrl = audioUrl;
+  const audio = new Audio(audioUrl);
+  entryAudio = audio;
+  audio.onended = () => { if (entryAudio === audio) stopEntrySpeech(false); };
+  let failureHandled = false;
+  const handleFailure = (cause: unknown): void => {
+    if (failureHandled || entryAudio !== audio || generation !== speechRequestGeneration) return;
+    failureHandled = true;
+    const entry = entries.value.find(item => item.id === playingEntryId.value);
+    if (!entry) { stopEntrySpeech(false); return; }
+    // 同一次播放的 error 事件和 play() 拒绝共享一次交接；Google 音频失败后直接进入浏览器回退。
+    if (fallback === 'browser') speakEntryWithBrowser(entry, generation, speechErrorText(cause));
+    else void fallbackEntrySpeech(entry, generation, speechErrorText(cause));
+  };
+  audio.onerror = () => handleFailure(new Error(t('learning.collection.speechPageAudioNotStarted')));
+  try { await audio.play(); } catch (cause) { handleFailure(cause); }
+  if (failureHandled) return 'fallback';
+  if (generation !== speechRequestGeneration || entryAudio !== audio) return 'stale';
+  speechPhase.value = 'playing';
+  return 'playing';
+}
+
 function stopEntrySpeech(notifyRemote = true): void {
+  speechRequestGeneration += 1;
+  if (entrySpeechWatchdog !== null) window.clearTimeout(entrySpeechWatchdog);
+  entrySpeechWatchdog = null;
   speechController.stop(notifyRemote);
   releaseEntryAudio();
   if (entryUtterance && 'speechSynthesis' in window) window.speechSynthesis.cancel();
   entryUtterance = null;
   playingEntryId.value = '';
+  speechPhase.value = 'idle';
 }
 
-function speakEntryWithBrowser(entry: VocabularyEntry): void {
-  if (entryUtterance) return;
+function speakEntryWithBrowser(entry: VocabularyEntry, generation = speechRequestGeneration, failureContext = ''): boolean {
+  if (generation !== speechRequestGeneration) return false;
+  if (entryUtterance) return true;
+  if (normalizeLocalTtsMode(runtimeConfig.selectionTtsMode) === 'local-only') {
+    stopEntrySpeech(false); showToast('本地语音生成失败，请重试'); return false;
+  }
   // 远端失败后的结束消息或 page.play 的迟到拒绝不能再停止或重复当前浏览器回退。
   speechController.stop(false);
   releaseEntryAudio();
   if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
-    stopEntrySpeech(); showToast('当前环境无法朗读，请稍后重试。'); return;
+    stopEntrySpeech(false);
+    showToast('当前环境无法朗读，请稍后重试。'); return false;
   }
   try {
     const utterance = new SpeechSynthesisUtterance(entry.term);
     utterance.lang = normalizeSpeechLanguage(entry.sourceLanguage);
     const voices = window.speechSynthesis.getVoices();
     utterance.voice = voices.find(voice => voice.lang.toLowerCase() === utterance.lang.toLowerCase()) ?? null;
+    utterance.onstart = () => {
+      if (entryUtterance !== utterance) return;
+      speechPhase.value = 'playing';
+      if (entrySpeechWatchdog !== null) window.clearTimeout(entrySpeechWatchdog);
+      entrySpeechWatchdog = null;
+    };
     utterance.onend = () => { if (entryUtterance === utterance) stopEntrySpeech(false); };
-    utterance.onerror = () => { if (entryUtterance === utterance) { stopEntrySpeech(false); showToast('朗读未完成，请重试。'); } };
+    utterance.onerror = event => {
+      if (entryUtterance === utterance) {
+        stopEntrySpeech(false);
+        showToast(t('learning.collection.speechBrowserStartFailed', {
+          error: event.error ? `：${event.error}` : '', details: failureContext ? `；${failureContext}` : '',
+        }), false, 10000);
+      }
+    };
     entryUtterance = utterance;
     playingEntryId.value = entry.id;
     window.speechSynthesis.speak(utterance);
-  } catch { stopEntrySpeech(); showToast('当前环境无法朗读，请稍后重试。'); }
+    entrySpeechWatchdog = window.setTimeout(() => {
+      if (entryUtterance !== utterance) return;
+      window.speechSynthesis.cancel();
+      entryUtterance = null;
+      playingEntryId.value = '';
+      entrySpeechWatchdog = null;
+      showToast(t('learning.collection.speechBrowserNotStarted', {details: failureContext ? `；${failureContext}` : ''}), false, 10000);
+    }, 8000);
+    return true;
+  } catch (cause) { if (generation === speechRequestGeneration) { entryUtterance = null; playingEntryId.value = ''; showToast(t('learning.collection.speechBrowserCallFailed', {
+    error: speechErrorText(cause), details: failureContext ? `；${failureContext}` : '',
+  }), false, 10000); } return false; }
+}
+
+function speechErrorText(cause: unknown): string {
+  if (cause instanceof Error) return cause.message || cause.name;
+  return String(cause || '未知错误');
 }
 
 async function toggleEntrySpeech(entry: VocabularyEntry): Promise<void> {
   const wasPlaying = playingEntryId.value === entry.id;
   stopEntrySpeech();
   if (wasPlaying) return;
+  prepareEntryAudioContext();
+  const generation = speechRequestGeneration;
   playingEntryId.value = entry.id;
+  speechPhase.value = 'requesting';
   const remote = speechController.beginRemoteRequest();
   try {
-    const response = await browser.runtime.sendMessage({type: 'selectionTts', text: entry.term, language: normalizeSpeechLanguage(entry.sourceLanguage), clientRequestId: remote.clientRequestId}) as {success?: boolean; transport?: 'offscreen' | 'page'; audioBase64?: string; contentType?: string};
+    const response = await browser.runtime.sendMessage({type: 'selectionTts', text: entry.term, language: normalizeSpeechLanguage(entry.sourceLanguage), clientRequestId: remote.clientRequestId}) as {success?: boolean; transport?: 'offscreen' | 'page'; audioBase64?: string; contentType?: string; error?: string; errorCode?: string};
     const result = speechController.completeRemoteRequest(remote, response);
-    if (result === 'stale' || result === 'offscreen') return;
-    if (result === 'failed' || !response.audioBase64) { speakEntryWithBrowser(entry); return; }
+    if (result === 'stale' || generation !== speechRequestGeneration) return;
+    if (result === 'offscreen') { speechPhase.value = 'playing'; return; }
+    if (result === 'failed' || !response.audioBase64) {
+      const primaryError = response.error && !/取消|已取消|aborted|cancelled/iu.test(response.error) ? response.error : t('learning.collection.speechOnlineNoAudio');
+      await fallbackEntrySpeech(entry, generation, primaryError);
+      return;
+    }
     const binary = atob(response.audioBase64);
     const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
-    entryAudioUrl = URL.createObjectURL(new Blob([bytes], {type: response.contentType || 'audio/mpeg'}));
-    const audio = new Audio(entryAudioUrl);
-    entryAudio = audio;
-    audio.onended = () => { if (entryAudio === audio) stopEntrySpeech(false); };
-    audio.onerror = () => { if (entryAudio === audio) speakEntryWithBrowser(entry); };
-    await audio.play();
-  } catch {
-    if (speechController.rejectRemoteRequest(remote)) speakEntryWithBrowser(entry);
+    await playEntryAudioBytes(bytes, response.contentType || 'audio/mpeg', generation);
+  } catch (cause) {
+    const current = speechController.rejectRemoteRequest(remote);
+    if (current && generation === speechRequestGeneration) await fallbackEntrySpeech(entry, generation,
+      t('learning.collection.speechOnlineRequestFailed', {error: speechErrorText(cause)}));
+  }
+}
+
+async function fallbackEntrySpeech(entry: VocabularyEntry, generation: number, primaryError = ''): Promise<void> {
+  if (normalizeLocalTtsMode(runtimeConfig.selectionTtsMode) === 'local-only') {
+    if (generation === speechRequestGeneration) {
+      stopEntrySpeech(false);
+      showToast(primaryError || t('learning.collection.speechFailed'), false, 10000);
+    }
+    return;
+  }
+  const googleError = await speakEntryWithGoogle(entry, generation);
+  if (googleError === null || generation !== speechRequestGeneration) return;
+  const failureContext = [primaryError ? t('learning.collection.speechOnlineSynthesis', {error: primaryError}) : '',
+    t('learning.collection.speechGoogleFallback', {error: googleError})].filter(Boolean).join('；');
+  if (!speakEntryWithBrowser(entry, generation, failureContext)) {
+    showToast(t('learning.collection.speechFailedDetail', {details: failureContext}), false, 10000);
+  }
+}
+
+async function speakEntryWithGoogle(entry: VocabularyEntry, generation: number): Promise<string | null> {
+  if (generation !== speechRequestGeneration) return t('learning.collection.speechCancelled');
+  releaseEntryAudio();
+  const remote = speechController.beginRemoteRequest();
+  try {
+    const response = await browser.runtime.sendMessage({type: 'selectionTtsGoogle', text: entry.term,
+      language: normalizeSpeechLanguage(entry.sourceLanguage), clientRequestId: remote.clientRequestId}) as {success?: boolean; transport?: 'offscreen' | 'page'; audioBase64?: string; contentType?: string; error?: string};
+    const result = speechController.completeRemoteRequest(remote, response);
+    if (generation !== speechRequestGeneration) return t('learning.collection.speechCancelled');
+    if (result === 'offscreen') { playingEntryId.value = entry.id; speechPhase.value = 'playing'; return null; }
+    if (result === 'stale') return t('learning.collection.speechCancelled');
+    if (result === 'page' && response.audioBase64) {
+      const binary = atob(response.audioBase64);
+      const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+      const playback = await playEntryAudioBytes(bytes, response.contentType || 'audio/mpeg', generation, 'browser');
+      return playback === 'stale' ? t('learning.collection.speechCancelled') : null;
+    }
+    return response.error || t('learning.collection.speechGoogleNoAudio');
+  } catch (cause) {
+    speechController.rejectRemoteRequest(remote);
+    return speechErrorText(cause);
   }
 }
 
@@ -381,13 +569,13 @@ function handleEntrySpeechState(message: unknown): undefined {
     const entry = entries.value.find(item => item.id === playingEntryId.value);
     if (entry) speakEntryWithBrowser(entry);
     else stopEntrySpeech(false);
-  } else if (state) stopEntrySpeech(false);
+  } else if (state === 'ended' || state === 'stopped') stopEntrySpeech(false);
   return undefined;
 }
 
 async function requestVocabulary<T>(request: VocabularyBookRequest): Promise<T> {
   const response = await browser.runtime.sendMessage(request) as VocabularyBookResponse<T>;
-  if (!response?.success) throw new Error(response?.error?.message || '单词本操作失败');
+  if (!response?.success) throw Object.assign(new Error(response?.error?.message || '单词本操作失败'), {code: response?.error?.code});
   return response.data;
 }
 
@@ -400,10 +588,9 @@ function applyTheme(): void {
 function scheduleTimeRefresh(): void {
   if (timeRefreshTimer !== null) window.clearTimeout(timeRefreshTimer);
   timeRefreshTimer = null;
-  if (!lifecycle.isActive()) return;
+  if (!lifecycle.isActive() || !configured || !viewVisible.value) return;
   const timestamp = Date.now();
   currentTime.value = timestamp;
-  if (document.visibilityState === 'hidden') return;
 
   const nearestDueAt = entries.value.reduce((nearest, entry) => {
     if (entry.nextReviewAt === null || entry.nextReviewAt <= timestamp) return nearest;
@@ -417,40 +604,64 @@ function scheduleTimeRefresh(): void {
 
 function handleVisibilityChange(): void {
   if (!lifecycle.isActive()) return;
-  if (document.visibilityState === 'hidden') stopEntrySpeech();
-  scheduleTimeRefresh();
-  if (document.visibilityState === 'visible') void loadEntries();
+  documentVisible.value = document.visibilityState !== 'hidden';
+  if (!documentVisible.value) stopEntrySpeech();
 }
+
+function canReadEntries(): boolean {
+  return lifecycle.isActive() && configured && viewVisible.value && !actionBusy.value;
+}
+
+// 暂停不等于卸载：普通读取延后，已接受写入仍通过原来的 lifecycle 接纳结果。
+watch(viewVisible, visible => {
+  readEpoch += 1;
+  scheduleTimeRefresh();
+  if (visible && configured) {void loadEntries(); void loadUndoTickets();}
+}, {flush: 'sync'});
+watch(actionBusy, busy => {
+  if (busy) {readEpoch += 1; undoReadEpoch += 1; if (undoReadsInFlight) undoRefreshPending = true;}
+  else {void flushPendingEntries(); if (undoRefreshPending) void loadUndoTickets();}
+}, {flush: 'sync'});
 
 async function loadEntries(): Promise<void> {
   if (!lifecycle.isActive()) return;
-  // 并发刷新合并为一个串行循环；若等待期间代次增长，旧响应不提交，循环会继续读取最新快照。
   loadRequestGeneration += 1;
+  // 隐藏或写入期间只记待办，不能等待未来恢复，否则持有 actionBusy 的保存会自锁。
+  if (canReadEntries()) await flushPendingEntries();
+}
+
+function flushPendingEntries(): Promise<void> | undefined {
+  if (!canReadEntries() || completedLoadGeneration >= loadRequestGeneration) return;
   if (loadLoopPromise) return loadLoopPromise;
-  loadLoopPromise = runLoadEntriesLoop().finally(() => { loadLoopPromise = null; });
+  loadLoopPromise = runLoadEntriesLoop().finally(() => {
+    loadLoopPromise = null;
+    // 覆盖循环退出到 finally 之间的新通知；失败代次已完成，不自动重试失败读取。
+    return flushPendingEntries();
+  });
   return loadLoopPromise;
 }
 
 async function runLoadEntriesLoop(): Promise<void> {
-  if (!lifecycle.isActive()) return;
   loading.value = true;
   loadError.value = '';
   try {
-    while (lifecycle.isActive() && completedLoadGeneration < loadRequestGeneration) {
+    while (canReadEntries() && completedLoadGeneration < loadRequestGeneration) {
       const generation = loadRequestGeneration;
+      const epoch = readEpoch;
       try {
         const nextEntries = await requestVocabulary<VocabularyEntry[]>({ type: VOCABULARY_BOOK_MESSAGE, action: 'list' });
-        if (lifecycle.isActive() && generation === loadRequestGeneration) {
+        if (canReadEntries() && epoch === readEpoch && generation === loadRequestGeneration) {
           entries.value = nextEntries;
           loadError.value = '';
           reconcileActiveReviewQueue();
         }
       } catch (cause) {
-        if (lifecycle.isActive() && generation === loadRequestGeneration) {
+        if (canReadEntries() && epoch === readEpoch && generation === loadRequestGeneration) {
           loadError.value = cause instanceof Error ? cause.message : '无法读取本地单词本';
         }
       } finally {
-        completedLoadGeneration = generation;
+        // 跨隐藏或写入的旧响应失效，保留待办，等可见且空闲后串行读取权威快照。
+        if (epoch === readEpoch) completedLoadGeneration = generation;
       }
     }
   } finally {
@@ -490,6 +701,8 @@ async function setReencounterEnabled(enabled: boolean): Promise<void> {
 }
 
 function replaceEntry(next: VocabularyEntry): void {
+  // 学习详情独立保存也会更新词条；拒绝保存前已经发出的列表响应。
+  readEpoch += 1;
   const index = entries.value.findIndex(entry => entry.id === next.id);
   if (index < 0) entries.value = [next, ...entries.value];
   else entries.value.splice(index, 1, next);
@@ -586,67 +799,101 @@ async function relearn(entry: VocabularyEntry): Promise<void> {
   finally { if (lifecycle.isActive()) actionBusy.value = false; }
 }
 
+function isUndoTicket(value: unknown): value is VocabularyUndoTicket {
+  if (!value || typeof value !== 'object') return false;
+  const ticket = value as Partial<VocabularyUndoTicket>;
+  return typeof ticket.id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(ticket.id)
+    && typeof ticket.term === 'string' && ticket.term.length > 0
+    && typeof ticket.createdAt === 'number' && Number.isFinite(ticket.createdAt)
+    && typeof ticket.expiresAt === 'number' && Number.isFinite(ticket.expiresAt) && ticket.expiresAt > ticket.createdAt;
+}
+
+async function loadUndoTickets(): Promise<void> {
+  if (!lifecycle.isActive()) return;
+  if (!viewVisible.value || actionBusy.value) {undoRefreshPending = true; undoReadEpoch += 1; return;}
+  undoRefreshPending = false;
+  const epoch = ++undoReadEpoch;
+  undoReadsInFlight += 1;
+  try {
+    const tickets = await requestVocabulary<VocabularyUndoTicket[]>({type: VOCABULARY_BOOK_MESSAGE, action: 'listUndo'});
+    if (!Array.isArray(tickets) || !tickets.every(isUndoTicket)) throw new Error('invalid tickets');
+    if (lifecycle.isActive() && viewVisible.value && !actionBusy.value && epoch === undoReadEpoch) undoTickets.value = tickets;
+  } catch {
+    if (lifecycle.isActive() && epoch === undoReadEpoch) showToast(t('learning.collection.undoListFailed'));
+  } finally {
+    undoReadsInFlight -= 1;
+    if (undoRefreshPending && lifecycle.isActive() && viewVisible.value && !actionBusy.value) void loadUndoTickets();
+  }
+}
+
 async function removeEntry(entry: VocabularyEntry): Promise<void> {
   if (!lifecycle.isActive() || actionBusy.value) return;
   actionBusy.value = true;
+  undoReadEpoch += 1;
+  let requested = false;
   try {
     try { await ElMessageBox.confirm(translateLegacyText(
-      `确认删除“${entry.term}”及其复习记录吗？`, normalizeUiLanguage(runtimeConfig.uiLanguage)),
+      t('learning.collection.deleteConfirm', {term: entry.term, notice: t(isUserscriptBuild ? 'learning.collection.undoScriptNotice' : 'learning.collection.undoExtensionNotice')}), normalizeUiLanguage(runtimeConfig.uiLanguage)),
       translateControlLabel('删除'), {type: 'warning', confirmButtonText: translateControlLabel('删除'), cancelButtonText: translateControlLabel('取消')}); }
     catch { return; }
     if (!lifecycle.isActive()) return;
-    const snapshot = await requestVocabulary<VocabularyRemovalSnapshot | null>({
-      type: VOCABULARY_BOOK_MESSAGE,
-      action: 'removeWithSnapshot',
-      entryId: entry.id,
-    });
+    requested = true;
+    const ticket = await requestVocabulary<VocabularyUndoTicket | null>({type: VOCABULARY_BOOK_MESSAGE, action: 'removeWithUndo', entryId: entry.id});
     if (!lifecycle.isActive()) return;
-    if (!snapshot) throw new Error('词条已不存在');
+    if (ticket === null) {showToast(t('learning.collection.entryMissing')); return;}
+    if (!isUndoTicket(ticket)) throw new Error('invalid ticket');
     entries.value = entries.value.filter(item => item.id !== entry.id);
-    undoExport.value = {
-      format: VOCABULARY_BOOK_EXPORT_FORMAT,
-      version: VOCABULARY_BOOK_EXPORT_VERSION,
-      exportedAt: Date.now(),
-      includesPrivateContext: true,
-      entries: [snapshot.entry],
-      reviewLogs: snapshot.reviewLogs,
-    };
+    undoTickets.value = [ticket, ...undoTickets.value.filter(item => item.id !== ticket.id)];
     scheduleTimeRefresh();
-    showToast(`已删除 ${entry.term}`, true);
-  } catch (cause) { showToast(cause instanceof Error ? cause.message : '删除失败'); }
-  finally { if (lifecycle.isActive()) actionBusy.value = false; }
+    showToast(t('learning.collection.deletedRecoverable', {term:entry.term}));
+  } catch (cause) {
+    if (lifecycle.isActive()) showToast(cause instanceof Error && 'code' in cause && cause.code === 'limit-exceeded' ? t('learning.collection.undoCapacity') : t('learning.collection.deleteUnconfirmed'));
+  } finally {
+    if (lifecycle.isActive()) {
+      actionBusy.value = false;
+      if (requested) {void loadEntries(); void loadUndoTickets();}
+    }
+  }
 }
 
-async function undoRemove(): Promise<void> {
-  const data = undoExport.value;
-  if (!lifecycle.isActive() || !data || actionBusy.value) return;
+async function undoRemove(ticket: VocabularyUndoTicket): Promise<void> {
+  if (!lifecycle.isActive() || !ticket || actionBusy.value) return;
   actionBusy.value = true;
+  undoReadEpoch += 1;
   try {
-    await requestVocabulary<VocabularyImportResult>({ type: VOCABULARY_BOOK_MESSAGE, action: 'importData', data });
+    const result = await requestVocabulary<'restored' | 'previously-restored' | 'expired' | 'missing'>({type: VOCABULARY_BOOK_MESSAGE, action: 'restoreUndo', undoId: ticket.id});
     if (!lifecycle.isActive()) return;
-    undoExport.value = null;
-    await loadEntries();
-    showToast('已恢复刚才删除的词条');
-  } catch (cause) { showToast(cause instanceof Error ? cause.message : '恢复失败'); }
-  finally { if (lifecycle.isActive()) actionBusy.value = false; }
+    if (result !== 'restored' && result !== 'previously-restored' && result !== 'expired' && result !== 'missing') throw new Error('unknown result');
+    undoTickets.value = undoTickets.value.filter(item => item.id !== ticket.id);
+    showToast(result === 'restored' ? t('learning.collection.deletedRestored') : result === 'previously-restored' ? t('learning.collection.restorePreviously') : t('learning.collection.restoreExpired'));
+  } catch (cause) {
+    if (lifecycle.isActive()) showToast(cause instanceof Error && 'code' in cause && cause.code === 'invalid-input' ? t('learning.collection.restoreConflict') : cause instanceof Error && 'code' in cause && cause.code === 'limit-exceeded' ? t('learning.collection.restoreCapacity') : t('learning.collection.undoUnconfirmed'));
+  } finally {
+    if (lifecycle.isActive()) {actionBusy.value = false; void loadEntries();}
+  }
+}
+
+async function discardUndo(ticket: VocabularyUndoTicket): Promise<void> {
+  if (!lifecycle.isActive() || actionBusy.value) return;
+  actionBusy.value = true;
+  undoReadEpoch += 1;
+  try {
+    const discarded = await requestVocabulary<boolean>({type: VOCABULARY_BOOK_MESSAGE, action: 'discardUndo', undoId: ticket.id});
+    if (!lifecycle.isActive()) return;
+    if (discarded !== true) throw new Error('unknown discard result');
+    undoTickets.value = undoTickets.value.filter(item => item.id !== ticket.id);
+    showToast(t('learning.collection.undoDiscarded'));
+  } catch (cause) {
+    if (lifecycle.isActive()) showToast(cause instanceof Error && 'code' in cause && cause.code === 'invalid-input' ? t('learning.collection.undoBusy') : t('learning.collection.discardUnconfirmed'));
+  } finally {
+    if (lifecycle.isActive()) {actionBusy.value = false; void loadUndoTickets();}
+  }
 }
 
 async function chooseAnkiContext(): Promise<boolean | null> {
-  try {
-    await ElMessageBox.confirm(
-      '默认不导出收藏时的网页片段和来源。这些内容可能包含浏览隐私。',
-      '导出到 Anki',
-      {
-        confirmButtonText: '不包含',
-        cancelButtonText: '包含上下文',
-        distinguishCancelAndClose: true,
-        type: 'warning',
-      },
-    );
-    return false;
-  } catch (action) {
-    return action === 'cancel' ? true : null;
-  }
+  return confirmExport({title: translateControlLabel('导出到 Anki'),
+    description: translateControlLabel('默认不导出收藏时的网页片段和来源。这些内容可能包含浏览隐私。'),
+    option: t('settings.backup.includeContext'), cancel: t('common.cancel')});
 }
 
 async function exportAnki(): Promise<void> {
@@ -733,12 +980,12 @@ async function importCollection(event: Event): Promise<void> {
 }
 
 async function clearVocabulary(): Promise<void> {
-  if (!lifecycle.isActive() || actionBusy.value || entries.value.length === 0) return;
+  if (!lifecycle.isActive() || actionBusy.value || (entries.value.length === 0 && undoTickets.value.length === 0)) return;
   actionBusy.value = true;
   try {
     try {
       await ElMessageBox.confirm(
-        t('learning.collection.clearHelp'),
+        `${t('learning.collection.clearHelp')} ${t('learning.collection.clearUndoNotice')}`,
         t('learning.collection.clearTitle'),
         {confirmButtonText: '确认清空', cancelButtonText: '取消', type: 'warning'},
       );
@@ -751,11 +998,13 @@ async function clearVocabulary(): Promise<void> {
     await requestVocabulary<boolean>({type: VOCABULARY_BOOK_MESSAGE, action: 'clear'});
     if (!lifecycle.isActive()) return;
     entries.value = [];
+    undoReadEpoch += 1;
+    undoTickets.value = [];
     finishReview();
     scheduleTimeRefresh();
     showToast(t('learning.collection.cleared'));
   } catch (cause) {
-    showToast(cause instanceof Error ? cause.message : '清空失败');
+    showToast(cause instanceof Error && 'code' in cause && cause.code === 'invalid-input' ? t('learning.collection.undoBusy') : cause instanceof Error ? cause.message : '清空失败');
   } finally {
     if (lifecycle.isActive()) actionBusy.value = false;
   }
@@ -764,19 +1013,13 @@ async function clearVocabulary(): Promise<void> {
 async function closeMoreMenuAndFocus(): Promise<void> {
   const details = moreMenu.value;
   if (!lifecycle.isActive() || !details) return;
+  const visible = viewVisible.value, epoch = readEpoch;
   details.open = false;
   await nextTick();
-  if (lifecycle.isActive() && details.isConnected && moreMenu.value === details) details.querySelector<HTMLElement>('summary')?.focus();
+  if (visible && viewVisible.value && epoch === readEpoch && lifecycle.isActive() && details.isConnected && moreMenu.value === details) details.querySelector<HTMLElement>('summary')?.focus();
 }
 
-function downloadFile(name: string, body: string, type: string): void {
-  const url = URL.createObjectURL(new Blob([body], {type}));
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = name;
-  anchor.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
+
 
 function entryTranslation(entry: Pick<VocabularyEntry, 'translations'>): string {
   const preferred = entry.translations[targetLanguageKey.value];
@@ -791,7 +1034,7 @@ function nextReviewLabel(entry: VocabularyEntry): string {
   if (delta <= 0) return '现在可以复习';
   if (delta < 60 * 60 * 1000) return `${Math.max(1, Math.ceil(delta / 60000))} 分钟后`;
   if (delta < 24 * 60 * 60 * 1000) return `${Math.ceil(delta / 3600000)} 小时后`;
-  return translate("learning.dueDays", normalizeUiLanguage(runtimeConfig.uiLanguage), {count: Math.ceil(delta / 86400000)});
+  return t('learning.dueDays', {count: Math.ceil(delta / 86400000)});
 }
 function normalizeLanguageKey(value: unknown): string {
   const normalized = String(value ?? '').trim().replaceAll('_', '-').toLowerCase();
@@ -800,24 +1043,26 @@ function normalizeLanguageKey(value: unknown): string {
 function goodIntervalLabel(entry: VocabularyEntry): string {
   return ['1 天后', '1 天后', '3 天后', '7 天后', '14 天后', '30 天后'][Math.min(5, entry.masteryLevel + 1)] || '30 天后';
 }
-function showToast(message: string, keepUndo = false): void {
+function showToast(message: string, _keepUndo = false, durationMs = _keepUndo ? 5000 : 2600): void {
   if (!lifecycle.isActive()) return;
   toastMessage.value = message;
-  if (!keepUndo) undoExport.value = null;
   if (toastTimer !== null) window.clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => { toastMessage.value = ''; undoExport.value = null; }, keepUndo ? 5000 : 2600);
+  toastTimer = durationMs > 0 ? window.setTimeout(() => {toastMessage.value = '';}, durationMs) : null;
+}
+
+function handleVocabularyFocus(): void {
+  if (lifecycle.isActive() && viewVisible.value && configured) {void loadEntries(); void loadUndoTickets();}
 }
 
 function handleBookChanged(message: unknown): undefined {
-  if (lifecycle.isActive() && (message as VocabularyBookChangedMessage)?.type === VOCABULARY_BOOK_CHANGED_MESSAGE) void loadEntries();
+  if (lifecycle.isActive() && (message as VocabularyBookChangedMessage)?.type === VOCABULARY_BOOK_CHANGED_MESSAGE) {void loadEntries(); void loadUndoTickets();}
   return undefined;
 }
 // 缓存保留复习会话与已接受的保存，只有当前显示的页面处理全局复习按键。
-let reviewKeyboardActive = true;
-onActivated(() => { reviewKeyboardActive = true; });
-onDeactivated(() => { reviewKeyboardActive = false; });
+onActivated(() => { keptAliveVisible.value = true; });
+onDeactivated(() => { keptAliveVisible.value = false; });
 function handleReviewKeyboard(event: KeyboardEvent): void {
-  if (!reviewKeyboardActive || !lifecycle.isActive() || !reviewActive.value || actionBusy.value) return;
+  if (!viewVisible.value || !lifecycle.isActive() || !reviewActive.value || actionBusy.value) return;
   const target = event.target as HTMLElement | null;
   if (target?.matches('input, textarea, select, button, a')) return;
   if (event.key === 'Escape') { event.preventDefault(); finishReview(); return; }
@@ -831,17 +1076,16 @@ function handleReviewKeyboard(event: KeyboardEvent): void {
 
 let unsubscribeConfig: (() => void) | null = null;
 onMounted(async () => {
+  documentVisible.value = document.visibilityState !== 'hidden';
   darkMedia = window.matchMedia('(prefers-color-scheme: dark)');
   darkMedia.addEventListener('change', applyTheme);
   await lifecycle.runAfterReady(configReady, async () => {
-    uiLanguage.value = normalizeUiLanguage(runtimeConfig.uiLanguage);
     betaEnabled.value = runtimeConfig.vocabularyBookEnabled;
     reencounterEnabled.value = runtimeConfig.vocabularyReencounterEnabled;
     selectionTranslatorEnabled.value = runtimeConfig.selectionTranslatorMode !== 'disabled' || runtimeConfig.harness?.enabled === true;
     targetLanguageKey.value = normalizeLanguageKey(runtimeConfig.to);
     applyTheme();
     unsubscribeConfig = subscribeConfig(next => {
-      uiLanguage.value = normalizeUiLanguage(next.uiLanguage);
       betaEnabled.value = next.vocabularyBookEnabled;
       reencounterEnabled.value = next.vocabularyReencounterEnabled;
       selectionTranslatorEnabled.value = next.selectionTranslatorMode !== 'disabled' || next.harness?.enabled === true;
@@ -851,8 +1095,12 @@ onMounted(async () => {
     browser.runtime.onMessage.addListener(handleBookChanged);
     browser.runtime.onMessage.addListener(handleEntrySpeechState);
     window.addEventListener('keydown', handleReviewKeyboard);
+    window.addEventListener('focus', handleVocabularyFocus);
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    documentVisible.value = document.visibilityState !== 'hidden';
+    configured = true;
     await loadEntries();
+    await loadUndoTickets();
   });
 });
 
@@ -863,10 +1111,12 @@ onBeforeUnmount(() => {
   browser.runtime.onMessage.removeListener(handleBookChanged);
   browser.runtime.onMessage.removeListener(handleEntrySpeechState);
   window.removeEventListener('keydown', handleReviewKeyboard);
+  window.removeEventListener('focus', handleVocabularyFocus);
   document.removeEventListener('visibilitychange', handleVisibilityChange);
   darkMedia?.removeEventListener('change', applyTheme);
   if (toastTimer !== null) window.clearTimeout(toastTimer);
   if (timeRefreshTimer !== null) window.clearTimeout(timeRefreshTimer);
+  if (entryAudioContext && entryAudioContext.state !== 'closed') void entryAudioContext.close().catch(() => undefined);
 });
 </script>
 
@@ -876,6 +1126,16 @@ onBeforeUnmount(() => {
 .collection-overview h2 { margin:0; color:var(--ink); font-size:18px; font-weight:650; line-height:1.5; }
 .collection-overview > span { display:block; margin-top:4px; color:var(--muted); font-size:11px; line-height:1.7; }
 .collection-management { display:flex; align-items:center; flex:none; gap:10px; }
+.recent-deletions { padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:var(--surface); }
+.recent-deletions-heading h3 { margin:0; color:var(--ink); font-size:12px; font-weight:600; }
+.recent-deletions-heading p { margin:4px 0 0; color:var(--muted); font-size:11px; line-height:1.6; }
+.recent-deletion-row { display:flex; align-items:center; justify-content:space-between; gap:12px; padding-top:10px; }
+.recent-deletion-term { min-width:0; color:var(--ink); font-size:12px; overflow-wrap:anywhere; }
+.recent-deletion-actions { display:flex; flex:none; gap:4px; }
+.recent-deletion-actions button { min-height:30px; padding:0 9px; border:0; border-radius:7px; color:var(--muted); background:transparent; cursor:pointer; font:inherit; font-size:12px; }
+.recent-deletion-actions .recent-deletion-restore { color:var(--brand-strong); background:var(--brand-soft); }
+.recent-deletion-actions button:hover:not(:disabled) { color:var(--brand-strong); background:var(--brand-soft); }
+.recent-deletion-actions button:focus-visible { outline:2px solid var(--brand); outline-offset:2px; }
 .collection-switches { display:grid; gap:4px; padding:4px 0 10px; margin-bottom:6px; border-bottom:1px solid var(--line); }
 .collection-switches .vocabulary-saving-control { margin:0; border:0; background:transparent; }
 .vocabulary-saving-control :deep(button) { min-height:58px; padding:8px 10px; gap:12px; }
@@ -984,6 +1244,8 @@ button:disabled { cursor: not-allowed; opacity: .55; }
 .book-toast { position: fixed; z-index: 30; right: 28px; bottom: 24px; display: flex; align-items: center; gap: 12px; padding: 11px 14px; border-radius: 11px; color: #fff; background: #252a33; box-shadow: 0 12px 30px rgba(0,0,0,.2); font-size: 11px; }
 .book-toast button { padding: 0; border: 0; color: #ffb8ce; background: transparent; cursor: pointer; font: inherit; font-weight: 600; }
 @media (max-width: 560px) {
+  .recent-deletion-row { align-items:flex-start; flex-wrap:wrap; gap:4px 12px; }
+  .recent-deletion-term { flex:1 1 100%; }
   .collection-tools { align-items:flex-start; gap:12px; }
   .collection-management { flex:1; min-width:0; max-width:65%; gap:3px; flex-wrap:wrap; justify-content:flex-end; }
   .collection-management .book-more { max-width:100%; }

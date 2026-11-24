@@ -1,7 +1,7 @@
 /**
  * @file src/features/full-page-translation/content/requestSession.ts
  * 文件职责：持有全文翻译会话级请求复用的取消域、活动队列会话与结果缓存生命周期。
- * 主要内容：创建共享 AbortSignal并向节点尝试传播会话取消，统一结束底层请求；路由变化结束旧取消域后创建下一代取消域，普通 AI 与含通用 AI 成员组合的页面上下文或相邻多段来源变化仅失效请求结果。
+ * 主要内容：创建共享 AbortSignal 并向节点尝试传播会话取消，统一构造取消错误和结束底层请求；路由变化结束旧取消域后创建下一代取消域，普通 AI 与含通用 AI 成员组合的页面上下文或相邻多段来源变化仅失效请求结果。
  * 模块边界：本文件不执行翻译、不管理候选或 DOM；translationRequest 负责填充缓存，runtime 只调用这里的生命周期入口。
  */
 import {servicesType} from '@/src/core/config/catalog';
@@ -17,6 +17,16 @@ import {
     type FullPageTranslationRequestCacheEntry,
     type FullPageTranslationSessionCache,
 } from '@/src/features/full-page-translation/content/translationRequest';
+
+export function createAbortError(): Error {
+    try {
+        return new DOMException('翻译已取消', 'AbortError');
+    } catch {
+        const error = new Error('翻译已取消');
+        error.name = 'AbortError';
+        return error;
+    }
+}
 
 export interface FullPageRequestSessionState {
     translationRequestCache: Map<string, FullPageTranslationRequestCacheEntry>;

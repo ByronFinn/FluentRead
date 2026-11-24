@@ -4,6 +4,7 @@ import {runInNewContext} from 'node:vm';
 
 const mountPorts = vi.hoisted(() => ({loaded: vi.fn(), mount: vi.fn(async (_selector: string) => {}), gate: undefined as Promise<void> | undefined, mountGate: undefined as Promise<void> | undefined}));
 vi.mock('element-plus/es/components/base/style/css', () => ({}));
+vi.mock('element-plus/es/components/tooltip/style/css', () => ({}));
 
 type Embedded = typeof import('../src/app/popup/embedded');
 function createPort() {
@@ -25,6 +26,7 @@ function fixture(embedded = true) {
     class Observer {observe = vi.fn(); disconnect = vi.fn(); constructor(public callback: () => void) {observers.push(this);} }
     const computed = vi.fn(() => ({width: '380px'}));
     vi.stubGlobal('window', target); vi.stubGlobal('document', doc); vi.stubGlobal('browser', {runtime});
+    vi.stubGlobal('navigator', {language: 'zh-CN'});
     vi.stubGlobal('chrome', undefined); vi.stubGlobal('ResizeObserver', Observer); vi.stubGlobal('getComputedStyle', computed);
     const connect = (port = createPort(), data: unknown = {type: 'fluentread-floating-popup-connect', token: 'fixture-token'}, source = target.parent, ports = [port]) => {
         target.dispatchEvent(Object.assign(new Event('message'), {data, source, ports}));
@@ -163,6 +165,9 @@ describe('页内 popup 授权与界面生命周期', () => {
     it('Escape 和页面动作通知父端一次并清理尺寸监听，其他按键和消息不关闭面板', async () => {
         const f = fixture(); popup.closePopupSurface(); const port = await authorizeFrame(f); popup.observeEmbeddedPopupSize();
         port.onmessage?.({data: {type: 'resize'}}); f.target.dispatchEvent(Object.assign(new Event('keydown'), {key: 'Enter'})); expect(popup.isPopupSurfaceActive()).toBe(true);
+        const handled = Object.assign(new Event('keydown', {cancelable: true}), {key: 'Escape'});
+        handled.preventDefault(); f.target.dispatchEvent(handled);
+        expect(popup.isPopupSurfaceActive()).toBe(true); expect(port.postMessage).not.toHaveBeenCalledWith({type: 'close'});
         const event = Object.assign(new Event('keydown', {cancelable: true}), {key: 'Escape'}); f.target.dispatchEvent(event); popup.closePopupSurface();
         expect(event.defaultPrevented).toBe(true); expect(port.postMessage.mock.calls.filter(([message]) => message.type === 'close')).toHaveLength(1);
         expect(port.close).toHaveBeenCalledOnce(); expect(f.observers[0].disconnect).toHaveBeenCalledOnce(); expect(f.probe.remove).toHaveBeenCalledOnce();

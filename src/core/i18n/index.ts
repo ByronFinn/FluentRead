@@ -3,13 +3,14 @@
  *
  * 文件职责：提供与 UI 框架无关的界面语言注册表、归一化和翻译函数。
  * 主要内容：内置简体中文默认目录；English、日本語、한국어、Français、Русский 与 Español 以资源包形式注册，
- * 支持稳定 key 参数插值、中文旧文案迁移适配、按语言惰性建立的旧文案反查表，以及资源包携带的旧文案模板的惰性编译。
+ * 仅匹配字典自身登记项，支持稳定 key 参数插值、中文旧文案迁移适配、按语言惰性建立的旧文案反查表，以及资源包携带的旧文案模板的惰性编译。
  * 旧文案适配仅用于扩展自己的 UI，不会翻译网页内容或用户输入。
  * 模块边界：本文件不读写 browser.storage、不发起资源请求，也不依赖 Vue；非中文资源包由 bundles.ts 静态汇总
  * （构建期生成、userscript 与测试使用）或由 platform/i18n 在扩展运行时按需加载后注册。
  */
 
 import {zhCNMessages} from './messages/zh-CN';
+import {normalizeUiLanguage} from './language';
 import type {
     LegacyPatternEntry,
     MessageCatalog,
@@ -26,6 +27,7 @@ const defaultMessages: MessageCatalog = zhCNMessages;
 const registeredBundles = new Map<UiLanguage, UiLanguageBundle>();
 /** 中文稳定资源也可供旧模板精确复用；反查表只在该语言首次使用旧文案时建立一次。 */
 const messageLegacyCatalogs = new Map<UiLanguage, MessageCatalog>();
+const pluralRules = new Map<UiLanguage, Intl.PluralRules>();
 
 /** 注册一种非中文界面语言的资源包；重复注册会替换旧包并丢弃基于旧包建立的反查表。 */
 export function registerUiLanguageBundle(language: RegisteredUiLanguage, bundle: UiLanguageBundle): void {
@@ -39,11 +41,16 @@ export function hasUiLanguageBundle(language: UiLanguage): boolean {
     return language === 'zh-CN' || registeredBundles.has(language);
 }
 
+/** 资源字典只匹配自身条目，避免 constructor 等普通文本命中 Object 原型。 */
+function ownMessage(catalog: MessageCatalog | undefined, key: string): string | undefined {
+    return catalog && Object.hasOwn(catalog, key) ? catalog[key] : undefined;
+}
+
 function getMessageLegacyCatalog(language: UiLanguage, bundle: UiLanguageBundle): MessageCatalog {
     let catalog = messageLegacyCatalogs.get(language);
     if (!catalog) {
         catalog = Object.fromEntries(
-            Object.entries(defaultMessages).map(([key, source]) => [source, bundle.messages[key] ?? source]),
+            Object.entries(defaultMessages).map(([key, source]) => [source, ownMessage(bundle.messages, key) ?? source]),
         );
         messageLegacyCatalogs.set(language, catalog);
     }
@@ -53,23 +60,37 @@ function getMessageLegacyCatalog(language: UiLanguage, bundle: UiLanguageBundle)
 function formatMessage(template: string, params?: TranslationParams): string {
     if (!params) return template;
     return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (placeholder, name: string) => {
-        const value = params[name];
+        const value = Object.hasOwn(params, name) ? params[name] : undefined;
         return value === undefined || value === null ? placeholder : String(value);
     });
 }
 
 /** 翻译稳定资源 key；当前语言缺失或资源包尚未加载时回退到中文，再缺失时返回 key 便于发现漏翻。 */
 export function translate(key: string, language: UiLanguage, params?: TranslationParams): string {
-    const template = registeredBundles.get(language)?.messages[key] ?? defaultMessages[key] ?? key;
+    const count = params && Object.hasOwn(params, 'count') ? params.count : undefined;
+    let category: Intl.LDMLPluralRule | undefined;
+    if (typeof count === 'number' && Number.isFinite(count)) {
+        const locale = normalizeUiLanguage(language);
+        let rules = pluralRules.get(locale);
+        if (!rules) {
+            rules = new Intl.PluralRules(locale);
+            pluralRules.set(locale, rules);
+        }
+        category = rules.select(count);
+    }
+    const message = (catalog: MessageCatalog | undefined): string | undefined => (
+        category === undefined ? undefined : ownMessage(catalog, `${key}.plural.${category}`)
+            ?? ownMessage(catalog, `${key}.plural.other`)
+    ) ?? ownMessage(catalog, key);
+    const template = message(registeredBundles.get(language)?.messages) ?? message(defaultMessages) ?? key;
     return formatMessage(template, params);
 }
 
 function preserveWhitespace(value: string, translated: string): string {
-    const leading = value.match(/^\s*/u)?.[0] || '';
-    const trailing = value.match(/\s*$/u)?.[0] || '';
-    const start = leading.length;
-    const end = trailing.length > 0 ? value.length - trailing.length : value.length;
-    return `${leading}${translated}${end > start ? trailing : ''}`;
+    const leading = value.match(/^\s*/u)![0];
+    const trailing = value.match(/\s*$/u)![0];
+    // Only nonblank source text reaches this helper; both zero-or-more patterns always match.
+    return `${leading}${translated}${trailing}`;
 }
 
 interface CompiledLegacyPattern {
@@ -122,7 +143,7 @@ function getCompiledLegacyPatterns(language: UiLanguage, bundle: UiLanguageBundl
 
 function getExactLegacyText(value: string, language: UiLanguage): string | undefined {
     const bundle = registeredBundles.get(language);
-    return bundle && (bundle.legacyText[value] ?? getMessageLegacyCatalog(language, bundle)[value]);
+    return bundle && (ownMessage(bundle.legacyText, value) ?? ownMessage(getMessageLegacyCatalog(language, bundle), value));
 }
 
 function* applyLegacyPatterns(patterns: readonly CompiledLegacyPattern[], value: string, language: UiLanguage): Generator<string, string | undefined, string> {
@@ -154,7 +175,7 @@ function* applyLegacyPatterns(patterns: readonly CompiledLegacyPattern[], value:
 }
 
 /**
- * 将尚未完成 key 化的扩展 UI 文案翻译成 English。
+ * 将尚未完成 key 化的扩展 UI 文案翻译成所选界面语言。
  *
  * 这个适配器是有边界的迁移工具：调用方必须只把扩展自己的文本节点/属性传入，
  * 并且 UI directive 会跳过 textarea、pre、code 和用户内容，避免误伤网页正文或译文。
@@ -191,5 +212,6 @@ export function translateLegacyText(value: string, language: UiLanguage): string
         if (step.done) {result = step.value; pending.pop();}
         else pending.push(evaluate(step.value));
     }
-    return result ?? value;
+    // The root generator always completes with a string before the work stack becomes empty.
+    return result!;
 }

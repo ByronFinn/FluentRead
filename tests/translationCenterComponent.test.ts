@@ -1,55 +1,359 @@
+import './helpers/vueDomFixture';
 import {readFileSync} from 'node:fs';
-import {createRequire} from 'node:module';
-import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-import {compileScript, compileStyle, parse} from 'vue/compiler-sfc';
-import ts from 'typescript';
+import {afterEach, beforeEach, describe, expect, it, vi, type Mock} from 'vitest';
+import {compileStyle, parse} from 'vue/compiler-sfc';
+import {parseHTML} from 'linkedom';
 import * as vue from 'vue';
 import {Config, normalizeConfig} from '@/src/core/config/model';
-import * as catalog from '@/src/core/config/catalog';
-import * as profiles from '@/src/core/config/customOpenAI';
-import * as composites from '@/src/core/config/compositeTranslation';
-import * as validation from '@/src/core/config/validation';
-import * as comparison from '@/src/features/translation-center/model/comparison';
 import {translate} from '@/src/core/i18n';
 import {TranslationRequestError, serializeTranslationError} from '@/src/services/translation/errors';
 
 const filename = 'src/features/translation-center/ui/TranslationCenter.vue';
 const source = readFileSync(filename, 'utf8');
 const {descriptor} = parse(source, {filename});
-const compiled = ts.transpileModule(compileScript(descriptor, {id: 'translation-center-test'}).content, {
-  compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true},
-}).outputText;
-const require = createRequire(import.meta.url);
-let state: Record<string, any>, scope: vue.EffectScope, config: Config;
-let requestPatch: ReturnType<typeof vi.fn>, translateText: ReturnType<typeof vi.fn>, copy: ReturnType<typeof vi.fn>;
-let mounted: (() => Promise<void>)[], unmounted: (() => void)[], subscription: (next: Config) => void;
-let emit: ReturnType<typeof vi.fn>;
+import TranslationCenter from '@/src/features/translation-center/ui/TranslationCenter.vue';
+let state: Record<string, any>, config: Config;
+let requestPatch: Mock, translateText: Mock, copy: Mock;
+let subscription: (next: Config) => void;
+let emit: Mock, unmount: (() => void) | undefined, host: HTMLElement;
+let configReady: Promise<void>;
+vi.mock('webextension-polyfill', () => ({default: {runtime: {sendMessage: vi.fn()}}}));
+vi.mock('@/src/services/config/store', () => ({
+  get config() {return config;}, get configReady() {return configReady;},
+  subscribeConfig: (fn: typeof subscription) => {subscription = fn; return vi.fn();},
+  requestConfigPatch: (...args: unknown[]) => requestPatch(...args),
+}));
+vi.mock('@/src/services/translation/client', () => ({translateText: (...args: unknown[]) => translateText(...args)}));
+vi.mock('@/src/services/translation/capabilities', () => ({
+  filterAvailableTranslationServices: (items: any[]) => items.filter(item => item.value !== 'chromeTranslator'),
+  isTranslationServiceAvailable: (service: string) => service !== 'chromeTranslator',
+}));
+vi.mock('@/src/ui/i18n', () => ({useUiI18n: () => ({language: vue.ref('zh-CN'), translateLegacy: (value: string) => value, t: (key: string, params: any) => translate(key, 'zh-CN', params)})}));
+vi.mock('element-plus', () => ({ElOption: {props: ['value', 'label'], setup: (props: any) => () => vue.h('option', {value: props.value}, props.label)}}));
+vi.mock('@/src/ui/components/UiSelect.vue', () => ({default: {props: ['modelValue'], emits: ['update:modelValue', 'change', 'visible-change'], setup: (props: any, context: any) => () => vue.h('select', {
+  value: props.modelValue, onFocus: () => context.emit('visible-change', true), onBlur: () => context.emit('visible-change', false),
+  onChange: (event: Event) => {const value = (event.target as HTMLSelectElement).value; context.emit('update:modelValue', value); context.emit('change', value);},
+}, [context.slots.label?.(), context.slots.default?.()])}}));
+vi.mock('@/src/ui/components/UiIcon.vue', () => ({default: {render: () => null}}));
+vi.mock('@/src/ui/components/ServiceIcon.vue', () => ({default: {render: () => null}}));
 const deferred = () => {let resolve!: (text: string) => void; const promise = new Promise<string>(done => {resolve = done;}); return {promise, resolve};};
+const close = () => {unmount?.(); unmount = undefined;};
 beforeEach(async () => {
-  config = new Config(); mounted = []; unmounted = []; emit = vi.fn();
+  config = new Config(); emit = vi.fn();
   requestPatch = vi.fn().mockResolvedValue(undefined); translateText = vi.fn().mockResolvedValue('translated'); copy = vi.fn().mockResolvedValue(undefined);
+  const {document, window} = parseHTML('<html><body></body></html>'); document.body.style.userSelect = 'text';
+  Object.assign(document, {elementFromPoint: vi.fn()});
+  vi.stubGlobal('window', new EventTarget());
   vi.stubGlobal('navigator', {platform: 'MacIntel', clipboard: {writeText: copy}});
-  vi.stubGlobal('document', {body: {style: {userSelect: 'text'}}, addEventListener: vi.fn(), removeEventListener: vi.fn(), elementFromPoint: vi.fn()});
-  const api = {...catalog, ...profiles, ...composites, ...validation, ...comparison, config, configReady: Promise.resolve(),
-    subscribeConfig: (fn: typeof subscription) => {subscription = fn; return vi.fn();}, requestConfigPatch: requestPatch, translateText, TranslationRequestError,
-    filterAvailableTranslationServices: (items: any[]) => items.filter(item => item.value !== 'chromeTranslator'),
-    isTranslationServiceAvailable: (service: string) => service !== 'chromeTranslator',
-    useUiI18n: () => ({language: vue.ref('zh-CN'), translateLegacy: (value: string) => value, t: (key: string, params: any) => translate(key, 'zh-CN', params)}),
-  };
-  const exports: Record<string, any> = {};
-  new Function('require', 'exports', compiled)((id: string) => {
-    if (id === 'vue') return {...vue, onMounted: (fn: () => Promise<void>) => mounted.push(fn), onUnmounted: (fn: () => void) => unmounted.push(fn)};
-    if (id === 'webextension-polyfill') return {runtime: {sendMessage: vi.fn()}};
-    if (id === 'element-plus' || id.endsWith('.vue')) return {};
-    if (id.startsWith('@/src/') || id === '../model/comparison') return api;
-    return require(id);
-  }, exports);
-  scope = vue.effectScope(); state = scope.run(() => vue.proxyRefs(exports.default.setup({}, {expose: () => {}, emit})))!;
-  await Promise.all(mounted.map(fn => fn())); await vue.nextTick();
+  vi.stubGlobal('document', document);
+  vi.stubGlobal('Document', window.Document);
+  vi.stubGlobal('ShadowRoot', window.ShadowRoot);
+  configReady = Promise.resolve();
+  await mountCenter();
 });
-afterEach(() => {unmounted.forEach(fn => fn()); scope.stop(); vi.unstubAllGlobals(); vi.useRealTimers();});
+async function mountCenter(surface: 'settings' | 'sidebar' = 'settings'): Promise<void> {
+  const document = globalThis.document;
+  const renderer = vue.createRenderer<any, any>({
+    createElement: (tag, namespace) => vue.markRaw(namespace === 'svg' ? document.createElementNS('http://www.w3.org/2000/svg', tag) : document.createElement(tag)),
+    createText: value => document.createTextNode(value), createComment: value => document.createComment(value),
+    setText: (node, value) => {node.nodeValue = value;}, setElementText: (node, value) => {node.textContent = value;},
+    parentNode: node => node.parentNode, nextSibling: node => node.nextSibling,
+    insert: (node, parent, anchor) => parent.insertBefore(node, anchor || null), remove: node => node.remove(),
+    patchProp: (node, key, previous, value) => {
+      if (key.startsWith('on')) {if (key.includes(':')) return; const event = key.slice(2).replace(/(?:Once|Passive|Capture)+$/, '').toLowerCase();
+        for (const listener of Array.isArray(previous) ? previous : previous ? [previous] : []) node.removeEventListener(event, listener);
+        for (const listener of Array.isArray(value) ? value : value ? [value] : []) node.addEventListener(event, listener);}
+      else if (key === 'style') Object.assign(node.style, value || {});
+      else if (key === 'value') {if (node.tagName === 'SELECT') for (const option of node.querySelectorAll('option')) option.toggleAttribute('selected', option.value === value); else node.value = value;}
+      else if (value == null || (value === false && !key.startsWith('aria-'))) node.removeAttribute(key);
+      else node.setAttribute(key, String(value));
+    },
+  });
+  host = document.createElement('div'); document.body.appendChild(host);
+  const app = renderer.createApp(TranslationCenter, {surface, 'onConfigure-service': (service: string) => emit('configure-service', service), 'onConfigure-general': () => emit('configure-general')});
+  app.mount(host); state = (app as any)._instance.setupState;
+  unmount = () => {app.unmount(); host.remove();};
+  for (let i = 0; i < 4; i++) {await Promise.resolve(); await vue.nextTick();}
+}
+afterEach(() => {close(); vi.unstubAllGlobals(); vi.useRealTimers();});
 
 describe('translation center product workflow', () => {
+  it('expires save and copy acknowledgements while pending language choices survive incoming configuration', async () => {
+    vi.useFakeTimers();
+    const pending = deferred(); requestPatch.mockReturnValueOnce(pending.promise);
+    state.sourceLanguage = 'en'; state.targetLanguage = 'ja'; state.persistTranslationCenterConfig('source', 'target');
+    subscription(config);
+    expect(state.sourceLanguage).toBe('en'); expect(state.targetLanguage).toBe('ja');
+    pending.resolve(''); await vue.nextTick(); await vue.nextTick();
+    expect(state.saveState).toBe('saved');
+    await state.copyText('reviewed', 'google'); expect(state.copiedService).toBe('google');
+    await vi.advanceTimersByTimeAsync(1800);
+    expect(state.saveState).toBe('idle'); expect(state.copiedService).toBe(''); expect(state.feedback).toBe('');
+  });
+  it('dismisses the service picker with Escape and bounds Alt arrow card moves at either end', async () => {
+    const key = (target: EventTarget, value: string) => {const event = new document.defaultView!.Event('keydown', {bubbles: true, cancelable: true}); Object.assign(event, {key: value, altKey: true}); target.dispatchEvent(event);};
+    await state.toggleServicePicker(); await vue.nextTick(); key(host.querySelector('[role="dialog"]')!, 'Escape');
+    await vue.nextTick(); expect(state.servicePickerOpen).toBe(false);
+    const initial = state.cards.map((card: any) => card.service);
+    key(host.querySelector('.drag-handle')!, 'ArrowUp'); await vue.nextTick(); expect(state.cards.map((card: any) => card.service)).toEqual(initial);
+    key(host.querySelector('.drag-handle')!, 'ArrowDown'); await vue.nextTick(); expect(state.cards.map((card: any) => card.service)).toEqual([...initial].reverse());
+    key(host.querySelectorAll('.drag-handle')[1], 'ArrowUp'); await vue.nextTick(); expect(state.cards.map((card: any) => card.service)).toEqual(initial);
+    state.swapLanguages(); expect(state.sourceLanguage).toBe('auto');
+  });
+  it('preserves a failed language edit across storage sync and ignores a clipboard rejection after close', async () => {
+    requestPatch.mockRejectedValueOnce(new Error('offline'));
+    state.sourceLanguage = 'en'; state.targetLanguage = 'ja'; state.persistTranslationCenterConfig('source', 'target');
+    await vue.nextTick(); await vue.nextTick(); subscription(config);
+    expect(state.sourceLanguage).toBe('en'); expect(state.targetLanguage).toBe('ja'); expect(state.saveState).toBe('error');
+    let reject!: (cause: Error) => void; copy.mockReturnValueOnce(new Promise((_resolve, fail) => {reject = fail;}));
+    const pending = state.copyText('reviewed', 'google'), feedback = state.feedback;
+    const staleSubscription = subscription; close(); staleSubscription(config); reject(new Error('window closed')); await pending;
+    expect(state.feedback).toBe(feedback);
+  });
+  it('keeps acknowledgement state for an outstanding save when another field has no changes', async () => {
+    const pending = deferred(); requestPatch.mockReturnValueOnce(pending.promise);
+    config.translationCenterServices = state.cards.map((card: any) => card.service);
+    state.setLayout('grid'); state.persistTranslationCenterConfig('services');
+    expect(requestPatch).toHaveBeenCalledOnce(); expect(state.saveState).toBe('idle');
+    pending.resolve(''); await vue.nextTick(); await vue.nextTick(); expect(state.saveState).toBe('saved');
+  });
+  it('uses a compact single column in the sidebar without changing saved comparison layout', async () => {
+    close();config.translationCenterLayout = 'grid';config.translationCenterServices = ['google'];await mountCenter('sidebar');
+    expect(host.querySelector('.is-sidebar')).not.toBeNull();expect(host.querySelector('.results-layout-control')).toBeNull();
+    expect(host.querySelector('.translation-result-list.is-grid')).toBeNull();expect(state.resultLayout).toBe('grid');
+    expect(requestPatch).not.toHaveBeenCalled();
+    expect(state.cards).toHaveLength(1);expect(host.querySelector('.translation-input-meta')).toBeNull();expect(host.querySelector('#translation-input-help')).toBeNull();
+    expect(host.querySelector('.translation-result-card')).toBeNull();
+    state.sourceText = 'A copied paragraph';state.runTranslation();await vi.waitFor(() => expect(state.successfulCards).toHaveLength(1));
+    expect(translateText.mock.calls[0][0]).toBe('A copied paragraph');
+    await vue.nextTick();host.querySelector<HTMLButtonElement>('.sidebar-copy-button')!.click();await vue.nextTick();expect(copy).toHaveBeenCalledWith('translated');
+    copy.mockRejectedValueOnce(new Error('clipboard unavailable'));await state.copyText('translated', state.cards[0].service);await vue.nextTick();
+    expect(host.querySelector('.translation-center-feedback')?.textContent).toBe(state.ct('copyError'));
+    config.on = false;subscription(config);await vue.nextTick();
+    host.querySelector<HTMLButtonElement>('.translation-paused button')!.click();expect(emit).toHaveBeenCalledWith('configure-general');
+    expect(host.querySelector('.translation-paused a')).toBeNull();
+    expect(state.sourceText).toBe('A copied paragraph');
+    state.sourceLanguage = 'fr';state.persistTranslationCenterConfig('source');
+    await vi.waitFor(() => expect(state.saveState).toBe('saved'));await vue.nextTick();expect(host.querySelector('.save-status')).toBeNull();
+  });
+  it('shares first-use comparison defaults between the settings page and sidebar', async () => {
+    const defaults = state.cards.map((card: any) => card.service);
+    close();await mountCenter('sidebar');
+    expect(state.cards.map((card: any) => card.service)).toEqual(defaults);
+    expect(defaults).toEqual(['freeTranslation', 'google']);expect(requestPatch).not.toHaveBeenCalled();
+  });
+  it('translates on sidebar Enter while preserving multiline input and IME composition', async () => {
+    close();config.translationCenterServices = ['google'];await mountCenter('sidebar');
+    const editor = host.querySelector<HTMLTextAreaElement>('textarea')!;
+    expect(editor.getAttribute('aria-describedby')).toBe('sidebar-input-help');
+    expect(editor.getAttribute('title')).toContain('Shift + Enter');
+    expect(host.querySelector('#sidebar-input-help')?.textContent).toContain('Shift + Enter');
+    const keydown = (options: Record<string, unknown>) => {
+      const event = Object.assign(new document.defaultView!.Event('keydown', {bubbles: true, cancelable: true}), {key: 'Enter'}, options);
+      editor.dispatchEvent(event);return event;
+    };
+    state.sourceText = 'Copied text';await vue.nextTick();
+    for (const options of [{shiftKey: true}, {altKey: true}, {isComposing: true}, {keyCode: 229}]) {
+      expect(keydown(options).defaultPrevented).toBe(false);
+    }
+    expect(translateText).not.toHaveBeenCalled();
+    expect(keydown({}).defaultPrevented).toBe(true);
+    await vi.waitFor(() => expect(state.successfulCards).toHaveLength(1));
+    expect(translateText).toHaveBeenCalledOnce();expect(translateText.mock.calls[0][0]).toBe('Copied text');
+    expect(keydown({repeat: true}).defaultPrevented).toBe(true);expect(translateText).toHaveBeenCalledOnce();
+    expect(keydown({ctrlKey: true}).defaultPrevented).toBe(true);
+    await vi.waitFor(() => expect(translateText).toHaveBeenCalledTimes(2));
+  });
+  it('keeps plain Enter as a newline in settings and blocks sidebar shortcuts when unavailable or running', async () => {
+    state.sourceText = 'Text';await vue.nextTick();
+    const settingsEnter = Object.assign(new document.defaultView!.Event('keydown', {bubbles: true, cancelable: true}), {key: 'Enter'});
+    host.querySelector('textarea')!.dispatchEvent(settingsEnter);
+    expect(settingsEnter.defaultPrevented).toBe(false);expect(translateText).not.toHaveBeenCalled();
+    close();config.translationCenterServices = ['openai'];await mountCenter('sidebar');state.sourceText = 'Text';
+    const press = () => host.querySelector('textarea')!.dispatchEvent(Object.assign(new document.defaultView!.Event('keydown', {bubbles: true, cancelable: true}), {key: 'Enter'}));
+    press();expect(translateText).not.toHaveBeenCalled();expect(state.state.run).toBe(0);
+    config.translationCenterServices = ['google'];subscription(config);config.on = false;subscription(config);
+    press();expect(translateText).not.toHaveBeenCalled();
+    config.on = true;subscription(config);const pending = deferred();translateText.mockReturnValueOnce(pending.promise);
+    press();press();expect(translateText).toHaveBeenCalledOnce();pending.resolve('translated');
+    await vi.waitFor(() => expect(state.successfulCards).toHaveLength(1));
+  });
+  it('retains a long saved comparison list and searches, toggles and copies each provider with its model identity', async () => {
+    close();
+    const providers = Array.from({length: 16}, (_, index) => ({id: `custom:team-${index + 1}`, name: `Team service ${index + 1}`,
+      endpoint: 'https://fixture.invalid/v1', models: [`unique-team-model-${index + 1}`]}));
+    config.customOpenAIProviders = providers;config.translationCenterServices = providers.map(provider => provider.id);
+    for (const provider of providers) {config.token[provider.id] = 'synthetic-fixture';config.model[provider.id] = provider.models[0];}
+    await mountCenter('sidebar');
+    expect(state.cards.map((card: any) => card.service)).toEqual(config.translationCenterServices);
+    expect(host.querySelector('.service-picker-count')?.textContent).toBe('16');expect(host.querySelector('.translation-result-card')).toBeNull();
+    expect(requestPatch).not.toHaveBeenCalled();requestPatch.mockImplementation(async patch => {Object.assign(config, patch);});await state.toggleServicePicker();
+    state.serviceSearchQuery = 'unique-team-model-16';await vue.nextTick();
+    const option = host.querySelector<HTMLButtonElement>('.service-picker-option')!;
+    expect(host.querySelectorAll('.service-picker-option')).toHaveLength(1);expect(option.getAttribute('aria-pressed')).toBe('true');
+    option.click();await vue.nextTick();expect(host.querySelector('.service-picker-count')?.textContent).toBe('15');
+    expect(requestPatch.mock.calls.at(-1)![0].translationCenterServices).not.toContain('custom:team-16');
+    option.click();await vue.nextTick();expect(host.querySelector('.service-picker-count')?.textContent).toBe('16');
+    await vi.waitFor(() => expect(requestPatch.mock.calls.at(-1)![0].translationCenterServices).toEqual(providers.map(provider => provider.id)));
+    state.closePicker(false);translateText.mockImplementation((_text: string, _title: string, options: any) => Promise.resolve(`Result from ${options.serviceOverride}`));
+    state.sourceText = 'One paragraph for all selected providers';state.runTranslation();
+    await vi.waitFor(() => expect(state.successfulCards).toHaveLength(16));await vue.nextTick();
+    expect(host.querySelectorAll('.translation-result-card-header')).toHaveLength(16);
+    expect(host.querySelector('[data-service="custom:team-16"] .translation-result-service-name small')?.textContent).toBe('unique-team-model-16');
+    host.querySelector<HTMLButtonElement>('[data-service="custom:team-16"] .translation-result-content footer button')!.click();
+    await vue.nextTick();expect(copy).toHaveBeenCalledWith('Result from custom:team-16');
+    config.model['custom:team-16'] = 'next-model';subscription(config);await vue.nextTick();
+    expect(state.staleCount).toBe(1);
+    expect(host.querySelector('[data-service="custom:team-16"] .translation-result-service-name small')?.textContent).toBe('unique-team-model-16');
+  });
+  it('keeps compact sidebar errors and optional comparisons actionable without restoring secondary metadata', async () => {
+    close();await mountCenter('sidebar');state.addService('openai');await vue.nextTick();
+    expect(host.querySelector('.needs-configuration')).not.toBeNull();expect(host.querySelector('.drag-handle')).toBeNull();
+    state.addService('google');state.sourceText = 'Original';state.runTranslation();
+    await vi.waitFor(() => expect(state.successfulCards).toHaveLength(2));await vue.nextTick();
+    expect(host.querySelectorAll('.translation-result-card-header')).toHaveLength(3);
+    expect(host.querySelectorAll('.translation-result-content footer > span')).toHaveLength(0);
+    expect(host.querySelectorAll('.card-connection-footer')).toHaveLength(0);
+    await state.toggleServicePicker();await vue.nextTick();expect(host.querySelector('.service-picker-footer')).toBeNull();
+    expect(host.querySelector('.service-picker-header p')).toBeNull();state.closePicker(false);
+    requestPatch.mockRejectedValueOnce(new Error('save unavailable'));state.sourceLanguage = 'fr';state.persistTranslationCenterConfig('source');
+    await vi.waitFor(() => expect(state.saveState).toBe('error'));await vue.nextTick();
+    host.querySelector<HTMLButtonElement>('.translation-center-intro button')!.click();await vi.waitFor(() => expect(state.saveState).toBe('saved'));
+    await vue.nextTick();host.querySelector<HTMLButtonElement>('.sidebar-clear-button')!.click();await vue.nextTick();expect(state.sourceText).toBe('');
+  });
+  it('stops a hidden native sidebar before Chromium can freeze it, keeping the pasted input for a retry', async () => {
+    close();await mountCenter('sidebar');const pending = deferred();translateText.mockReturnValueOnce(pending.promise);
+    state.sourceText = 'Copied text';state.runTranslation();await vue.nextTick();
+    const signal = translateText.mock.calls[0][2].signal as AbortSignal;expect(signal.aborted).toBe(false);
+    Object.defineProperty(document, 'visibilityState', {configurable: true, value: 'visible'});document.dispatchEvent(new document.defaultView!.Event('visibilitychange'));expect(signal.aborted).toBe(false);
+    Object.defineProperty(document, 'visibilityState', {configurable: true, value: 'hidden'});document.dispatchEvent(new document.defaultView!.Event('visibilitychange'));expect(signal.aborted).toBe(true);
+    expect(state.sourceText).toBe('Copied text');pending.resolve('late');await vue.nextTick();expect(state.cards[0].status).toBe('cancelled');
+  });
+
+  it.each(['empty result', 'empty error'])('renders a useful error and retry control for %s', async result => {
+    if (result === 'empty result') translateText.mockResolvedValueOnce('   '); else translateText.mockRejectedValueOnce(new Error(''));
+    state.sourceText = 'Original'; state.retryService('google'); await vi.waitFor(() => expect(state.cards[1].status).toBe('error')); await vue.nextTick();
+    const error = host.querySelector('.translation-result-error')!;
+    expect(error.querySelector('p')!.textContent?.trim()).toBeTruthy();
+    expect(error.textContent).toContain(state.ct(result === 'empty result' ? 'emptyResult' : 'requestError'));
+    error.querySelector('button')!.dispatchEvent(new document.defaultView!.Event('click')); await vi.waitFor(() => expect(state.cards[1].status).toBe('success'));
+  });
+  it('visible stop and retry controls isolate individual cards and expose configuration before launch', async () => {
+    const click = async (selector: string) => {const button = host.querySelector(selector)!; expect(button).toBeTruthy(); button.dispatchEvent(new document.defaultView!.Event('click', {bubbles: true})); await vue.nextTick(); await Promise.resolve(); await vue.nextTick();};
+    state.sourceText = 'Original'; await vue.nextTick();
+    const one = deferred(), two = deferred(); translateText.mockReturnValueOnce(one.promise).mockReturnValueOnce(two.promise);
+    await click('.translate-primary-button');
+    await click('[data-service="freeTranslation"] .loading-placeholder button');
+    expect(state.cards[0].status).toBe('cancelled'); expect(state.cards[1].status).toBe('loading');
+    await click('.translate-stop-button'); expect(state.cards[1].status).toBe('cancelled');
+    one.resolve('late one'); two.resolve('late two'); await vue.nextTick();
+    translateText.mockRejectedValueOnce(new Error('service unavailable'));
+    await click('[data-service="freeTranslation"] .translation-result-placeholder button');
+    expect(host.querySelector('.translation-result-error')?.textContent).toContain('service unavailable');
+    await click('.translation-result-error button'); expect(state.cards[0].result).toBe('translated');
+    state.addService('openai'); await vue.nextTick(); await click('[data-service="openai"] .needs-configuration button');
+    expect(emit).toHaveBeenCalledWith('configure-service', 'openai');
+  });
+
+  it('normalizes invalid persisted languages, searches custom models and renders model identity on completed cards', async () => {
+    config.translationCenterSourceLanguage = 'bad-language'; config.translationCenterTargetLanguage = 'bad-language'; subscription(config);
+    expect(state.sourceLanguage).toBe('auto'); expect(state.targetLanguage).toBe('zh-Hans');
+    config.translationCenterSourceLanguage = ''; config.translationCenterTargetLanguage = ''; config.from = ''; config.to = ''; subscription(config);
+    expect(state.sourceLanguage).toBe('auto'); expect(state.targetLanguage).toBe('zh-Hans');
+    config.customOpenAIProviders = [{id: 'custom:search', name: 'Private model service', endpoint: 'https://model.invalid/v1', models: ['unique-search-model']}];
+    config.model['custom:search'] = 'unique-search-model'; config.token['custom:search'] = 'fixture-only'; config.translationCenterServices = ['custom:search']; subscription(config);
+    state.serviceSearchQuery = 'unique-search-model'; expect(state.filteredServiceGroups[0].items.map((item: any) => item.value)).toContain('custom:search');
+    expect(state.serviceLabel('gone-service')).toBe('gone-service'); expect(state.languageLabel('gone-language')).toContain('gone-language');
+    state.sourceText = 'Original'; state.runTranslation(); await vi.waitFor(() => expect(state.cards[0].status).toBe('success')); await vue.nextTick();
+    expect(host.querySelector('.translation-result-content footer')?.textContent).toContain('unique-search-model');
+    state.sourceLanguage = state.targetLanguage; await vue.nextTick();
+    expect(host.querySelector('.translate-primary-button')?.hasAttribute('disabled')).toBe(true);
+    expect(host.querySelectorAll('.input-notice').length).toBeGreaterThan(0);
+  });
+
+  it('removes omitted stored services on save and ignores invalid drag targets and secondary pointers', async () => {
+    config.translationCenterServices = ['google', 'freeTranslation', 'microsoft']; subscription(config);
+    state.removeService('microsoft'); expect(requestPatch.mock.calls.at(-1)![0].translationCenterServices).toEqual(['google', 'freeTranslation']);
+    const before = state.cards.map((card: any) => card.service); state.reorderCards('gone', 'google'); state.reorderCards('google', 'gone'); state.reorderCards('google', 'google');
+    state.startPointerDrag('google', {button: 2, pointerId: 1}); expect(state.draggingService).toBe('');
+    state.handlePointerMove({pointerId: 1, clientX: 0, clientY: 0}); state.finishPointerDrag({pointerId: 1});
+    state.startPointerDrag('google', {button: 0, pointerId: 1});
+    state.finishPointerDrag({pointerId: 2}); expect(state.draggingService).toBe('google');
+    vi.mocked(document.elementFromPoint).mockReturnValue(host.querySelector('[data-service="google"]'));
+    state.handlePointerMove({pointerId: 1, clientX: 0, clientY: 0}); expect(state.dragOverService).toBe('');
+    vi.mocked(document.elementFromPoint).mockReturnValue(null); state.handlePointerMove({pointerId: 1, clientX: 0, clientY: 0});
+    state.finishPointerDrag({pointerId: 1, type: 'pointerup'}); expect(state.cards.map((card: any) => card.service)).toEqual(before);
+  });
+
+  it('does not hydrate or save after closing before configuration is ready, and shows Windows shortcuts on reopen', async () => {
+    close(); let ready!: () => void; configReady = new Promise<void>(resolve => {ready = resolve;});
+    vi.stubGlobal('navigator', {platform: 'Win32', clipboard: {writeText: copy}}); await mountCenter();
+    expect(state.shortcutLabel).toBe('Ctrl ↵'); expect(state.cards).toEqual([]);
+    state.setLayout('grid'); expect(requestPatch).not.toHaveBeenCalled();
+    close(); ready(); await vue.nextTick(); await vue.nextTick(); expect(state.configHydrated).toBe(false);
+    state.setLayout('list'); expect(requestPatch).not.toHaveBeenCalled();
+    await mountCenter(); state.sourceText = 'Original';
+    state.handleEditorKeydown({key: 'Enter', metaKey: true, ctrlKey: false, isComposing: false, preventDefault: vi.fn()});
+    await vi.waitFor(() => expect(state.successfulCards).toHaveLength(2));
+  });
+
+  it('ignores late clipboard and configuration settlements after unmount', async () => {
+    const clipboard = deferred(), settings = deferred(); copy.mockReturnValueOnce(clipboard.promise); requestPatch.mockReturnValueOnce(settings.promise);
+    const copying = state.copyText('Reviewed text', 'google'); state.setLayout('grid'); close();
+    clipboard.resolve(''); settings.resolve(''); await copying; await vue.nextTick();
+    expect(state.feedback).toBe(''); expect(state.saveState).toBe('idle');
+  });
+
+  it('runs the visible input, language, service-picker, card and copy controls through the actual template', async () => {
+    const click = async (selector: string, parent: ParentNode = host) => {const button = parent.querySelector(selector) as HTMLButtonElement; expect(button).toBeTruthy(); expect(button.hasAttribute('disabled')).toBe(false); button.dispatchEvent(new document.defaultView!.Event('click', {bubbles: true})); await vue.nextTick(); await Promise.resolve(); await vue.nextTick();};
+    const input = async (element: HTMLInputElement | HTMLTextAreaElement, value: string) => {element.value = value; element.dispatchEvent(new document.defaultView!.Event('input', {bubbles: true})); await vue.nextTick();};
+    await click('.example-button'); expect(state.sourceText).toContain('Good design');
+    const editor = host.querySelector('textarea')!; await input(editor, 'A source to compare'); expect(state.sourceText).toBe('A source to compare');
+    const select = async (id: string, value: string) => {const element = host.querySelector(id) as HTMLSelectElement;
+      element.dispatchEvent(new document.defaultView!.Event('focus')); await vue.nextTick();
+      for (const option of element.querySelectorAll('option')) option.toggleAttribute('selected', option.value === value);
+      element.dispatchEvent(new document.defaultView!.Event('change')); await vue.nextTick();
+      element.dispatchEvent(new document.defaultView!.Event('blur')); await vue.nextTick();};
+    await select('#translation-center-source', 'en'); await select('#translation-center-target', 'ja');
+    expect(state.sourceLanguage).toBe('en'); expect(state.targetLanguage).toBe('ja');
+    await click('.language-swap-button'); expect(state.sourceLanguage).toBe('ja'); expect(state.targetLanguage).toBe('en');
+    await click('.add-service-button'); expect(host.querySelector('[role="dialog"]')).toBeTruthy();
+    await input(host.querySelector('.service-picker-search input')!, 'a service that cannot exist'); expect(host.querySelector('.picker-empty')).toBeTruthy();
+    await input(host.querySelector('.service-picker-search input')!, '');
+    const row = (service: string) => [...host.querySelectorAll('.service-picker-row')].find(node => node.querySelector('strong')?.textContent === state.serviceLabel(service))!;
+    await click('.service-picker-option', row('google')); expect(state.cards.map((card: any) => card.service)).not.toContain('google');
+    await click('.service-picker-option', row('google')); expect(state.cards.map((card: any) => card.service)).toContain('google');
+    await click('.picker-configure', row('openai')); expect(emit).toHaveBeenCalledWith('configure-service', 'openai'); expect(host.querySelector('[role="dialog"]')).toBeNull();
+    await click('.add-service-button'); await click('.service-picker-close'); expect(state.servicePickerOpen).toBe(false);
+    await click('.results-layout-control button:last-child'); expect(host.querySelector('.translation-result-list')?.getAttribute('class')).toContain('is-grid');
+    await click('.results-layout-control button:first-child'); expect(state.resultLayout).toBe('list');
+    await click('.translate-primary-button'); await vi.waitFor(() => expect(state.successfulCards).toHaveLength(2)); await vue.nextTick();
+    expect(host.querySelectorAll('.translation-result-content')).toHaveLength(2);
+    await click('.translation-result-content footer button:last-child'); expect(copy).toHaveBeenLastCalledWith('translated');
+    await click('.copy-all-button'); expect(copy.mock.lastCall?.[0]).toContain('translated');
+    await input(editor, 'Edited source'); expect(host.querySelector('.results-stale-notice')).toBeTruthy();
+    await click('.translation-result-content footer button:first-child'); await vi.waitFor(() => expect(state.successfulCards).toHaveLength(1));
+    await click('.card-connection-footer button'); expect(emit).toHaveBeenCalled();
+    await click('.remove-service-button'); expect(state.cards).toHaveLength(1);
+    await click('.translation-input-panel .translation-panel-heading .text-button'); expect(state.sourceText).toBe('');
+  });
+
+  it('routes actual pointer and focus events to picker dismissal and card reordering, retaining the selected pointer owner', async () => {
+    const dispatch = (target: EventTarget, type: string, fields: Record<string, unknown> = {}) => {const event = new document.defaultView!.Event(type, {bubbles: true, cancelable: true}); Object.assign(event, fields); target.dispatchEvent(event);};
+    const open = async () => {dispatch(host.querySelector('.add-service-button')!, 'click'); await vue.nextTick();};
+    await open(); dispatch(host.querySelector('.service-picker-search input')!, 'focusin'); expect(state.servicePickerOpen).toBe(true);
+    dispatch(host.querySelector('textarea')!, 'focusin'); await vue.nextTick(); expect(state.servicePickerOpen).toBe(false);
+    await open(); dispatch(host.querySelector('.service-picker-search input')!, 'pointerdown'); expect(state.servicePickerOpen).toBe(true);
+    dispatch(document.body, 'pointerdown'); await vue.nextTick(); expect(state.servicePickerOpen).toBe(false);
+    await open(); await open(); expect(state.servicePickerOpen).toBe(false);
+    const cards = host.querySelectorAll('.translation-result-card');
+    dispatch(cards[0].querySelector('.drag-handle')!, 'pointerdown', {button: 0, pointerId: 9});
+    vi.mocked(document.elementFromPoint).mockReturnValue(cards[1]);
+    dispatch(document, 'pointermove', {pointerId: 8, clientX: 10, clientY: 20}); expect(state.dragOverService).toBe('');
+    dispatch(document, 'pointermove', {pointerId: 9, clientX: 10, clientY: 20}); expect(state.dragOverService).toBe('google');
+    dispatch(document, 'pointerup', {pointerId: 9}); await vue.nextTick(); expect(state.cards[0].service).toBe('google'); expect(document.body.style.userSelect).toBe('text');
+  });
+
   it('keeps a combination label and marks completed results stale after member configuration changes', async () => {
     const service = 'composite:center';
     config.compositeTranslationProviders = [{id: service, name: 'Everyday', strategy: 'sequential', services: ['google', 'microsoft'], timeoutMs: 12000}];
@@ -202,6 +506,19 @@ describe('translation center product workflow', () => {
     expect(document.body.style.userSelect).toBe('none'); state.finishPointerDrag({pointerId: 2, type: 'pointercancel'});
     expect(document.body.style.userSelect).toBe('text'); expect(state.cards[0].service).toBe('freeTranslation');
   });
+  it('cancels dragging on window blur and removes the blur listener on disposal', () => {
+    const remove = vi.spyOn(window, 'removeEventListener');
+    state.startPointerDrag('freeTranslation', {button: 0, pointerId: 2}); state.dragOverService = 'google';
+    window.dispatchEvent(new Event('blur'));
+    expect(document.body.style.userSelect).toBe('text');
+    expect(state.draggingService).toBe('');
+    expect(state.cards[0].service).toBe('freeTranslation');
+    expect(requestPatch).not.toHaveBeenCalled();
+    state.startPointerDrag('google', {button: 0, pointerId: 3});
+    close();
+    expect(document.body.style.userSelect).toBe('text');
+    expect(remove).toHaveBeenCalledWith('blur', state.endCardDrag);
+  });
   it('receives model updates during dragging and reconciles deferred order after cancellation', () => {
     state.startPointerDrag('freeTranslation', {button: 0, pointerId: 2});
     config.translationCenterServices = ['google', 'openai']; config.model.openai = 'custom-model'; config.token.openai = 'fixture-only'; subscription(config);
@@ -232,7 +549,7 @@ describe('translation center product workflow', () => {
   it('protects user content from legacy localization and provides persistent layout controls', () => {
     expect(source).toContain('<p data-i18n-ignore>{{ card.result }}</p>');
     expect(source).toContain('v-model="sourceText" data-i18n-ignore');
-    expect(source).toContain('!event.isComposing'); expect(source).toContain('prefers-reduced-motion');
+    expect(source).toContain('event.isComposing'); expect(source).toContain('prefers-reduced-motion');
     expect(source).toContain('aria-pressed="resultLayout');
     const css = compileStyle({source: descriptor.styles[0].content, filename, id: 'data-v-center-test', scoped: true}).code;
     expect(css).toContain(':root.dark .translation-center .translate-primary-button');

@@ -1,7 +1,7 @@
 /**
  * @file src/features/vocabulary/content/scanner.ts
  * 文件职责：在阅读期间绘制收藏表达并协调动态网页、滚动、点击与失效清理。
- * 主要内容：按约 4ms 或工作检查点预算分帧扫描并取消旧工作，完成后替换绘制；复用文档公共规则，仅为缺失规则及命中 Shadow 根装样式，避免再次使整页样式失效；完整释放资源并保留宿主点击。
+ * 主要内容：按约 4ms 或工作检查点预算分帧扫描并取消旧工作，完成后替换绘制；词条身份、表达与顺序未变时复用匹配索引，每次仍复制最新记录并重扫；复用文档公共规则，仅为缺失规则及命中 Shadow 根装样式，完整释放资源并保留宿主点击。
  * 模块边界：不访问数据库、配置或模型，不截获链接、输入或选区，不记录掌握状态；生命周期和卡片展示由内容挂载器注入。
  */
 import {createExpressionIndex, type ReencounterEntry} from '../domain/reencounter';
@@ -27,6 +27,8 @@ export function installReencounterScanner(document: Document, callbacks: {
   const observers = new Map<Document | ShadowRoot, MutationObserver>();
   let entries: readonly ReencounterEntry[] = [];
   let index = createExpressionIndex([]);
+  // 交替保存 id、term 的标量；命中回调可拿到条目对象，不能用那些可变对象判断索引是否仍有效。
+  let indexedTerms: readonly string[] = [];
   const empty: ReencounterOccurrence[] = [];
   let occurrences = empty;
   let notifying = false;
@@ -143,7 +145,20 @@ export function installReencounterScanner(document: Document, callbacks: {
   // 无条目时也观察正文，随后收藏变更通过 setEntries 更新同一实例。
   observe(document);
   return {
-    setEntries(next) { if (disposed) return; cancelWork(); entries = next.map(entry => ({...entry})); index = createExpressionIndex(entries); clear(); schedule(); },
+    setEntries(next) {
+      if (disposed) return;
+      cancelWork();
+      entries = next.map(entry => ({...entry}));
+      const sameTerms = indexedTerms.length === entries.length * 2 && entries.every((entry, offset) =>
+        indexedTerms[offset * 2] === entry.id && indexedTerms[offset * 2 + 1] === entry.term);
+      if (!sameTerms) {
+        index = createExpressionIndex(entries);
+        const terms: string[] = [];
+        for (const entry of entries) terms.push(entry.id, entry.term);
+        indexedTerms = terms;
+      }
+      clear(); schedule();
+    },
     refresh: schedule,
     dispose() {
       if (disposed) return;
@@ -161,7 +176,7 @@ export function installReencounterScanner(document: Document, callbacks: {
       document.removeEventListener('fluentread-route-change', schedule);
       document.removeEventListener('fluentread-open-shadow-root', schedule, true);
       view.removeEventListener('resize', schedule);
-      entries = []; index = createExpressionIndex([]);
+      entries = []; indexedTerms = []; index = createExpressionIndex([]);
       clear();
     },
   };

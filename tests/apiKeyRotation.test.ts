@@ -43,6 +43,49 @@ describe('multi-key request orchestration', () => {
         expect(operation).toHaveBeenCalledTimes(1);
     });
 
+    it.each([
+        {token: {demo: first}},
+        {...config(), apiKeyRotationEnabled: {demo: false}},
+        {},
+    ])('rejects a late single-attempt result after the owner aborts (%j)', async source => {
+        for (const succeeds of [true, false]) {
+            const owner = new AbortController();
+            const operation = vi.fn(async () => {
+                owner.abort();
+                if (!succeeds) throw failure(503);
+                return 'late translation';
+            });
+            await expect(run(source, 'demo', operation, {signal: owner.signal}))
+                .rejects.toMatchObject({name: 'AbortError'});
+            expect(operation).toHaveBeenCalledOnce();
+        }
+    });
+
+    it.each([false, true])('redacts provider key echoes when rotation is disabled or unnecessary (%s)', async disabled => {
+        const key = 'fixture/+single-secret';
+        const source = {token: {demo: key}, apiKeys: {demo: disabled ? [key, second] : [key]},
+            apiKeyRotationEnabled: {demo: !disabled}};
+        const echoed = Object.assign(new Error(`HTTP 401 ${key} ${encodeURIComponent(key)} ${second}`), {
+            statusCode: 401, code: key, requestId: encodeURIComponent(key), retryAfterMs: 500,
+        });
+        const error = await run(source, 'demo', async () => {throw echoed;}).catch(reason => reason);
+        expect(error.message).not.toContain(key);
+        expect(error.message).not.toContain(encodeURIComponent(key));
+        if (disabled) expect(error.message).not.toContain(second);
+        expect(error).toMatchObject({statusCode: 401, code: '[已隐藏的密钥]', requestId: '[已隐藏的密钥]', retryAfterMs: 500});
+    });
+
+    it('keeps no-key failures and provider cancellation recognizable on the single-attempt path', async () => {
+        const noKeyFailure = failure(503);
+        await expect(run({}, 'demo', async () => {throw noKeyFailure;})).rejects.toBe(noKeyFailure);
+        class ProviderDeadlineError extends Error {}
+        const deadline = new ProviderDeadlineError('provider deadline');
+        await expect(run({token: {demo: first}}, 'demo', async () => {throw deadline;})).rejects.toBe(deadline);
+        await expect(run({token: {demo: first}}, 'demo', async () => {
+            throw new DOMException(`cancelled ${first}`, 'AbortError');
+        })).rejects.toMatchObject({name: 'AbortError', message: 'cancelled [已隐藏的密钥]'});
+    });
+
     it('clears stale tokens when an explicit service key list is empty or blank', async () => {
         const operation = vi.fn(async (source: any) => source);
         const stale = {token: {demo: 'stale-secret'}, apiKeys: {demo: []}};

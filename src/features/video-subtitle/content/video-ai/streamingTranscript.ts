@@ -1,7 +1,7 @@
 /**
  * @file src/features/video-subtitle/content/video-ai/streamingTranscript.ts
  * 文件职责：把 Whisper 滑动窗口文本归并为可读、可修正且身份稳定的实时或完整字幕 cue。
- * 主要内容：处理跨窗重叠、边界重复、否定语义保护、实时短片段暂存、完整音频段提交和原位校正。
+ * 主要内容：处理跨窗重叠、归一化比较到完整原文字元的边界映射、边界重复、否定语义保护、实时短片段暂存、完整音频段提交和原位校正。
  * 模块边界：只处理转写文本与 spoken 时间，不调用模型、不管理音频节点或翻译服务。
  */
 import type { VideoSubtitleCue } from '../youtubeSubtitleData';
@@ -280,7 +280,9 @@ function longestCommonTokenSubsequenceLength(left: string[], right: string[]): n
 
 function hasTranscriptNegation(value: string): boolean {
   const folded = foldTranscriptText(value);
-  return /(^|\s)(?:no|not|never|cannot|neither|nor)(?:\s|$)|(^|\s)can\s+t(?:\s|$)|[不没無无未非勿莫]/u.test(folded);
+  // don't / won't / isn't 等缩约形式同样改变极性；在去标点前辨认直/弯撇号。
+  return /\b[a-z]+n['’]t\b/iu.test(value)
+    || /(^|\s)(?:no|not|never|cannot|neither|nor)(?:\s|$)|(^|\s)can\s+t(?:\s|$)|[不没無无未非勿莫]/u.test(folded);
 }
 
 /**
@@ -333,6 +335,47 @@ export function areVideoAiTranscriptCorrectionVariants(left: string, right: stri
   return shared / shorterLength >= 0.72;
 }
 
+/** 比较时略去的标点不能改变原文切点；大小写扩展也不能切开一个原始码点。 */
+function sliceTranscriptDisplaySuffix(display: string, comparisonLength: number, consumed: number, previous: string): string {
+  const characters = Array.from(display);
+  const sourceOffsets = [0];
+  const starts: number[] = [], ends: number[] = [];
+  let offset = 0;
+  for (const character of characters) {
+    const start = offset;
+    offset += character.length;
+    sourceOffsets.push(offset);
+    if (/[\p{P}\p{S}]/u.test(character)) continue;
+    // 这里只投影长度，实际比较仍用整串 locale 小写；不为每个汉字调用 locale 转换。
+    for (const _ of character.toLowerCase()) {
+      starts.push(start);
+      ends.push(offset);
+    }
+  }
+  let boundary: number;
+  if (ends.length === comparisonLength) {
+    const lastStart = starts[consumed - 1]!;
+    boundary = starts[consumed] === lastStart ? lastStart : ends[consumed - 1]!;
+  } else {
+    // 土耳其语可删除 I 后的点，立陶宛语可按后续组合符插入点。
+    // 仅这种长度变化才二分原文前缀；普通路径保持线性，不逐前缀反复归一化。
+    let low = 0, high = characters.length;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      const length = Array.from(foldTranscriptText(display.slice(0, sourceOffsets[middle]!)).replace(/\s+/g, '')).length;
+      if (length <= consumed) low = middle;
+      else high = middle - 1;
+    }
+    // 二分可越过比较中忽略的标点/符号；它们仍可能属于真正的新后缀。
+    while (low > 0 && /[\p{P}\p{S}]/u.test(characters[low - 1]!)) low -= 1;
+    boundary = sourceOffsets[low]!;
+  }
+  const suffix = display.slice(boundary);
+  const punctuation = previous.match(/[\p{P}\p{S}]+$/u)?.[0];
+  // 只消费原句已有且在同一边界重现的标点，保留新引号、emoji 和不同标点。
+  return (punctuation && suffix.startsWith(punctuation) ? suffix.slice(punctuation.length) : suffix).trim();
+}
+
 /** 取滚动窗口相对已提交文本真正新增的后缀，避免整句重复上屏。 */
 export function getVideoAiTranscriptNovelSuffix(committed: string, current: string): string {
   const previous = normalizeVideoAiTranscriptText(committed);
@@ -349,23 +392,27 @@ export function getVideoAiTranscriptNovelSuffix(committed: string, current: stri
     const nextUnits = Array.from(foldTranscriptText(nextDisplay).replace(/\s+/g, ''));
     const containedAt = findTokenSequence(nextUnits, previousUnits);
     if (containedAt >= 0) {
-      return Array.from(nextDisplay).slice(containedAt + previousUnits.length).join('').trim();
+      return sliceTranscriptDisplaySuffix(nextDisplay, nextUnits.length, containedAt + previousUnits.length, previous);
     }
     const overlap = longestTokenOverlap(previousUnits, nextUnits);
-    return overlap > 0 ? Array.from(nextDisplay).slice(overlap).join('').trim() : next;
+    return overlap > 0 ? sliceTranscriptDisplaySuffix(nextDisplay, nextUnits.length, overlap, previous) : next;
   }
 
   const previousTokens = previous.split(/\s+/).filter(Boolean);
   const nextTokens = next.split(/\s+/).filter(Boolean);
   const previousComparable = previousTokens.map(foldTranscriptText).filter(Boolean);
-  const nextComparable = nextTokens.map(foldTranscriptText).filter(Boolean);
+  const nextComparable: string[] = [], nextTokenEnds: number[] = [];
+  for (let index = 0; index < nextTokens.length; index += 1) {
+    const folded = foldTranscriptText(nextTokens[index]);
+    if (folded) { nextComparable.push(folded); nextTokenEnds.push(index + 1); }
+  }
   const containedAt = findTokenSequence(nextComparable, previousComparable);
-  if (containedAt >= 0) return nextTokens.slice(containedAt + previousComparable.length).join(' ').trim();
+  if (containedAt >= 0) return nextTokens.slice(nextTokenEnds[containedAt + previousComparable.length - 1]).join(' ').trim();
     const overlap = Math.max(
       longestTokenOverlap(previousComparable, nextComparable),
       longestApproximateTokenOverlap(previousComparable, nextComparable),
     );
-  return overlap > 0 ? nextTokens.slice(overlap).join(' ').trim() : next;
+  return overlap > 0 ? nextTokens.slice(nextTokenEnds[overlap - 1]).join(' ').trim() : next;
 }
 
 export function areVideoAiTranscriptTextsRelated(left: string, right: string): boolean {

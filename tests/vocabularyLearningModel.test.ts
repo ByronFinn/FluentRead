@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   advanceVocabularyReviewSession,
   buildAnkiTsv,
-  buildVocabularyCloze,
   vocabularyStudyContext,
   vocabularyReviewCloze,
   vocabularyStudyPrompt,
@@ -75,8 +74,8 @@ describe('vocabulary learning model edge cases', () => {
       '#separator:tab\n#html:false\n#columns:\n',
     )
     expect(vocabularyImportNeedsConfirmation(Number.NaN)).toBe(false)
-    expect(buildVocabularyCloze('', 'word')).toBe('')
-    expect(buildVocabularyCloze('word', '')).toBe('')
+    expect(vocabularyReviewCloze({term: 'word', contexts: [{text: '', capturedAt: NOW}]})).toBe('')
+    expect(vocabularyReviewCloze({term: '', contexts: [{text: 'word', capturedAt: NOW}]})).toBe('')
   })
 
   it('deduplicates queue entries and advances non-head or missing entries safely', () => {
@@ -136,17 +135,16 @@ describe('context-grounded vocabulary study', () => {
     ['art', '我喜欢art作品。', '我喜欢____作品。'],
   ])('uses the saved %s expression in a continuous multilingual sentence', (term, text, cloze) => {
     const context = {text, capturedAt: 2}; const saved = entry(term, {contexts: [context]}); const before = structuredClone(saved);
-    expect(buildVocabularyCloze(text, term)).toBe(cloze);
     expect(vocabularyStudyContext(saved)).toBe(context); expect(vocabularyReviewCloze(saved)).toBe(cloze);
     expect(saved).toEqual(before);
   });
   it('matches canonical accents and flexible whitespace while leaving the remaining original sentence intact', () => {
-    expect(buildVocabularyCloze('A cafe\u0301 serves tea.', 'CAFÉ')).toBe('A ____ serves tea.');
-    expect(buildVocabularyCloze('We arrive on\n  time, or on\ttime.', 'on time')).toBe('We arrive ____, or ____.');
-    expect(buildVocabularyCloze('Use don’t and re‑enter today.', "don't")).toBe('Use ____ and re‑enter today.');
+    expect(vocabularyReviewCloze({term: 'CAFÉ', contexts: [{text: 'A cafe\u0301 serves tea.', capturedAt: NOW}]})).toBe('A ____ serves tea.');
+    expect(vocabularyReviewCloze({term: 'on time', contexts: [{text: 'We arrive on\n  time, or on\ttime.', capturedAt: NOW}]})).toBe('We arrive ____, or ____.');
+    expect(vocabularyReviewCloze({term: "don't", contexts: [{text: 'Use don’t and re‑enter today.', capturedAt: NOW}]})).toBe('Use ____ and re‑enter today.');
   });
   it('still rejects embedded Latin words, lone terms and unrelated clues after multilingual matching', () => {
-    expect(buildVocabularyCloze('artful cart art2 2art art.', 'art')).toBe('artful cart art2 2art ____.');
+    expect(vocabularyReviewCloze({term: 'art', contexts: [{text: 'artful cart art2 2art art.', capturedAt: NOW}]})).toBe('artful cart art2 2art ____.');
     expect(vocabularyStudyContext(entry('学习', {contexts: [{text: '学习学习！', capturedAt: 1}]}))).toBeUndefined();
     expect(vocabularyReviewCloze(entry('学习', {contexts: [{text: '我喜欢中文。', capturedAt: 1}]}))).toBe('');
     expect(vocabularyStudyContext(entry('word', {contexts: [{text: '', capturedAt: 1}]}))).toBeUndefined();

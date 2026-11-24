@@ -16,27 +16,17 @@ vi.mock('webextension-polyfill', () => ({
     default: { runtime: { sendMessage: vi.fn() } },
 }));
 import {
-    getVideoSubtitleDownloadErrorMessage,
-    getVideoServiceLabel,
-    getVideoPretranslationWindowMs,
-    getVisibleVideoAiCue,
-    mergeVideoAiSubtitleCues,
-    isYouTubeVideoPage,
-    isXHostPage,
-    isXVideoPage,
-    isSupportedVideoPage,
-    normalizeVideoSubtitleDisplayMode,
-    normalizeVideoCaptionText,
-    readVisibleCaptionText,
-    revealVideoSubtitleTranslation,
-    translateVideoSubtitleCues,
-    VIDEO_CAPTION_SEGMENT_SELECTOR,
-} from '@/src/features/video-subtitle/content/runtime';
-import {applyVideoDisplayState, findVideoPlayer, findCaptionContainer, getVisibleCaptionSegments} from '@/src/features/video-subtitle/content/ui';
+    getVideoSubtitleDownloadErrorMessage, isYouTubeVideoPage, isYouTubeEmbedPage, isXHostPage, isXVideoPage, isSupportedVideoPage,
+    normalizeVideoSubtitleDisplayMode, readVisibleCaptionText, VIDEO_CAPTION_SEGMENT_SELECTOR,
+} from '@/src/features/video-subtitle/content/ui';
+import {getVideoServiceLabel, getVideoPretranslationWindowMs} from '@/src/features/video-subtitle/content/serviceProfile';
+import {getVisibleVideoAiCue, mergeVideoAiSubtitleCues} from '@/src/features/video-subtitle/content/video-ai/cueTimeline';
+import {normalizeVideoCaptionText, revealVideoSubtitleTranslation, translateVideoSubtitleCues} from '@/src/features/video-subtitle/content/subtitleLogic';
+import {applyVideoDisplayState, findVideoPlayer, findCaptionContainer, getVisibleCaptionSegments, renderVideoReadingAnnotation, clearRenderedVideoTranslation} from '@/src/features/video-subtitle/content/ui';
 import {validateYoutubeTimedTextMessage} from '@/src/features/video-subtitle/content/youtubeTimedTextMessage';
 import {config} from '@/src/services/config/store';
 import { normalizeVideoSubtitleFontSize } from '@/src/core/config/model';
-import {registerAllUiLanguageBundles} from '@/src/core/i18n/bundles';
+import {registerAllUiLanguageBundles} from './helpers/uiLanguageBundles';
 
 // 本文件断言非中文界面文案；扩展运行时按需加载，测试中一次注册全部语言资源包。
 registerAllUiLanguageBundles();
@@ -46,6 +36,27 @@ afterEach(() => {
 });
 
 describe('YouTube 视频字幕识别', () => {
+    it('读音使用独立纯文本节点，不把标注混入原文、译文或原生字幕读取', () => {
+        const {document, window} = parseHTML('<html><body><div id="movie_player"><div id="captions"><span class="ytp-caption-segment">今日はいい天気です。</span></div></div></body></html>');
+        vi.stubGlobal('document', document); vi.stubGlobal('window', window); vi.stubGlobal('HTMLElement', window.HTMLElement);
+        const player = document.getElementById('movie_player')!, native = document.getElementById('captions')!;
+        expect(renderVideoReadingAnnotation(player, '')).toBe(false);
+        expect(document.getElementById('fluent-read-video-subtitle-reading')).toBeNull();
+        // 无布局端口下直接创建已有渲染层，避免把注音文本用 innerHTML 解释。
+        const panel = document.createElement('div'); panel.id = 'fluent-read-video-subtitle-panel';
+        const source = document.createElement('div'); source.id = 'fluent-read-video-subtitle-original'; source.textContent = '今日はいい天気です。';
+        const translation = document.createElement('div'); translation.id = 'fluent-read-video-subtitle'; translation.textContent = '今天天气真好。';
+        const layer = document.createElement('div'); layer.id = 'fluent-read-video-subtitle-layer'; layer.appendChild(panel); panel.append(source, translation); player.appendChild(layer);
+        expect(renderVideoReadingAnnotation(player, '<b>kyō</b> wa ii tenki desu.', 'ja')).toBe(true);
+        const reading = document.getElementById('fluent-read-video-subtitle-reading')!;
+        expect(reading.textContent).toBe('<b>kyō</b> wa ii tenki desu.'); expect(reading.querySelector('b')).toBeNull();
+        expect(reading.getAttribute('lang')).toBe('ja-Latn'); expect(reading.getAttribute('aria-label')).toBe('日语罗马音');
+        expect(source.textContent).toBe('今日はいい天気です。'); expect(translation.textContent).toBe('今天天气真好。');
+        expect(readVisibleCaptionText(native)).toBe('今日はいい天気です。');
+        expect(renderVideoReadingAnnotation(player, '<b>kyō</b> wa ii tenki desu.', 'ja')).toBe(false);
+        clearRenderedVideoTranslation(document); expect(reading.textContent).toBe(''); expect(source.textContent).toBe('今日はいい天気です。');
+    });
+
     it('滚动窗口中只读取未被裁掉的字幕行，隐藏原生字形时仍能读取当前行', () => {
         const {document} = parseHTML('<div id="captions"><div class="ytp-caption-window-rollup"><span class="ytp-caption-segment">Old clipped line.</span><span class="ytp-caption-segment" style="visibility:hidden">Current line.</span><span class="ytp-caption-segment">New words.</span><span class="ytp-caption-segment">Outside below.</span></div></div>');
         const rollup = document.querySelector('.ytp-caption-window-rollup')!;
@@ -63,6 +74,51 @@ describe('YouTube 视频字幕识别', () => {
         rollup.getBoundingClientRect = () => ({top: 100, bottom: 160, height: 60} as DOMRect);
         segments[3].getBoundingClientRect = () => ({height: 0} as DOMRect);
         expect(readVisibleCaptionText(rollup)).toContain('Outside below.');
+    });
+
+    it.each([
+        ['强调', ['Very', 'very'], 'Very very'],
+        ['对话', ['No', 'no'], 'No no'],
+        ['歌词', ['Bye', 'bye'], 'Bye bye'],
+        ['逐词短语', ['Sea', 'otters', 'Sea', 'otters'], 'Sea otters Sea otters'],
+        ['大小写不同的整句', ['Hey! It works.', 'hey!  it WORKS.'], 'Hey! It works. hey! it WORKS.'],
+    ] as const)('合法重复：同一可见行中的%s不因片段边界丢失', (_name, parts, expected) => {
+        const {document} = parseHTML('<div id="captions"><span class="caption-visual-line"></span></div>');
+        const line = document.querySelector('.caption-visual-line')!;
+        for (const text of parts) {
+            const segment = document.createElement('span'); segment.className = 'ytp-caption-segment'; segment.textContent = text;
+            line.appendChild(segment);
+        }
+        expect(readVisibleCaptionText(document.getElementById('captions'))).toBe(expected);
+    });
+
+    it('合法重复：滚动窗口仅排除被裁切的同文旧行，仍保留同时可见的重复行', () => {
+        const {document} = parseHTML('<div id="captions" class="ytp-caption-window-rollup"><span class="caption-visual-line"><span class="ytp-caption-segment">A full sentence.</span></span><span class="caption-visual-line"><span class="ytp-caption-segment">A full sentence.</span></span></div>');
+        const container = document.getElementById('captions')!;
+        const [previous, current] = Array.from(container.querySelectorAll('.ytp-caption-segment'));
+        container.getBoundingClientRect = () => ({top: 100, bottom: 130, height: 30} as DOMRect);
+        previous.getBoundingClientRect = () => ({top: 70, bottom: 100, height: 30} as DOMRect);
+        current.getBoundingClientRect = () => ({top: 100, bottom: 130, height: 30} as DOMRect);
+        expect(readVisibleCaptionText(container)).toBe('A full sentence.');
+        previous.getBoundingClientRect = () => ({top: 90, bottom: 120, height: 30} as DOMRect);
+        expect(readVisibleCaptionText(container)).toBe('A full sentence. A full sentence.');
+    });
+
+    it('合法重复：fallback片段和动态重分段保留同一份完整原文', () => {
+        const {document} = parseHTML('<div id="captions"><span class="captions-text">No</span><span class="captions-text">no</span></div>');
+        const container = document.getElementById('captions')!;
+        expect(readVisibleCaptionText(container)).toBe('No no');
+        container.innerHTML = '<span class="ytp-caption-segment">No no</span>';
+        expect(readVisibleCaptionText(container)).toBe('No no');
+        container.innerHTML = '<span class="ytp-caption-segment">No</span><span class="ytp-caption-segment">no</span>';
+        expect(readVisibleCaptionText(container)).toBe('No no');
+    });
+
+    it('不同句保持拼接且单行内部的合法重复不被折叠', () => {
+        const mixed = parseHTML('<div id="captions"><span class="ytp-caption-segment">They open the shell.</span><span class="ytp-caption-segment">Sea otters have strong teeth.</span></div>');
+        expect(readVisibleCaptionText(mixed.document.getElementById('captions'))).toBe('They open the shell. Sea otters have strong teeth.');
+        const single = parseHTML('<div id="captions"><span class="ytp-caption-segment">Bye bye! Bye bye!</span></div>');
+        expect(readVisibleCaptionText(single.document.getElementById('captions'))).toBe('Bye bye! Bye bye!');
     });
 
     it('只读取当前播放器内的字幕，忽略页面上残留的其他字幕容器', () => {
@@ -371,6 +427,22 @@ describe('YouTube timedtext MAIN bridge 消息边界', () => {
         responseText,
     };
 
+    it('内嵌播放器只接收同主机与完整路径ID的字幕，查询参数不能冒领其他视频', () => {
+        const valid = new URL('https://www.youtube.com/embed/abcdefghijk?v=other-video');
+        vi.stubGlobal('window', {location: valid});
+        expect(isYouTubeEmbedPage()).toBe(true);
+        expect(isYouTubeVideoPage(valid)).toBe(true);
+        expect(validateYoutubeTimedTextMessage({...payload, url: 'https://www.youtube.com/api/timedtext?v=abcdefghijk&lang=en'}, valid.href)?.cues).toHaveLength(1);
+        expect(validateYoutubeTimedTextMessage({...payload, url: 'https://www.youtube.com/api/timedtext?v=other-video&lang=en'}, valid.href)).toBeNull();
+        for (const href of ['https://youtube.com.evil.test/embed/abcdefghijk', 'https://youtube.com/embed/short-id',
+            'https://youtube.com/embed/abcdefghijk/more', 'https://youtube.com/embed/abcdefghijkl']) {
+            const invalid = new URL(href);
+            expect(isYouTubeEmbedPage(invalid)).toBe(false);
+            expect(validateYoutubeTimedTextMessage(payload, href)).toBeNull();
+        }
+        expect(isYouTubeEmbedPage(new URL('https://m.youtube.com/embed/aB_cD-eF123/'))).toBe(true);
+    });
+
     it('只接收绑定到当前 watch/shorts videoId 的真实 timedtext URL', () => {
         expect(validateYoutubeTimedTextMessage(
             payload,
@@ -384,6 +456,11 @@ describe('YouTube timedtext MAIN bridge 消息边界', () => {
             {...payload, url: 'https://www.youtube.com/api/timedtext?v=short-id&lang=en'},
             'https://www.youtube.com/shorts/short-id',
         )?.cues).toHaveLength(1);
+    });
+
+    it('拒绝超长桥接 URL，保留正常签名参数', () => {
+        expect(validateYoutubeTimedTextMessage({...payload, url: payload.url + '&sig=' + 'x'.repeat(100)}, 'https://www.youtube.com/watch?v=current-video')).not.toBeNull();
+        expect(validateYoutubeTimedTextMessage({...payload, url: payload.url + '&name=' + 'x'.repeat(32_768)}, 'https://www.youtube.com/watch?v=current-video')).toBeNull();
     });
 
     it('拒绝伪造协议、非 timedtext 资源与非播放页消息', () => {

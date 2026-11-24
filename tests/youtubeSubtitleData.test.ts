@@ -12,6 +12,29 @@ import {
 } from '@/src/features/video-subtitle/content/youtubeSubtitleData';
 
 describe('YouTube 字幕轨道数据', () => {
+  it('内嵌播放器严格绑定路径ID，原watch和shorts解析保持既有行为', () => {
+    const location = (pathname: string, search = '') => ({hostname: 'www.youtube.com', pathname, search});
+    expect(getYoutubeVideoId(location('/embed/abcdefghijk', '?v=other-video'))).toBe('abcdefghijk');
+    expect(getYoutubeVideoId(location('/embed/aB_cD-eF123/'))).toBe('aB_cD-eF123');
+    for (const path of ['/embed/', '/embed/short-id', '/embed/abcdefghijkl', '/embed/abcdefghijk/extra', '/embed/abc%20efghijk']) {
+      expect(getYoutubeVideoId(location(path))).toBe('');
+    }
+    expect(getYoutubeVideoId(location('/shorts/short-id'))).toBe('short-id');
+    expect(getYoutubeVideoId(location('/shorts/short-id/', '?v=preferred-id'))).toBe('preferred-id');
+    expect(getYoutubeVideoId(location('/watch', '?v=watch-id'))).toBe('watch-id');
+  });
+  it('跳过响应中的空轨道、空事件和空片段，保留相邻有效字幕', () => {
+    const validTrack = {baseUrl: 'https://www.youtube.com/api/timedtext?v=current&lang=en', languageCode: 'en'};
+    const root = {querySelectorAll: () => [{textContent: `var ytInitialPlayerResponse = ${JSON.stringify({
+      captions: {playerCaptionsTracklistRenderer: {captionTracks: [null, false, 3, validTrack]}},
+    })};`}]} as unknown as ParentNode;
+    expect.soft(extractYoutubeCaptionTracks(root, 'current')).toEqual([expect.objectContaining(validTrack)]);
+    expect(parseYoutubeTimedTextResponse(JSON.stringify({events: [null, false, 3,
+      {tStartMs: 0, dDurationMs: 1000, segs: [null, false, 3, {utf8: 'First '}, {utf8: 'cue'}]},
+      {tStartMs: 2000, dDurationMs: 1000, segs: [{utf8: 'Second cue'}]},
+    ]}))).toEqual([{startMs: 0, durationMs: 1000, text: 'First cue'}, {startMs: 2000, durationMs: 1000, text: 'Second cue'}]);
+  });
+
   it('从初始化脚本提取字幕轨道并优先选择指定语言的人工作品', () => {
     const playerResponse = {
       captions: {
@@ -223,20 +246,15 @@ describe('YouTube 字幕轨道数据', () => {
       Object.defineProperty(globalThis, 'document', {
         configurable: true,
         value: {
-          createElement: () => {
-            const textarea = {value: ''};
-            Object.defineProperty(textarea, 'innerHTML', {
-              set: (value: string) => {
-                textarea.value = value.replace(/&amp;/g, '&');
-              },
-            });
-            return textarea;
-          },
+          createElement: () => {throw new Error('subtitle decoding must not create DOM');},
         },
       });
       expect(parseYoutubeTimedTextResponse(JSON.stringify({
         events: [{tStartMs: 0, dDurationMs: 100, segs: [{utf8: 'A &amp; B'}]}],
       }))).toEqual([{startMs: 0, durationMs: 100, text: 'A & B'}]);
+      expect(parseYoutubeTimedTextResponse(JSON.stringify({
+        events: [{tStartMs: 0, dDurationMs: 100, segs: [{utf8: '&NotEqualTilde; &amp;lt;'}]}],
+      }))).toEqual([{startMs: 0, durationMs: 100, text: '≂̸ &lt;'}]);
     } finally {
       if (previousDocument) Object.defineProperty(globalThis, 'document', previousDocument);
       else Reflect.deleteProperty(globalThis, 'document');
@@ -256,9 +274,9 @@ describe('YouTube 字幕轨道数据', () => {
 
     const previousParser = Object.getOwnPropertyDescriptor(globalThis, 'DOMParser');
     class FixtureDOMParser {
-      parseFromString() {
+      parseFromString(source: string) {
         return {
-          querySelectorAll: () => [
+          querySelectorAll: () => source === '<transcript/>' ? [] : [
             {
               getAttribute: () => null,
               textContent: null,
@@ -284,6 +302,7 @@ describe('YouTube 字幕轨道数据', () => {
       expect(parseYoutubeTimedTextResponse('<transcript><text start="2.5">DOM &amp; XML</text></transcript>')).toEqual([
         {startMs: 2500, durationMs: 0, text: 'DOM & XML'},
       ]);
+      expect(parseYoutubeTimedTextResponse('<transcript/>')).toEqual([]);
     } finally {
       if (previousParser) Object.defineProperty(globalThis, 'DOMParser', previousParser);
       else Reflect.deleteProperty(globalThis, 'DOMParser');
@@ -752,6 +771,7 @@ describe('YouTube 字幕轨道数据', () => {
     {words: ['This', `${apostrophe}s`, 'a', `James${apostrophe}`, 'book.'], text: `This${apostrophe}s a James${apostrophe} book.`},
     {words: ['John', `${apostrophe}s`, `dogs${apostrophe}`, 'food.'], text: `John${apostrophe}s dogs${apostrophe} food.`},
     {words: ['John', apostrophe, 's', `dogs${apostrophe}`, 'food.'], text: `John${apostrophe}s dogs${apostrophe} food.`},
+    {words: ['Read', apostrophe, 's', 'example [‘].'], text: `Read${apostrophe}s example [‘].`},
     {words: ['we', 'quote', `${apostrophe}I don${apostrophe}`, 't', 'today.'], text: `we quote ${apostrophe}I don${apostrophe} t today.`},
     {words: ['we', 'quote', `${apostrophe}we l${apostrophe}`, 'aimons', 'today.'], text: `we quote ${apostrophe}we l${apostrophe} aimons today.`},
     {words: ['it', `${apostrophe}s`, `${apostrophe}ready${apostrophe}`, 'now.'], text: `it${apostrophe}s ${apostrophe}ready${apostrophe} now.`},

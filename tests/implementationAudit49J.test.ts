@@ -1,6 +1,7 @@
 import {afterAll, describe, expect, it} from 'vitest';
 import {execFile, spawn, type ChildProcess} from 'node:child_process';
 import {createServer} from 'node:net';
+import {createRequire} from 'node:module';
 import {existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {delimiter, join, resolve} from 'node:path';
@@ -346,6 +347,7 @@ interface PlanProbeReport {
 }
 
 async function planChild(command: string, args: string[]) {
+    // Process/report contracts own a temporary cwd; snapshot Git status is unrelated and can scan large copied trees.
     const entry = join(fixtureRoot, `plan-${++serial}.mjs`);
     const artifactsDir = join(fixtureRoot, `plan-artifacts-${serial}`);
     writeFileSync(entry, `import {executePlan} from ${JSON.stringify(pathToFileURL(join(sourceRoot, 'scripts/testing/run-full-regression.mjs')).href)};
@@ -353,7 +355,7 @@ console.log('ORIGINAL_PUBLIC_RUNNER_LOADED');
 try {
  const report=await executePlan({version:3,mode:'contract-fixture',dryRun:false,artifactsDir:${JSON.stringify(artifactsDir)},
   failFast:false,continueOnError:true,policies:{browser:'disabled',network:'disabled',headed:'disabled'},
-  steps:[{id:'controlled-step',phase:'local',command:${JSON.stringify(command)},args:${JSON.stringify(args)},label:'controlled step',gates:[],dependsOn:[]}]});
+  steps:[{id:'controlled-step',phase:'local',command:${JSON.stringify(command)},args:${JSON.stringify(args)},label:'controlled step',gates:[],dependsOn:[]}]}, {cwd:${JSON.stringify(fixtureRoot)}});
  console.log('PLAN_RESULT '+JSON.stringify(report));console.log('PLAN_FINISHED');process.exitCode=report.status==='passed'?0:1;
 }
 catch (error) {console.error('PLAN_REJECTED', error.message); process.exitCode=17;}`);
@@ -619,7 +621,25 @@ exports.queryMacFrontmostApplication=async()=>({pid:process.pid,name:'controlled
     const preload = join(root, 'preload.cjs');
     writeFileSync(preload, String.raw`
 const Module = require('node:module'); const original = Module._extensions['.js'];
-Module._extensions['.js']=(mod,file)=>{if(file===process.argv[1])console.log('ORIGINAL_CLI_LOADED',file);return original(mod,file);};
+Module._extensions['.js']=(mod,file)=>{
+ if(file===process.argv[1]){
+  console.log('ORIGINAL_CLI_LOADED',file);
+  // The site CLI reads process.platform directly. Give only that consumer a
+  // controlled OS value while preserving native platform/ownership in every
+  // dependency and in the parent-owned process. Its source and callbacks run
+  // unchanged; only the lexical external process port is substituted.
+  if(file.endsWith('/run-site-translation-test.cjs')&&process.env.AUDIT_PORT_MODE.startsWith('scan-')){
+   const actualCompile=mod._compile, consumerPlatform=process.env.AUDIT_PORT_MODE==='scan-site-platform-block'?'unsupported-fixture-platform':'darwin';
+   console.log('CONTROLLED_SITE_PLATFORM_PORT',JSON.stringify({hostPlatform:process.platform,consumerPlatform}));
+   mod._compile=function(source,filename){
+    const newline=source.indexOf('\n');if(!source.startsWith('#!')||newline<0)throw Error('controlled site CLI entry format changed');
+    const binding='const process = new Proxy(globalThis.process, {get(target, key) {return key === "platform" ? '+JSON.stringify(consumerPlatform)+' : Reflect.get(target, key, target);}});\n';
+    return actualCompile.call(this,source.slice(0,newline+1)+binding+source.slice(newline+1),filename);
+   };
+  }
+ }
+ return original(mod,file);
+};
 // Only the selected CLI's OS capability is a controlled external port. Its
 // production macOS gate still runs; dependencies retain the host OS module and
 // real process.platform, including Linux /proc start identity and native ps.
@@ -701,6 +721,11 @@ if(mode.startsWith('native')) {
         const mediaDir = join(root, 'media'); mkdirSync(mediaDir);
         writeFileSync(join(mediaDir, 'video-direct.mp4'), 'controlled media fixture, never decoded');
         if (script.endsWith('run-x-native-subtitle-test.cjs') || script.endsWith('run-reported-fixes-test.cjs')) flags.push('--media-dir', mediaDir, '--extension-install', 'command-line');
+        if (script.endsWith('run-site-translation-test.cjs') || script.endsWith('run-youtube-subtitle-sync-test.cjs')) {
+            const diagnosticHelper = join(root, 'runtime-diagnostics.cjs');
+            writeFileSync(diagnosticHelper, `module.exports={redact:String,createRuntimeDiagnostics:()=>({start:async()=>{},attachPage:async()=>{},setExtensionId(){},setPhase(){},flush:async()=>{console.log('DIAGNOSTICS_FLUSH');},snapshot:()=>({passed:false,completeCoverage:false}),assertClean(){},stop:async()=>{console.log('DIAGNOSTICS_STOP');}})};`);
+            flags.push('--runtime-diagnostics-helper', diagnosticHelper);
+        }
         if (script.endsWith('run-site-translation-test.cjs')) flags.push('--case', 'example-com', '--mode', 'hover', '--allow-network');
         if (script.endsWith('run-translation-viewport-test.cjs')) flags.push('--allow-network');
     }
@@ -825,13 +850,14 @@ describe('audit49 J continuation2 public consumer lifecycle', () => {
 async function rdpCLI(mode: 'wrong-id' | 'wrong-actor' | 'report') {
     const root = mkdtempSync(join(fixtureRoot, 'rdp-'));
     const artifacts = join(root, 'artifacts');mkdirSync(artifacts);
-    const remote = join(workspaceRoot, 'node_modules/.pnpm/web-ext-run@0.2.4/node_modules/web-ext-run/lib/firefox/remote.js');
+    const webExtEntry = pathToFileURL(createRequire(import.meta.url).resolve('web-ext-run'));
+    const remote = new URL('./lib/firefox/remote.js', webExtEntry).href;
     const loader = join(root, 'loader.mjs');
     writeFileSync(loader, `import {pathToFileURL} from 'node:url';
-export async function resolve(specifier,context,next){if(specifier.endsWith('/web-ext-run/lib/firefox/remote.js'))return next(${JSON.stringify(pathToFileURL(remote).href)},context);return next(specifier,context);}
+export async function resolve(specifier,context,next){if(specifier.endsWith('/web-ext-run/lib/firefox/remote.js'))return next(${JSON.stringify(remote)},context);return next(specifier,context);}
 export async function load(url,context,next){if(url===${JSON.stringify(pathToFileURL(join(sourceRoot, 'scripts/run-firefox-config-persistence.mjs')).href)})console.log('ORIGINAL_CLI_LOADED');return next(url,context);}`);
     const preload = join(root, 'preload.mjs');
-    writeFileSync(preload, `import fs from 'node:fs';import path from 'node:path';import {RemoteFirefox} from ${JSON.stringify(pathToFileURL(remote).href)};
+    writeFileSync(preload, `import fs from 'node:fs';import path from 'node:path';import {RemoteFirefox} from ${JSON.stringify(remote)};
 const original=RemoteFirefox.prototype.disconnect;RemoteFirefox.prototype.disconnect=function(...args){console.log('RDP_DISCONNECT_REQUESTED');return original.apply(this,args);};
 const write=fs.writeFileSync;fs.writeFileSync=function(file,...args){if(${JSON.stringify(mode)}==='report'&&path.basename(file)==='firefox-config-persistence.json')throw new Error('controlled report write failure');return write.call(this,file,...args);};`);
     const packets: unknown[] = [];const sockets = new Set<import('node:net').Socket>();
@@ -1077,9 +1103,18 @@ describe('audit49 J continuation3 complete manual cleanup consumers', () => {
             if (script === 'scripts/run-ai-context-ui-test.cjs') {
                 expect(result.stdout).toContain(`CONTROLLED_MACOS_PLATFORM_PORT ${JSON.stringify({hostPlatform: process.platform, consumerPlatform: 'darwin'})}`);
             }
+            if (script === 'scripts/run-site-translation-test.cjs') {
+                expect(result.stdout).toContain(`CONTROLLED_SITE_PLATFORM_PORT ${JSON.stringify({hostPlatform: process.platform, consumerPlatform: 'darwin'})}`);
+            }
             expect(result.stdout, `${script} ${mode} acquired external port`).toContain('PUBLIC_LAUNCH_REACHED');
             expect(result.timedOut, `${script} ${mode} finite consumer`).toBe(false);
-            if (mode !== 'scan-partial') expect(result.stdout, `${script} ${mode} closes acquired browser`).toContain('SESSION_CLOSE');
+            if (mode !== 'scan-partial') expect(result.stdout, `${script} ${mode} closes acquired browser\n${result.stderr}`).toContain('SESSION_CLOSE');
+            if (script === 'scripts/run-youtube-subtitle-sync-test.cjs') {
+                // 诊断是显式外部端口；清理夹具不依赖 CI runner 安装本机 Codex 技能。
+                expect(result.stdout.split('DIAGNOSTICS_FLUSH')).toHaveLength(2);
+                expect(result.stdout.split('DIAGNOSTICS_STOP')).toHaveLength(2);
+                if (mode !== 'scan-partial') expect(result.stdout.indexOf('DIAGNOSTICS_STOP')).toBeLessThan(result.stdout.indexOf('SESSION_CLOSE'));
+            }
             if (continuation3ServerScripts.has(script)) expect(result.stdout, `${script} ${mode} releases independent HTTP fixture`).toContain('OWNED_HTTP_SERVER_CLOSED');
             if (mode === 'scan-report') expect(profiles, `${script} confirmed closed profile`).toEqual([]);
             else if (mode === 'scan-partial') expect(retainedMarkers, `${script} unknown active profile retained`).toContain('controlled active profile');
@@ -1088,7 +1123,7 @@ describe('audit49 J continuation3 complete manual cleanup consumers', () => {
             if (mode === 'scan-report') expect(observation.ownerStates[0]).toMatchObject({gone: true, timerCleared: true, fdClosed: true});
             else if (mode === 'scan-report-close') expect(observation.ownerStates[0]).toMatchObject({gone: true, profileExists: true, timerCleared: true, fdClosed: true});
             else expect(observation.ownerStates[0]).toMatchObject({gone: false, profileExists: true});
-            if (script === 'scripts/testing/run-changing-source-test.cjs') {
+            if (script === 'scripts/testing/run-changing-source-test.cjs' || script === 'scripts/run-site-translation-test.cjs') {
               for (const marker of ['FOCUS_OBSERVER_COMPILE_PORT', 'FOCUS_OBSERVER_ACQUIRED', 'FOCUS_OBSERVER_READY', 'FOCUS_OBSERVER_STOP_REQUESTED', 'FOCUS_OBSERVER_CLOSED', 'FOCUS_OBSERVER_CLEANUP']) {
                 expect(result.stdout.split(marker), `${script} ${mode} ${marker} once`).toHaveLength(2);
               }
@@ -1099,6 +1134,34 @@ describe('audit49 J continuation3 complete manual cleanup consumers', () => {
             for (const observation of observations) await observation.cleanup();
         }
     }, 60000);
+    it('site translation refuses an unsupported platform before acquiring an observer or browser', async () => {
+        const observation = await portCLI('scripts/run-site-translation-test.cjs', 'scan-site-platform-block');
+        try {
+            const {result} = observation;
+            expect(result.stdout).toContain(`CONTROLLED_SITE_PLATFORM_PORT ${JSON.stringify({hostPlatform: process.platform, consumerPlatform: 'unsupported-fixture-platform'})}`);
+            expect(result.stdout).not.toContain('FOCUS_OBSERVER_COMPILE_PORT');
+            expect(result.stdout).not.toContain('PUBLIC_LAUNCH_REACHED');
+            expect(result.stderr).toContain('后台焦点事件监控目前只支持 macOS');
+            expect(result.timedOut).toBe(false);
+            expect(result.code).toBe(86);
+            expect(observation.ownerStates).toEqual([]);
+            expect(observation.profiles).toEqual([]);
+        } finally {await observation.cleanup();}
+    }, 20000);
+    it('site translation stops before browser launch when its focus observer cannot start', async () => {
+        const observation = await portCLI('scripts/run-site-translation-test.cjs', 'scan-focus-ready-failure');
+        try {
+            const {result} = observation;
+            expect(result.stdout).toContain('FOCUS_OBSERVER_COMPILE_PORT');
+            expect(result.stdout).toContain('FOCUS_OBSERVER_CLEANUP');
+            expect(result.stdout).not.toContain('PUBLIC_LAUNCH_REACHED');
+            expect(result.stderr).toContain('controlled focus compile failure');
+            expect(result.timedOut).toBe(false);
+            expect(result.code).toBe(86);
+            expect(observation.ownerStates).toEqual([]);
+            expect(observation.profiles).toEqual([]);
+        } finally {await observation.cleanup();}
+    }, 20000);
     it('changing-source focus readiness failure releases both fixtures without launching a browser actor', async () => {
         const observation = await portCLI('scripts/testing/run-changing-source-test.cjs', 'scan-focus-ready-failure');
         try {

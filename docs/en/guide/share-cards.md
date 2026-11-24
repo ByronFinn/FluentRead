@@ -1,29 +1,28 @@
 # Bilingual share cards
 
-Turn a sentence you love into a high-resolution image.
+Turn a selection and its translation into an image to save or share. Cards are generated locally without another translation request or text upload.
 
 <GuideVisual kind="share" en />
 
 ## Make a card
 
-1. Select text and translate it. Choose **Create card** in the selection result.
-2. Pick a style. Adjust the text in **Edit excerpt** and layout in **More settings**.
-3. Save a PNG or copy the image, then share it yourself.
+1. Select text, open its translation card, and choose **Create card**.
+2. Pick a style. Use **Edit excerpt** to change the text, or **More options** for size, font size, and bilingual order.
+3. Check the preview, then choose **Save image** or **Copy image**.
 
-Images are generated locally, with no extra translation request or upload. The entry appears only inside selection results.
+This entry is available in selection translation results. Hover and full-page translation do not have a card button. Editing an excerpt changes this card only.
 
-<details class="guide-details">
-<summary>Styles, formats and copying</summary>
+## Adjust and export
 
-The eight styles are Coral, Sky, Prism, Pearl, Matcha, Book, Sunset, and Blueprint. Choose an adaptive or square format, font size, language order, source, and FluentRead credit. Editing the excerpt does not change your webpage or translation. The source defaults to the domain.
+- **Style:** choose Coral, Sky, Prism, Pearl, Matcha, Linen, Sunset, or Blueprint.
+- **Size:** use adaptive height for longer excerpts and a square for short ones. If a square overflows, shorten the text or switch to adaptive height.
+- **Source and credit:** the source starts with the website domain. Change it to an author or hide it, and adjust the brand credit if needed.
 
-The preview matches the exported image. Choose an adaptive format or shorten text that does not fit a square; text is not silently cropped. Appearance preferences are saved, but excerpt text and generated images are not. Formulas and rich content are rendered as text.
+The preview uses the export layout. Style preferences are retained; excerpts and images are not stored in extension settings. Rich text and formulas become plain text.
 
-Some pages cannot copy images to the clipboard; save the PNG instead. Status appears in the fixed bottom bar. A save confirmation means a download was started; check your browser downloads.
-
-</details>
+If copying fails, choose **Save image**. A download message means the download has started; check the browser’s download list for the file.
 
 ## Related guides
 
 - [Selection translation](/en/guide/deepseek-harness)
-- [Learning center](/en/guide/vocabulary-book)
+- [Data and privacy](/en/guide/privacy)

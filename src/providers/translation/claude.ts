@@ -1,5 +1,6 @@
 /**
  * @file src/providers/translation/claude.ts
+ * 字幕参考：将后台规范化的相邻 cue 标记交给共用提示模板，供应商协议与返回结构保持原契约。
  *
  * 文件职责：适配 Anthropic Claude Messages API，将 FluentRead 翻译消息转换为 Claude 请求并解析文本响应。
  * 主要内容：从配置快照选择模型、代理和 x-api-key，使用 claudeMsgTemplate 构建 body，把调用方取消与显式剩余预算或 AI 配置默认截止合并后通过 runtimeFetch 发起请求，统一处理 HTTP/JSON 数据并旁路上报 Claude token 用量。 可核对的公开符号包括 default:claude。
@@ -11,10 +12,11 @@ import {method, urls} from "@/src/core/config/constants";
 import {claudeMsgTemplate} from '@/src/services/translation/templates';
 import {appendOptionalHeader} from './auth';
 import {createHttpStatusError, createImageInputHttpError, readJsonResponse} from '@/src/platform/http/errors';
-import {abortErrorFromSignal, createRuntimeAbortContext, runtimeFetch} from '@/src/platform/http/runtime';
+import {abortErrorFromSignal, cancelUnreadResponseBody, createRuntimeAbortContext, runtimeFetch} from '@/src/platform/http/runtime';
 import {normalizeAiRequestTimeoutMs} from '@/src/core/config/aiRequestTimeout';
 import {
     requireTranslationProviderConfig,
+    observeTranslationHttpResponse,
     reportTranslationModelUsage,
     reportTranslationModelUsageFailure,
     getTranslationImageInput,
@@ -42,6 +44,7 @@ async function claude(message: TranslationProviderRequest<string>) {
     const body = claudeMsgTemplate({
         origin: message.origin,
         context: message.pageContext,
+        subtitleContext: message.subtitleContext,
         prompt: message.summaryPrompt,
         systemPrompt: message.summarySystemPrompt,
         serviceOverride: service,
@@ -64,17 +67,42 @@ async function claude(message: TranslationProviderRequest<string>) {
             body,
             signal: abortContext.signal,
         });
+        observeTranslationHttpResponse(message, resp);
         if (!resp.ok) {
             reportTranslationModelUsageFailure(message, undefined, startedAt, configuredModel, resp.status);
             attemptReported = true;
-            throw getTranslationImageInput(message) ? await createImageInputHttpError(resp, '请求失败') : createHttpStatusError(resp, '请求失败');
+            const error = getTranslationImageInput(message) ? await createImageInputHttpError(resp, '请求失败') : createHttpStatusError(resp, '请求失败');
+            cancelUnreadResponseBody(resp);
+            throw error;
         }
 
-        const result = await readJsonResponse<any>(resp, 'Claude 返回的不是有效 JSON');
+        const result = await readJsonResponse<any>(resp, 'Claude 返回的不是有效 JSON', abortContext.signal);
         if (abortContext.signal.aborted) throw abortErrorFromSignal(abortContext.signal);
         const actualModel = typeof result?.model === 'string' && result.model.trim()
             ? result.model
             : configuredModel;
+        // 旧兼容端点可省略 stop_reason；显式截断、工具交接、拒绝或错误不得作为完整译文。
+        const incompleteMessage = result?.type === 'error'
+            || result?.error != null
+            || (result?.stop_reason !== undefined
+                && result.stop_reason !== 'end_turn' && result.stop_reason !== 'stop_sequence')
+            || (Array.isArray(result?.content) && result.content.some((item: any) =>
+                item?.type === 'refusal' || item?.type === 'error' || item?.type === 'tool_use'));
+        if (incompleteMessage) {
+            const error = Object.assign(new Error('Claude 响应未完整完成，已拒绝部分输出'), {
+                kind: 'response', retryable: false, statusCode: resp.status,
+            });
+            attemptReported = true;
+            reportTranslationModelUsage(message, {
+                ...normalizeClaudeUsage(result?.usage, actualModel),
+                startedAt,
+                durationMs: Math.max(0, Date.now() - startedAt),
+                outcome: 'error',
+                statusCode: resp.status,
+            });
+            throw error;
+        }
+
         const translatedText = Array.isArray(result?.content)
             ? result.content
                 .filter((item: unknown): item is {type?: string; text: string} => Boolean(

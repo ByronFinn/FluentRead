@@ -5,6 +5,7 @@
  * 模块边界：仅转换传入的文本和 URL，不发起网络请求、不选择播放器、不改变字幕显示时间。
  */
 import type { VideoSubtitleCue } from './youtubeSubtitleData';
+import {decodeTextareaHtml} from '@/src/shared/text/htmlEntities';
 
 export interface XSubtitleResource {
   url: string;
@@ -130,9 +131,7 @@ export function createXVideoBridgeResourcePayload(url: string, responseText: unk
 
 export function decodeHtmlEntities(value: string, useDom = true): string {
   if (useDom && typeof document !== 'undefined') {
-    const textarea = document.createElement('textarea');
-    textarea.innerHTML = value;
-    return textarea.value;
+    return decodeTextareaHtml(value);
   }
 
   return value
@@ -278,6 +277,10 @@ export function parseXSubtitleResource(source: string, baseUrl: string, segmentS
   if (/^WEBVTT(?:\s|$)/i.test(trimmed)) {
     return { cues: parseWebVttSubtitleResponse(trimmed, segmentStartMs), resources: [] };
   }
+  // 完整 HLS 列表有 EXTM3U 头；桥接也允许单独捕获的字幕 MEDIA 标签。
+  // 不能把 200 错误页或普通正文当作相对资源。
+  if (!/^#EXTM3U(?:\s|$)/i.test(trimmed)
+    && !/^\s*#EXT-X-MEDIA:[^\n]*TYPE=SUBTITLES/im.test(trimmed)) return {cues: [], resources: []};
 
   const resources: XSubtitleResource[] = [];
   const lines = trimmed.replace(/\r/g, '').split('\n');

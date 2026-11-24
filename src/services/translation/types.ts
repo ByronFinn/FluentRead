@@ -17,7 +17,12 @@ import type {TranslationRequestScheduler, TranslationRequestIdentity, Translatio
 /** 内部 symbol 无法由 content runtime 消息伪造，也不会进入网络 JSON。 */
 export const TRANSLATION_PROVIDER_CONFIG = Symbol('fluentread.translation-provider-config');
 
+/** 仅在后台完成逐项保护后，为本次 provider 请求选择默认 JSON 模板。 */
+export const TRANSLATION_COMPACT_BATCH = Symbol('fluentread.translation-compact-batch');
+
 export const TRANSLATION_REMAINING_BUDGET = Symbol('fluentread.translation-remaining-budget');
+
+export const TRANSLATION_REQUEST_STARTED_AT = Symbol('fluentread.translation-request-started-at');
 
 export const TRANSLATION_MODEL_USAGE_OBSERVER = Symbol('fluentread.translation-model-usage-observer');
 
@@ -76,6 +81,7 @@ export type TranslationProviderRequestContext = {
     readonly [TRANSLATION_REQUEST_SCHEDULER]?: {
         readonly scheduler: TranslationRequestScheduler;
         readonly identity?: TranslationRequestIdentity;
+        readonly deadlineAt?: number;
         /** provider 在真正启动 transport 时登记结算，取消包装不能提前归还外层并发槽。 */
         readonly lease?: TranslationRequestLease;
     };
@@ -108,6 +114,8 @@ export interface TranslationRequestMessageBase {
     pageContext?: string;
     /** 有界单篇原文/既有译文证据；与页面摘要分开，避免每段额外摘要调用。 */
     discourseContext?: string;
+    /** 来自 SRT/VTT/ASS 的邻接 cue 原文；文档字幕请求独立携带，不受网页上下文开关影响。 */
+    subtitleContext?: string;
     /** 当前请求是否允许 AI 网页上下文；全文翻译会显式携带会话启动时的冻结值。 */
     enableAIContext?: boolean;
     /** 请求入口冻结的原生合批偏好；缺省由后台当前服务配置解析。 */
@@ -119,6 +127,8 @@ export interface TranslationRequestMessageBase {
     documentBatch?: boolean;
     /** 全文内部的单条槽协议；broker 按冻结术语配置逐槽校验，沿用本次请求的截止时间。 */
     validateTranslationSlots?: boolean;
+    /** 行内代码的单条标记协议；仅已验证的响应可进入独立缓存。 */
+    validateInlineCodeTranslation?: boolean;
     /** 视频字幕、文档等独立入口使用的翻译服务；普通网页请求不设置。 */
     serviceOverride?: string;
     /** 文档、翻译中心等独立入口指定的实际模型；普通网页请求不设置。 */
@@ -209,6 +219,8 @@ export interface TranslationCachePort {
 }
 
 export interface TranslationConfigSnapshot {
+    privacyProtection?: import('@/src/core/privacy/policy').PrivacyProtectionPolicy;
+    privacyProtectionSecretTerms?: readonly string[];
     /** 本次请求的界面语言，仅用于本地服务稳定失败文案。 */
     uiLanguage?: string;
     glossaryEnabled?: boolean;
@@ -223,12 +235,16 @@ export interface TranslationConfigSnapshot {
     glossaryMatchContext?: Readonly<{
         /** broker 根据当前入口派生；文档正文的地址与代码名称使用同一严格保护链。 */
         context?: TranslationGlossaryContext;
+        /** 普通网页和文字请求可以使用默认技术术语；摘要、文档和图像输入独立处理。 */
+        preserveCommonWebTerms?: boolean;
         sourceLanguage: string;
         targetLanguage: string;
         pageUrl?: string;
         glossaryIds?: readonly string[] | null;
     }>;
     service: string;
+    /** 关闭后不能作为 provider 使用；组合路由也会跳过关闭成员。 */
+    disabledTranslationServices?: readonly string[];
     from: string;
     to: string;
     useCache: boolean;
@@ -305,7 +321,9 @@ export interface TranslationProviderConfigFields {
 }
 
 /** 一次 provider 调用使用的完整、不可变配置视图。 */
-export type TranslationProviderConfigSnapshot = Readonly<TranslationConfigSnapshot & TranslationProviderConfigFields>;
+export type TranslationProviderConfigSnapshot = Readonly<TranslationConfigSnapshot & TranslationProviderConfigFields & {
+    [TRANSLATION_COMPACT_BATCH]?: true;
+}>;
 
 /** 测试或迁移期配置源可以省略凭据字段，snapshot factory 会补安全默认值。 */
 export type TranslationConfigSource = TranslationConfigSnapshot & Partial<TranslationProviderConfigFields>;

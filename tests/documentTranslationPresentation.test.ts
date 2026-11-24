@@ -1,4 +1,6 @@
 import {describe, expect, it} from 'vitest';
+import {translate, translateLegacyText, type UiLanguage} from '@/src/core/i18n';
+import {registerAllUiLanguageBundles} from './helpers/uiLanguageBundles';
 
 import {parseDocument, type BinaryDocumentData, type DocumentFormat, type ParsedDocument} from '@/src/features/document-translation/core/document';
 import {
@@ -7,8 +9,8 @@ import {
     DOCUMENT_QUICK_SAMPLES,
     getDocumentExportPreview,
     getDocumentEmptyReaderHint,
-    getDocumentReaderSourceClass,
     getDocxPartLabel,
+    getDocumentGeneratedPositionLabels,
     isRichDocumentFormat,
     isSubtitleDocumentFormat,
 } from '@/src/features/document-translation/ui/presentation';
@@ -25,6 +27,24 @@ function parsed(format: DocumentFormat, binary?: BinaryDocumentData): ParsedDocu
 }
 
 describe('document translation presentation', () => {
+    it('localizes generated PDF and DOCX positions in seven languages without guessing user headings', () => {
+        registerAllUiLanguageBundles();
+        const pdf = parsed('pdf', {kind: 'pdf', bytes: new Uint8Array(), pages: [{pageNumber: 7, width: 100, height: 100, segmentIndexes: [0, 9], blocks: []}]});
+        pdf.segments = [{id: 0, source: 'Original', contextLabel: '第 7 页'}];
+        const docx = parsed('docx', {kind: 'docx', bytes: new Uint8Array(), parts: [{path: 'word/header1.xml', source: '', paragraphSegments: [{paragraphIndex: 0, segmentIndex: 0}, {paragraphIndex: 1, segmentIndex: 9}]}]});
+        docx.segments = [{id: 0, source: 'Header', pathLabel: '页眉'}];
+        const epub = parsed('epub', {kind: 'epub', bytes: new Uint8Array(), chapters: []});
+        epub.segments = [{id: 0, source: 'Original', contextLabel: '第 7 页'}];
+        for (const language of ['zh-CN', 'en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as UiLanguage[]) {
+            const labels = (document: ParsedDocument) => getDocumentGeneratedPositionLabels(document, page => translate('document.pageNumber', language, {page}), value => translateLegacyText(value, language));
+            expect([...labels(pdf)]).toEqual([[0, translate('document.pageNumber', language, {page: 7})]]);
+            expect([...labels(docx)]).toEqual([[0, translateLegacyText('页眉', language)]]);
+            expect([...labels(epub)]).toEqual([]);
+            expect([...labels(parsed('json'))]).toEqual([]);
+        }
+        expect(epub.segments[0].contextLabel).toBe('第 7 页');
+        expect(pdf.segments[0].contextLabel).toBe('第 7 页');
+    });
     it('does not read the rest of a large text document to produce its download excerpt', () => {
         const document = parseDocument('long.txt', 'A'.repeat(1700));
         expect(getDocumentExportPreview(document, [], 'translated')).toBe(`${'A'.repeat(1600)}\n…`);
@@ -58,6 +78,9 @@ describe('document translation presentation', () => {
         pdf.segments = [{id: 0, source: 'Original'}, {id: 1, source: 'Pending'}];
         expect(getDocumentExportPreview(pdf, ['译文', ' '], 'translated')).toBe('译文\n\nPending');
         expect(getDocumentExportPreview(pdf, ['译文'], 'bilingual')).toBe('Original\n译文\n\nPending');
+        const word = parsed('docx', {kind: 'docx', bytes: new Uint8Array(), parts: []});
+        word.segments = [{id: 0, source: 'Read the <g1>guide</g1>.', docxInline: true}];
+        expect(getDocumentExportPreview(word, ['阅读<g1>指南</g1>。'], 'bilingual')).toBe('Read the guide.\n阅读指南。');
     });
 
     it('区分格式族和空态提示', () => {
@@ -96,8 +119,5 @@ describe('document translation presentation', () => {
         expect(formatDocumentReaderText('epub', ' Read <a href="#n">the note</a> ')).toBe('Read the note');
         expect(formatDocumentReaderText('markdown', '阅读<g1>指南</g1>并运行<g2/>')).toBe('阅读指南并运行');
         expect([hasDocumentPlaceholder('阅读<g1>指南</g1>'), hasDocumentPlaceholder('运行<g2/>'), hasDocumentPlaceholder('a < g1 > b'), hasDocumentPlaceholder(''), hasDocumentPlaceholder(undefined)]).toEqual([true, true, false, false, false]);
-        expect(getDocumentReaderSourceClass('markdown', '## Heading')).toBe('reader-heading');
-        expect(getDocumentReaderSourceClass('markdown', 'Paragraph')).toBe('');
-        expect(getDocumentReaderSourceClass('html', '## Heading')).toBe('');
     });
 });

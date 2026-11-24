@@ -6,9 +6,16 @@
 // 浏览器，也不会通过 page.evaluate 派发伪造的键盘事件。Control 和 Alt+T
 // 都由 Playwright keyboard API 发送真实的浏览器按键。
 
-const {guardBrowserClose} = require('./testing/owned-browser-close.cjs');
-const {reportErrorCodes} = require('./testing/site-error-diagnostics.cjs');
+const {guardBrowserClose, getGuardedBrowserPid} = require('./testing/owned-browser-close.cjs');
+const {createSiteFocusGuard} = require('./testing/site-focus-guard.cjs');
+const {installControlledProvider, buildSourceLanguagePolicy} = require('./site-translation/controlled-provider.cjs');
+const {interactionHrefsEquivalent} = require('./site-translation/interaction-url.cjs');
+const {runStabilityProbes, runNativeCommentToggle} = require('./site-translation/stability-probes.cjs');
+const {FACEBOOK_PUBLIC_POST_SELECTORS, prepareFacebookPublicPost, isVerifiedFacebookPublicPostPreparation} =
+  require('./site-translation/facebook-public-post-preparation.cjs');
+const {reportErrorCodes, siteTestExitCode} = require('./testing/site-error-diagnostics.cjs');
 const fs = require('node:fs');
+const {createHash} = require('node:crypto');
 const os = require('node:os');
 const path = require('node:path');
 const {createRequire} = require('node:module');
@@ -16,6 +23,7 @@ const {
   CASES,
   collectBaseCaseConfigErrors,
   normalizeCaseConfig,
+  normalizeDismissiblePromotion,
 } = require('./site-translation/case-config.cjs');
 
 const PRODUCTION_SOURCE_ROOTS = ['src', 'entrypoints', 'components', 'public', 'styles'];
@@ -28,6 +36,10 @@ const ownerCompletionLedgers = new WeakMap();
 const trustedCompletionStatuses = new WeakMap();
 // Exact LearnOpenGL baseline/page handles only; context teardown destroys their DOM references.
 const protectedNavContractHandles = new WeakMap();
+// 仅成功的原生准备可以绑定本页原始帖子 dialog；选择器近似或后续替换的 dialog 不继承豁免。
+const facebookReadingDialogs = new WeakMap();
+const pageFocusGuards = new WeakMap();
+function assertPageFocusAllowed(page) {pageFocusGuards.get(page)?.check();}
 const SINGLE_TOKEN_TECHNICAL_WORDS = new Set([
   'accept', 'api', 'authorization', 'cookie', 'css', 'etag', 'host', 'html', 'http', 'https', 'json',
   'referer', 'referrer', 'sql', 'tcp', 'tls', 'udp', 'uri', 'url', 'user-agent', 'xml',
@@ -35,6 +47,7 @@ const SINGLE_TOKEN_TECHNICAL_WORDS = new Set([
 
 function isNaturalLanguageText(value) {
   const text = String(value || '').replace(/\s+/gu, ' ').trim();
+  if (/^https?:\/\/\S+$/iu.test(text)) return false;
   if (!text || /^#!|^#lang\b|^<!doctype\b|^<\?xml\b/iu.test(text)) return false;
   if (/^[a-z][a-z0-9_-]*(?:-stmt|-expr|-clause)?:\s*(?:hide|show|expand|collapse|藏起来)?$/iu.test(text)) {
     return false;
@@ -123,6 +136,10 @@ function parseArgs(argv) {
       args.background = false;
       continue;
     }
+    if (['--controlled-provider', '--stability-probes'].includes(token)) {
+      args[token === '--controlled-provider' ? 'controlledProvider' : 'stabilityProbes'] = true;
+      continue;
+    }
     if (token === '--allow-network') {
       args.allowNetwork = true;
       continue;
@@ -137,12 +154,14 @@ function parseArgs(argv) {
 
   args.timeout = Number(args.timeout);
   if (!Number.isFinite(args.timeout) || args.timeout <= 0) throw new Error('--timeout 必须为正数');
+  if (args.stabilityProbes && args.mode !== 'full') throw new Error('--stability-probes requires --mode full');
   if (!args.case) throw new Error('必须传入 --case，例如 example-com');
   if (!CASES[args.case]) throw new Error(`未知 case：${args.case}`);
   if (!['hover', 'full'].includes(args.mode)) throw new Error('--mode 必须是 hover 或 full');
   if (!args.extensionDir) throw new Error('必须传入 --extension-dir');
   if (!args.playwrightRoot) throw new Error('必须传入 --playwright-root');
   if (!args.allowNetwork) throw new Error('真实网络站点测试必须显式传入 --allow-network');
+  if (!args.runtimeDiagnosticsHelper) throw new Error('必须传入 --runtime-diagnostics-helper；缺少运行时采集不能判定站点兼容性通过');
   if (args.background && !args.focusSafeHelper) {
     throw new Error('后台模式必须传入 --focus-safe-helper，禁止回退到会抢焦点的 Playwright 启动');
   }
@@ -154,12 +173,56 @@ function parseArgs(argv) {
     throw new Error(`case ${args.case} 配置无效：\n- ${configErrors.join('\n- ')}`);
   }
   if (!normalized.modes.includes(args.mode)) throw new Error(`case ${args.case} 不支持 ${args.mode} 模式`);
+  if (!args.controlledProvider && (normalized.coverageRules.some(rule => rule.sourcePartition) ||
+      normalized.hoverTargets.some(target => target.sourcePartition))) {
+    throw new Error(`case ${args.case} 的 sourcePartition 完整正文契约必须使用 --controlled-provider；不能跳过完整来源验收`);
+  }
 
   return {
     ...caseConfig,
     ...args,
     ...normalized,
+    ...(args.controlledProvider ? {service: 'microsoft'} : {}),
   };
+}
+
+function loadRuntimeDiagnostics(helperPath, load = require) {
+  const {createRuntimeDiagnostics, redact} = load(path.resolve(helperPath));
+  if (typeof createRuntimeDiagnostics !== 'function' || typeof redact !== 'function') {
+    throw new Error('运行时诊断 helper 缺少 createRuntimeDiagnostics/redact 接口');
+  }
+  const diagnostics = createRuntimeDiagnostics();
+  for (const name of ['start', 'attachPage', 'setExtensionId', 'setPhase', 'flush', 'snapshot', 'assertClean', 'stop']) {
+    if (typeof diagnostics?.[name] !== 'function') throw new Error(`运行时诊断 helper 缺少接口：${name}`);
+  }
+  return {diagnostics, redact};
+}
+
+// 原始功能失败与诊断失败分别保留。即使 verdict/write/stop 失败，调用方仍须清理自有浏览器。
+async function finishRuntimeDiagnostics(diagnostics, output, artifactsDir) {
+  const failures = [];
+  let verdictPassed = false;
+  const attempt = async (stage, action) => {
+    try {await action();} catch (error) {failures.push({stage, error}); output.ok = false;}
+  };
+  await attempt('runtime-flush', () => diagnostics.flush());
+  await attempt('runtime-verdict', () => {diagnostics.assertClean(); verdictPassed = true;});
+  await attempt('runtime-snapshot', () => {
+    output.runtimeDiagnostics = diagnostics.snapshot();
+    if (verdictPassed && output.runtimeDiagnostics?.passed !== true) throw new Error('运行时诊断缺少通过证据');
+  });
+  if (artifactsDir && output.runtimeDiagnostics) await attempt('runtime-evidence', () =>
+    fs.writeFileSync(path.join(artifactsDir, 'runtime-diagnostics.json'), JSON.stringify(output.runtimeDiagnostics, null, 2)));
+  await attempt('runtime-stop', () => diagnostics.stop());
+  // primaryError 的异常身份由 main 保留；这里返回全部失败，不能覆盖它或让清理提前退出。
+  return failures;
+}
+
+async function unloadRuntimePage(page, diagnostics, phase) {
+  if (!page || page.isClosed()) return {status: 'unavailable', reason: 'page-already-closed-or-not-created'};
+  diagnostics.setPhase(phase);
+  await page.goto('about:blank', {waitUntil: 'domcontentloaded', timeout: 3000});
+  return {status: 'observed', action: 'about:blank-navigation', timeoutMs: 3000};
 }
 
 function assertCoverageReport(rules, report, phase) {
@@ -218,7 +281,7 @@ function assertCoverageRestoration(report, phase) {
   return report;
 }
 
-function withMandatoryHeadingCoverage(rules, protectPageHeading = false) {
+function withMandatoryHeadingCoverage(rules, protectPageHeading = false, fullPageScope = 'finite-page') {
   // 站点自身的列表页标题属于应用 UI，显式纳入 forbidden contract 时保留原文。
   if (protectPageHeading) return [...rules];
   return [
@@ -229,7 +292,7 @@ function withMandatoryHeadingCoverage(rules, protectPageHeading = false) {
       kind: 'heading',
       minInitial: 0,
       minSeen: 0,
-      trackDynamic: true,
+      trackDynamic: fullPageScope !== 'initial-corpus',
       sourceIncludes: [],
       requiresPhrase: true,
     },
@@ -260,71 +323,146 @@ const COVERAGE_EXCLUDED_SELECTOR_LIST = [
 ];
 const COVERAGE_EXCLUDED_ANCESTORS = COVERAGE_EXCLUDED_SELECTOR_LIST.join(', ');
 const COVERAGE_PROTECTED_DESCENDANTS = [...COVERAGE_EXCLUDED_SELECTOR_LIST, 'math', 'svg'].join(', ');
+const COVERAGE_NON_DIALOG_EXCLUSIONS = COVERAGE_EXCLUDED_SELECTOR_LIST
+  .filter(selector => selector !== 'dialog' && selector !== '[role="dialog"]');
+
+function coverageEligibilityContext(page) {
+  return {
+    excludedSelector: COVERAGE_EXCLUDED_ANCESTORS,
+    protectedSelector: COVERAGE_PROTECTED_DESCENDANTS,
+    nonDialogExcludedSelector: COVERAGE_NON_DIALOG_EXCLUSIONS.join(', '),
+    nonDialogProtectedSelector: [...COVERAGE_NON_DIALOG_EXCLUSIONS, 'math', 'svg'].join(', '),
+    readingPostDialog: facebookReadingDialogs.get(page),
+  };
+}
+
+async function authorizeFacebookReadingDialog(page, preparation) {
+  if (!isVerifiedFacebookPublicPostPreparation(preparation, page)) {
+    throw new Error('Facebook reading scope requires a successful native preparation');
+  }
+  if (facebookReadingDialogs.has(page)) throw new Error('Facebook reading scope is already bound');
+  const readingPostDialog = await page.evaluateHandle(({expectedUrl, selectors}) => {
+    const messages = [...document.querySelectorAll(selectors.message)];
+    const dialogs = [...document.querySelectorAll(selectors.readingDialog)];
+    const canonicals = [...document.querySelectorAll('link[rel="canonical"][href]')];
+    const message = messages[0], dialog = dialogs[0];
+    const article = message?.closest(selectors.publicArticle);
+    if (location.href !== expectedUrl || messages.length !== 1 || dialogs.length !== 1 ||
+        message.closest('[role="dialog"]') !== dialog || article?.closest('[role="dialog"]') !== dialog ||
+        canonicals.length !== 1 || new URL(canonicals[0].getAttribute('href'), location.href).href !== expectedUrl ||
+        dialog.closest('[hidden],[inert],[aria-hidden="true"]')) {
+      throw new Error('Facebook reading scope changed after native preparation');
+    }
+    return dialog;
+  }, {expectedUrl: preparation.url, selectors: FACEBOOK_PUBLIC_POST_SELECTORS});
+  if (!readingPostDialog.asElement()) {
+    await readingPostDialog.dispose();
+    throw new Error('Facebook reading scope has no native dialog identity');
+  }
+  facebookReadingDialogs.set(page, readingPostDialog);
+}
+
+async function releaseFacebookReadingDialog(page) {
+  const handle = facebookReadingDialogs.get(page);
+  facebookReadingDialogs.delete(page);
+  await handle?.dispose();
+}
+
+// Predicate and failure details share exactly the same eligibility decisions.
+function readCoverageReadinessInPage({coverageRules, excludedSelector, protectedSelector,
+  nonDialogExcludedSelector, readingPostDialog, technicalWords, sourceLanguagePolicySource, diagnostics = false}) {
+  // 只编译当前 checkout 的纯语言规则；不执行网站提供的脚本或改写原文。
+  const policy = new Function(sourceLanguagePolicySource)();
+  // 只浅复制 Document 壳；在无窗口文档中 import，避免只读探针重新请求来源图片。
+  const snapshotDocument = document.cloneNode(false);
+  const excludedAncestor = node => {
+    let ancestor = node.closest(excludedSelector);
+    while (ancestor && ancestor === readingPostDialog && !ancestor.matches(nonDialogExcludedSelector)) {
+      ancestor = ancestor.parentElement?.closest(excludedSelector) || null;
+    }
+    return ancestor;
+  };
+  const technicalWordSet = new Set(technicalWords);
+  const naturalLanguage = value => {
+    const text = String(value || '').replace(/\s+/gu, ' ').trim();
+    if (/^https?:\/\/\S+$/iu.test(text)) return false;
+    if (!text || /^#!|^#lang\b|^<!doctype\b|^<\?xml\b/iu.test(text)) return false;
+    if (/^[a-z][a-z0-9_-]*(?:-stmt|-expr|-clause)?:\s*(?:hide|show|expand|collapse|藏起来)?$/iu.test(text)) return false;
+    const token = text.replace(/^[`'"([{]+|[`'"\])},.!?;:]+$/gu, '');
+    if (!/\s/u.test(token) && (technicalWordSet.has(token.toLowerCase()) ||
+      (/^[A-Z][A-Z0-9_-]{3,15}$/u.test(token) && !/[AEIOU]/u.test(token)))) return false;
+    const letters = text.match(/[A-Za-z]/gu)?.length || 0;
+    const cjk = text.match(/[\u3400-\u9fff]/gu)?.length || 0;
+    return letters >= 2 && letters >= cjk && !policy.shouldSkipTranslationForTarget(text, 'zh-Hans', []);
+  };
+  const sourceText = node => {
+    const clone = snapshotDocument.importNode(node, true);
+    clone.querySelectorAll('.fluent-read-bilingual-content, .fluent-read-loading, .fluent-read-retry-wrapper, [data-fr-translation-owned="true"]')
+      .forEach(owned => owned.remove());
+    clone.querySelectorAll('[data-fr-translation-segment="true"]').forEach(segment => segment.replaceWith(...segment.childNodes));
+    clone.querySelectorAll(protectedSelector).forEach(protectedNode => protectedNode.remove());
+    return (clone.textContent || '').replace(/\s+/gu, ' ').trim();
+  };
+  const rows = coverageRules.map(rule => {
+    const nodes = [...document.querySelectorAll(rule.selector)].map((node, index) => {
+      const text = sourceText(node), reasons = [];
+      const isHtml = node instanceof HTMLElement;
+      const excluded = excludedAncestor(node);
+      const outsideReadingScope = readingPostDialog && (!readingPostDialog.isConnected ||
+        !readingPostDialog.matches('[role="dialog"][aria-modal="true"]') || !readingPostDialog.contains(node));
+      const artifact = node.closest('.fluent-read-bilingual-content, [data-fr-translation-owned="true"]');
+      const rect = node.getBoundingClientRect(), style = getComputedStyle(node);
+      if (!isHtml) reasons.push('not-html-element');
+      if (excluded) reasons.push('excluded-ancestor');
+      if (outsideReadingScope) reasons.push('unverified-reading-scope');
+      if (artifact) reasons.push('translation-artifact');
+      if (!(rect.width > 0 && rect.height > 0)) reasons.push('no-rect');
+      if (style.display === 'none' || style.visibility === 'hidden') reasons.push('hidden-style');
+      if (!text) reasons.push('protected-source-empty');
+      if (!naturalLanguage(text)) reasons.push('natural-language-false');
+      if (text.length < (rule.minTextLength || 0)) reasons.push('min-text-length');
+      if (rule.requiresPhrase && !/[\s.,:;!?()\-]/u.test(text)) reasons.push('requires-phrase');
+      return {index, tag: node.localName, id: node.id, text, sourceLength: text.length, reasons,
+        excludedAncestor: excluded ? {tag: excluded.localName, id: excluded.id, classes: excluded.className} : null,
+        rect: {width: rect.width, height: rect.height}, style: {display: style.display, visibility: style.visibility},
+        rawSample: (node.textContent || '').replace(/\s+/gu, ' ').trim().slice(0, 180)};
+    });
+    const eligible = nodes.filter(node => node.reasons.length === 0);
+    const missingSourceIncludes = rule.sourceIncludes.filter(fragment => !eligible.some(node => node.text.includes(fragment)));
+    return {name: rule.name, selector: rule.selector, nodes, eligible, missingSourceIncludes,
+      minInitial: rule.minInitial, ready: eligible.length >= rule.minInitial && missingSourceIncludes.length === 0};
+  });
+  if (!diagnostics) return rows.every(row => row.ready);
+  return rows.map(row => ({name: row.name, selector: row.selector, count: row.nodes.length,
+    samples: row.nodes.slice(0, 8).map(node => node.rawSample), eligibleCount: row.eligible.length,
+    minInitial: row.minInitial, ready: row.ready, missingSourceIncludes: row.missingSourceIncludes,
+    ruleRejections: [...(row.eligible.length < row.minInitial ? ['minimum-eligible-count'] : []),
+      ...(row.missingSourceIncludes.length ? ['source-fragment-missing'] : [])],
+    eligibleSamples: row.eligible.slice(0, 8).map(node => ({index: node.index, source: node.text.slice(0, 180)})),
+    rejected: row.nodes.filter(node => node.reasons.length).map(({text, ...node}) => ({...node, sourceSample: text.slice(0, 180)}))}));
+}
 
 async function waitForCoverageReady(page, rules, timeout) {
+  const argument = {coverageRules: rules, ...coverageEligibilityContext(page),
+    technicalWords: [...SINGLE_TOKEN_TECHNICAL_WORDS], sourceLanguagePolicySource: buildSourceLanguagePolicy()};
   try {
-    await page.waitForFunction(({coverageRules, excludedSelector, protectedSelector, technicalWords}) => {
-      const technicalWordSet = new Set(technicalWords);
-      const naturalLanguage = (value) => {
-        const text = String(value || '').replace(/\s+/gu, ' ').trim();
-        if (!text || /^#!|^#lang\b|^<!doctype\b|^<\?xml\b/iu.test(text)) return false;
-        if (/^[a-z][a-z0-9_-]*(?:-stmt|-expr|-clause)?:\s*(?:hide|show|expand|collapse|藏起来)?$/iu.test(text)) {
-          return false;
-        }
-        const token = text.replace(/^[`'"([{]+|[`'"\])},.!?;:]+$/gu, '');
-        if (!/\s/u.test(token) && (technicalWordSet.has(token.toLowerCase()) ||
-          (/^[A-Z][A-Z0-9_-]{3,15}$/u.test(token) && !/[AEIOU]/u.test(token)))) return false;
-        const letters = text.match(/[A-Za-z]/gu)?.length || 0;
-        const cjk = text.match(/[\u3400-\u9fff]/gu)?.length || 0;
-        return letters >= 2 && letters >= cjk;
-      };
-      const sourceText = (node) => {
-        const clone = node.cloneNode(true);
-        clone.querySelectorAll(
-          '.fluent-read-bilingual-content, .fluent-read-loading, .fluent-read-retry-wrapper, [data-fr-translation-owned="true"]',
-        ).forEach((owned) => owned.remove());
-        clone.querySelectorAll('[data-fr-translation-segment="true"]').forEach((segment) => {
-          segment.replaceWith(...segment.childNodes);
-        });
-        clone.querySelectorAll(protectedSelector).forEach((protectedNode) => protectedNode.remove());
-        return (clone.textContent || '').replace(/\s+/gu, ' ').trim();
-      };
-      const eligible = (node, rule) => {
-        if (!(node instanceof HTMLElement) || node.closest(excludedSelector)) return false;
-        if (node.closest('.fluent-read-bilingual-content, [data-fr-translation-owned="true"]')) return false;
-        const rect = node.getBoundingClientRect();
-        const style = getComputedStyle(node);
-        const text = sourceText(node);
-        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' &&
-          naturalLanguage(text) && text.length >= (rule.minTextLength || 0) &&
-          (!rule.requiresPhrase || /[\s.,:;!?()\-]/u.test(text));
-      };
-      return coverageRules.every((rule) => {
-        const texts = [...document.querySelectorAll(rule.selector)].filter((node) => eligible(node, rule)).map(sourceText);
-        return texts.length >= rule.minInitial &&
-          rule.sourceIncludes.every((fragment) => texts.some((text) => text.includes(fragment)));
-      });
-    }, {
-      coverageRules: rules,
-      excludedSelector: COVERAGE_EXCLUDED_ANCESTORS,
-      protectedSelector: COVERAGE_PROTECTED_DESCENDANTS,
-      technicalWords: [...SINGLE_TOKEN_TECHNICAL_WORDS],
-    }, {timeout});
+    await page.waitForFunction(readCoverageReadinessInPage, argument, {timeout});
   } catch (error) {
-    const diagnostics = await page.evaluate((coverageRules) => coverageRules.map((rule) => ({
-      name: rule.name,
-      selector: rule.selector,
-      count: document.querySelectorAll(rule.selector).length,
-      samples: [...document.querySelectorAll(rule.selector)].slice(0, 8)
-        .map((node) => (node.textContent || '').replace(/\s+/gu, ' ').trim().slice(0, 180)),
-    })), rules);
-    throw new Error(`${error.message}\ncoverageRules 页面就绪诊断：${JSON.stringify(diagnostics)}`);
+    let diagnostics;
+    try {diagnostics = await page.evaluate(readCoverageReadinessInPage, {...argument, diagnostics: true});}
+    catch (diagnosticError) {diagnostics = {status: 'unavailable', reason: diagnosticError.message};}
+    const failure = new Error(`${error.message}\ncoverageRules 页面就绪诊断：${JSON.stringify(diagnostics)}`, {cause: error});
+    failure.readinessDiagnostic = diagnostics;
+    throw failure;
   }
 }
 
 async function installCoverageTracker(page, rules) {
-  await page.evaluate(({coverageRules, trackerKey, excludedSelector, protectedSelector, technicalWords}) => {
+  await page.evaluate(({coverageRules, trackerKey, excludedSelector, protectedSelector,
+    nonDialogExcludedSelector, nonDialogProtectedSelector, readingPostDialog, technicalWords, sourceLanguagePolicySource}) => {
+    const policy = new Function(sourceLanguagePolicySource)();
     window[trackerKey]?.stop?.();
+    const snapshotDocument = document.cloneNode(false);
     const ownedSelector = [
       '.fluent-read-bilingual-content',
       '.fluent-read-loading',
@@ -333,8 +471,16 @@ async function installCoverageTracker(page, rules) {
     ].join(', ');
     const artifactSelector = `${ownedSelector}, [data-fr-translation-segment="true"]`;
     const normalizeText = (value) => String(value || '').replace(/\s+/gu, ' ').trim();
+    const guardedAncestor = (node, selector, nonDialogSelector) => {
+      let ancestor = node.closest(selector);
+      while (ancestor && ancestor === readingPostDialog && !ancestor.matches(nonDialogSelector)) {
+        ancestor = ancestor.parentElement?.closest(selector) || null;
+      }
+      return ancestor;
+    };
     const technicalWordSet = new Set(technicalWords);
     const naturalLanguage = (text) => {
+      if (/^https?:\/\/\S+$/iu.test(text)) return false;
       if (!text || /^#!|^#lang\b|^<!doctype\b|^<\?xml\b/iu.test(text)) return false;
       if (/^[a-z][a-z0-9_-]*(?:-stmt|-expr|-clause)?:\s*(?:hide|show|expand|collapse|藏起来)?$/iu.test(text)) {
         return false;
@@ -344,7 +490,7 @@ async function installCoverageTracker(page, rules) {
         (/^[A-Z][A-Z0-9_-]{3,15}$/u.test(token) && !/[AEIOU]/u.test(token)))) return false;
       const letters = text.match(/[A-Za-z]/gu)?.length || 0;
       const cjk = text.match(/[\u3400-\u9fff]/gu)?.length || 0;
-      return letters >= 2 && letters >= cjk;
+      return letters >= 2 && letters >= cjk && !policy.shouldSkipTranslationForTarget(text, 'zh-Hans', []);
     };
     const metrics = {
       canonicalSnapshotCalls: 0,
@@ -359,7 +505,7 @@ async function installCoverageTracker(page, rules) {
     };
     const canonicalSnapshot = (node, structurePhase) => {
       metrics.canonicalSnapshotCalls += 1;
-      const clone = node.cloneNode(true);
+      const clone = snapshotDocument.importNode(node, true);
       clone.querySelectorAll(ownedSelector).forEach((owned) => owned.remove());
       clone.querySelectorAll('[data-fr-translation-segment="true"]').forEach((segment) => {
         segment.replaceWith(...segment.childNodes);
@@ -386,7 +532,9 @@ async function installCoverageTracker(page, rules) {
       return {sourceText, structure: JSON.stringify(visit(clone))};
     };
     const isEligible = (node, rule, text) => {
-      if (!(node instanceof HTMLElement) || node.closest(excludedSelector)) return false;
+      if (!(node instanceof HTMLElement) || guardedAncestor(node, excludedSelector, nonDialogExcludedSelector)) return false;
+      if (readingPostDialog && (!readingPostDialog.isConnected ||
+          !readingPostDialog.matches('[role="dialog"][aria-modal="true"]') || !readingPostDialog.contains(node))) return false;
       if (node.closest(ownedSelector)) return false;
       const rect = node.getBoundingClientRect();
       const style = getComputedStyle(node);
@@ -493,7 +641,7 @@ async function installCoverageTracker(page, rules) {
     const initialScan = () => {
       for (const state of states) {
         for (const node of document.querySelectorAll(state.rule.selector)) {
-          if (!(node instanceof HTMLElement) || node.closest(excludedSelector) || node.closest(ownedSelector)) continue;
+          if (!(node instanceof HTMLElement) || guardedAncestor(node, excludedSelector, nonDialogExcludedSelector) || node.closest(ownedSelector)) continue;
           const snapshot = canonicalSnapshot(node, 'initial');
           if (isEligible(node, state.rule, snapshot.sourceText)) attachRecord(state, node, snapshot, 'initial', false);
         }
@@ -506,6 +654,9 @@ async function installCoverageTracker(page, rules) {
     const elementFor = (node) => node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
     const isWithin = (node, selector) => {
       const element = elementFor(node);
+      if (selector === protectedSelector) {
+        return Boolean(element && guardedAncestor(element, protectedSelector, nonDialogProtectedSelector));
+      }
       return Boolean(element && (element.matches?.(selector) || element.closest?.(selector)));
     };
     const isArtifactOnlyMutation = (mutation) => {
@@ -587,7 +738,7 @@ async function installCoverageTracker(page, rules) {
           }
           continue;
         }
-        if (elementFor(mutation.target)?.closest?.(protectedSelector) || onlyCanonicalIgnoredChildren(mutation)) {
+        if (isWithin(mutation.target, protectedSelector) || onlyCanonicalIgnoredChildren(mutation)) {
           metrics.ignoredProtectedMutationCount += 1;
           continue;
         }
@@ -675,7 +826,7 @@ async function installCoverageTracker(page, rules) {
     // Only bounded missing-owner queries use presentation-filtered source. Raw
     // canonical text/structure still guard coverage identity and restoration.
     const completionQuerySource = (node) => {
-      const clone = node.cloneNode(true);
+      const clone = snapshotDocument.importNode(node, true);
       const liveDescendants = node.querySelectorAll('*');
       const clonedDescendants = clone.querySelectorAll('*');
       liveDescendants.forEach((live, index) => {
@@ -942,9 +1093,9 @@ async function installCoverageTracker(page, rules) {
   }, {
     coverageRules: rules,
     trackerKey: COVERAGE_TRACKER_KEY,
-    excludedSelector: COVERAGE_EXCLUDED_ANCESTORS,
-    protectedSelector: COVERAGE_PROTECTED_DESCENDANTS,
+    ...coverageEligibilityContext(page),
     technicalWords: [...SINGLE_TOKEN_TECHNICAL_WORDS],
+    sourceLanguagePolicySource: buildSourceLanguagePolicy(),
   });
 }
 
@@ -1487,6 +1638,7 @@ async function waitForStableTarget(page, selector, timeout) {
           Boolean(target.textContent?.trim());
       }), selector);
     if (revealIndex >= 0) {
+      assertPageFocusAllowed(page);
       await page.locator(selector).nth(revealIndex).scrollIntoViewIfNeeded({timeout});
     }
     await waitFor(page, (targetSelector) => {
@@ -1506,8 +1658,10 @@ async function waitForStableTarget(page, selector, timeout) {
         return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' &&
           Boolean(target.textContent?.trim());
       }), selector);
+    assertPageFocusAllowed(page);
     await page.locator(selector).nth(rawIndex).scrollIntoViewIfNeeded();
   } catch (error) {
+    assertPageFocusAllowed(page);
     const diagnostics = await page.evaluate((targetSelector) => ({
       url: location.href,
       title: document.title,
@@ -1533,6 +1687,132 @@ async function waitForStableTarget(page, selector, timeout) {
     throw new Error(`${error.message}\n目标 selector 诊断：${JSON.stringify(diagnostics)}`);
   }
   await page.waitForTimeout(1000);
+}
+
+// Read-only preconditions for one native dismiss action. Accessibility attributes are never rewritten.
+function readDismissiblePromotionStateInPage({dialogSelector, buttonSelector, contentSelector, expectedUrl,
+  afterDismissal = false, allowEmptyFragment = false, waitForButton = false, diagnostics = false}) {
+  const paint = node => {
+    if (!node) return {painted: false, reasons: ['missing']};
+    const reasons = [], rect = node.getBoundingClientRect();
+    if (!node.isConnected) reasons.push('disconnected');
+    if (node.closest('[hidden]')) reasons.push('hidden-attribute');
+    if (!(rect.width > 0 && rect.height > 0)) reasons.push('no-rect');
+    for (let current = node; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (style.display === 'none') reasons.push(`display:none:${current.localName}`);
+      if (['hidden', 'collapse'].includes(style.visibility)) reasons.push(`visibility:${style.visibility}:${current.localName}`);
+      if (style.opacity === '0') reasons.push(`opacity:0:${current.localName}`);
+    }
+    return {painted: reasons.length === 0, reasons, width: rect.width, height: rect.height};
+  };
+  const dialogs = [...document.querySelectorAll(dialogSelector)], buttons = [...document.querySelectorAll(buttonSelector)];
+  const contents = [...document.querySelectorAll(contentSelector)];
+  const visibleDialogs = dialogs.filter(node => paint(node).painted);
+  const blockers = [...document.querySelectorAll('dialog[open],[role="dialog"],[role="alertdialog"],[aria-modal="true"]')]
+    .filter(node => paint(node).painted);
+  const button = buttons[0], content = contents[0];
+  const dismissLink = button?.matches('a[href="#"][data-action="dismiss"][aria-label="close"]:not([target],[download],[ping])') &&
+    !document.querySelector('base[target]') && new URL('#', document.baseURI || expectedUrl).href === `${expectedUrl}#`;
+  const contentHidden = !!content?.closest('[hidden],[inert],[aria-hidden="true"]');
+  const ariaHiddenAncestor = button?.closest('[aria-hidden="true"]');
+  const inertAncestor = button?.closest('[inert]');
+  // Native inactive promotion markup can be present before its hiding CSS settles.
+  // Only an external ancestor containing the whole known dialog may wait; no click occurs in that state.
+  const inactiveKnownPromotionAncestor = !!ariaHiddenAncestor && !!content && !inertAncestor && dialogs.length === 1 &&
+    ariaHiddenAncestor !== dialogs[0] && ariaHiddenAncestor.contains(dialogs[0]) && !ariaHiddenAncestor.contains(content);
+  const formAttributes = ['form', 'formaction', 'formmethod', 'formenctype', 'formtarget', 'formnovalidate'];
+  const state = {urlUnchanged: location.href === expectedUrl || (allowEmptyFragment && location.href === `${expectedUrl}#`),
+    path: location.pathname,
+    dialogCount: dialogs.length, visibleDialogCount: visibleDialogs.length, blockingDialogCount: blockers.length,
+    unrecognizedBlockingDialogs: blockers.filter(node => !visibleDialogs.includes(node)).map(node => ({tag: node.localName,
+      role: node.getAttribute('role'), ariaModal: node.getAttribute('aria-modal')})),
+    dialog: dialogs[0] ? {role: dialogs[0].getAttribute('role'), ariaModal: dialogs[0].getAttribute('aria-modal'), ...paint(dialogs[0])} : null,
+    button: {count: buttons.length, tag: button?.localName || null, insideDialog: !!button && dialogs.length === 1 && dialogs[0].contains(button),
+      typeAttribute: button?.getAttribute('type') ?? null, effectiveType: button?.type ?? null,
+      ancestorForm: !!button?.closest('form'), associatedForm: !!button?.form,
+      formAttributes: button ? formAttributes.filter(name => button.hasAttribute(name)) : [],
+      disabled: !!button && (!!button.disabled || button.hasAttribute('disabled') || button.getAttribute('aria-disabled') === 'true'),
+      inaccessibleAncestor: !!ariaHiddenAncestor || !!inertAncestor, inactiveKnownPromotionAncestor,
+      ariaHiddenAncestor: ariaHiddenAncestor ? {tag: ariaHiddenAncestor.localName, id: ariaHiddenAncestor.id} : null,
+      inertAncestor: inertAncestor ? {tag: inertAncestor.localName, id: inertAncestor.id} : null, ...paint(button)},
+    content: {count: contents.length, hasText: !!content?.textContent?.trim(), hiddenOrInertAncestor: contentHidden,
+      insideDialog: !!content && dialogs.some(dialog => dialog.contains(content)), ...paint(content)}};
+  if (diagnostics) return state;
+  const reject = reason => {throw new Error(`Dismissible promotion preparation refused: ${reason}; ${JSON.stringify(state)}`);};
+  if (!state.urlUnchanged) reject('URL changed');
+  if (/(?:^|\/)(?:authwall|login|signin|signup|checkpoint|challenge|captcha)(?:\/|$)/iu.test(location.pathname)) {
+    reject('authentication or challenge path');
+  }
+  if (state.unrecognizedBlockingDialogs.length) reject('unrecognized blocking dialog');
+  if (contents.length !== 1 || !state.content.hasText || !state.content.painted) {
+    if (afterDismissal) return false;
+    reject('public content is absent, ambiguous or not rendered');
+  }
+  // A hidden known dialog needs no action when the public article is already readable.
+  const needsDialog = visibleDialogs.length > 0 || (contentHidden && dialogs.length > 0);
+  if (needsDialog) {
+    if (dialogs.length !== 1 || visibleDialogs.length > 1 || dialogs[0].getAttribute('role') !== 'dialog' ||
+        dialogs[0].getAttribute('aria-modal') !== 'true') reject('promotion dialog is not unique and modal');
+    if (state.content.insideDialog) reject('configured content is inside the promotion');
+    if (afterDismissal) return false;
+    if (buttons.length !== 1 || !state.button.insideDialog || (button.localName !== 'button' && !dismissLink) || state.button.disabled ||
+        (state.button.inaccessibleAncestor && !inactiveKnownPromotionAncestor)) reject('dismiss button is not unique, native and actionable inside the promotion');
+    const type = state.button.typeAttribute;
+    // Native LinkedIn's close button omits type. It is safe only without any associated/ancestor form.
+    if ((type !== null && type.toLowerCase() !== 'button') || state.button.ancestorForm || state.button.associatedForm ||
+        state.button.formAttributes.length) reject('dismiss button can submit/reset or belongs to a form');
+    if (inactiveKnownPromotionAncestor || !state.dialog.painted || !state.button.painted) {
+      if (waitForButton) return false;
+      reject('known promotion dismiss button is not yet active and painted');
+    }
+    return {action: 'dismiss', dismissLink, publicContentCount: contents.length};
+  }
+  if (contentHidden) {
+    if (afterDismissal) return false;
+    reject('public content remains hidden or inert without a known promotion');
+  }
+  return {action: 'none', publicContentCount: contents.length};
+}
+
+async function prepareDismissiblePromotion(page, config, expectedUrl, timeout) {
+  const normalized = normalizeDismissiblePromotion(config);
+  if (!normalized) return undefined;
+  const argument = {...normalized, expectedUrl}, deadline = Date.now() + timeout;
+  const remaining = () => Math.max(1, deadline - Date.now());
+  try {
+    if (!await page.evaluate(readDismissiblePromotionStateInPage, {...argument, waitForButton: true})) {
+      const painted = await page.waitForFunction(readDismissiblePromotionStateInPage,
+        {...argument, waitForButton: true}, {timeout: remaining(), polling: 100});
+      await painted?.dispose?.();
+    }
+    const before = await page.evaluate(readDismissiblePromotionStateInPage, argument);
+    if (before.action === 'none') return {status: 'not-present', nativeClicks: 0, ...normalized, url: expectedUrl};
+    if (Date.now() >= deadline) throw new Error('native preparation deadline exceeded before dismissal');
+    assertPageFocusAllowed(page);
+    const dismissal = page.locator(normalized.buttonSelector);
+    // 站点的浮动导航有时覆盖关闭链接，使用它原生支持的键盘激活。
+    if (before.dismissLink) await dismissal.press('Enter', {timeout: remaining()});
+    else await dismissal.click({timeout: remaining()});
+    const staysOnPage = () => page.url() === expectedUrl || (before.dismissLink && page.url() === `${expectedUrl}#`);
+    if (!staysOnPage()) throw new Error('URL changed after dismissal');
+    const afterArgument = {...argument, afterDismissal: true, allowEmptyFragment: before.dismissLink};
+    const ready = await page.waitForFunction(readDismissiblePromotionStateInPage,
+      afterArgument, {timeout: remaining(), polling: 100});
+    await ready?.dispose?.();
+    const after = await page.evaluate(readDismissiblePromotionStateInPage, afterArgument);
+    if (!after || after.action !== 'none' || !staysOnPage()) throw new Error('public content did not become readable');
+    return {status: 'dismissed', nativeClicks: 1, ...(before.dismissLink ? {nativeActivation: 'keyboard-enter'} : {}),
+      ...normalized, url: page.url()};
+  } catch (error) {
+    assertPageFocusAllowed(page);
+    let details;
+    try {details = await page.evaluate(readDismissiblePromotionStateInPage, {...argument, diagnostics: true});}
+    catch (diagnosticError) {details = {status: 'unavailable', reason: diagnosticError.message};}
+    const failure = new Error(`Dismissible promotion preparation refused: ${error.message}\npromotion diagnostics: ${JSON.stringify(details)}`, {cause: error});
+    failure.promotionDiagnostic = details;
+    throw failure;
+  }
 }
 
 async function waitForPageContract(
@@ -1579,11 +1859,12 @@ async function waitForPageContract(
 }
 
 // One serialized page callback keeps capture/assert projection predicates identical.
-// Only the exact observed LearnOpenGL native empty slot is opaque; no host DOM writes.
+// Only the two observed LearnOpenGL native empty slots are opaque; no host DOM writes.
 function readPageContractStateInPage({
   required, forbidden = [], interactions = [], dynamicForbidden = [], optionalForbidden = [],
   mutableForbidden = [], baselineState, url, captureIdentity = false, navIdentity,
 }) {
+  const snapshotDocument = document.cloneNode(false);
   const normalizeText = (value) => String(value || '').replace(/\s+/gu, ' ').trim();
   const ownedSelector = [
     '.fluent-read-bilingual-content', '.fluent-read-loading', '.fluent-read-retry-wrapper',
@@ -1591,21 +1872,24 @@ function readPageContractStateInPage({
   ].join(', ');
   const attributes = (node) => [...node.attributes].map(({name, value}) => [name, value])
     .sort(([a], [b]) => a.localeCompare(b));
-  const visit = (current, opaqueSlot) => {
+  const visit = (current, opaqueSlots) => {
     if (current.nodeType === Node.TEXT_NODE) return normalizeText(current.nodeValue) ? '#text' : null;
     if (current.nodeType !== Node.ELEMENT_NODE) return null;
-    return [current.tagName.toLowerCase(), current === opaqueSlot
-      ? ['#native-host-slot'] : [...current.childNodes].map((child) => visit(child, opaqueSlot)).filter(Boolean)];
+    return [current.tagName.toLowerCase(), opaqueSlots?.has(current)
+      ? ['#native-host-slot'] : [...current.childNodes].map((child) => visit(child, opaqueSlots)).filter(Boolean)];
   };
-  const nativeSlotFor = (node, selector) => {
+  const nativeSlotsFor = (node, selector) => {
     if (selector !== '#nav' || node.tagName !== 'DIV' || node.id !== 'nav' || typeof location === 'undefined' ||
         location.href !== 'https://learnopengl.com/Getting-started/Coordinate-Systems' || document.querySelectorAll('#nav').length !== 1 ||
-        document.querySelectorAll('#leftfourthtenthad').length !== 1 || node.children.length !== 10) return null;
-    const slot = document.querySelector('#leftfourthtenthad');
-    if (slot?.tagName !== 'DIV' || slot.parentElement !== node || node.children[6] !== slot ||
-        normalizeText(slot.textContent) || slot.querySelector('a') || slot.matches(ownedSelector) ||
-        slot.querySelector(ownedSelector)) return null;
-    return slot;
+        node.children.length !== 10) return [];
+    return [['leftfourthtenthad', 6], ['lefteighttenthad', 8]].flatMap(([id, index]) => {
+      if (document.querySelectorAll(`#${id}`).length !== 1) return [];
+      const slot = document.querySelector(`#${id}`);
+      if (slot?.tagName !== 'DIV' || slot.parentElement !== node || node.children[index] !== slot ||
+          normalizeText(slot.textContent) || slot.querySelector('a') || slot.matches(ownedSelector) ||
+          slot.querySelector(ownedSelector)) return [];
+      return [slot];
+    });
   };
   const parentsOf = (anchor, nav) => {
     const parents = [];
@@ -1615,12 +1899,13 @@ function readPageContractStateInPage({
     }
     return parents;
   };
-  const makeIdentity = (nav, slot) => ({nav, slot, anchors: [...nav.querySelectorAll('a')].map((node) => ({
+  const makeIdentity = (nav, slots) => ({nav, slots, anchors: [...nav.querySelectorAll('a')].map((node) => ({
     node, parents: parentsOf(node, nav), attributes: attributes(node), text: node.textContent,
     href: node instanceof HTMLAnchorElement ? node.href : '', type: 'type' in node ? String(node.type || '') : '',
   }))});
-  const identityMatches = (nav, slot, identity) => {
-    if (!identity || identity.nav !== nav || identity.slot !== slot || !nav.isConnected || !slot.isConnected) return false;
+  const identityMatches = (nav, slots, identity) => {
+    if (!identity || identity.nav !== nav || !nav.isConnected || identity.slots.length !== slots.length ||
+        slots.some((slot, index) => identity.slots[index] !== slot || !slot.isConnected)) return false;
     const anchors = [...nav.querySelectorAll('a')];
     return anchors.length === identity.anchors.length && identity.anchors.every((initial, index) => {
       const node = anchors[index], parents = parentsOf(node, nav);
@@ -1634,25 +1919,27 @@ function readPageContractStateInPage({
   let identity = null;
   const hostNativeDiagnostics = [];
   const forbiddenSignature = (node, selector) => {
-    const slot = nativeSlotFor(node, selector);
-    const project = Boolean(slot && (captureIdentity || navIdentity?.identity));
+    const slots = nativeSlotsFor(node, selector);
+    const project = Boolean(slots.length && (captureIdentity || navIdentity?.identity));
+    const opaqueSlots = project ? new Set(slots) : null;
     const signature = {
       tagName: node.tagName, id: node.id, role: node.getAttribute('role') || '',
       ariaLabel: node.getAttribute('aria-label') || '', value: 'value' in node ? String(node.value || '') : '',
-      text: normalizeText(node.textContent), structure: JSON.stringify(visit(node, project ? slot : null)),
+      text: normalizeText(node.textContent), structure: JSON.stringify(visit(node, opaqueSlots)),
     };
     if (project) {
-      if (captureIdentity) identity = makeIdentity(node, slot);
-      signature.nativeSlotProjection = {tagName: slot.tagName, id: slot.id, directElementChildIndex: 6,
-        attributes: attributes(slot), navIdentityValid: captureIdentity || identityMatches(node, slot, navIdentity.identity)};
+      if (captureIdentity) identity = makeIdentity(node, slots);
+      signature.nativeSlotProjection = {slots: slots.map(slot => ({tagName: slot.tagName, id: slot.id,
+        directElementChildIndex: [...node.children].indexOf(slot), attributes: attributes(slot)})),
+        navIdentityValid: captureIdentity || identityMatches(node, slots, navIdentity.identity)};
       const protectedAttributes = [];
       const collectProtectedAttributes = (current, position) => {
         protectedAttributes.push({position, tagName: current.tagName, attributes: attributes(current)});
-        if (current !== slot) [...current.children].forEach((child, index) => collectProtectedAttributes(child, [...position, index]));
+        if (!opaqueSlots.has(current)) [...current.children].forEach((child, index) => collectProtectedAttributes(child, [...position, index]));
       };
       collectProtectedAttributes(node, []);
       signature.protectedAttributes = protectedAttributes;
-      hostNativeDiagnostics.push({selector, slotId: slot.id, outerHTML: node.outerHTML,
+      hostNativeDiagnostics.push({selector, slotIds: slots.map(slot => slot.id), outerHTML: node.outerHTML,
         unprojectedStructure: JSON.stringify(visit(node, null))});
     }
     return signature;
@@ -1676,7 +1963,7 @@ function readPageContractStateInPage({
   });
   const semanticSnapshot = (node) => {
     if (!node) return {sourceText: '', structure: ''};
-    const clone = node.cloneNode(true);
+    const clone = snapshotDocument.importNode(node, true);
     clone.querySelectorAll(ownedSelector).forEach((owned) => owned.remove());
     clone.querySelectorAll('[data-fr-translation-segment="true"]').forEach((segment) => segment.replaceWith(...segment.childNodes));
     return {sourceText: normalizeText(clone.textContent), structure: JSON.stringify(visit(clone, null))};
@@ -1777,9 +2064,20 @@ function reconcileForbiddenContractState(initial, current) {
       initial.count = current.count;
       return null;
     }
-    const currentSignatures = new Set(current.signatures.map((signature) => JSON.stringify(signature)));
-    const missingBaseline = initial.signatures.some((signature) =>
-      !currentSignatures.has(JSON.stringify(signature)));
+    const currentSignatures = new Map();
+    for (const signature of current.signatures) {
+      const key = JSON.stringify(signature);
+      currentSignatures.set(key, (currentSignatures.get(key) || 0) + 1);
+    }
+    // Relative times and publisher labels can repeat. Each baseline node needs
+    // its own matching occurrence; one survivor cannot account for two originals.
+    const missingBaseline = initial.signatures.some((signature) => {
+      const key = JSON.stringify(signature);
+      const remaining = currentSignatures.get(key) || 0;
+      if (!remaining) return true;
+      currentSignatures.set(key, remaining - 1);
+      return false;
+    });
     if (current.count < initial.count || missingBaseline) {
       return `动态 forbidden DOM 基线丢失：${JSON.stringify({
         before: diagnosticState(initial),
@@ -1826,7 +2124,7 @@ async function assertPageContract(page, baseline, requiredSelectors, expectedUrl
   for (const current of state.interactionState) {
     const initial = baseline.interactionState.find(({selector}) => selector === current.selector);
     const stable = current.count >= initial.minimumCount && current.tagName === initial.tagName &&
-      current.href === initial.href && current.type === initial.type && current.disabled === initial.disabled &&
+      interactionHrefsEquivalent(initial.href, current.href, expectedUrl) && current.type === initial.type && current.disabled === initial.disabled &&
       current.ariaDisabled === initial.ariaDisabled && current.role === initial.role && current.connected &&
       (current.disabled || current.focusable);
     if (!stable) errors.push(`交互元素失效：${JSON.stringify({before: initial, after: current})}`);
@@ -1837,10 +2135,11 @@ async function assertPageContract(page, baseline, requiredSelectors, expectedUrl
 
 async function assertRequiredRestored(page, baseline, phase) {
   const restored = await page.evaluate((requiredState) => requiredState.map(({selector}) => {
+    const snapshotDocument = document.cloneNode(false);
     const normalizeText = (value) => String(value || '').replace(/\s+/gu, ' ').trim();
     const semanticSnapshot = (node) => {
       if (!node) return {sourceText: '', structure: ''};
-      const clone = node.cloneNode(true);
+      const clone = snapshotDocument.importNode(node, true);
       clone.querySelectorAll(
         '.fluent-read-bilingual-content, .fluent-read-loading, .fluent-read-retry-wrapper, [data-fr-translation-owned="true"]',
       ).forEach((owned) => owned.remove());
@@ -1962,9 +2261,12 @@ async function waitForTranslationIdle(page, timeout, phase, minimumRetryBudget =
     throw new Error(`${phase} 等待翻译请求结束超时：${error?.message || String(error)}`, {cause: error});
   } finally {
     // context finally 是最终清理边界；迟到或拒绝的 key 删除不阻塞失败传播。
-    void Promise.resolve().then(() => page.evaluate((key) => { delete window[key]; }, idleKey)).catch(() => {});
+    if (!pageFocusGuards.get(page)?.failure) void Promise.resolve().then(() => {
+      assertPageFocusAllowed(page); return page.evaluate((key) => { delete window[key]; }, idleKey);
+    }).catch(() => {});
   }
 
+  assertPageFocusAllowed(page);
   const retries = await page.evaluate((selector) => {
     const notices = () => [...(document.querySelector('#fluent-read-page-notice-host')?.shadowRoot
       ?.querySelectorAll('.page-notice') || [])];
@@ -1997,33 +2299,42 @@ async function waitForTranslationIdle(page, timeout, phase, minimumRetryBudget =
 // 全文翻译使用可视区懒加载。回归时主动滚过页面，触发所有长页面内容块，
 // 然后等待插件的进行中任务和 loading 节点都清空，避免只验证到首屏。
 async function scrollAndWaitFullPage(page, timeout, scrollContainerSelector, targetSelector, verifyUnchanged, waitForTarget) {
-  const maxSteps = 320;
+  // Work scales with the observed page geometry; each step still exposes at most 65%
+  // of a viewport. An independent cap bounds infinite feeds, and no-progress detection
+  // catches blocked scrolling without spending the whole finite-page budget.
+  let maxSteps = 320;
+  const absoluteMaxSteps = 2048;
+  const stepSizeFor = state => Math.max(Math.floor(state.viewport * 0.65), 320);
+  const updateStepBudget = state => {
+    maxSteps = Math.min(absoluteMaxSteps, Math.max(maxSteps, Math.ceil(state.maxDistance / stepSizeFor(state)) + 8));
+  };
   const readScrollState = () => page.evaluate((selector) => {
     const container = selector ? document.querySelector(selector) : null;
     if (selector && !(container instanceof HTMLElement)) {
       throw new Error(`找不到滚动容器：${selector}`);
     }
-    const viewport = container instanceof HTMLElement
-      ? Math.max(container.clientHeight, 1)
-      : Math.max(window.innerHeight || 0, 480);
-    const extent = container instanceof HTMLElement
-      ? container.scrollHeight
-      : Math.max(document.body?.scrollHeight || 0, document.documentElement?.scrollHeight || 0);
+    // The body can extend outside a clipped root without enlarging the window's
+    // scroll range. Read the actual scrolling element, including its scrollbar-adjusted
+    // client height, so success and no-progress failures refer to the surface we move.
+    const scrolling = container instanceof HTMLElement ? container : document.scrollingElement || document.documentElement;
+    const viewport = container instanceof HTMLElement ? Math.max(container.clientHeight, 1)
+      : Math.max(scrolling?.clientHeight || window.innerHeight || 0, 1);
+    const extent = scrolling?.scrollHeight || viewport;
     return {
       viewport,
       extent,
-      position: container instanceof HTMLElement ? container.scrollTop : window.scrollY,
+      position: scrolling?.scrollTop ?? window.scrollY,
       maxDistance: Math.max(0, extent - viewport),
     };
   }, scrollContainerSelector || '');
-  const moveTo = (position) => page.evaluate(({position: nextPosition, selector}) => {
+  const moveTo = (position) => {assertPageFocusAllowed(page); return page.evaluate(({position: nextPosition, selector}) => {
       const container = selector ? document.querySelector(selector) : null;
       if (container instanceof HTMLElement) {
         container.scrollTop = nextPosition;
         return;
       }
       window.scrollTo({top: nextPosition, behavior: 'instant'});
-    }, {position, selector: scrollContainerSelector || ''});
+    }, {position, selector: scrollContainerSelector || ''});};
 
   await moveTo(0);
   await page.waitForTimeout(400);
@@ -2032,9 +2343,16 @@ async function scrollAndWaitFullPage(page, timeout, scrollContainerSelector, tar
   let step = 0;
   let bottomStableChecks = 0;
   let lastBottomExtent = -1;
-  while (step < maxSteps && bottomStableChecks < 2) {
+  let previousPosition = -1;
+  let stalledChecks = 0;
+  while (bottomStableChecks < 2) {
     const before = await readScrollState();
+    updateStepBudget(before);
+    if (step >= maxSteps) break;
     const remaining = Math.max(0, before.maxDistance - before.position);
+    stalledChecks = remaining > 4 && before.position <= previousPosition ? stalledChecks + 1 : 0;
+    previousPosition = before.position;
+    if (stalledChecks >= 12) throw new Error(`全文翻译连续 ${stalledChecks} 次没有滚动进展：${JSON.stringify(before)}`);
     if (remaining <= 4) {
       await page.waitForTimeout(400);
       await observeCoverage(page);
@@ -2044,13 +2362,13 @@ async function scrollAndWaitFullPage(page, timeout, scrollContainerSelector, tar
       bottomStableChecks = stillAtBottom && extentStable ? bottomStableChecks + 1 : 0;
       lastBottomExtent = after.extent;
       if (!stillAtBottom) {
-        const stepSize = Math.max(Math.floor(after.viewport * 0.65), 320);
+        const stepSize = stepSizeFor(after);
         await moveTo(Math.min(after.maxDistance, after.position + stepSize));
       }
     } else {
       bottomStableChecks = 0;
       lastBottomExtent = -1;
-      const stepSize = Math.max(Math.floor(before.viewport * 0.65), 320);
+      const stepSize = stepSizeFor(before);
       await moveTo(Math.min(before.maxDistance, before.position + stepSize));
       await page.waitForTimeout(400);
       await observeCoverage(page);
@@ -2075,15 +2393,16 @@ async function scrollAndWaitFullPage(page, timeout, scrollContainerSelector, tar
     let current = await readScrollState();
     if (current.maxDistance - current.position <= 4) break;
     let catchUpSteps = 0;
+    updateStepBudget(current);
     while (catchUpSteps < maxSteps && current.maxDistance - current.position > 4) {
-      const stepSize = Math.max(Math.floor(current.viewport * 0.65), 320);
+      const stepSize = stepSizeFor(current);
       await moveTo(Math.min(current.maxDistance, current.position + stepSize));
       await page.waitForTimeout(400);
       await observeCoverage(page);
       catchUpSteps += 1;
       current = await readScrollState();
     }
-    if (catchUpSteps >= maxSteps) {
+    if (catchUpSteps >= maxSteps && current.maxDistance - current.position > 4) {
       throw new Error('全文翻译后页面持续增长，补扫未能在预算内到达底部');
     }
     await waitForTranslationIdle(page, timeout, `长页补扫第 ${round + 1} 轮后`);
@@ -2096,6 +2415,7 @@ async function scrollAndWaitFullPage(page, timeout, scrollContainerSelector, tar
   await settleCoverageByReveal(page, timeout, '全文覆盖收敛', 0, verifyUnchanged);
 
   await page.waitForTimeout(800);
+  assertPageFocusAllowed(page);
   await page.evaluate((selector) => {
     const container = selector ? document.querySelector(selector) : null;
     if (container instanceof HTMLElement) container.scrollTop = 0;
@@ -2114,8 +2434,10 @@ async function scrollAndWaitFullPage(page, timeout, scrollContainerSelector, tar
 async function revealFullPageTarget(page, selector) {
   const target = page.locator(selector).first();
   try {
+    assertPageFocusAllowed(page);
     await target.scrollIntoViewIfNeeded({timeout: 10000});
   } catch {
+    assertPageFocusAllowed(page);
     // GitHub 的虚拟化 React 列表可能让已连接且可读的元素暂时处于不可操作状态。
     // 此处直接滚动 DOM 即可；所有翻译输入仍使用可信键盘事件，而不是页面合成事件。
     await target.evaluate((node) => node.scrollIntoView({block: 'center', inline: 'nearest'}));
@@ -2179,15 +2501,119 @@ async function readFullPageState(page, selector, requiredSelectors, fullCoverage
   });
 }
 
-function findHoverTextPointInPage({selector, index}) {
+function findHoverTextPointInPage({selector, index, textIncludes = []}) {
   const target = document.querySelectorAll(selector)[index];
   if (!target?.isConnected) return null;
   const excluded = '[data-fr-translation-owned="true"], .fluent-read-bilingual-content, ' +
     '.fluent-read-loading, .fluent-read-retry-wrapper, [hidden], [aria-hidden="true"], [inert]';
   const hitPolicyForText = (parent, x, y) => {
     const hit = document.elementFromPoint(x, y);
-    if (!hit || hit.closest(excluded)) return null;
-    if (target.contains(hit) && (hit === parent || hit.contains(parent))) return 'direct-text';
+    if (!hit) return null;
+    if (!hit.closest(excluded) && target.contains(hit) && (hit === parent || hit.contains(parent))) return 'direct-text';
+    // Google News /home 的空整卡链接与可读标题是同一卡片的兄弟。
+    // 只接受已观察到的三层命中栈；aria-hidden 的例外只属于这个空链接自身。
+    if (typeof location !== 'undefined' && location.hostname === 'news.google.com' && location.pathname === '/home' &&
+      parent === target && target.matches('main a[href^="./read/"]:not([aria-hidden="true"])')) {
+      const wrapper = hit.parentElement;
+      const headlineParent = target.parentElement;
+      const contentShell = headlineParent?.parentElement;
+      // 当前公开页也会在同一卡片的首个空链接与标题之间嵌两层正文容器。
+      // 精确验证已观察的父子/相邻关系及标题唯一性，不向任意祖先或其它卡片穿透。
+      const nestedCard = contentShell?.parentElement;
+      const nested = Boolean(wrapper && headlineParent && contentShell && nestedCard &&
+        wrapper.parentElement === nestedCard && wrapper.nextElementSibling === contentShell &&
+        contentShell.children.length === 1 && contentShell.firstElementChild === headlineParent &&
+        headlineParent.lastElementChild === target &&
+        nestedCard.querySelectorAll('a[href^="./read/"]:not([aria-hidden="true"])').length === 1 &&
+        nestedCard.querySelector('a[href^="./read/"]:not([aria-hidden="true"])') === target);
+      const card = nested ? nestedCard : headlineParent;
+      const barrier = 'dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"], button, [role="button"], ' +
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="searchbox"]';
+      const nonAriaExcluded = '[data-fr-translation-owned="true"], .fluent-read-bilingual-content, ' +
+        '.fluent-read-loading, .fluent-read-retry-wrapper, [hidden], [inert]';
+      const href = target.getAttribute('href');
+      const destination = target.getAttribute('target');
+      const stack = document.elementsFromPoint?.(x, y);
+      if (!hit.matches('a[aria-hidden="true"][tabindex="-1"]') || hit.childNodes.length ||
+        !wrapper?.matches('div') || wrapper.childNodes.length !== 1 || wrapper.firstChild !== hit ||
+        !card?.matches('div') || wrapper.parentElement !== card || card.firstElementChild !== wrapper ||
+        hit.closest(nonAriaExcluded) || wrapper.closest(excluded) ||
+        [hit, wrapper, target].some(owner => owner.closest(barrier)) ||
+        !href || hit.getAttribute('href') !== href || destination !== '_blank' || hit.getAttribute('target') !== destination ||
+        !stack || stack[0] !== hit || stack[1] !== wrapper || stack[2] !== target) return null;
+      const paintlessStretchedBox = owner => {
+        try {
+          const style = getComputedStyle(owner);
+          const transparent = style.backgroundColor === 'transparent' || /^rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)$/u.test(style.backgroundColor);
+          return style.position === 'absolute' && ['left', 'right', 'top', 'bottom'].every(key => style[key] === '0px') &&
+            transparent && style.backgroundImage === 'none' && style.boxShadow === 'none' && style.filter === 'none' &&
+            (!style.backdropFilter || style.backdropFilter === 'none') && style.opacity === '1' &&
+            ['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'outlineWidth'].every(key => style[key] === '0px');
+        } catch { return false; }
+      };
+      if (![hit, wrapper].every(paintlessStretchedBox)) return null;
+      // 未出现在命中栈的共同或独立祖先也可能隐藏整张卡片。路径有界、必须到达当前文档根。
+      const visiblyConnected = owner => {
+        try {
+          let current = owner, depth = 0;
+          while (current && ++depth <= 128) {
+            const style = getComputedStyle(current), opacity = Number(style.opacity);
+            if (style.display === 'none' || style.visibility !== 'visible' || !Number.isFinite(opacity) || opacity <= 0) return false;
+            if (current === document.documentElement) return true;
+            current = current.parentElement;
+          }
+        } catch { /* 未能读取样式时拒绝该例外。 */ }
+        return false;
+      };
+      if (![hit, target].every(visiblyConnected)) return null;
+      for (const owner of new Set([hit, wrapper, target, headlineParent, ...(nested ? [contentShell, card] : [card])])) {
+        for (const pseudo of ['::before', '::after']) {
+          let content;
+          try { content = getComputedStyle(owner, pseudo).content; } catch { return null; }
+          if (content !== 'none' && content !== 'normal' && content !== '') return null;
+        }
+      }
+      // 目的地也是稳定性的一部分；同一文字下的链接更新会重置既有 200ms 计时。
+      return `google-news-stretched-link:${JSON.stringify([href, destination])}`;
+    }
+    // Steam 讨论列表在标题上方放置同一行的空白链接；只接受实测的命中栈与主题链接。
+    // 普通用户不会点击该链接；仍以标题原文 Range 和真实键盘事件执行悬浮测试。
+    if (typeof location !== 'undefined' && location.origin === 'https://steamcommunity.com' &&
+      location.pathname === '/app/570/discussions/' && !location.search && !location.hash &&
+      parent === target && target.matches('#AppHubContent .forum_topics > .forum_topic > .forum_topic_name')) {
+      const row = target.parentElement;
+      const overlays = [...row.children].filter(child => child.matches('a.forum_topic_overlay'));
+      const stack = document.elementsFromPoint?.(x, y);
+      const barrier = 'dialog, [role="dialog"], [role="alertdialog"], [aria-modal="true"], button, [role="button"], ' +
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="searchbox"]';
+      const topicId = row.getAttribute('data-gidforumtopic');
+      const href = hit.getAttribute('href');
+      if (!row.matches('div.forum_topic[role="button"]') ||
+        row.matches('[aria-modal="true"], [contenteditable]:not([contenteditable="false"])') ||
+        !hit.matches('a.forum_topic_overlay') || hit.parentElement !== row || overlays.length !== 1 || overlays[0] !== hit ||
+        [...hit.childNodes].some(node => node.nodeType !== 3 || node.textContent?.trim()) ||
+        hit.closest(excluded) || hit.closest(barrier) !== row || target.closest(barrier) !== row ||
+        row.parentElement?.closest(barrier) || !topicId || !/^\d+$/u.test(topicId) || !href ||
+        !stack || stack[0] !== hit || stack[1] !== target || stack[2] !== row) return null;
+      let link;
+      try { link = new URL(href, location.href); } catch { return null; }
+      if (link.origin !== location.origin || link.search || link.hash ||
+        !new RegExp(`^/app/570/discussions/\\d+/${topicId}/?$`, 'u').test(link.pathname)) return null;
+      const style = getComputedStyle(hit);
+      const transparent = style.backgroundColor === 'transparent' || /^rgba\(\s*0\s*,\s*0\s*,\s*0\s*,\s*0\s*\)$/u.test(style.backgroundColor);
+      if (style.position !== 'absolute' || style.display === 'none' || style.visibility !== 'visible' ||
+        style.pointerEvents === 'none' || style.opacity !== '1' || !transparent || style.backgroundImage !== 'none' ||
+        style.boxShadow !== 'none' || style.filter !== 'none' || (style.backdropFilter && style.backdropFilter !== 'none') ||
+        !['borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth', 'outlineWidth'].every(key => style[key] === '0px')) return null;
+      for (const owner of [hit, target, row]) {
+        for (const pseudo of ['::before', '::after']) {
+          const content = getComputedStyle(owner, pseudo).content;
+          if (content !== 'none' && content !== 'normal' && content !== '') return null;
+        }
+      }
+      return `steam-community-topic-overlay:${JSON.stringify([href, topicId])}`;
+    }
+    if (hit.closest(excluded)) return null;
     // PH 首页把产品名链接的空 span 拉伸到整张卡片。仅识别已观察到的结构，
     // 且命中栈第二项必须是当前介绍的原文 parent，不能穿过其他遮罩或控件。
     if (typeof location === 'undefined' || location.hostname !== 'www.producthunt.com' || location.pathname !== '/' ||
@@ -2224,7 +2650,11 @@ function findHoverTextPointInPage({selector, index}) {
     const currentIndex = textIndex++;
     const parent = textNode.parentElement;
     if (!parent || parent.closest(excluded) || !textNode.textContent?.trim()) continue;
-    const style = getComputedStyle(parent);
+    const originalText = textNode.textContent.replace(/\s+/gu, ' ').trim();
+    if (!textIncludes.every(fragment => originalText.includes(fragment))) continue;
+    let style;
+    try { style = getComputedStyle(parent); } catch { continue; }
+    if (!style) continue;
     if (style.display === 'none' || style.visibility === 'hidden') continue;
     const range = document.createRange();
     range.selectNodeContents(textNode);
@@ -2268,6 +2698,7 @@ async function waitForHoverPointer(page, targetConfig, timeout, prepareClickText
         const clickBudget = timeout - (Date.now() - started);
         if (clickBudget <= 0) break;
         prepared = true;
+        assertPageFocusAllowed(page);
         await button.click({timeout: clickBudget});
         const hideBudget = timeout - (Date.now() - started);
         if (hideBudget <= 0) break;
@@ -2283,7 +2714,7 @@ async function waitForHoverPointer(page, targetConfig, timeout, prepareClickText
       Math.abs(point.x - previous.x) < 0.5 && Math.abs(point.y - previous.y) < 0.5;
     if (!stable) {
       stableSince = Date.now();
-      if (point) await page.mouse.move(point.x, point.y);
+      if (point) {assertPageFocusAllowed(page); await page.mouse.move(point.x, point.y);}
     } else if (Date.now() - stableSince >= 200) {
       return point;
     }
@@ -2345,14 +2776,61 @@ async function waitForHoverPointer(page, targetConfig, timeout, prepareClickText
     preparation: {text: prepareClickText || '', clicked: prepared}})}`);
 }
 
+async function leaveEditingFocusForHover(page, targetConfig) {
+  for (let step = 0; step <= 8; step += 1) {
+    const editing = await page.evaluate(() => {
+      let active = document.activeElement;
+      while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+      return Boolean(active?.closest?.('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]'));
+    });
+    if (editing !== true) return step;
+    if (step === 8) throw new Error('悬浮测试准备失败：原生 Tab 导航后焦点仍在编辑区');
+    assertPageFocusAllowed(page);
+    if (step === 0 && targetConfig) {
+      const point = await page.evaluate(findHoverTextPointInPage, targetConfig);
+      const passiveText = point && await page.evaluate(({x, y}) => {
+        const hit = document.elementFromPoint(x, y);
+        return Boolean(hit && !hit.closest('a,button,input,textarea,select,[role="button"],[role="link"],[contenteditable]:not([contenteditable="false"])'));
+      }, point);
+      if (passiveText === true) {assertPageFocusAllowed(page); await page.mouse.click(point.x, point.y); continue;}
+    }
+    await page.keyboard.press('Tab');
+  }
+}
+
 async function toggleHover(page, target, targetConfig, expectedCount, timeout, attempt, prepareClickText) {
   const {selector, index} = targetConfig;
-  await target.scrollIntoViewIfNeeded();
+  assertPageFocusAllowed(page); await target.scrollIntoViewIfNeeded();
+  // viewport 内的原文仍可能被原生 sticky 标题遮住。先用原生滚动居中，
+  // 再由下面原有的 TextRange / 实际命中 / 稳定期门禁决定能否发送手势。
+  assertPageFocusAllowed(page); await target.evaluate((node) => {
+    let source = node;
+    // 超长段落的译文会把整个 owner 撑高；居中 owner 可能只露出译文，导致第二次
+    // 手势找不到任何原文。先把仍保留的原生文字滚入视口，再照常复核 Range 与命中栈。
+    if (node.getBoundingClientRect().height > node.ownerDocument.defaultView.innerHeight) {
+      const excluded = '[data-fr-translation-owned="true"], .fluent-read-bilingual-content, ' +
+        '.fluent-read-loading, .fluent-read-retry-wrapper, [hidden], [aria-hidden="true"], [inert]';
+      const walker = document.createTreeWalker(node, 4);
+      let text;
+      while ((text = walker.nextNode())) {
+        const parent = text.parentElement;
+        if (parent && text.textContent?.trim() && !parent.closest(excluded) &&
+          [...parent.getClientRects()].some(rect => rect.width > 0 && rect.height > 0)) {
+          source = parent;
+          break;
+        }
+      }
+    }
+    source.scrollIntoView({block: 'center', inline: 'nearest', behavior: 'instant'});
+  });
   // 还原译文会改变布局，宿主也可能继续滚动或播放入场动画。固定等待后取外框
   // 坐标会落到空白容器；按键前等待真实原文行稳定并保持命中，按键只发送一次。
-  const {x, y} = await waitForHoverPointer(page, targetConfig, timeout, prepareClickText);
-  await page.keyboard.down('Control');
-  await page.keyboard.up('Control');
+  // 有些站点自动聚焦搜索框。先可信点击可命中的非交互正文或原生 Tab 导航，保留产品的输入保护。
+  await leaveEditingFocusForHover(page, targetConfig);
+  const point = await waitForHoverPointer(page, targetConfig, timeout, prepareClickText);
+  const {x, y} = point;
+  assertPageFocusAllowed(page); await page.keyboard.down('Control');
+  assertPageFocusAllowed(page); await page.keyboard.up('Control');
   try {
     await page.waitForFunction(
       ({targetSelector, targetIndex, count}) =>
@@ -2382,6 +2860,7 @@ async function toggleHover(page, target, targetConfig, expectedCount, timeout, a
     }, {targetSelector: selector, targetIndex: index, point: {x, y}});
     throw new Error(`${error.message}\n悬浮 case 诊断（${JSON.stringify(targetConfig)}，第 ${attempt} 次，期望 wrapper=${expectedCount}）：${JSON.stringify(diagnostics)}`);
   }
+  return point;
 }
 
 function findHoverTargetInPage({
@@ -2390,11 +2869,15 @@ function findHoverTargetInPage({
   sourceIncludes,
   excludedSelector,
   protectedSelector,
+  nonDialogExcludedSelector,
+  readingPostDialog,
   technicalWords,
 }) {
+  const snapshotDocument = document.cloneNode(false);
   const normalizeText = (value) => String(value || '').replace(/\s+/gu, ' ').trim();
   const technicalWordSet = new Set(technicalWords);
   const naturalLanguage = (text) => {
+    if (/^https?:\/\/\S+$/iu.test(text)) return false;
     if (!text || /^#!|^#lang\b|^<!doctype\b|^<\?xml\b/iu.test(text)) return false;
     if (/^[a-z][a-z0-9_-]*(?:-stmt|-expr|-clause)?:\s*(?:hide|show|expand|collapse|藏起来)?$/iu.test(text)) {
       return false;
@@ -2407,7 +2890,7 @@ function findHoverTargetInPage({
     return letters >= 2 && letters >= cjk;
   };
   const sourceText = (node) => {
-    const clone = node.cloneNode(true);
+    const clone = snapshotDocument.importNode(node, true);
     clone.querySelectorAll(
       `.fluent-read-bilingual-content, .fluent-read-loading, .fluent-read-retry-wrapper, ` +
       `[data-fr-translation-owned="true"], ${protectedSelector}`,
@@ -2416,7 +2899,14 @@ function findHoverTargetInPage({
   };
   const raw = [...document.querySelectorAll(selector)];
   const matches = raw.map((node, rawIndex) => ({node, rawIndex, text: sourceText(node)})).filter(({node, text}) => {
-    if (!(node instanceof HTMLElement) || node.closest(excludedSelector)) return false;
+    if (!(node instanceof HTMLElement)) return false;
+    if (readingPostDialog && (!readingPostDialog.isConnected ||
+        !readingPostDialog.matches('[role="dialog"][aria-modal="true"]') || !readingPostDialog.contains(node))) return false;
+    let ancestor = node.closest(excludedSelector);
+    while (ancestor && ancestor === readingPostDialog && !ancestor.matches(nonDialogExcludedSelector)) {
+      ancestor = ancestor.parentElement?.closest(excludedSelector) || null;
+    }
+    if (ancestor) return false;
     const rect = node.getBoundingClientRect();
     const style = getComputedStyle(node);
     return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' &&
@@ -2434,8 +2924,7 @@ async function resolveHoverTarget(page, targetConfig, timeout) {
     selector: targetConfig.selector,
     eligibleIndex: targetConfig.index,
     sourceIncludes: targetConfig.sourceIncludes || [],
-    excludedSelector: COVERAGE_EXCLUDED_ANCESTORS,
-    protectedSelector: COVERAGE_PROTECTED_DESCENDANTS,
+    ...coverageEligibilityContext(page),
     technicalWords: [...SINGLE_TOKEN_TECHNICAL_WORDS],
   };
   await page.waitForFunction(findHoverTargetInPage, argument, {timeout});
@@ -2451,9 +2940,9 @@ async function resolveHoverTarget(page, targetConfig, timeout) {
 
 async function toggleFull(page) {
   // 全文翻译使用产品真实快捷键 Alt+T，而不是点击浮球或构造 KeyboardEvent。
-  await page.keyboard.down('Alt');
-  await page.keyboard.press('t');
-  await page.keyboard.up('Alt');
+  assertPageFocusAllowed(page); await page.keyboard.down('Alt');
+  assertPageFocusAllowed(page); await page.keyboard.press('t');
+  assertPageFocusAllowed(page); await page.keyboard.up('Alt');
 }
 
 async function closeInteractionDialog(page, scenario, timeout, phase) {
@@ -2473,7 +2962,7 @@ async function closeInteractionDialog(page, scenario, timeout, phase) {
     for (let attempt = 1; attempt <= scenario.closeAttempts; attempt += 1) {
       const timing = {attempt, start: nodeStamp()};
       attemptTimings.push(timing);
-      await page.keyboard.press(scenario.closeKey);
+      assertPageFocusAllowed(page); await page.keyboard.press(scenario.closeKey);
       timing.keyDone = nodeStamp();
       try {
         // 检查全部匹配的 dialog 与原 trigger；保留每次时限和真实 Escape 次数。
@@ -2602,15 +3091,17 @@ async function runInteractionScenarios(page, scenarios, timeout, phase) {
     }));
 
     if (scenario.openKey === 'click') {
+      assertPageFocusAllowed(page);
       await page.locator(scenario.triggerSelector).first().click();
     } else {
+      assertPageFocusAllowed(page);
       await page.keyboard.press(scenario.openKey);
     }
     await page.waitForSelector(scenario.dialogSelector, {state: 'visible', timeout});
     const dialogLocator = page.locator(scenario.dialogSelector).first();
     const comboboxLocator = dialogLocator.locator(scenario.comboboxSelector).first();
     await comboboxLocator.waitFor({state: 'visible', timeout});
-    if (scenario.inputText) await comboboxLocator.fill(scenario.inputText);
+    if (scenario.inputText) {assertPageFocusAllowed(page); await comboboxLocator.fill(scenario.inputText);}
     await page.waitForFunction(({dialogSelector, comboboxSelector, listboxSelector, inputText}) => {
       const isVisible = (node) => {
         const rect = node?.getBoundingClientRect();
@@ -2702,13 +3193,33 @@ async function runInteractionScenarios(page, scenarios, timeout, phase) {
 
 async function captureEvidence(page, outputPath) {
   try {
-    await page.screenshot({path: outputPath, fullPage: false, timeout: 10000});
+    await page.screenshot({path: outputPath, fullPage: false, timeout: 10000, caret: 'initial'});
   } catch (error) {
     process.stderr.write(`证据截图失败（不影响 DOM/交互断言）：${error.message}\n`);
   }
 }
 
-async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract, timeout, artifactsDir, prepareClickText) {
+async function captureSourcePartitionLedger(page, configs, controlledProvider) {
+  const partitions = configs.filter(config => config.sourcePartition);
+  if (!partitions.length) return null;
+  if (typeof controlledProvider?.captureSourcePartitions !== 'function' ||
+      typeof controlledProvider?.assertSourcePartitions !== 'function') {
+    throw new Error('sourcePartition 完整正文契约必须使用支持来源 ledger 的 --controlled-provider');
+  }
+  const ledger = await controlledProvider.captureSourcePartitions(page, partitions);
+  if (!ledger || typeof ledger !== 'object') throw new Error('sourcePartition 未捕获有效的原生正文基线 ledger');
+  return ledger;
+}
+
+async function verifySourcePartitionLedger(page, ledger, controlledProvider, phase, restored = false) {
+  if (ledger === null) return undefined;
+  if (!ledger || typeof controlledProvider?.assertSourcePartitions !== 'function') {
+    throw new Error(`${phase} sourcePartition 原生正文 ledger 或校验器缺失`);
+  }
+  return controlledProvider.assertSourcePartitions(page, ledger, phase, {restored});
+}
+
+async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract, timeout, artifactsDir, prepareClickText, controlledProvider) {
   const initialUrl = page.url();
   const results = [];
 
@@ -2723,9 +3234,13 @@ async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract,
     const target = targets.nth(runtimeTargetConfig.index);
     const counts = [];
     const neighborCounts = [];
+    const hoverTextPoints = [];
+    const sourcePartitionEvidence = [];
+    const sourcePartitionLedger = await captureSourcePartitionLedger(page, [runtimeTargetConfig], controlledProvider);
 
     for (const expected of [1, 0, 1]) {
-      await toggleHover(page, target, runtimeTargetConfig, expected, timeout, counts.length + 1, prepareClickText);
+      const point = await toggleHover(page, target, runtimeTargetConfig, expected, timeout, counts.length + 1, prepareClickText);
+      if (runtimeTargetConfig.textIncludes?.length) hoverTextPoints.push(point);
       counts.push(await target.locator('.fluent-read-bilingual-content').count());
       const neighborCount = await targets.evaluateAll((nodes, activeIndex) => nodes.reduce((count, node, index) =>
         count + (index === activeIndex ? 0 : node.querySelectorAll('.fluent-read-bilingual-content').length), 0), runtimeTargetConfig.index);
@@ -2741,7 +3256,10 @@ async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract,
         initialUrl,
         `${targetConfig.name} 悬浮第 ${counts.length} 次切换`,
       );
+      if (expected === 1 && controlledProvider) await controlledProvider.assertPage(page, `${targetConfig.name} 悬浮第 ${counts.length} 次切换`);
       if (expected === 0) await assertRequiredRestored(page, pageContract, `${targetConfig.name} 悬浮恢复`);
+      if (sourcePartitionLedger) sourcePartitionEvidence.push(await verifySourcePartitionLedger(page,
+        sourcePartitionLedger, controlledProvider, `${targetConfig.name} 悬浮第 ${counts.length} 次切换`, expected === 0));
       if (artifactsDir && expected === 1) {
         const suffix = counts.length === 1 ? 'first' : 'final';
         await captureEvidence(page, path.join(artifactsDir, `hover-${targetNumber + 1}-${targetConfig.name}-${suffix}.png`));
@@ -2760,6 +3278,8 @@ async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract,
       counts,
       neighborCounts,
       translationText,
+      ...(hoverTextPoints.length ? {hoverTextPoints} : {}),
+      ...(sourcePartitionLedger ? {sourcePartitionEvidence} : {}),
     });
 
     // 为下一个语义类型清场，避免前一个 H1 的译文让全局 wrapper 计数
@@ -2768,6 +3288,8 @@ async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract,
       await toggleHover(page, target, runtimeTargetConfig, 0, timeout, 4, prepareClickText);
       await assertWrapperUniqueness(page, 0, `${targetConfig.name} 悬浮目标清场`);
       await assertRequiredRestored(page, pageContract, `${targetConfig.name} 悬浮目标清场`);
+      if (sourcePartitionLedger) sourcePartitionEvidence.push(await verifySourcePartitionLedger(page,
+        sourcePartitionLedger, controlledProvider, `${targetConfig.name} 悬浮目标清场`, true));
     }
   }
 
@@ -2777,6 +3299,91 @@ async function runHoverCase(page, hoverTargets, requiredSelectors, pageContract,
     neighborCounts: results[0]?.neighborCounts || [],
     translationText: results[0]?.translationText || '',
   };
+}
+
+// Read-only failure evidence: target geometry/occluders and visible modal candidates distinguish
+// a deferred background page from a missing candidate without changing either completion contract.
+function readFullPageFailureSnapshotInPage(targetSelector) {
+  const targetNode = document.querySelector(targetSelector);
+  const describe = (node, includeHtml = true) => {
+    if (!node) return null;
+    let style;
+    try {style = getComputedStyle(node);} catch {style = null;}
+    const rect = node.getBoundingClientRect();
+    return {tag: node.tagName, id: node.id || '', className: String(node.className || ''),
+      role: node.getAttribute('role'), ariaModal: node.getAttribute('aria-modal'),
+      ariaHidden: node.getAttribute('aria-hidden'), inert: node.hasAttribute('inert'),
+      translate: node.getAttribute('translate'), contenteditable: node.getAttribute('contenteditable'),
+      rect: {left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height},
+      style: style ? {display: style.display, visibility: style.visibility, opacity: style.opacity,
+        position: style.position, zIndex: style.zIndex, overflow: style.overflow, overflowY: style.overflowY,
+        pointerEvents: style.pointerEvents} : null,
+      html: includeHtml ? node.outerHTML.slice(0, 4000) : undefined};
+  };
+  const visible = (node) => {
+    const rect = node.getBoundingClientRect();
+    let style;try {style = getComputedStyle(node);} catch {style = null;}
+    return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 &&
+      rect.left < innerWidth && rect.top < innerHeight && style?.display !== 'none' &&
+      style?.visibility !== 'hidden' && style?.visibility !== 'collapse' && style?.opacity !== '0';
+  };
+  const targetAncestors = [];
+  for (let node = targetNode; node && targetAncestors.length < 12; node = node.parentElement) targetAncestors.push(describe(node, node === targetNode));
+  const modalNodes = [...document.querySelectorAll('[role="dialog"],[role="alertdialog"],dialog,.modal,.ant-modal,.el-dialog')].filter(visible);
+  const maskNodes = [...document.querySelectorAll('[class*="overlay" i],[class*="backdrop" i],[class*="mask" i]')].filter(visible);
+  const targetRect = targetNode?.getBoundingClientRect();
+  const point = targetRect && {x: Math.max(0, Math.min(innerWidth - 1, targetRect.left + targetRect.width / 2)),
+    y: Math.max(0, Math.min(innerHeight - 1, targetRect.top + targetRect.height / 2))};
+  return {
+    status: 'available', capturedAt: Date.now(), snapshotPhase: 'after-readiness-failure',
+    totalBilingual: document.querySelectorAll('.fluent-read-bilingual-content').length,
+    targetText: targetNode?.textContent?.trim() || '',
+    targetBilingual: targetNode?.querySelectorAll('.fluent-read-bilingual-content').length || 0,
+    targetLoading: targetNode?.querySelectorAll('.fluent-read-loading').length || 0,
+    targetRetry: targetNode?.querySelectorAll('.fluent-read-retry-wrapper').length || 0,
+    translatedNodes: [...document.querySelectorAll('.fluent-read-bilingual-content')].slice(0, 32).map((node) => ({
+      text: node.textContent?.trim().slice(0, 2000) || '', parent: node.parentElement?.outerHTML.slice(0, 500) || ''})),
+    bodyText: (document.body?.innerText || '').slice(0, 1000), activeElement: document.activeElement?.outerHTML.slice(0, 500),
+    targetAncestors, viewport: {width: innerWidth, height: innerHeight},
+    targetPoint: point || null,
+    pointStack: point && typeof document.elementsFromPoint === 'function'
+      ? document.elementsFromPoint(point.x, point.y).slice(0, 8).map(node => describe(node)) : [],
+    visibleModals: modalNodes.slice(0, 16).map(node => ({...describe(node), containsTarget: node.contains(targetNode),
+      containsActive: node.contains(document.activeElement), text: node.textContent?.trim().slice(0, 2000)})),
+    visibleMasks: maskNodes.slice(0, 16).map(node => describe(node)),
+    visibleButtons: [...document.querySelectorAll('button,[role="button"]')].filter(visible).slice(0, 32)
+      .map(node => ({...describe(node), text: node.textContent?.trim().slice(0, 100)})),
+    truncated: {modals: modalNodes.length > 16, masks: maskNodes.length > 16},
+  };
+}
+
+function readSanitizedFailureDomInPage() {
+  const snapshotDocument = document.cloneNode(false);
+  const clone = snapshotDocument.importNode(document.documentElement, true);
+  clone.querySelectorAll('script,noscript,style').forEach(node => node.remove());
+  clone.querySelectorAll('input').forEach(node => node.removeAttribute('value'));
+  clone.querySelectorAll('textarea').forEach(node => {node.textContent = '';});
+  for (const node of [clone, ...clone.querySelectorAll('*')]) {
+    for (const attribute of [...node.attributes]) {
+      if (/nonce|csrf|token/iu.test(attribute.name)) node.removeAttribute(attribute.name);
+    }
+  }
+  return '<!doctype html>\n' + clone.outerHTML;
+}
+
+async function completeFullPageScope({page, timeout, scrollContainer, selector, verifyUnchanged, waitForTarget,
+  fullPageScope = 'finite-page'}, actions = {scrollAndWaitFullPage, settleCoverageByReveal,
+  revealFullPageTarget, waitForTranslationIdle, observeCoverage}) {
+  if (fullPageScope === 'finite-page') {
+    return actions.scrollAndWaitFullPage(page, timeout, scrollContainer, selector, verifyUnchanged, waitForTarget);
+  }
+  if (fullPageScope !== 'initial-corpus') throw new Error(`Unknown full-page scope: ${fullPageScope}`);
+  // 无限信息流没有终点。逐个暴露覆盖选择器中本轮已冻结的初始正文，每个 owner 仍须严格完成。
+  await actions.settleCoverageByReveal(page, timeout, '本轮已载入正文覆盖收敛', 0, verifyUnchanged);
+  await actions.revealFullPageTarget(page, selector);
+  await waitForTarget();
+  await actions.waitForTranslationIdle(page, timeout, '本轮已载入正文回到目标后', 0);
+  await actions.observeCoverage(page);
 }
 
 async function runFullTranslationPass(context, pass) {
@@ -2790,11 +3397,14 @@ async function runFullTranslationPass(context, pass) {
     interactionScenarios,
     controlSelector,
     scrollContainer,
+    fullPageScope = 'finite-page',
     timeout,
     artifactsDir,
     initialUrl,
     readCompletion,
     previousCompletionSessionId,
+    controlledProvider,
+    sourcePartitionLedger = null,
   } = context;
   const first = pass === 'first';
   const phase = first ? '全文首次翻译' : '全文再次翻译';
@@ -2824,35 +3434,16 @@ async function runFullTranslationPass(context, pass) {
   } catch (error) {
     let diagnostics = {status: 'unavailable', reason: 'target-snapshot-unavailable'};
     try {
-      diagnostics = await completionOperation(Date.now() + 2000, () => page.evaluate((targetSelector) => {
-        const targetNode = document.querySelector(targetSelector);
-        return {
-          status: 'available', capturedAt: Date.now(), snapshotPhase: 'after-readiness-failure',
-          totalBilingual: document.querySelectorAll('.fluent-read-bilingual-content').length,
-          targetText: targetNode?.textContent?.trim() || '',
-          targetBilingual: targetNode?.querySelectorAll('.fluent-read-bilingual-content').length || 0,
-          targetLoading: targetNode?.querySelectorAll('.fluent-read-loading').length || 0,
-          targetRetry: targetNode?.querySelectorAll('.fluent-read-retry-wrapper').length || 0,
-          translatedNodes: [...document.querySelectorAll('.fluent-read-bilingual-content')].map((node) => ({
-            text: node.textContent?.trim() || '',
-            parent: node.parentElement?.outerHTML.slice(0, 500) || '',
-          })),
-          bodyText: (document.body?.innerText || '').slice(0, 1000),
-          activeElement: document.activeElement?.outerHTML.slice(0, 500),
-          targetAncestors: (() => {const values = []; let node = targetNode; while (node && values.length < 8) {
-            values.push({tag: node.tagName, className: node.className, translate: node.getAttribute('translate'),
-              contenteditable: node.getAttribute('contenteditable')}); node = node.parentElement;
-          } return values;})(),
-        };
-      }, selector));
+      diagnostics = await completionOperation(Date.now() + 2000, () => page.evaluate(readFullPageFailureSnapshotInPage, selector));
+      if (artifactsDir) fs.writeFileSync(path.join(artifactsDir, `full-${pass}-readiness-failure.json`), JSON.stringify(diagnostics, null, 2));
     } catch { /* 保存原始 deadline 失败；无响应 renderer 不能阻止错误传播。 */ }
     throw new Error(`${error.message}\n全文 case 诊断：${JSON.stringify({phase, completionIdentity,
       readiness: error.readinessDiagnostic || {observationStatus: 'unavailable'}, ...diagnostics})}`, {cause: error});
   }
 
   const target = targetReadiness.target;
-  if (first) reportProgress(`首次目标已完成 (${targetReadiness.completion})，开始滚动页面主滚动面`);
-  await scrollAndWaitFullPage(page, timeout, scrollContainer, selector, verifyUnchanged, waitForTarget);
+  if (first) reportProgress(`首次目标已完成 (${targetReadiness.completion})，验证 ${fullPageScope} 正文范围`);
+  await completeFullPageScope({page, timeout, scrollContainer, selector, verifyUnchanged, waitForTarget, fullPageScope});
   await verifyUnchanged();
   const pageState = await readFullPageState(
     page,
@@ -2891,7 +3482,10 @@ async function runFullTranslationPass(context, pass) {
     await captureEvidence(page, path.join(artifactsDir,
       first ? 'full-first-translation.png' : 'full-final-translation.png'));
   }
-  return {target, pageState, coverage, interactions, completionIdentity, targetReadiness, finalTargetReadiness};
+  const controlledAttribution = controlledProvider ? await controlledProvider.assertPage(page, phase) : undefined;
+  const sourcePartitions = await verifySourcePartitionLedger(page, sourcePartitionLedger, controlledProvider, phase);
+  return {target, pageState, coverage, interactions, completionIdentity, targetReadiness, finalTargetReadiness,
+    controlledAttribution, sourcePartitions};
 }
 
 async function runFullCase(
@@ -2908,6 +3502,8 @@ async function runFullCase(
   timeout,
   artifactsDir,
   readCompletion,
+  controlledProvider,
+  fullPageScope = 'finite-page',
 ) {
   const initialUrl = page.url();
   const baselineInteractionScenarios = await runInteractionScenarios(
@@ -2918,7 +3514,8 @@ async function runFullCase(
   );
   const runtimeCoverageRules = withMandatoryHeadingCoverage(coverageRules,
     skipUnscopedH1Coverage ||
-    pageContract.forbiddenState.some(({selector}) => /(?:^|[\s>+~,(])h1\b/iu.test(selector)));
+    pageContract.forbiddenState.some(({selector}) => /(?:^|[\s>+~,(])h1\b/iu.test(selector)), fullPageScope);
+  const sourcePartitionLedger = await captureSourcePartitionLedger(page, runtimeCoverageRules, controlledProvider);
   await installCoverageTracker(page, runtimeCoverageRules);
   const passContext = {
     page,
@@ -2930,10 +3527,13 @@ async function runFullCase(
     interactionScenarios,
     controlSelector,
     scrollContainer,
+    fullPageScope,
     timeout,
     artifactsDir,
     initialUrl,
     readCompletion,
+    controlledProvider,
+    sourcePartitionLedger,
   };
   const firstPass = await runFullTranslationPass(passContext, 'first');
   passContext.previousCompletionSessionId = firstPass.completionIdentity.sessionId;
@@ -2959,11 +3559,19 @@ async function runFullCase(
   );
   const restoredCoverage = await readCoverageRestoration(page);
   assertCoverageRestoration(restoredCoverage, '全文恢复');
+  const restoredSourcePartitions = await verifySourcePartitionLedger(page, sourcePartitionLedger,
+    controlledProvider, '全文恢复', true);
   await resetCoverageTracker(page);
   reportProgress('全文恢复完成');
 
   const secondPass = await runFullTranslationPass(passContext, 'second');
   return {
+    fullPageScope,
+    fullPageBoundary: fullPageScope === 'initial-corpus'
+      ? 'all eligible nodes matching configured coverage selectors loaded at the start of each translation pass; does not claim the end of an infinite feed'
+      : 'finite page through its stable bottom',
+    controlledAttribution: [firstPass.controlledAttribution, secondPass.controlledAttribution],
+    ...(sourcePartitionLedger ? {sourcePartitions: [firstPass.sourcePartitions, secondPass.sourcePartitions], restoredSourcePartitions} : {}),
     translated: firstPass.target,
     translatedPage: firstPass.pageState,
     coverage: firstPass.coverage,
@@ -2986,15 +3594,25 @@ async function runFullCase(
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  const {diagnostics: runtimeDiagnostics, redact} = loadRuntimeDiagnostics(args.runtimeDiagnosticsHelper);
   const extensionDir = path.resolve(args.extensionDir);
   if (!fs.existsSync(path.join(extensionDir, 'manifest.json'))) throw new Error('插件 manifest.json 不存在');
-  assertFreshProductionExtension(extensionDir);
+  const buildFreshness = assertFreshProductionExtension(extensionDir);
+  const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  const artifactBinding = {manifest: sha256(path.join(extensionDir, 'manifest.json')),
+    content: sha256(path.join(extensionDir, 'content-scripts/content.js')),
+    background: sha256(path.join(extensionDir, 'background.js')),
+    source: Object.fromEntries(['runtime.ts', 'mutationObservation.ts'].map(file =>
+      [file, sha256(path.join(__dirname, '../src/features/full-page-translation/content', file))]))};
   if (!fs.existsSync(args.browserPath)) throw new Error(`浏览器不存在：${args.browserPath}`);
 
-  const artifactsDir = args.artifactsDir ? path.resolve(args.artifactsDir) : null;
-  if (artifactsDir) fs.mkdirSync(artifactsDir, {recursive: true});
+  const artifactsDir = args.artifactsDir ? path.resolve(args.artifactsDir)
+    : fs.mkdtempSync(path.join(os.tmpdir(), 'fluentread-site-evidence-'));
+  fs.mkdirSync(artifactsDir, {recursive: true});
   const {chromium} = loadPlaywright(args.playwrightRoot);
   const focusSafeHelper = loadFocusSafeHelper(args.focusSafeHelper);
+  const monitorAvailable = typeof focusSafeHelper?.startFocusEventMonitor === 'function';
+  const focusGuard = args.background ? createSiteFocusGuard(focusSafeHelper?.startFocusEventMonitor) : null;
   const viewport = {width: 1280, height: 900};
   const browserArgs = [
     `--disable-extensions-except=${extensionDir}`,
@@ -3002,12 +3620,27 @@ async function main() {
     '--no-first-run',
     '--no-default-browser-check',
   ];
-  const createPage = focusSafeHelper
+  const newPage = focusSafeHelper
     ? focusSafeHelper.newPageWithoutForeground
     : async (targetContext) => targetContext.newPage();
-  const activateTab = focusSafeHelper
-    ? focusSafeHelper.activateExtensionTabWithoutForeground
-    : async () => undefined;
+  const createPage = async (...parameters) => {
+    focusGuard?.mark('page-create-start');
+    focusGuard?.check();
+    const target = await newPage(...parameters);
+    if (focusGuard) pageFocusGuards.set(target, focusGuard);
+    focusGuard?.check();
+    await runtimeDiagnostics.attachPage(target, 'site-test-page');
+    focusGuard?.check();
+    focusGuard?.mark('page-create-complete');
+    return target;
+  };
+  const activateTab = async (...parameters) => {
+    focusGuard?.mark('tab-activate-start');
+    focusGuard?.check();
+    if (focusSafeHelper) await focusSafeHelper.activateExtensionTabWithoutForeground(...parameters);
+    focusGuard?.check();
+    focusGuard?.mark('tab-activate-complete');
+  };
   const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fluentread-site-case-'));
   let context;
   let launched;
@@ -3017,9 +3650,21 @@ async function main() {
   let page;
   let extensionId;
   let diagnosticService = args.service;
+  let controlledProvider;
+  let promotionPreparation;
+  let facebookPreparation;
+  let failureDomEvidence;
+  let runtimeStarted = false;
   const attemptStartedAt = Date.now();
   try {
     assertDedicatedProfile(profileDir);
+    if (focusGuard && process.platform !== 'darwin') {
+      throw Object.assign(new Error('后台焦点事件监控目前只支持 macOS；本次未启动浏览器'), {code: 'FOCUS_SAFETY_VIOLATION'});
+    }
+    if (focusGuard && !monitorAvailable) {
+      throw Object.assign(new Error('后台模式必须支持原生焦点事件监控，不能仅依赖前台采样'), {code: 'FOCUS_SAFETY_VIOLATION'});
+    }
+    if (focusGuard) {await focusGuard.start(); focusGuard.mark('launch'); focusGuard.check();}
     if (focusSafeHelper) {
       launchAttempted = true;
       launched = await focusSafeHelper.launchFocusSafePersistentContext({
@@ -3033,6 +3678,14 @@ async function main() {
         timeout: args.timeout,
       });
       guardBrowserClose(launched, profileDir);
+      if (focusGuard) {
+        focusGuard.register(launched);
+        let browserPid;
+        try {browserPid = await getGuardedBrowserPid(launched);}
+        catch (error) {focusGuard.fail(error); throw focusGuard.failure;}
+        focusGuard.bind(launched, browserPid);
+        focusGuard.mark('initialization');
+      }
     } else {
       launchAttempted = true;
       context = await chromium.launchPersistentContext(profileDir, {
@@ -3055,8 +3708,21 @@ async function main() {
       };
     }
     context = launched.context;
+    focusGuard?.check();
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/initialization`);
+    await runtimeDiagnostics.start(context);
+    runtimeStarted = true;
+    focusGuard?.check();
+    const initialWorker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker', {timeout: args.timeout});
+    extensionId = new URL(initialWorker.url()).host;
+    runtimeDiagnostics.setExtensionId(extensionId);
+    if (args.controlledProvider) controlledProvider = await installControlledProvider(context, createPage, args.timeout);
     page = await createPage(context, args.timeout);
-    await page.goto(args.url, {waitUntil: 'domcontentloaded', timeout: args.timeout});
+    await runtimeDiagnostics.attachPage(page, 'translation-page');
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/navigation`);
+    focusGuard?.mark('navigation'); focusGuard?.check();
+    const navigation = await page.goto(args.url, {waitUntil: 'domcontentloaded', timeout: args.timeout});
+    if (navigation && navigation.status() >= 400) throw new Error(`External site returned HTTP ${navigation.status()}: ${args.url}`);
     await activateTab(context, page, args.timeout);
     reportProgress(`${args.case}/${args.mode} 页面已加载`);
     // 当前 main 默认关闭悬浮球，但 Control/Alt+T 快捷键仍独立工作；
@@ -3068,6 +3734,7 @@ async function main() {
       const appeared = await button.waitFor({state: 'visible', timeout: Math.min(args.timeout, 10000)})
         .then(() => true, () => false);
       if (appeared) {
+        assertPageFocusAllowed(page);
         await button.click({timeout: args.timeout});
         await button.waitFor({state: 'hidden', timeout: args.timeout});
         reportProgress(`已关闭站点对话框：${args.prepareClickText}`);
@@ -3076,8 +3743,30 @@ async function main() {
     if (args.prepareScrollSelector) {
       // Some landing pages reveal existing DOM only after it enters the viewport.
       // Use normal browser scrolling; never remove the site's hidden markers.
+      assertPageFocusAllowed(page);
       await page.locator(args.prepareScrollSelector).first().scrollIntoViewIfNeeded({timeout: args.timeout});
       reportProgress(`页面预滚动已完成：${args.prepareScrollSelector}`);
+    }
+    if (args.prepareDismissiblePromotion) {
+      const {dialogSelector, waitForDialogMs} = args.prepareDismissiblePromotion;
+      if (waitForDialogMs) {
+        // 有些可选弹窗由异步脚本在页面准备后挂载。
+        await page.locator(dialogSelector).first().waitFor({state: 'visible', timeout: Math.min(waitForDialogMs, args.timeout)})
+          .catch(error => {if (error.name !== 'TimeoutError') throw error;});
+      } else {
+        await page.waitForTimeout(Math.min(2000, args.timeout));
+      }
+      runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/dismissible-promotion`);
+      promotionPreparation = {status: 'started', ...args.prepareDismissiblePromotion};
+      promotionPreparation = await prepareDismissiblePromotion(page, args.prepareDismissiblePromotion, args.url, args.timeout);
+      reportProgress(`公开推广准备完成：${promotionPreparation.status}`);
+    }
+    if (args.prepareFacebookPublicPost) {
+      runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/facebook-public-post-preparation`);
+      facebookPreparation = {status: 'started'};
+      facebookPreparation = await prepareFacebookPublicPost(page, args.url, args.timeout, () => assertPageFocusAllowed(page));
+      await authorizeFacebookReadingDialog(page, facebookPreparation);
+      reportProgress(`Facebook 公开帖子准备完成：${facebookPreparation.status}，绑定原生正文 dialog`);
     }
     const hostMathRendering = await waitForHostMathRendering(page, args.timeout);
     await waitForStableTarget(page, args.selector, args.timeout);
@@ -3102,7 +3791,9 @@ async function main() {
       args.mutableForbiddenSelectors,
     );
     const configResult = await readConfig(context, args.timeout, createPage, activateTab);
+    focusGuard?.check();
     extensionId = configResult.extensionId;
+    runtimeDiagnostics.setExtensionId(extensionId);
     diagnosticService = configResult.config?.service || args.service;
     // 读取配置时会临时激活 popup 页；关闭它后显式还原目标页，确保真实快捷键发给站点标签页。
     await activateTab(context, page, args.timeout);
@@ -3113,6 +3804,8 @@ async function main() {
     if (args.mode === 'hover' && config.hotkey !== expectedHotkey) throw new Error(`悬浮快捷键不符：${config.hotkey}`);
     if (args.mode === 'full' && config.floatingBallHotkey !== expectedHotkey) throw new Error(`全文快捷键不符：${config.floatingBallHotkey}`);
     reportProgress(`${args.case}/${args.mode} 页面 contract 与扩展配置已就绪`);
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/translate-restore-retranslate`);
+    focusGuard?.mark('translate-restore-retranslate'); focusGuard?.check();
 
     const result = args.mode === 'hover'
       ? await runHoverCase(
@@ -3123,6 +3816,7 @@ async function main() {
         args.timeout,
         artifactsDir,
         args.case === 'roadmap-frontend' ? args.prepareClickText : undefined,
+        controlledProvider,
       )
       : await runFullCase(
         page,
@@ -3138,12 +3832,28 @@ async function main() {
         args.timeout,
         artifactsDir,
         await createUnchangedCompletionReader(context, page, args.timeout),
+        controlledProvider,
+        args.fullPageScope,
       );
+    focusGuard?.check();
+    const nativeComments = args.stabilityProbes && args.case === 'hacker-news-8863'
+      ? await runNativeCommentToggle({page, timeout: args.timeout, artifactsDir, checkFocus: () => assertPageFocusAllowed(page)}) : undefined;
+    const stability = args.stabilityProbes
+      ? await runStabilityProbes({page, selector: args.selector, timeout: args.timeout, artifactsDir, toggleFull, observeMs: 5000, checkFocus: () => assertPageFocusAllowed(page)}) : undefined;
+    focusGuard?.check();
     output = {
       ok: true,
+      artifactsDir,
+      artifactBinding,
+      buildFreshness,
+      stability,
+      nativeComments,
+      providerEvidence: controlledProvider ? await controlledProvider.snapshot() : {mode: 'live-provider'},
       case: args.case,
       mode: args.mode,
       hostMathRendering,
+      promotionPreparation,
+      facebookPreparation,
       url: args.url,
       selector: args.selector,
       requiredSelectors: args.requiredSelectors,
@@ -3169,6 +3879,10 @@ async function main() {
     };
   } catch (error) {
     primaryError = error;
+    if (focusGuard && monitorAvailable && process.platform === 'darwin' && error?.code === 'FOCUS_SAFETY_VIOLATION') focusGuard.fail(error);
+    if (focusGuard?.failure) throw focusGuard.failure;
+    if (focusGuard && (!monitorAvailable || process.platform !== 'darwin')) throw error;
+    runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/failure-evidence`);
     // 只在失败后、既有清理前旁路取证；共用最多 2 秒，不修改测试/provider 预算或重试。
     const budgetMs = Math.min(args.timeout, 2000);
     const startedAt = Date.now();
@@ -3191,6 +3905,18 @@ async function main() {
       let optionsStage = 'page-selection';
       try {
         if (page && !page.isClosed()) {
+          let failureDom;
+          try {
+            const html = await page.evaluate(readSanitizedFailureDomInPage);
+            if (!expired) {
+              const file = path.join(artifactsDir, 'failure-native-dom.html');
+              fs.writeFileSync(file, html);
+              failureDom = {status: 'saved', path: file,
+                sanitization: 'scripts/styles removed; input values, textarea contents and nonce/csrf/token attributes removed; source DOM unchanged'};
+            }
+          } catch {failureDom = {status: 'unavailable', reason: 'native-dom-read-unavailable'};}
+          if (expired) return;
+          failureDomEvidence = failureDom;
           try {
             const snapshot = await page.evaluate(() => {
               const owned = (name) => `.${name}[data-fr-translation-owned="true"]`;
@@ -3227,7 +3953,7 @@ async function main() {
                 progress, requestSlotCounts: 'unavailable',
               };
             });
-            if (!expired) diagnostics.page = {status: 'available', ...snapshot};
+            if (!expired) diagnostics.page = {status: 'available', ...snapshot, failureDom};
           } catch { if (!expired) diagnostics.page.reason = 'page-read-unavailable'; }
         } else diagnostics.page.reason = 'page-unavailable';
         if (expired) return;
@@ -3356,11 +4082,47 @@ async function main() {
   }
   finally {
     const cleanupErrors = [];
-    let browserClosed = false;
+    try {controlledProvider?.dispose();} catch (error) {cleanupErrors.push(error);}
+    output ||= {ok: false, artifactsDir, case: args.case, mode: args.mode, url: args.url,
+      launchMode: launched?.launchMode, focusPolicy: launched?.focusPolicy, windowPlacement: launched?.windowPlacement};
+    if (promotionPreparation) output.promotionPreparation = promotionPreparation;
+    if (facebookPreparation) output.facebookPreparation = facebookPreparation;
+    if (primaryError) {output.ok = false; output.error = redact(primaryError.message || primaryError);}
+    if (primaryError?.readinessDiagnostic) output.coverageReadinessDiagnostic = primaryError.readinessDiagnostic;
+    if (primaryError?.promotionDiagnostic) output.promotionDiagnostic = primaryError.promotionDiagnostic;
+    if (primaryError?.facebookPreparation) output.facebookPreparation = primaryError.facebookPreparation;
+    if (failureDomEvidence) output.failureNativeDom = failureDomEvidence;
     try {
-      if (launched?.close) {await launched.close(); browserClosed = true;}
+      if (focusGuard?.failure) throw focusGuard.failure;
+      output.unload = await unloadRuntimePage(page, runtimeDiagnostics, `${args.case}/${args.mode}/unload`);
+      if (output.ok && output.unload.status !== 'observed') throw new Error('未观察到目标文档卸载，不能判定本轮通过');
+    }
+    catch (error) {
+      output.unload = {status: 'failed', message: redact(error.message || error)};
+      cleanupErrors.push(error);
+    }
+    try {runtimeDiagnostics.setPhase(`${args.case}/${args.mode}/cleanup`);} catch (error) {cleanupErrors.push(error);}
+    let diagnosticFailures = [];
+    try {diagnosticFailures = await finishRuntimeDiagnostics(runtimeDiagnostics, output, artifactsDir);}
+    catch (error) {cleanupErrors.push(error); output.ok = false;}
+    cleanupErrors.push(...diagnosticFailures.map(({error}) => error));
+    if (!runtimeStarted) {
+      output.runtimeDiagnostics = {...output.runtimeDiagnostics, passed: false, status: 'not-started'};
+    }
+    if (diagnosticFailures.length) output.finalizationErrors = diagnosticFailures.map(({stage, error}) => ({stage, message: redact(error.message || error)}));
+    if (!focusGuard?.failure) try {await releaseFacebookReadingDialog(page);} catch (error) {cleanupErrors.push(error);}
+    let browserClosed = false;
+    focusGuard?.mark('browser-close');
+    try {
+      if (launched?.close) {await (focusGuard?.requestClose() || launched.close()); browserClosed = true;}
       else if (context) {await context.close(); browserClosed = true;}
     } catch (error) {cleanupErrors.push(error);}
+    if (focusGuard) {
+      focusGuard.mark('observer-stop');
+      try {await focusGuard.stop();} catch (error) {cleanupErrors.push(error);}
+      output.focusObservation = focusGuard.snapshot();
+      if (output.focusObservation.status !== 'complete') output.ok = false;
+    } else output.focusObservation = {status: 'not-monitored', reason: 'explicit-headed-mode'};
     try {
       if (browserClosed) fs.rmSync(profileDir, {recursive: true, force: true, maxRetries: 5, retryDelay: 200});
       else if (!launchAttempted) {
@@ -3369,10 +4131,24 @@ async function main() {
         }
       }
     } catch (error) {cleanupErrors.push(error);}
+    output.cleanupConfirmed = browserClosed;
+    try {output.profileRemoved = !fs.existsSync(profileDir);} catch (error) {output.profileRemoved = null; cleanupErrors.push(error);}
+    if (cleanupErrors.length) {
+      output.ok = false;
+      output.cleanupErrors = cleanupErrors.map(error => ({message: redact(error.message || error)}));
+    }
+    try {if (output.runtimeDiagnostics) fs.writeFileSync(path.join(artifactsDir, 'runtime-diagnostics.json'), JSON.stringify(output.runtimeDiagnostics, null, 2));}
+    catch (error) {cleanupErrors.push(error); output.ok = false;}
+    if (cleanupErrors.length) output.cleanupErrors = cleanupErrors.map(error => ({message: redact(error.message || error)}));
+    try {
+      fs.writeFileSync(path.join(artifactsDir, 'result.json'), JSON.stringify(output, null, 2));
+      reportProgress(`证据目录：${artifactsDir}`);
+    } catch (error) {cleanupErrors.push(error); output.ok = false;}
     for (const error of cleanupErrors) {
       process.stderr.write(`Cleanup failed: ${error.stack || error}\n`);
       reportErrorCodes(error, 'cleanup');
     }
+    if (focusGuard?.failure) throw focusGuard.failure;
     if (cleanupErrors.length && !primaryError) throw cleanupErrors[0];
   }
   process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
@@ -3382,15 +4158,27 @@ if (require.main === module) {
   main().catch((error) => {
     process.stderr.write(`${error.stack || error}\n`);
     reportErrorCodes(error, 'terminal');
-    process.exitCode = 1;
+    process.exitCode = siteTestExitCode(error);
   });
 }
 
 module.exports = {
+  parseArgs,
+  captureEvidence,
+  prepareDismissiblePromotion,
+  authorizeFacebookReadingDialog,
+  releaseFacebookReadingDialog,
+  coverageEligibilityContext,
+  readDismissiblePromotionStateInPage,
+  loadRuntimeDiagnostics,
+  finishRuntimeDiagnostics,
+  unloadRuntimePage,
+  completeFullPageScope,
   COVERAGE_EXCLUDED_ANCESTORS,
   COVERAGE_PROTECTED_DESCENDANTS,
   COVERAGE_TRACKER_KEY,
   assertPageContract,
+  assertRequiredRestored,
   assertFreshProductionExtension,
   assertCoverageReport,
   assertCoverageRestoration,
@@ -3401,11 +4189,16 @@ module.exports = {
   readCoverageReport,
   readCoverageStatuses,
   readFullTargetReadiness,
+  readFullPageFailureSnapshotInPage,
+  readSanitizedFailureDomInPage,
   waitForFullTargetReadiness,
   runFullCase,
+  captureSourcePartitionLedger,
+  verifySourcePartitionLedger,
   beginCoverageCompletionPass,
   verifyCoverageUnchanged,
   isNaturalLanguageText,
+  leaveEditingFocusForHover,
   newestFile,
   reconcileForbiddenContractState,
   findHoverTextPointInPage,
@@ -3416,9 +4209,11 @@ module.exports = {
   closeInteractionDialog,
   validateCoverageRevealStatuses,
   waitForCoverageReady,
+  readCoverageReadinessInPage,
   waitForHostMathRendering,
   observeTranslationIdleInPage,
   waitForTranslationIdle,
+  scrollAndWaitFullPage,
   waitForStableTarget,
   withMandatoryHeadingCoverage,
 };

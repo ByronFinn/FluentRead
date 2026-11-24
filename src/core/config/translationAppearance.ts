@@ -2,14 +2,15 @@
  * @file src/core/config/translationAppearance.ts
  * 文件职责：定义网页双语译文的样式预设注册表，以及用户对译文颜色、独立背景、字号和自定义 CSS 声明等外观的微调契约。
  * 主要内容：维护预设的稳定编号、页面类名、旧版分组与设置页分类，并标注预设是否使用线条或底色、是否逐行绘制、是否悬停才显示；提供外观默认值、
- * 存储与导入值归一化、精选色板和既有颜色库的纯函数换算，以及把外观转换为 CSS 声明和页面样式表文本的纯函数，供设置预览与内容脚本共用。
+ * 存储与导入值归一化、精选色板和既有颜色库的纯函数换算，选择颜色预设时仅清理冲突配色，并把外观转换为 CSS 声明和页面样式表文本，供设置预览与内容脚本共用；
+ * 不透明背景或自选纸面底色另提供黑白正文配色，仅供自带纸面的预设使用，其他类别不消费此变量，显式文字颜色仍保留优先级。
  * 模块边界：只处理纯数据与字符串，不访问 DOM、浏览器存储或配置仓库；预设的视觉规则位于 src/ui/styles/translation-display.css，
  * 页面样式表由 content composition root 注入，设置界面只消费这里导出的元数据与声明。
  */
 
-import {inputToRGB, rgbToHex} from '@ctrl/tinycolor';
+import {inputToRGB, readability, rgbToHex} from '@ctrl/tinycolor';
 
-export type TranslationStyleCategory = 'text' | 'line' | 'mark' | 'card' | 'fun';
+export type TranslationStyleCategory = 'text' | 'color' | 'line' | 'mark' | 'card' | 'fun';
 export type TranslationStyleLegacyGroup = 'basic' | 'underline' | 'card' | 'highlight' | 'background' | 'special' | 'pro' | 'transparent' | 'fun';
 
 export interface TranslationStylePreset {
@@ -58,6 +59,7 @@ export const TRANSLATION_STYLE_LEGACY_GROUPS: ReadonlyArray<{readonly value: Tra
 
 export const TRANSLATION_STYLE_CATEGORIES: ReadonlyArray<{readonly value: TranslationStyleCategory; readonly labelKey: string}> = [
     {value: 'text', labelKey: 'settings.translationStyle.category.text'},
+    {value: 'color', labelKey: 'settings.translationStyle.category.color'},
     {value: 'line', labelKey: 'settings.translationStyle.category.line'},
     {value: 'mark', labelKey: 'settings.translationStyle.category.mark'},
     {value: 'card', labelKey: 'settings.translationStyle.category.card'},
@@ -67,7 +69,8 @@ export const TRANSLATION_STYLE_CATEGORIES: ReadonlyArray<{readonly value: Transl
 /**
  * 数组顺序即设置页卡片顺序；旧版下拉按分组内编号排序，已有预设的相对位置保持不变。
  * 24 以后的编号为新增预设，线条类改用 text-decoration，使多行译文逐行带线。
- * 29 以后的预设以网页文字颜色调配线条与底色，浅色和深色网页无需分别适配。
+ * 阅读向预设以网页文字颜色调配线条与底色，卡片与趣味使用独立主题纸面及配套正文；49 至 57 号与三款既有趣味配色单列为“颜色”分类，品牌粉沿用界面品牌源色，与图标保持同一色系。
+ * 58 至 70 号补充卡片与趣味分类，各提供 12 种；新增效果仍共用外观变量，不改变已发布编号与保存的样式。
  */
 export const TRANSLATION_STYLE_PRESETS: readonly TranslationStylePreset[] = [
     {value: 0, className: 'fluent-display-default', label: '朴素模式', legacyGroup: 'basic', category: 'text', usesLine: false, usesFill: false},
@@ -82,6 +85,19 @@ export const TRANSLATION_STYLE_PRESETS: readonly TranslationStylePreset[] = [
     {value: 30, className: 'fluent-display-kaiti', label: '楷体手札', legacyGroup: 'basic', category: 'text', usesLine: false, usesFill: false},
     {value: 31, className: 'fluent-display-airy', label: '宽松行距', legacyGroup: 'basic', category: 'text', usesLine: false, usesFill: false},
     {value: 32, className: 'fluent-display-indent', label: '首行缩进', legacyGroup: 'basic', category: 'text', usesLine: false, usesFill: false},
+
+    {value: 49, className: 'fluent-display-text-green', label: '森林绿', legacyGroup: 'basic', category: 'color', usesLine: false, usesFill: false},
+    {value: 50, className: 'fluent-display-text-blue', label: '澄澈蓝', legacyGroup: 'basic', category: 'color', usesLine: false, usesFill: false},
+    {value: 51, className: 'fluent-display-text-purple', label: '优雅紫', legacyGroup: 'basic', category: 'color', usesLine: false, usesFill: false},
+    {value: 52, className: 'fluent-display-text-orange', label: '暖橙', legacyGroup: 'basic', category: 'color', usesLine: false, usesFill: false},
+    {value: 53, className: 'fluent-display-text-teal', label: '青碧', legacyGroup: 'basic', category: 'color', usesLine: false, usesFill: false},
+    {value: 54, className: 'fluent-display-text-brand', label: 'FluentRead 粉', legacyGroup: 'basic', category: 'color', usesLine: false, usesFill: false},
+    {value: 55, className: 'fluent-display-text-berry', label: '莓果红', legacyGroup: 'basic', category: 'color', usesLine: false, usesFill: false},
+    {value: 56, className: 'fluent-display-text-gold', label: '暖金', legacyGroup: 'basic', category: 'color', usesLine: false, usesFill: false},
+    {value: 57, className: 'fluent-display-text-graphite', label: '石墨灰', legacyGroup: 'basic', category: 'color', usesLine: false, usesFill: false},
+    {value: 40, className: 'fluent-display-gradient-text', label: '渐变文字', legacyGroup: 'fun', category: 'color', usesLine: false, usesFill: false},
+    {value: 41, className: 'fluent-display-neon', label: '霓虹微光', legacyGroup: 'fun', category: 'color', usesLine: false, usesFill: false},
+    {value: 42, className: 'fluent-display-rainbow-marker', label: '彩虹荧光', legacyGroup: 'fun', category: 'color', usesLine: false, usesFill: false, inlineText: true},
 
     {value: 4, className: 'fluent-display-solid-underline', label: '蓝色实线', legacyGroup: 'underline', category: 'line', usesLine: true, usesFill: false},
     {value: 5, className: 'fluent-display-dot-underline', label: '优雅虚线', legacyGroup: 'underline', category: 'line', usesLine: true, usesFill: false},
@@ -113,16 +129,26 @@ export const TRANSLATION_STYLE_PRESETS: readonly TranslationStylePreset[] = [
     {value: 9, className: 'fluent-display-paper', label: '纸张卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: false},
     {value: 20, className: 'fluent-display-tech', label: '代码风格', legacyGroup: 'pro', category: 'card', usesLine: true, usesFill: false},
     {value: 39, className: 'fluent-display-glass', label: '毛玻璃卡片', legacyGroup: 'card', category: 'card', usesLine: false, usesFill: true},
+    {value: 58, className: 'fluent-display-card-outline', label: '细边卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: true},
+    {value: 59, className: 'fluent-display-card-accent', label: '侧栏卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: true},
+    {value: 60, className: 'fluent-display-card-double', label: '信笺卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: true},
+    {value: 61, className: 'fluent-display-card-folded', label: '折角卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: true},
+    {value: 62, className: 'fluent-display-card-floating', label: '悬浮卡片', legacyGroup: 'card', category: 'card', usesLine: false, usesFill: true},
+    {value: 63, className: 'fluent-display-card-stacked', label: '叠层卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: true},
+    {value: 64, className: 'fluent-display-card-dashed', label: '虚线卡片', legacyGroup: 'card', category: 'card', usesLine: true, usesFill: true},
 
-    {value: 40, className: 'fluent-display-gradient-text', label: '渐变文字', legacyGroup: 'fun', category: 'fun', usesLine: false, usesFill: false},
-    {value: 41, className: 'fluent-display-neon', label: '霓虹微光', legacyGroup: 'fun', category: 'fun', usesLine: false, usesFill: false},
-    {value: 42, className: 'fluent-display-rainbow-marker', label: '彩虹荧光', legacyGroup: 'fun', category: 'fun', usesLine: false, usesFill: false, inlineText: true},
     {value: 43, className: 'fluent-display-rainbow-underline', label: '彩虹底线', legacyGroup: 'fun', category: 'fun', usesLine: false, usesFill: false, inlineText: true},
-    {value: 44, className: 'fluent-display-hand-drawn', label: '手绘圈注', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: false},
+    {value: 44, className: 'fluent-display-hand-drawn', label: '手绘圈注', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: true},
     {value: 45, className: 'fluent-display-sticky-note', label: '便利贴', legacyGroup: 'fun', category: 'fun', usesLine: false, usesFill: true},
     {value: 46, className: 'fluent-display-chat-bubble', label: '对话气泡', legacyGroup: 'fun', category: 'fun', usesLine: false, usesFill: true},
     {value: 47, className: 'fluent-display-terminal', label: '终端风格', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: false},
     {value: 48, className: 'fluent-display-spoiler', label: '黑幕遮挡', legacyGroup: 'fun', category: 'fun', usesLine: false, usesFill: false, inlineText: true, revealOnHover: true},
+    {value: 65, className: 'fluent-display-tape-note', label: '胶带手账', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: true},
+    {value: 66, className: 'fluent-display-postage', label: '邮票边框', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: true},
+    {value: 67, className: 'fluent-display-dot-note', label: '波点手账', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: true},
+    {value: 68, className: 'fluent-display-grid-note', label: '方格笔记', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: true},
+    {value: 69, className: 'fluent-display-spotlight', label: '星光夜读', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: true},
+    {value: 70, className: 'fluent-display-bookmark', label: '书签丝带', legacyGroup: 'fun', category: 'fun', usesLine: true, usesFill: true},
 ];
 
 export function getTranslationStylePreset(value: unknown): TranslationStylePreset | undefined {
@@ -239,7 +265,7 @@ function swatch(id: string, value: string): TranslationColorSwatch {
     return {id, value, labelKey: `settings.translationStyle.colors.${id}`};
 }
 
-/** 前八种适合浅色网页，最后两种浅色适合深色网页。 */
+/** 常用深色与品牌粉在前，最后两种浅色适合深色网页；品牌粉与 --fr-color-brand 源色一致，呼应图标的粉色系。 */
 export const TRANSLATION_TEXT_COLOR_SWATCHES: readonly TranslationColorSwatch[] = [
     swatch('ink', '#1f2937'),
     swatch('slate', '#475569'),
@@ -249,6 +275,7 @@ export const TRANSLATION_TEXT_COLOR_SWATCHES: readonly TranslationColorSwatch[] 
     swatch('amber', '#b45309'),
     swatch('rose', '#be123c'),
     swatch('violet', '#6d28d9'),
+    swatch('brand', '#ef4776'),
     swatch('snow', '#f1f5f9'),
     swatch('gold', '#fde68a'),
 ];
@@ -294,6 +321,7 @@ export const TRANSLATION_APPEARANCE_VARIABLES = {
     fillFaint: '--fluent-read-translation-fill-faint',
     surface: '--fluent-read-translation-surface',
     surfaceDeep: '--fluent-read-translation-surface-deep',
+    surfaceInk: '--fluent-read-translation-surface-ink',
 } as const;
 
 /** 页面样式表只命中 FluentRead 自建且拥有的双语译文容器，悬浮翻译与全文翻译共用。 */
@@ -363,6 +391,28 @@ export function parseTranslationCustomCss(value: unknown, allowedProperties: Rea
     return {declarations, invalidCount};
 }
 
+/**
+ * 颜色预设需要恢复自身文字配色；只剔除安全解析器确认的冲突声明，保留其余原始 CSS 片段和排版微调。
+ * text-fill 仅在清理旧输入时识别，不加入实际可执行 CSS 白名单；渐变的背景与霓虹的阴影也是各自的配色来源。
+ */
+export function getTranslationPresetAppearance(style: unknown, value: unknown): TranslationAppearance {
+    const appearance = normalizeTranslationAppearance(value);
+    if (getTranslationStylePreset(style)?.category !== 'color') return appearance;
+    const conflicts = new Set(['color', 'text-fill-color', '-webkit-text-fill-color']);
+    if (style === 40) {
+        conflicts.add('background');
+        conflicts.add('background-color');
+        appearance.backgroundColor = '';
+    }
+    if (style === 41) conflicts.add('text-shadow');
+    const recognizedProperties = new Set([...TRANSLATION_CUSTOM_CSS_PROPERTIES, 'text-fill-color', '-webkit-text-fill-color']);
+    appearance.textColor = '';
+    appearance.customCss = appearance.customCss.split(';').filter((part) =>
+        !parseTranslationCustomCss(part, recognizedProperties).declarations.some(({property}) => conflicts.has(property)),
+    ).join(';');
+    return appearance;
+}
+
 function normalizeStep(value: unknown, fallback: number, range: {readonly min: number; readonly max: number; readonly step: number}): number {
     const number = typeof value === 'number'
         ? value
@@ -418,6 +468,34 @@ export interface TranslationAppearanceDeclaration {
     readonly value: string;
 }
 
+/** 只对能够确定的纯色纸面配正文；复杂 CSS 保留用户声明，不以旧纯色猜测图层或透明合成。 */
+function getTranslationSurfaceInk(declarations: readonly TranslationAppearanceDeclaration[], fillColor: string): string {
+    let surface = fillColor ? mixWithWhite(fillColor, 0.24) : '';
+    let hasImage = false;
+    for (const {property, value} of declarations) {
+        if (property !== 'background' && property !== 'background-color') continue;
+        const cssValue = value.trim().toLowerCase();
+        // TinyColor 的函数解析较宽松，先约束为完整颜色，避免从渐变或无效尾巴里提取 rgb。
+        const simpleSyntax = /^(?:#[\da-f]{3,8}|[a-z]+|(?:rgba?|hsla?)\([+\-\d\s.,%]+\))$/u.test(cssValue);
+        const color = simpleSyntax ? inputToRGB(cssValue) : null;
+        const alpha = /^(?:rgba?|hsla?)\([^,()]*,[^,()]*,[^,()]*,\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))(%?)\s*\)$/u.exec(cssValue);
+        // CSS 钳制超界 alpha；库的 boundAlpha 会把超界值回退为 1，不能把透明背景误判为不透明。
+        if (color && alpha) color.a = Math.min(1, Math.max(0, Number(alpha[1]) / (alpha[2] ? 100 : 1)));
+        if (color?.ok && (!/^[a-z]+$/u.test(cssValue) || color.format === 'name')) {
+            if (property === 'background') hasImage = false;
+            surface = color.a === 1 && !hasImage ? `#${rgbToHex(color.r, color.g, color.b, false)}` : '';
+        } else if (/^(?:inherit|initial|unset|revert(?:-layer)?|currentcolor)$/u.test(cssValue)
+            || /^(?:color|color-mix|oklab|oklch|lab|lch|hwb|rgba?|hsla?)\(.*\)$/u.test(cssValue)
+            || (property === 'background' && (cssValue === 'none' || /^[a-z-]+\(.*\)$/u.test(cssValue)))) {
+            surface = '';
+            // initial/unset 和颜色简写会清空 background-image；继承、回滚与复杂图层仍不能猜测。
+            if (property === 'background') hasImage = !/^(?:none|initial|unset|currentcolor)$/u.test(cssValue);
+        }
+        // 其余无效值由浏览器忽略；不能抹掉前一条仍会生效的纯色背景。
+    }
+    return surface ? (readability(surface, '#000') >= readability(surface, '#fff') ? '#000000' : '#ffffff') : '';
+}
+
 /** 只输出用户改动过的声明；默认外观返回空数组，网页和预设保持原样。 */
 export function getTranslationAppearanceDeclarations(value: unknown): TranslationAppearanceDeclaration[] {
     const appearance = normalizeTranslationAppearance(value);
@@ -447,12 +525,24 @@ export function getTranslationAppearanceDeclarations(value: unknown): Translatio
         declarations.push({property: 'opacity', value: String(appearance.opacity / 100)});
     }
     declarations.push(...parseTranslationCustomCss(appearance.customCss).declarations);
+    const surfaceInk = getTranslationSurfaceInk(declarations, appearance.fillColor);
+    if (surfaceInk) declarations.push({property: TRANSLATION_APPEARANCE_VARIABLES.surfaceInk, value: surfaceInk});
+    // 显式文字色也要覆盖渐变预设的透明填色；currentColor 使用最终 color，包括随后输入的自定义 CSS 色值。
+    if (declarations.some(({property}) => property === 'color')) {
+        declarations.push({property: '-webkit-text-fill-color', value: 'currentColor'});
+    }
     return declarations;
 }
 
 /** 设置页预览以内联样式应用同一组声明，保证与网页效果一致。 */
 export function getTranslationAppearanceStyle(value: unknown): Record<string, string> {
-    return Object.fromEntries(getTranslationAppearanceDeclarations(value).map(({property, value: cssValue}) => [property, cssValue]));
+    const style: Record<string, string> = {};
+    for (const {property, value: cssValue} of getTranslationAppearanceDeclarations(value)) {
+        // 重复简写要回到最终声明的位置，避免 Vue 按对象键顺序安装时反转 background/background-color 的覆盖次序。
+        delete style[property];
+        style[property] = cssValue;
+    }
+    return style;
 }
 
 /**

@@ -1,7 +1,7 @@
 /**
  * @file src/services/translation-stats/aggregation.ts
  * 文件职责：把翻译请求事件折叠为本地小时汇总，并把汇总行计算成设置页可直接展示的统计快照。
- * 主要内容：提供本地日界线与小时桶、筛选归一化、分桶定位与分位数估算、请求事件与线路尝试折叠、总量与成功率/复用率/耗时指标计算、逐小时或逐日趋势，以及按服务模型和内部线路分组的表现排行。
+ * 主要内容：提供本地日界线与小时桶、筛选归一化、跳过空桶的分位数估算、请求事件与线路尝试折叠、总量与成功率/复用率/耗时指标计算、逐小时或逐日趋势，以及按服务模型和内部线路分组的表现排行；已有记录起点直接复用，缺省时逐项归约而不展开无界实参。
  * 模块边界：本文件只执行确定性的内存计算，不访问 IndexedDB、浏览器 runtime、翻译 provider 或 Vue 组件。
  */
 
@@ -115,7 +115,7 @@ export function estimateHistogramPercentile(
     const target = Math.min(1, Math.max(0, percentile)) * total;
     let index = 0;
     let cumulative = 0;
-    while (index < histogram.length - 1 && cumulative + histogram[index] < target) {
+    while (index < histogram.length - 1 && (histogram[index] === 0 || cumulative + histogram[index] < target)) {
         cumulative += histogram[index];
         index += 1;
     }
@@ -493,15 +493,13 @@ export function buildTranslationStatsSnapshot(
         && rollup.bucketStart >= rangeStart
         && rollup.bucketStart <= generatedAt
     ));
-    const derivedRecordingStartedAt = rollups.length > 0
-        ? Math.min(...rollups.map((rollup) => rollup.bucketStart))
-        : null;
+    const recordingStartedAt = options.recordingStartedAt === undefined
+        ? rollups.reduce<number | null>((start, row) => start === null ? row.bucketStart : Math.min(start, row.bucketStart), null)
+        : options.recordingStartedAt;
 
     return {
         generatedAt,
-        recordingStartedAt: options.recordingStartedAt === undefined
-            ? derivedRecordingStartedAt
-            : options.recordingStartedAt,
+        recordingStartedAt,
         dimensions: (options.dimensions ?? collectTranslationStatsDimensions(rollups)).map((dimension) => ({
             serviceId: dimension.serviceId,
             models: [...dimension.models],

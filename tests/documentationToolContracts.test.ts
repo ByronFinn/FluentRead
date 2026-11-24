@@ -15,6 +15,7 @@ const repo = path.resolve(__dirname, '..');
 const sourceRoot = process.env.DOCUMENTATION_TOOL_SOURCE_ROOT || repo;
 const roots: string[] = [];
 const taglines = JSON.parse(fs.readFileSync(path.join(repo, 'src/core/i18n/messages/brand-taglines.json'), 'utf8')) as Record<string, string>;
+const descriptions = JSON.parse(fs.readFileSync(path.join(repo, 'src/core/i18n/messages/product-descriptions.json'), 'utf8')) as Record<string, string>;
 const combined = `${taglines['en-US']} ${taglines['zh-CN']}`;
 function fixture() {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fluentread-doc-contract-'));
@@ -68,15 +69,16 @@ async function checker(root: string, script: string) {
 function brandFixture(bilingual = false) {
     const root = fixture();
     write(root, 'src/core/i18n/messages/brand-taglines.json', JSON.stringify(taglines));
-    write(root, 'package.json', JSON.stringify({description: combined}));
-    write(root, 'marketing/brand.md', Object.values(taglines).join('\n'));
+    write(root, 'src/core/i18n/messages/product-descriptions.json', JSON.stringify(descriptions));
+    write(root, 'package.json', JSON.stringify({description: descriptions['en-US']}));
+    write(root, 'docs/maintainers/marketing/brand.md', Object.values(taglines).join('\n'));
     for (const language of Object.keys(taglines)) write(root, `src/core/i18n/messages/${language}.ts`, `"brand.tagline": brandTaglines['${language}']`);
     for (const [locale, language] of [['en', 'en-US'], ['zh-CN', 'zh-CN']]) {
-        const folder = `marketing/chrome-web-store/${locale}`;
-        write(root, `${folder}/short-description.txt`, combined + '\n');
-        write(root, `${folder}/listing.json`, JSON.stringify({shortDescription: combined}));
+        const folder = `docs/maintainers/marketing/chrome-web-store/${locale}`;
+        write(root, `${folder}/short-description.txt`, descriptions[language] + '\n');
+        write(root, `${folder}/listing.json`, JSON.stringify({shortDescription: descriptions[language]}));
         write(root, `${folder}/description.txt`, `${taglines[language]}\n\nFixture`);
-        write(root, `marketing/copy/${locale}.md`, taglines[language]);
+        write(root, `docs/maintainers/marketing/copy/${locale}.md`, taglines[language]);
     }
     write(root, 'README.md', `<div>${bilingual ? combined : taglines['en-US']}\n[简体中文](./misc/README_ZH.md)</div>`);
     write(root, 'misc/README_ZH.md', `<div>${bilingual ? combined : taglines['zh-CN']}\n[English](../README.md)</div>`);
@@ -139,7 +141,8 @@ const captureRunner = String.raw`
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm'), {EventEmitter} = require('node:events');
 const {performance} = require('node:perf_hooks');
 const input = JSON.parse(process.argv[1]), source = fs.readFileSync(input.source, 'utf8');
-const state = {loaded:true, calls:[], errors:[], reports:[], writes:[], config:[], cdps:0, detached:0, profile:null, removed:[], listening:false};
+input.fixture = fs.realpathSync(input.fixture);
+const state = {loaded:true, calls:[], errors:[], reports:[], writes:[], config:[], clicks:[], fills:[], checks:[], phases:[], cdps:0, detached:0, profile:null, removed:[], listening:false};
 let server, clip, metrics;
 state.actorGone = false; state.guardProbes = []; state.required = [];
 const unrelated=path.join(input.fixture,'unrelated-profile');fs.mkdirSync(unrelated);fs.writeFileSync(path.join(unrelated,'sentinel'),'unrelated owner');
@@ -149,7 +152,7 @@ const fsPort = {...fs,
  readFileSync(file, encoding) {if(String(file).endsWith('manifest.json')) return JSON.stringify({version:'fixture'}); return encoding ? 'fixture-source' : Buffer.from('fixture-source');},
  mkdtempSync() {state.calls.push('profile.create'); fail('profile'); state.profile = fs.mkdtempSync(path.join(input.fixture,'owned-profile-')); return state.profile;},
  mkdirSync() {},
- writeFileSync(file, data) {state.writes.push(String(file)); if(String(file).endsWith('/marketing/site-ui-manifest.json')||String(file).endsWith('/report.json')) {state.calls.push('report.write'); state.attemptedReport=JSON.parse(data); fail('report');} virtual.set(String(file),data); fail('write');},
+ writeFileSync(file, data) {state.writes.push(String(file)); if(String(file).endsWith('/docs/maintainers/marketing/site-ui-manifest.json')||String(file).endsWith('/report.json')||String(file).endsWith('/capture-manifest.json')) {state.calls.push('report.write'); state.attemptedReport=JSON.parse(data); fail('report');} virtual.set(String(file),data); fail('write');},
  statSync() {return {size:bytes.length};},
  rmSync(file, options) {state.calls.push('profile.remove'); state.removed.push(String(file)); if(file!==state.profile) throw Error('unowned-remove'); fs.rmSync(file,options); fail('remove');}
 };
@@ -161,16 +164,16 @@ const httpPort = {createServer(callback) {
  server.close = callback => {state.calls.push('server.close'); server.listening=false; callback?.(input.fail?.includes('server.close') ? Error('server.close-failure') : undefined);};
  return server;
 }};
-function locator(selector) {return {waitFor:async()=>{fail('wait');},click:async()=>{},first(){return this;},last(){return this;},boundingBox:async()=> {
+function locator(selector) {return {waitFor:async()=>{fail('wait');},click:async()=>{state.clicks.push(selector);},fill:async value=>{state.fills.push({selector,value});},check:async()=>{state.checks.push(selector);},first(){return this;},last(){return this;},boundingBox:async()=> {
  if(input.fail?.includes('rect')) return null;
  if(input.fail?.includes('target') && selector.endsWith(':visible')) return {x:0,y:900,width:40,height:20};
  if(input.fail?.includes('target.right') && selector.endsWith(':visible')) return {x:1600,y:20,width:40,height:20};
  return {x:0,y:0,width:360,height:700};
 }};}
-const page = {on(name, fn) {if(input.fail?.includes('pageerror')) fn(Error('pageerror-failure'));}, goto:async()=>{fail('goto');},reload:async()=>{},locator,
- evaluate:async(fn,arg)=>fn(arg), setViewportSize:async()=>{},waitForTimeout:async()=>{},close:async()=>{state.calls.push('page.close');}};
+const page = {on(name, fn) {if(input.fail?.includes('pageerror')) fn(Error('pageerror-failure'));}, goto:async()=>{state.calls.push('page.goto');fail('goto');},reload:async()=>{},locator,
+ evaluate:async(fn,arg)=>fn(arg), keyboard:{press:async key=>state.calls.push('key.'+key)},setViewportSize:async()=>{},waitForTimeout:async()=>{},close:async()=>{state.calls.push('page.close');}};
 const ctx = {browser:()=>({newBrowserCDPSession:async()=>({send:async()=>({processInfo:[{type:'browser',id:424242}]}),detach:async()=>{}})}),serviceWorkers:()=>{if(input.fixtureCLI)throw Error('body-failure');return input.waitWorker ? [] : [{url:()=> 'chrome-extension://fixture/worker.js'}];},waitForEvent:async()=>({url:()=> 'chrome-extension://fixture/worker.js'}),
- newCDPSession:async()=>{state.cdps++; return {send:async(method, options)=>{fail('cdp'); if(method==='Emulation.setDeviceMetricsOverride') metrics=options; else {clip=options.clip; return {data:bytes.toString('base64')};}},detach:async()=>{state.detached++;fail('detach');}};}};
+ newCDPSession:async()=>{state.cdps++; return {send:async(method, options)=>{fail('cdp'); if(method==='Emulation.setDeviceMetricsOverride') metrics=options; else {state.calls.push('screenshot');clip=options.clip; return {data:bytes.toString('base64')};}},detach:async()=>{state.detached++;fail('detach');}};}};
 const helper = {launchFocusSafePersistentContext:async options=> {
  state.calls.push('browser.launch'); state.launch=options; fail('launch'); if(input.noSession)return undefined; state.listening=server.listening;
  if(!input.fixtureCLI){const response={setHeader:(_,value)=>state.article={type:value},end:text=>state.article.text=text};server.respond({},response);}
@@ -181,7 +184,19 @@ const helper = {launchFocusSafePersistentContext:async options=> {
 const sharp = () => {const api={webp:()=>api,ensureAlpha:()=>api,raw:()=>api,toBuffer:async()=>bytes,
  toFile:async file=>{virtual.set(file,bytes);},metadata:async()=>({width:clip.width*metrics.deviceScaleFactor,height:clip.height*metrics.deviceScaleFactor})};return api;};
 const provider={requestPayloads:()=>[],close:async()=>{state.calls.push('provider.close');fail('provider.close');if(input.fail?.includes('provider.callback'))return Error('provider.callback-failure');}};
-const args=input.fixtureCLI?['--playwright-root',input.fixture,'--focus-safe-helper','fixture-helper','--extension-dir',path.join(input.fixture,'extension'),'--artifacts-dir',path.join(input.fixture,'artifacts')]:['--runtime',input.fixture,'--helper','fixture-helper'];
+const helperPath=path.join(input.fixture,'fixture-helper.cjs');
+const diagnosticsPath=path.join(input.fixture,input.customDiagnostics?'custom-diagnostics.cjs':'runtime-diagnostics.cjs');
+const diagnostics={
+ start:async context=>{state.calls.push('diagnostics.start');if(context!==ctx)throw Error('diagnostics-context');fail('diagnostics.start');},
+ attachPage:async(candidate,label)=>{state.calls.push('diagnostics.attach');if(candidate!==page||label!=='docs-capture')throw Error('diagnostics-page');fail('diagnostics.attach');},
+ setExtensionId:id=>{state.extensionId=id;},setPhase:phase=>{state.phases.push(phase);},
+ flush:async()=>{state.calls.push('diagnostics.flush');fail('diagnostics.flush');},
+ assertClean:()=>{state.calls.push('diagnostics.assert');fail('diagnostics.dirty');},
+ write:(directory,report)=>{state.calls.push('diagnostics.write');state.diagnosticsDirectory=directory;fail('diagnostics.write');report.runtimeDiagnostics={counts:{errors:0,warnings:0,resourceFailures:0}};},
+ stop:async()=>{state.calls.push('diagnostics.stop');fail('diagnostics.stop');}
+};
+const helperArg=input.relativeHelper?path.basename(helperPath):helperPath;
+const args=input.fixtureCLI?['--playwright-root',input.fixture,'--focus-safe-helper',helperPath,'--extension-dir',path.join(input.fixture,'extension'),'--artifacts-dir',path.join(input.fixture,'artifacts')]:['--runtime',input.fixture,'--helper',helperArg,...(input.customDiagnostics?['--diagnostics-helper',path.basename(diagnosticsPath)]:[])];
 const processPort = {argv:['fixture-node','fixture-script',...(input.args||args)],exitCode:0};
 // Run the unchanged owned-browser-close implementation. CDP/ps/kill are
 // explicit controlled ports; their simulated PID absence is never native proof.
@@ -212,12 +227,17 @@ const requirePort = name => {
  if(name==='./testing/owned-browser-close.cjs'||name==='./owned-browser-close.cjs') return guardPort;
  if(name==='node:module') return {createRequire:file=>{state.calls.push('runtime.load');state.runtimePath=file;return name=>name==='playwright'?{chromium:{fixture:true}}:sharp;}};
  if(name==='node:child_process') return {execFileSync:(_,args)=>args[0]==='rev-parse'?'fixture-head\n':''};
- if(name==='fixture-helper' || name==='fixture-node') {state.calls.push('helper.load');state.helperPath=name;return helper;}
+ if(name===helperPath) {state.calls.push('helper.load');state.helperPath=name;return helper;}
+ if(name===diagnosticsPath) {state.calls.push('diagnostics.load');state.diagnosticsPath=name;return {createRuntimeDiagnostics:()=>diagnostics};}
  return require(name);
 };
 const sandbox = {require:requirePort,__dirname:path.dirname(input.source),Buffer,process:processPort,
  console:{log:value=>state.reports.push(JSON.parse(value)),error:(...errors)=>state.errors.push(errors.map(error=>String(error.stack||error)).join(' '))},
- document:{fonts:{ready:Promise.resolve()}},crypto:require('node:crypto').webcrypto,
+ document:{fonts:{ready:Promise.resolve()},getAnimations:()=>{
+  state.calls.push('animation.inspect');fail('animation');
+  const animation=(name,rejected=false)=>({effect:{getComputedTiming:()=>({iterations:1})},finished:new Promise((resolve,reject)=>queueMicrotask(()=>{state.calls.push(name);rejected?reject(Error('canceled-animation')):resolve();}))});
+  return [animation('animation.finish'),animation('animation.cancel',true),{effect:{getComputedTiming:()=>({iterations:Infinity})},get finished(){state.calls.push('animation.infinite.await');throw Error('infinite-animation-wait');}}];
+ }},requestAnimationFrame:callback=>queueMicrotask(()=>{state.calls.push('animation.frame');callback(performance.now());}),crypto:require('node:crypto').webcrypto,
  chrome:{runtime:{sendMessage:async message=>{fail('message');if(message.type==='configStorageRead') {if(input.fail?.includes('read')) return {success:false,error:'read-failure'};return {success:true,value:input.objectConfig ? {__fluentConfigRevision:3,fixture:true}:JSON.stringify({__fluentConfigRevision:3,fixture:true})};}state.config.push(message);return {success:!input.fail?.includes('persist'),error:'persist-failure'};}}},
  setTimeout,clearTimeout,queueMicrotask};
 (async()=>{const start=performance.now();const context=vm.createContext(sandbox);try {await vm.runInContext(source,context,{filename:input.source,timeout:2000});}catch(error){state.rejection=String(error.stack||error);}
@@ -238,7 +258,7 @@ async function capture(options: Record<string, unknown> = {}) {
     recordProbe({family:'capture',sourceRoot,options,result});
     expect(result.timedOut, result.err).toBe(false);
     expect(result.code, result.err).toBe(0);
-    const state = JSON.parse(result.out.trim()) as {loaded: boolean; calls: string[]; errors: string[]; rejection?: string; profileExists: boolean; listening: boolean; exitCode: number; reports: Array<{screenshots: Array<{locale: string; name: string; points: unknown[]; losslessPixels: boolean}>}>; config: Array<{config: Record<string, unknown>; baseRevision: number}>; removed: string[]; profile: string; writes: string[]; cdps: number; detached: number; article: {text: string; type: string}; durationMs: number; runtimePath: string; guardBound?: boolean; guardProbes: string[]; finalReport?: {error?: string; failure?: string; cleanupErrors?: Array<{resource:string;error:string}>; retainedProfile?: string; retainedProfileLaunchAttempted?: boolean}; attemptedReport?: {error?: string; failure?: string}; actorGone: boolean; rawCloseFulfilled?: boolean; protectedUnchanged: boolean; required:string[]; launch?: {profileDir:string;background:boolean;headless:boolean}};
+    const state = JSON.parse(result.out.trim()) as {loaded: boolean; calls: string[]; errors: string[]; rejection?: string; profileExists: boolean; listening: boolean; exitCode: number; reports: Array<{screenshots: number}>; clicks: string[]; fills: Array<{selector: string; value: string}>; checks: string[]; phases: string[]; helperPath?: string; diagnosticsPath?: string; extensionId?: string; config: Array<{config: Record<string, unknown>; baseRevision: number}>; removed: string[]; profile: string; writes: string[]; cdps: number; detached: number; article: {text: string; type: string}; durationMs: number; runtimePath: string; guardBound?: boolean; guardProbes: string[]; finalReport?: {screenshots?: Array<{locale: string; name: string; points: unknown[]; losslessPixels: boolean}>; runtimeDiagnostics?: {counts: {errors: number; warnings: number; resourceFailures: number}}; error?: string; failure?: string; cleanupErrors?: Array<{resource:string;error:string}>; retainedProfile?: string; retainedProfileLaunchAttempted?: boolean}; attemptedReport?: {error?: string; failure?: string}; actorGone: boolean; rawCloseFulfilled?: boolean; protectedUnchanged: boolean; required:string[]; launch?: {profileDir:string;background:boolean;headless:boolean}};
     expect(state.loaded).toBe(true);
     return state;
 }
@@ -303,11 +323,34 @@ describe('documentation delivery CLI contracts', () => {
         const result = await checker(root, 'verify-brand-copy.mjs');
         expect(result.code).toBe(1); expect(result.err).toContain(`${language}: interface resource`);
     });
-    it.each(['package.json', 'marketing/chrome-web-store/en/short-description.txt', 'marketing/chrome-web-store/zh-CN/listing.json', 'marketing/chrome-web-store/en/description.txt', 'marketing/copy/zh-CN.md', 'marketing/brand.md'])('rejects broken combined/store/community contract at %s', async file => {
+    it.each([
+        ['package.json', JSON.stringify({description: combined}), 'Package product description'],
+        ['docs/maintainers/marketing/chrome-web-store/en/short-description.txt', combined, 'en: localized product short description'],
+        ['docs/maintainers/marketing/chrome-web-store/zh-CN/short-description.txt', combined, 'zh-CN: localized product short description'],
+        ['docs/maintainers/marketing/chrome-web-store/en/listing.json', JSON.stringify({shortDescription: combined}), 'en: listing'],
+        ['docs/maintainers/marketing/chrome-web-store/zh-CN/listing.json', JSON.stringify({shortDescription: combined}), 'zh-CN: listing'],
+        ['docs/maintainers/marketing/chrome-web-store/en/description.txt', 'bad', 'en: full description'],
+        ['docs/maintainers/marketing/copy/zh-CN.md', 'bad', 'zh-CN: community copy'],
+        ['docs/maintainers/marketing/brand.md', 'bad', 'copyable brand guide'],
+    ])('rejects broken functional description/store/community contract at %s', async (file, invalid, diagnostic) => {
         const root = brandFixture(true);
-        write(root, file, file.endsWith('.json') ? JSON.stringify({description:'bad',shortDescription:'bad'}) : 'bad');
+        write(root, file, invalid);
         const result = await checker(root, 'verify-brand-copy.mjs');
-        expect(result.code).toBe(1); expect(result.err).toContain('AssertionError');
+        expect(result.code).toBe(1); expect(result.err).toContain(diagnostic);
+    });
+    it.each([
+        ['missing locale', Object.fromEntries(Object.entries(descriptions).filter(([language]) => language !== 'es-ES')), 'Product descriptions cover the same seven languages'],
+        ['unsupported locale', {...Object.fromEntries(Object.entries(descriptions).filter(([language]) => language !== 'es-ES')), 'pt-BR':'Fixture'}, 'Product descriptions cover the same seven languages'],
+        ['empty text', {...descriptions, 'ja-JP':''}, 'ja-JP: empty or untrimmed product description'],
+        ['non-string text', {...descriptions, 'ko-KR':42}, 'ko-KR: empty or untrimmed product description'],
+        ['untrimmed text', {...descriptions, 'es-ES':` ${descriptions['es-ES']}`}, 'es-ES: empty or untrimmed product description'],
+        ['overlong text', {...descriptions, 'fr-FR':'x'.repeat(133)}, 'fr-FR: native manifest description limit'],
+        ['multiline text', {...descriptions, 'ru-RU':'Fixture\nDescription'}, 'ru-RU: native manifest description limit'],
+    ] as const)('rejects invalid product descriptions: %s', async (_case, invalid, diagnostic) => {
+        const root = brandFixture();
+        write(root, 'src/core/i18n/messages/product-descriptions.json', JSON.stringify(invalid));
+        const result = await checker(root, 'verify-brand-copy.mjs');
+        expect(result.code).toBe(1); expect(result.err).toContain(diagnostic);
     });
     it('rejects fewer than seven languages and empty translated taglines', async () => {
         for (const value of [{...taglines, 'ja-JP':''}, Object.fromEntries(Object.entries(taglines).slice(1))]) {
@@ -387,30 +430,95 @@ describe('documentation delivery CLI contracts', () => {
         const internalResult = await checker(internal, 'verify-docs-build.mjs');
         expect(internalResult.code).toBe(1); expect(internalResult.err).toContain('Internal reports');
     });
-    it.each([[], ['--helper','fixture-helper'], ['--runtime'], ['--runtime','--helper','fixture-helper'], ['--runtime','fixture'], ['--runtime','fixture','--helper']].map(args=>({args})))('validates CLI before loading dependencies or acquiring resources: $args', async ({args}) => {
+    it.each([[], ['--helper','fixture-helper'], ['--runtime'], ['--runtime','--helper','fixture-helper'], ['--runtime','fixture'], ['--runtime','fixture','--helper'], ['--runtime','fixture','--helper','fixture-helper','--diagnostics-helper'], ['--runtime','fixture','--helper','fixture-helper','--artifacts-dir','--next']].map(args=>({args})))('validates CLI before loading dependencies or acquiring resources: $args', async ({args}) => {
         const state = await capture({args});
         expect(state.calls).toEqual([]); expect(state.profileExists).toBe(false);
-        expect(state.errors.join('\n') + (state.rejection || '')).toMatch(/--runtime|--helper/);
+        expect(state.errors.join('\n') + (state.rejection || '')).toMatch(/--runtime|--helper|--diagnostics-helper|--artifacts-dir/);
     });
     it('runs both locales through actual capture callbacks using a fresh controlled profile and HTTP port', async () => {
         const state = await capture();
         expect(state.errors).toEqual([]); expect(state.rejection).toBeUndefined(); expect(state.exitCode).toBe(0);
-        expect(state.reports).toHaveLength(1); expect(state.reports[0].screenshots).toHaveLength(28);
-        expect(state.reports[0].screenshots.every(item=>item.losslessPixels)).toBe(true);
+        expect(state.reports).toHaveLength(1); expect(state.reports[0].screenshots).toBe(36);
+        expect(state.finalReport?.screenshots).toHaveLength(36);
+        for (const locale of ['zh-CN','en-US']) {
+            expect(state.finalReport?.screenshots?.filter(item=>item.locale===locale).map(item=>item.name)).toEqual([
+                'popup-language-initial','popup-language','popup','popup-hover','popup-selection',
+                'settings-general','settings-services','settings-general','settings-interface','settings-translation-center',
+                'settings-data','settings-glossary','settings-sites','settings-translation-stats','settings-vocabulary',
+                'settings-provider','settings-webdav','settings-webdav-connection',
+            ]);
+        }
+        expect(state.finalReport?.screenshots?.every(item=>item.losslessPixels)).toBe(true);
         expect(state.config.map(item=>item.config.uiLanguage)).toEqual(['zh-CN','en-US']);
         expect(state.config.every(item=>item.baseRevision===3 && item.config.fixture===true && item.config.service==='freeTranslation')).toBe(true);
         expect(state.article.text).toContain('Reading example'); expect(state.article.type).toBe('text/html; charset=utf-8');
-        expect(state.cdps).toBe(28); expect(state.detached).toBe(28);
+        expect(state.cdps).toBe(36); expect(state.detached).toBe(36);
         expect(state.guardBound).toBe(true); expect(state.guardProbes).toContain('present'); expect(state.guardProbes.at(-1)).toBe('absent');
         expect(state.calls.indexOf('guard.bind')).toBeLessThan(state.calls.indexOf('browser.close'));
         expect(state.calls.indexOf('browser.close')).toBeLessThan(state.calls.indexOf('profile.remove'));
         expect(state.removed).toEqual([state.profile]); expect(state.profileExists).toBe(false); expect(state.listening).toBe(false);
     });
+    it('resolves helper paths from the CLI and loads default or explicit diagnostics beside them', async () => {
+        for (const customDiagnostics of [false, true]) {
+            const state = await capture({relativeHelper:true,customDiagnostics});
+            expect(state.errors).toEqual([]); expect(state.rejection).toBeUndefined(); expect(state.exitCode).toBe(0);
+            expect(state.helperPath).toBe(path.join(path.dirname(state.profile), 'fixture-helper.cjs'));
+            expect(state.diagnosticsPath).toBe(path.join(path.dirname(state.profile), customDiagnostics ? 'custom-diagnostics.cjs' : 'runtime-diagnostics.cjs'));
+            expect(state.required).toContain(state.helperPath); expect(state.required).toContain(state.diagnosticsPath);
+        }
+    });
+    it('captures WebDAV example fields without a password and waits for finite animations before every screenshot', async () => {
+        const state = await capture();
+        expect(state.errors).toEqual([]); expect(state.exitCode).toBe(0);
+        expect(state.fills).toEqual(['zh-CN','en-US'].flatMap(()=>[
+            {selector:'#webdav-url',value:'https://dav.jianguoyun.com/dav/'},
+            {selector:'#webdav-username',value:'yourname@example.com'},
+        ]));
+        expect(state.checks).toEqual(Array(2).fill('[data-testid="cloud-method-webdav"]'));
+        for (const action of ['webdav-test','webdav-save','webdav-sync-now']) expect(state.clicks).not.toContain('[data-testid="'+action+'"]');
+        expect(state.finalReport?.screenshots?.filter(item=>item.name==='popup-hover'||item.name==='popup-selection').map(item=>({locale:item.locale,name:item.name,points:item.points.length}))).toEqual([
+            {locale:'zh-CN',name:'popup-hover',points:1},{locale:'zh-CN',name:'popup-selection',points:1},
+            {locale:'en-US',name:'popup-hover',points:1},{locale:'en-US',name:'popup-selection',points:1},
+        ]);
+        expect(state.finalReport?.screenshots?.filter(item=>item.name==='settings-webdav-connection').map(item=>({locale:item.locale,points:item.points.length}))).toEqual([{locale:'zh-CN',points:3},{locale:'en-US',points:3}]);
+        const animationCalls=state.calls.filter(call=>call.startsWith('animation.')||call==='screenshot');
+        expect(animationCalls).toEqual(Array.from({length:36},()=>['animation.inspect','animation.finish','animation.cancel','animation.frame','animation.frame','screenshot']).flat());
+    });
+    it('collects runtime diagnostics before navigation and fails captures with dirty diagnostics', async () => {
+        const state = await capture();
+        expect(state.calls.indexOf('diagnostics.start')).toBeLessThan(state.calls.indexOf('diagnostics.attach'));
+        expect(state.calls.indexOf('diagnostics.attach')).toBeLessThan(state.calls.indexOf('page.goto'));
+        expect(state.extensionId).toBe('fixture');
+        expect(state.phases).toEqual(state.finalReport?.screenshots?.map(item=>item.locale+':'+item.name));
+        expect(state.calls.filter(call=>call==='diagnostics.attach')).toHaveLength(4);
+        expect(state.calls.indexOf('diagnostics.assert')).toBeLessThan(state.calls.indexOf('diagnostics.write'));
+        expect(state.calls.indexOf('diagnostics.stop')).toBeLessThan(state.calls.indexOf('browser.close'));
+        expect(state.finalReport?.runtimeDiagnostics?.counts).toEqual({errors:0,warnings:0,resourceFailures:0});
+        const dirty=await capture({fail:['diagnostics.dirty']});
+        expect(dirty.exitCode).toBe(1); expect(dirty.finalReport?.error).toContain('diagnostics.dirty-failure');
+        expect(dirty.calls).toContain('diagnostics.stop'); expect(dirty.profileExists).toBe(false); expect(dirty.listening).toBe(false);
+    });
+    it.each(['diagnostics.start','diagnostics.attach','diagnostics.flush','diagnostics.write','diagnostics.stop'])('preserves cleanup after %s fails', async failure => {
+        const state=await capture({fail:[failure]});
+        expect(state.exitCode).toBe(1); expect(state.rejection).toBeUndefined();
+        expect(state.errors.join('\n')).toContain(failure+'-failure');
+        expect(state.calls).toContain('diagnostics.stop'); expect(state.calls).toContain('browser.close'); expect(state.calls).toContain('server.close');
+        expect(state.profileExists).toBe(false); expect(state.listening).toBe(false); expect(state.removed).toEqual([state.profile]);
+        expect(state.calls.at(-1)).toBe('report.write');
+    });
+    it('keeps the primary error and all diagnostic cleanup failures while releasing later resources', async () => {
+        const state=await capture({fail:['goto','diagnostics.flush','diagnostics.write','diagnostics.stop']});
+        expect(state.finalReport?.error).toContain('goto-failure'); expect(state.exitCode).toBe(1);
+        expect(state.finalReport?.cleanupErrors?.map(item=>item.resource)).toEqual(['diagnostics flush','diagnostics report','diagnostics']);
+        for (const failure of ['diagnostics.flush','diagnostics.write','diagnostics.stop']) expect(state.errors.join('\n')).toContain(failure+'-failure');
+        expect(state.calls).toContain('browser.close'); expect(state.calls).toContain('server.close');
+        expect(state.profileExists).toBe(false); expect(state.removed).toEqual([state.profile]); expect(state.listening).toBe(false);
+    });
     it('retains serviceworker waiting and object-valued config compatibility', async () => {
         const state = await capture({waitWorker:true,objectConfig:true});
-        expect(state.errors).toEqual([]); expect(state.reports[0].screenshots).toHaveLength(28);
+        expect(state.errors).toEqual([]); expect(state.reports[0].screenshots).toBe(36); expect(state.finalReport?.screenshots).toHaveLength(36);
     });
-    it.each(['goto','wait','read','persist','write','rect','target','target.right','cdp','pageerror'])('cleans owned resources after %s failure', async failure => {
+    it.each(['goto','wait','read','persist','write','rect','target','target.right','cdp','pageerror','animation'])('cleans owned resources after %s failure', async failure => {
         const state = await capture({fail:[failure]});
         expect(state.exitCode).toBe(1); expect(state.errors.length).toBeGreaterThan(0);
         expect(state.profileExists).toBe(false); expect(state.listening).toBe(false);

@@ -4,6 +4,7 @@
  * 图片翻译生产产物回归：真实 Tesseract、可信点击、与当前 Google 批量协议一致的确定性翻译 transport。
  * 所有用例复用同一自动临时配置，由 focus-safe helper 保持正常尺寸、后台且不抢焦点。
  * --unchanged-fixture 仅验证原样响应成功、保留原图、文字阅读与恢复后缓存复用。
+ * --trace-typography 在标准48px Arial源图的真实离屏操作中记录原文字形与最终字体，不发送额外翻译请求。
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -23,19 +24,31 @@ const extensionDir = path.resolve(arg('extension-dir', '.output/chrome-mv3'));
 const artifacts = path.resolve(arg('artifacts-dir', '/private/tmp/fluentread-image-flow'));
 const playwrightRoot = arg('playwright-root', process.env.PLAYWRIGHT_ROOT);
 const focusHelper = arg('focus-safe-helper', process.env.FLUENTREAD_FOCUS_SAFE_HELPER);
+const diagnosticsHelper = arg('runtime-diagnostics-helper', process.env.FLUENTREAD_RUNTIME_DIAGNOSTICS_HELPER);
+const diagnostics = diagnosticsHelper && require(path.resolve(diagnosticsHelper)).createRuntimeDiagnostics();
 const xLightbox = process.argv.includes('--x-lightbox');
 const xSurface = process.argv.includes('--x-surface') || xLightbox;
 const recoveryOnly = process.argv.includes('--recovery-only');
+const transformedImages = process.argv.includes('--transformed-images');
+const traceTypography = process.argv.includes('--trace-typography');
 const liveTranslation = process.argv.includes('--live-translation');
 const multilingual = process.argv.includes('--multilingual');
 const harFixture = process.argv.includes('--har-fixture');
 const unchangedFixture = process.argv.includes('--unchanged-fixture');
+const modelCacheDir = arg('model-cache-dir', process.env.FLUENTREAD_TEST_MODEL_CACHE_DIR);
+// 此开关只控制共享缓存助手，不限制浏览器或 Tesseract 的网络。
+const noCacheDownload = process.argv.includes('--model-cache-no-download');
+if (noCacheDownload && !xLightbox) throw new Error('--model-cache-no-download requires --x-lightbox and controls only the shared model cache');
 if (unchangedFixture && liveTranslation) throw new Error('--unchanged-fixture requires deterministic transport');
 const paragraphImage = arg('paragraph-image', null);
 const denseParagraphs = process.argv.includes('--dense-paragraphs');
 const manyLineTranslation = process.argv.includes('--many-line-translation');
+if (transformedImages && (xSurface || recoveryOnly || liveTranslation || multilingual || harFixture || unchangedFixture || paragraphImage || denseParagraphs))
+    throw new Error('--transformed-images requires the standard deterministic image fixture');
 if (manyLineTranslation && (!denseParagraphs || liveTranslation))
     throw new Error('--many-line-translation requires --dense-paragraphs and deterministic transport');
+if(traceTypography&&(xSurface||recoveryOnly||transformedImages||liveTranslation||multilingual||harFixture||unchangedFixture||paragraphImage||denseParagraphs))
+    throw new Error('--trace-typography requires the standard deterministic 48px Arial source fixture');
 if (!playwrightRoot || !focusHelper)
     throw new Error('必须提供 --playwright-root 与 --focus-safe-helper');
 const { chromium } = require(path.join(playwrightRoot, 'playwright'));
@@ -212,9 +225,172 @@ function assertGeometry(snapshot) {
     assert.equal(snapshot.bitmapIdentity, 'retained');
 }
 
+/** 直接比较浏览器排版后的四角，旋转或透视时不能用轴对齐外接矩形代替。 */
+async function readNativeImageBoxes() {
+    const tree = await cdp.send('DOM.getDocument', {depth: -1, pierce: true});
+    let source, bitmap;
+    function visit(node) {
+        const attributes = Object.fromEntries(Array.from({length: (node.attributes || []).length / 2},
+            (_, i) => [node.attributes[i * 2], node.attributes[i * 2 + 1]]));
+        if (attributes.id === 'sample') source = node;
+        if ((attributes.class || '').split(/\s+/).includes('fluent-read-image-translation-bitmap')) bitmap = node;
+        for (const child of [...(node.children || []), ...(node.shadowRoots || [])]) visit(child);
+    }
+    visit(tree.root);
+    if (!source || !bitmap) return null;
+    const boxes = await Promise.all([source, bitmap].map(node => cdp.send('DOM.getBoxModel', {backendNodeId: node.backendNodeId})));
+    return {source: boxes[0].model, bitmap: boxes[1].model, bitmapNode: bitmap.backendNodeId};
+}
+
+async function verifyTransformedImages({worker, ui, wait, shot}) {
+    const requestsBefore = await worker.evaluate(() => globalThis.__imageFixture.requests.length);
+    const initial = await readNativeImageBoxes();
+    const cases = [
+        {name: 'own-rotation', image: {transform: 'rotate(9deg)', transformOrigin: '25% 70%'}},
+        {name: 'own-scale-skew', image: {transform: 'scale(.83, .91) skewX(12deg)'}},
+        {name: 'independent-transforms', image: {rotate: '-7deg', scale: '.82 .93', translate: '18px -9px'}},
+        {name: 'ancestor-transform', card: {transform: 'rotate(-6deg) scale(.9)', transformOrigin: '15% 40%'}},
+        {name: 'combined-transforms', card: {transform: 'scale(.85) rotate(-4deg)'}, image: {transform: 'rotate(11deg)'}},
+        {name: 'ancestor-perspective', card: {perspective: '800px'}, image: {transform: 'rotateY(22deg) rotateX(8deg)'}},
+        {name: 'fractional-box', image: {width: '601.375px', height: '323.625px', transform: 'rotate(4deg)'}},
+        {name: 'transformed-scroll-clip', card: {transform: 'rotate(-3deg)', width: '470px', height: '230px', overflow: 'auto'}, scroll: true},
+        {name: 'static-overflow-reader-fallback', card: {position:'static', width:'470px', height:'230px', overflow:'hidden', borderRadius:'0px'}, image:{transform:'rotate(5deg)'}, fallback:true, clippingProbe:true},
+        {name: 'positioned-overflow-clip', card: {position:'relative', width:'470px', height:'230px', overflow:'hidden', borderRadius:'0px'}, image:{transform:'rotate(5deg)'}, clippingProbe:true},
+        {name: 'own-transform-content-box', image: {transform: 'rotate(7deg) scale(.9)', transformBox: 'content-box', transformOrigin: '30% 70%'}},
+        {name: 'content-box-pixel-origin', image: {transform: 'rotate(-5deg)', transformBox: 'content-box', transformOrigin: '50px 70px'}},
+        {name: 'mirrored-image', image: {transform: 'scaleX(-1) rotate(5deg)'}},
+        {name: 'ancestor-zoom', card: {zoom: '.85'}, image: {transform: 'rotate(4deg)'}},
+        {name: 'own-zoom', image: {zoom: '.9', transform: 'rotate(3deg)'}},
+        {name: 'rotated-image-under-menu', image: {transform: 'rotate(7deg)'}, cover: true},
+        {name: 'fixed-positive-scale', image: {position:'fixed', left:'80px', top:'230px', transform:'translate(12px, 8px) scale(.9)'}},
+        {name: 'fixed-transform-reader-fallback', image: {position:'fixed', left:'80px', top:'230px', transform:'rotate(5deg)'}, fallback:true},
+        {name: 'back-to-normal'},
+    ];
+    const failures = [];
+    report.transformedImages = [];
+    const originals = await page.evaluate(() => ['#sample', '.card'].map(selector => {
+        const node = document.querySelector(selector);
+        return {selector, css: [...node.style].filter(name => !['opacity', 'transition', 'transition-property'].includes(name))
+            .map(name => [name, node.style.getPropertyValue(name), node.style.getPropertyPriority(name)])};
+    }));
+    try {
+        for (const fixture of cases) {
+            currentCase = `native image corners: ${fixture.name}`;
+            await page.evaluate(({fixture, originals}) => {
+                for (const {selector, css} of originals) {
+                    const node = document.querySelector(selector);
+                    for (const name of [...node.style]) if (!['opacity', 'transition', 'transition-property'].includes(name)) node.style.removeProperty(name);
+                    for (const [name, value, priority] of css) node.style.setProperty(name, value, priority);
+                }
+                const image = document.querySelector('#sample'), card = document.querySelector('.card');
+                document.querySelector('#transform-cover')?.remove();
+                Object.assign(image.style, {width:'620px', height:'340px', boxSizing:'content-box', padding:'9px 16px 21px 28px',
+                    border:'5px solid #637fad', objectFit:'cover', objectPosition:'30% 65%', ...fixture.image});
+                Object.assign(card.style, fixture.card || {});
+                card.scrollLeft = fixture.scroll ? 48 : 0; card.scrollTop = fixture.scroll ? 31 : 0;
+                window.scrollTo(0, 0);
+                if (fixture.cover) {
+                    const rect = image.getBoundingClientRect(), cover = document.createElement('div');
+                    cover.id = 'transform-cover';
+                    cover.style.cssText = `position:fixed;z-index:100;background:rgb(11,22,33);width:90px;height:70px;left:${rect.x+rect.width/2-45}px;top:${rect.y+rect.height/2-35}px`;
+                    document.body.append(cover);
+                }
+            }, {fixture, originals});
+            let snapshot, failure;
+            await wait(async () => {
+                try {
+                    if (fixture.fallback) {
+                        assert.equal(await page.locator('#sample').evaluate(node => getComputedStyle(node).opacity), '1');
+                        const fallback = await ui(`const bitmap=(paintRoot||this).querySelector('.fluent-read-image-translation-bitmap');const warning=this.querySelector('.fr-image-warning-button');return {hidden:bitmap&&getComputedStyle(bitmap).visibility==='hidden',retained:bitmap?.dataset.probeIdentity==='retained',warning:warning&&!warning.hidden&&warning.getClientRects().length>0&&warning.title.includes('当前布局无法覆盖')};`, true);
+                        assert.deepEqual(fallback, {hidden:true, retained:true, warning:true});
+                        return true;
+                    }
+                    snapshot = await readNativeImageBoxes();
+                    assert.ok(snapshot);
+                    assert.equal(snapshot.bitmapNode, initial.bitmapNode, 'CSS 改变必须复用同一译图');
+                    for (const box of ['border', 'padding', 'content']) for (let i = 0; i < 8; i++)
+                        assert.ok(Math.abs(snapshot.source[box][i] - snapshot.bitmap[box][i]) <= 0.75,
+                            `${box}[${i}]: source=${snapshot.source[box][i]}, bitmap=${snapshot.bitmap[box][i]}`);
+                    assert.equal(await page.locator('#sample').evaluate(node => getComputedStyle(node).opacity), '0');
+                    return true;
+                } catch (error) { failure = error.message; return false; }
+            }, 1800).catch(() => failures.push({name:fixture.name, failure}));
+            const layout = await page.evaluate(() => {
+                const read = node => {
+                    if (!node) return null;
+                    const style = getComputedStyle(node), rect = node.getBoundingClientRect();
+                    return {rect:rect.toJSON(), offsetParent:node.offsetParent?.tagName, offsetLeft:node.offsetLeft, offsetTop:node.offsetTop,
+                        width:style.width, height:style.height, boxSizing:style.boxSizing, transform:style.transform,
+                        transformOrigin:style.transformOrigin, transformBox:style.transformBox, css:node.style.cssText};
+                };
+                return {source:read(document.querySelector('#sample')), host:read(document.querySelector('[data-fluent-read-ui="image-translation-bitmap"]'))};
+            });
+            const idleStyleWrites = await page.evaluate(async () => {
+                await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+                const host = document.querySelector('[data-fluent-read-ui="image-translation-bitmap"]');
+                if (!host) return 0;
+                let count = 0;
+                const observer = new MutationObserver(records => {count += records.length;});
+                observer.observe(host, {attributes:true, attributeFilter:['style']});
+                await new Promise(resolve => setTimeout(resolve, 250)); observer.disconnect(); return count;
+            });
+            assert.equal(idleStyleWrites, 0, '稳定布局不能持续改写样式并触发下一帧');
+            report.transformedImages.push({name:fixture.name, snapshot, layout, idleStyleWrites, failure: failures.at(-1)?.name === fixture.name ? failure : undefined});
+            if (fixture.cover) {
+                const png = await page.screenshot();
+                const pixel = await page.evaluate(async data => {
+                    const image = new Image(); image.src = data; await image.decode();
+                    const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
+                    const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
+                    const rect = document.querySelector('#transform-cover').getBoundingClientRect();
+                    return [...context.getImageData(Math.round((rect.x+rect.width/2)*image.width/innerWidth),
+                        Math.round((rect.y+rect.height/2)*image.height/innerHeight), 1, 1).data];
+                }, `data:image/png;base64,${png.toString('base64')}`);
+                assert.deepEqual(pixel, [11,22,33,255], '译图不得盖住宿主菜单的真实像素');
+                report.transformedImages.at(-1).foregroundPixel = pixel;
+            }
+            if (fixture.clippingProbe) {
+                const png = await page.screenshot();
+                const clipping = await page.evaluate(async data => {
+                    const screenshot = new Image(); screenshot.src = data; await screenshot.decode();
+                    const canvas = document.createElement('canvas'); canvas.width = screenshot.width; canvas.height = screenshot.height;
+                    const context = canvas.getContext('2d', {willReadFrequently:true}); context.drawImage(screenshot, 0, 0);
+                    const card = document.querySelector('.card'), rect = card.getBoundingClientRect();
+                    const point = {x:rect.right + 90, y:rect.top + 110};
+                    const control = {x:innerWidth - 30, y:point.y};
+                    const cssBackground = getComputedStyle(document.body).backgroundColor.match(/\d+/g).map(Number).slice(0, 3).concat(255);
+                    const read = point => [...context.getImageData(Math.round(point.x * screenshot.width / innerWidth),
+                        Math.round(point.y * screenshot.height / innerHeight), 1, 1).data];
+                    // macOS 截图经颜色配置转换后可能与 CSS 字面色相差 1 级；比较同图空白背景仍要求逐字节一致。
+                    return {point, control, cssBackground, expected:read(control), actual:read(point), cardPosition:getComputedStyle(card).position, overflow:getComputedStyle(card).overflow,
+                        sourceOffsetParent:document.querySelector('#sample').offsetParent?.tagName};
+                }, `data:image/png;base64,${png.toString('base64')}`);
+                report.transformedImages.at(-1).clippingProbe = clipping;
+                fs.writeFileSync(path.join(artifacts, `clipping-${fixture.name}.png`), png);
+                assert.ok(clipping.expected.every((value, index) => Math.abs(value - clipping.cssBackground[index]) <= 1), '裁切参照点必须仍为空白背景');
+                assert.deepEqual(clipping.actual, clipping.expected, '译图不得越过原图祖先的溢出裁切');
+            }
+            await shot(`native-corners-${fixture.name}`);
+        }
+        assert.equal(await worker.evaluate(() => globalThis.__imageFixture.requests.length), requestsBefore);
+        assert.deepEqual(failures, [], '真实浏览器译图四角必须与原图一致');
+        report.cases.push(`${cases.filter(item => !item.fallback).length} image border/padding/content quads match; unsupported fixed transforms and static clipping preserve the original and reader; no extra OCR or translation`);
+    } finally {
+        await page.evaluate(originals => {
+            document.querySelector('#transform-cover')?.remove();
+            for (const {selector, css} of originals) {
+                const node = document.querySelector(selector);
+                for (const name of [...node.style]) if (!['opacity', 'transition', 'transition-property'].includes(name)) node.style.removeProperty(name);
+                for (const [name, value, priority] of css) node.style.setProperty(name, value, priority);
+                node.scrollLeft = 0; node.scrollTop = 0;
+            }
+        }, originals);
+    }
+}
+
 async function verifyGeometryCases({worker, ui, wait, shot}) {
     const requestsBefore = await worker.evaluate(() => globalThis.__imageFixture.requests.length);
-    const properties = ['width', 'height', 'box-sizing', 'padding', 'border', 'object-fit', 'object-position'];
+    const properties = ['width', 'height', 'box-sizing', 'padding', 'border', 'object-fit', 'object-position', 'clip-path', 'image-rendering'];
     // 只恢复本夹具修改的属性，保留图片 runtime 正在持有的 opacity 租约。
     const originalStyles = await page.locator('#sample').evaluate((image, properties) =>
         properties.map(property => [property, image.style.getPropertyValue(property), image.style.getPropertyPriority(property)]), properties);
@@ -222,6 +398,7 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
         {name: 'contain-padding-border', fit: 'contain', position: '25% 75%'},
         {name: 'cover-padding-border', fit: 'cover', position: '70% 30%'},
         {name: 'none-padding-border', fit: 'none', position: '25% 75%'},
+        {name: 'image-shape-pixelated', fit: 'contain', position: '50% 50%', shape: 'inset(5% round 36px)'},
         {name: 'ancestor-clipping', fit: 'cover', position: '50% 50%', clipped: true},
         {name: 'ancestor-scroll-clipping', fit: 'contain', position: '50% 50%', clipped: true, scroll: true},
     ];
@@ -234,6 +411,7 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
                     width: '620px', height: '390px', boxSizing: 'content-box',
                     padding: '12px 18px 24px 30px', border: '6px solid #637fad',
                     objectFit: fixture.fit, objectPosition: fixture.position,
+                    clipPath: fixture.shape || 'none', imageRendering: fixture.shape ? 'pixelated' : 'auto',
                 });
                 if (fixture.clipped) {
                     let clip = document.querySelector('#geometry-clip');
@@ -258,6 +436,9 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
                 snapshot = await ui(`return (${readGeometry.toString()}).call(this)`);
                 try {
                     assertGeometry(snapshot);
+                    const appearance = await ui(`const source=getComputedStyle(document.querySelector('#sample'));const bitmap=getComputedStyle(this.querySelector('.fluent-read-image-translation-bitmap'));return {sourceClip:source.clipPath,bitmapClip:bitmap.clipPath,sourceSampling:source.imageRendering,bitmapSampling:bitmap.imageRendering};`);
+                    assert.equal(appearance.bitmapClip, appearance.sourceClip);
+                    assert.equal(appearance.bitmapSampling, appearance.sourceSampling);
                     if (fixture.clipped) {
                         assert.ok(snapshot.ancestorClipCount > 0, '祖先裁切夹具未生效');
                         assert.ok(snapshot.insets.some(value => value > 0), '译图必须发生实际裁切');
@@ -290,6 +471,58 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
     }
 }
 
+/** 在真实操作前观察已创建的离屏页，记录实际 Canvas 字体；不改原文、译文或请求归属。 */
+async function recordSourceTypography(context,popup,worker,action){
+    const bridge=await context.newCDPSession(popup),pending=new Map();let next=0,session,actionTask;
+    const receive=event=>{if(event.sessionId!==session)return;const data=JSON.parse(event.message),slot=pending.get(data.id);if(!slot)return;
+        pending.delete(data.id);clearTimeout(slot.timer);data.error?slot.reject(new Error(data.error.message)):slot.resolve(data.result);};
+    bridge.on('Target.receivedMessageFromTarget',receive);
+    const command=(method,params={})=>new Promise((resolve,reject)=>{
+        const id=++next,timer=setTimeout(()=>{pending.delete(id);reject(new Error('Typography CDP timed out: '+method));},15000);
+        pending.set(id,{resolve,reject,timer});
+        bridge.send('Target.sendMessageToTarget',{sessionId:session,message:JSON.stringify({id,method,params})}).catch(error=>{clearTimeout(timer);pending.delete(id);reject(error);});
+    });
+    try{
+        const expectedOffscreen=`chrome-extension://${new URL(worker.url()).host}/offscreen.html`;
+        const isOffscreen=info=>info.url===expectedOffscreen||info.url.startsWith(expectedOffscreen+'?');
+        const {targetInfos}=await bridge.send('Target.getTargets');let target=targetInfos.find(isOffscreen);
+        if(!target){
+            let remove;
+            const created=new Promise((resolve,reject)=>{
+                const timer=setTimeout(()=>{remove();reject(new Error('The real offscreen document did not appear'));},15000);
+                const observe=({targetInfo})=>{if(isOffscreen(targetInfo)){remove();resolve(targetInfo);}};
+                remove=()=>{clearTimeout(timer);bridge.off('Target.targetCreated',observe);bridge.off('Target.targetInfoChanged',observe);};
+                bridge.on('Target.targetCreated',observe);bridge.on('Target.targetInfoChanged',observe);
+            });
+            await bridge.send('Target.setDiscoverTargets',{discover:true});
+            actionTask=action();
+            try{target=await Promise.race([created,actionTask.then(()=>{throw new Error('Translation completed before its offscreen document was observed');})]);}finally{remove();}
+        }
+        session=(await bridge.send('Target.attachToTarget',{targetId:target.targetId,flatten:false})).sessionId;
+        await command('Runtime.enable');
+        await command('Runtime.evaluate',{expression:`(()=>{const p=CanvasRenderingContext2D.prototype,original=p.fillText,rect=p.rect,bounds=new WeakMap();globalThis.__typographyDraws=[];globalThis.__restoreTypography=()=>{p.fillText=original;p.rect=rect;};
+            p.rect=function(...args){bounds.set(this,args.slice());return rect.apply(this,args);};
+            p.fillText=function(...args){if(this.canvas.width===1400&&this.canvas.height===700&&globalThis.__typographyDraws.length<32){const m=this.measureText(args[0]);globalThis.__typographyDraws.push({text:args[0],font:this.font,fill:this.fillStyle,clip:bounds.get(this),x:args[1],y:args[2],ascent:m.actualBoundingBoxAscent,descent:m.actualBoundingBoxDescent,left:m.actualBoundingBoxLeft,right:m.actualBoundingBoxRight});}return original.apply(this,args);};})()`});
+        await (actionTask??action());
+        const captured=await worker.evaluate(()=>globalThis.__imageFixture.typographyResult);
+        assert.ok(captured,'Capture the actual offscreen response');assert.equal(captured.lines.length,3);
+        const evaluated=await command('Runtime.evaluate',{expression:'globalThis.__typographyDraws',returnByValue:true});
+        if(evaluated.exceptionDetails)throw new Error(evaluated.exceptionDetails.text);
+        const draws=evaluated.result.value;assert.equal(draws.length,3,'Each complete translated line is actually drawn once');
+        const sourceMetrics=await popup.evaluate(lines=>{
+            const ctx=document.createElement('canvas').getContext('2d');ctx.textBaseline='alphabetic';ctx.textAlign='left';ctx.font='400 100px Arial';
+            return lines.map(line=>{const m=ctx.measureText(line.sourceText);return {text:line.sourceText,bbox:line.bbox,widthAt100:m.actualBoundingBoxLeft+m.actualBoundingBoxRight,heightAt100:m.actualBoundingBoxAscent+m.actualBoundingBoxDescent};});
+        },captured.lines);
+        const image=path.join(artifacts,'typography-translated.png');assert.ok(captured.image.startsWith('data:image/png;base64,'));fs.writeFileSync(image,Buffer.from(captured.image.split(',')[1],'base64'));
+        const sourceImage=path.join(artifacts,'typography-source.png');assert.ok(captured.sourceImage.startsWith('data:image/png;base64,'));fs.writeFileSync(sourceImage,Buffer.from(captured.sourceImage.split(',')[1],'base64'));
+        report.typography={scope:'Same 48px Arial source, real OCR, original production offscreen response and native fillText; deterministic translated text.',sourceMetrics,draws,image,sourceImage};
+    }finally{
+        if(session)await command('Runtime.evaluate',{expression:'globalThis.__restoreTypography?.()'}).catch(error=>report.cleanupErrors.push('Typography instrumentation restore: '+error.message));
+        for(const slot of pending.values())clearTimeout(slot.timer);
+        await bridge.detach();
+    }
+}
+
 (async () => {
     await new Promise((resolve, reject) => {
         server.once('error', reject);
@@ -309,6 +542,7 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
     assert.equal(launched.windowPlacement.mode, 'background-visible-no-focus');
     assert.equal(launched.windowPlacement.browserFrontmost, false);
     const context = launched.context;
+    await diagnostics?.start(context);
     report.console = [];
     context.on('console', message => {
         if (['warning', 'error'].includes(message.type())) report.console.push({type: message.type(), text: message.text().slice(0, 1500)});
@@ -322,7 +556,8 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
         let diagnosticMessageId = 0;
         report.ocrConsole = [];
         report.ocrTargets = [];
-        const targetIsOcr = targetInfo => targetInfo.url.includes('/fluent-read-ocr/') || targetInfo.url.endsWith('/offscreen.html');
+        const targetIsOcr = targetInfo => targetInfo.url.includes('/fluent-read-ocr/')
+            || targetInfo.url.endsWith('/mangaInferenceWorker.js') || targetInfo.url.endsWith('/offscreen.html');
         const sendToTargetSession = async (sessionId, method, params = {}) => {
             const id = ++diagnosticMessageId;
             const message = JSON.stringify({id, method, params});
@@ -385,10 +620,20 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
                 return;
             }
             if (event.method === 'Target.detachedFromTarget') return;
+            if (event.method === 'Runtime.exceptionThrown') {
+                const details = event.params.exceptionDetails;
+                report.ocrConsole.push({
+                    type: 'error',
+                    targetSessionId: parentSessionId,
+                    text: details.exception?.description || details.text,
+                    stack: details.stackTrace?.callFrames || [],
+                });
+            }
             if (event.method === 'Runtime.consoleAPICalled' && ['warning','error'].includes(event.params.type)) {
                 report.ocrConsole.push({
                     type: event.params.type,
                     targetSessionId: parentSessionId,
+                    stack: event.params.stackTrace?.callFrames || [],
                     text: event.params.args.map(arg=>arg.value ?? arg.description ?? '').join(' ').slice(0,2000),
                 });
             }
@@ -411,7 +656,10 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
         await Promise.all(targetInfos.map(targetInfo=>attachTarget(targetInfo)));
     }
     worker = context.serviceWorkers().find(w => w.url().startsWith('chrome-extension://')) || await context.waitForEvent('serviceworker', { timeout: 30000 });
+    diagnostics?.setExtensionId(new URL(worker.url()).host);
+    diagnostics?.setPhase('extension configuration and model setup');
     const popup = await newPageWithoutForeground(context, 30000);
+    await diagnostics?.attachPage(popup, 'extension-popup-options');
     await popup.goto(`chrome-extension://${new URL(worker.url()).host}/popup.html`);
     await popup.evaluate(async ({xSurface, xLightbox}) => {
         const read = await chrome.runtime.sendMessage({type: 'configStorageRead', key: 'local:config'});
@@ -425,10 +673,38 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
         });
         if (!response.success) throw new Error(response.error);
     }, {xSurface, xLightbox});
-    await worker.evaluate(({liveTranslation, paragraphFixture, xLightbox, manyLineTranslation, unchangedFixture}) => {
+    if (xLightbox) {
+        await popup.goto(`chrome-extension://${new URL(worker.url()).host}/options.html#settings-image-translation`);
+        const models = popup.locator('.manga-model-settings');
+        await models.waitFor();
+        await models.locator('.manga-download-settings > summary').click();
+        const input = models.locator('input[type=file]');
+        await input.waitFor({state: 'attached'});
+        // 浏览器与导入入口就绪后才准备模型；启动失败不产生无用下载。
+        const modelCache = await require('./image-model-cache.cjs').ensureImageTranslationModelFiles({
+            directory: modelCacheDir, kinds: ['ocr'], allowNetworkDownload: !noCacheDownload,
+            sourceDirectories: [modelCacheDir || require('./image-model-cache.cjs').defaultImageTranslationModelCacheDirectory()],
+        });
+        report.modelCache = {directory: modelCache.directory, networkDownloads: modelCache.networkDownloads,
+            files: modelCache.files.map(({filename, bytes, sha256, cache}) => ({filename, bytes, sha256, cache}))};
+        await input.setInputFiles(modelCache.files.map(file => file.path));
+        await popup.waitForFunction(async () => (await chrome.runtime.sendMessage({type: 'fluentReadMangaModelStatus'})).ready,
+            null, {timeout: 60_000});
+        report.modelCache.importedIntoTemporaryProfile = true;
+        await popup.goto(`chrome-extension://${new URL(worker.url()).host}/popup.html`);
+    }
+    await worker.evaluate(({liveTranslation, paragraphFixture, xLightbox, manyLineTranslation, unchangedFixture, traceTypography}) => {
         const originalFetch = globalThis.fetch.bind(globalThis);
         // Keep the real OCR path intact while giving the loading controls enough time to sample.
         const fixture = globalThis.__imageFixture = {requests: [], endpointHosts: [], rejectPrimaryXsrf: false, operationIds: [], delay: 1800, replayProgress: false, progressTimer: null, progressRequestId: null};
+        if(traceTypography){
+            const send=chrome.runtime.sendMessage.bind(chrome.runtime);
+            chrome.runtime.sendMessage=function(...args){
+                const message=args[0],observe=response=>{if(message?.type==='FLUENT_READ_IMAGE_TRANSLATE_OFFSCREEN'&&response?.success&&Array.isArray(response.lines))fixture.typographyResult={lines:response.lines,image:response.image,sourceImage:message.image};return response;};
+                const last=args.length-1,callback=args[last];if(typeof callback==='function')args[last]=response=>callback(observe(response));
+                const result=send(...args);return typeof callback!=='function'&&result?.then?result.then(observe):result;
+            };
+        }
         const clearProgress = () => {
             if (fixture.progressTimer !== null) clearInterval(fixture.progressTimer);
             fixture.progressTimer = null;
@@ -537,7 +813,7 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
             // OCR worker、wasm 和语言包仍沿真实生产路径加载，不 mock Tesseract。
             return originalFetch(input, options);
         };
-    }, {liveTranslation, paragraphFixture: Boolean(paragraphImage), xLightbox, manyLineTranslation, unchangedFixture});
+    }, {liveTranslation, paragraphFixture: Boolean(paragraphImage), xLightbox, manyLineTranslation, unchangedFixture, traceTypography});
     if (harFixture) {
         if (liveTranslation) throw new Error('--har-fixture 只用于确定性响应验证');
         currentCase = 'HAR identifier filtering and Google XSRF cooldown';
@@ -560,39 +836,55 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
         await worker.evaluate(() => {globalThis.__imageFixture.requests = []; globalThis.__imageFixture.endpointHosts = []; globalThis.__imageFixture.rejectPrimaryXsrf = false;});
     }
     page = await newPageWithoutForeground(context, 30000);
+    await diagnostics?.attachPage(page, 'image-fixture-content');
+    diagnostics?.setPhase(xSurface ? 'X-style thumbnail translation and preview' : 'image translation fixture');
     page.on('pageerror', e => report.errors.push(e.message));
-    await page.goto(`http://127.0.0.1:${server.address().port}/`);
+    const fixtureUrl = xLightbox ? 'https://x.com/fluentread-fixture/status/1' : `http://127.0.0.1:${server.address().port}/`;
+    if (xLightbox) {
+        await page.route(fixtureUrl, route => route.fulfill({contentType: 'text/html; charset=utf-8', body: html}));
+    }
+    await page.goto(fixtureUrl);
     cdp = await context.newCDPSession(page);
-    async function rootObject() {
+    async function shadowObjects(includeXBitmap) {
         const tree = await cdp.send('DOM.getDocument', {depth: -1, pierce: true});
         let host;
+        let bitmapHost;
         function visit(node) {
             const attributes = node.attributes || [];
             for (let index = 0; index < attributes.length; index += 2) {
-                if (attributes[index] === 'id' && attributes[index + 1] === 'fluent-read-image-translation-root') host = node;
+                const key = attributes[index];
+                const value = attributes[index + 1];
+                if (key === 'id' && value === 'fluent-read-image-translation-root') host = node;
+                if (includeXBitmap && key === 'data-fluent-read-ui' && value === 'image-translation-bitmap') bitmapHost = node;
             }
             for (const child of [...(node.children || []), ...(node.shadowRoots || [])]) visit(child);
         }
         visit(tree.root);
-        const shadow = host?.shadowRoots?.[0];
-        if (!shadow) return null;
-        return (await cdp.send('DOM.resolveNode', {nodeId: shadow.nodeId})).object.objectId;
+        // 宿主节点可能在两条 CDP 命令之间移动，使用稳定的后端节点标识。
+        const resolveShadow = async element => {
+            const shadow = element?.shadowRoots?.[0];
+            if (!shadow) return null;
+            return (await cdp.send('DOM.resolveNode', {backendNodeId: shadow.backendNodeId})).object.objectId;
+        };
+        return Promise.all([resolveShadow(host), resolveShadow(bitmapHost)]);
     }
-    async function ui(code) {
-        const objectId = await rootObject();
-        if (!objectId) return null;
+    async function ui(code, includeXBitmap = false) {
+        const [objectId, bitmapRootId] = await shadowObjects(includeXBitmap);
         try {
+            if (!objectId) return null;
             const response = await cdp.send('Runtime.callFunctionOn', {
-                objectId, functionDeclaration: `function(){${code}}`, returnByValue: true,
+                objectId, functionDeclaration: `function(paintRoot){${code}}`, returnByValue: true,
+                arguments: bitmapRootId ? [{objectId: bitmapRootId}] : [],
             });
             if (response.exceptionDetails) {
                 throw new Error(response.exceptionDetails.exception?.description || response.exceptionDetails.text);
             }
             return response.result.value;
         } finally {
-            await cdp.send('Runtime.releaseObject', {objectId}).catch(error => {
-                report.cleanupErrors.push(`CDP object release: ${error.message}`);
-            });
+            await Promise.all([objectId, bitmapRootId].filter(Boolean).map(id =>
+                cdp.send('Runtime.releaseObject', {objectId: id}).catch(error => {
+                    report.cleanupErrors.push(`CDP object release: ${error.message}`);
+                })));
         }
     }
     readUi = ui;
@@ -887,10 +1179,15 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
     if (xSurface) {
         currentCase = 'X snapshot surface and first-use automatic OCR languages';
         const {verifyXSurface} = require('./image-translation-x-surface.cjs');
-        await verifyXSurface({page, context, popup, worker, ui, wait, click, shot, report,
+        await verifyXSurface({page, context, popup, worker, ui: code => ui(code, true), wait, click, shot, report,
             originalImage: arg('original-image', null), lightboxOnly:xLightbox});
         if (!xLightbox) assert.ok(report.ocrTargets.some(target => target.type === 'worker' && target.url.includes('/fluent-read-ocr/')),
             '必须实际监听 dedicated OCR Worker，才能断言不存在语言加载错误');
+        if (xLightbox && diagnostics) {
+            assert.ok(report.ocrTargets.some(target => target.type === 'worker' && target.url.endsWith('/mangaInferenceWorker.js')),
+                '必须实际监听 PaddleOCR Worker');
+            assert.equal(report.ocrConsole.length, 0, 'Offscreen 和 PaddleOCR Worker 无运行时错误或告警');
+        }
         assert.equal(report.ocrConsole.some(entry => entry.diagnosticError), false, 'OCR 控制台监听不得静默失效');
         assert.equal(report.ocrConsole.some(entry => /Error opening data file|Failed loading language|Tesseract couldn't load/.test(entry.text || '')),
             false, '显式下载的语言包不应触发子语言文件加载错误');
@@ -922,9 +1219,9 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
     await wait(() => ui("return this.querySelector('.fr-image-controls')?.dataset.phase==='error'"));
     await shot('01-language-preparation');
     report.cases.push('missing languages exposes preparation action');
-    await click('下载语言包并翻译');
     const began = Date.now();
-    await wait(() => ui("return this.querySelector('.fr-image-controls')?.dataset.phase==='translated'"), 300000);
+    const translatePreparedImage=async()=>{await click('下载语言包并翻译');await wait(() => ui("return this.querySelector('.fr-image-controls')?.dataset.phase==='translated'"), 300000);};
+    if(traceTypography)await recordSourceTypography(context,popup,worker,translatePreparedImage);else await translatePreparedImage();
     report.coldPreparationAndTranslationMs = Date.now() - began;
     report.progress = await ui('return this.__progress');
     assert.ok(report.progress.some(t => t.includes('识别图片文字')));
@@ -1001,6 +1298,11 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
     }
     await wait(() => ui("return this.querySelectorAll('.fr-image-controls').length === 1"));
     await verifyGeometryCases({worker, ui, wait, shot});
+    if (transformedImages) {
+        await verifyTransformedImages({worker, ui, wait, shot});
+        report.success = true;
+        return;
+    }
     currentCase = 'dynamic source, cancellation and retry';
     await popup.evaluate(async () => {
         const read = await chrome.runtime.sendMessage({type: 'configStorageRead', key: 'local:config'});
@@ -1262,6 +1564,20 @@ async function verifyGeometryCases({worker, ui, wait, shot}) {
     if (cdp) {
         if (readUi) await readUi('this.__progressObserver?.disconnect(); return true;').catch(() => undefined);
         await cdp.detach().catch(error => report.cleanupErrors.push(`CDP session detach: ${error.message}`));
+    }
+    if (diagnostics && launched) {
+        try {
+            await diagnostics.flush();
+            report.runtimeDiagnostics = diagnostics.snapshot();
+            fs.writeFileSync(path.join(artifacts, 'runtime-diagnostics.json'), JSON.stringify(report.runtimeDiagnostics, null, 2));
+            if (!report.runtimeDiagnostics.passed) {
+                report.success = false;
+                process.exitCode = 1;
+            }
+        } catch (error) {
+            report.cleanupErrors.push(`runtime diagnostics: ${error.message}`);
+        }
+        await diagnostics.stop().catch(error => report.cleanupErrors.push(`runtime diagnostics detach: ${error.message}`));
     }
     // 启动抛错时无法在这里证明浏览器已退出，保留本次临时配置以供诊断。
     let browserClosed = !launchAttempted;

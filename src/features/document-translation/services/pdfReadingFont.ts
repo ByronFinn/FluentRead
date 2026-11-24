@@ -6,6 +6,7 @@
  */
 import type {PDFDocument, PDFFont, PDFPage, PDFPageDrawTextOptions} from 'pdf-lib';
 import {isPdfReadingVariationSelector} from '../core/pdfTextLayout';
+import {cancelUnreadResponseBody} from '@/src/platform/http/runtime';
 
 export const PDF_READING_FONT_PATH = '/pdf-fonts/FluentReadNotoSansSC-Regular.woff2';
 export const PDF_READING_FONT_BYTES = 5_112_688;
@@ -55,11 +56,13 @@ export function createPdfReadingFontLoader(overrides: Partial<PdfReadingFontLoad
     type Download = {controller: AbortController; subscribers: number; promise: Promise<Uint8Array>};
     let pending: Download | undefined;
 
-    async function readVerified(response: Response, signal: AbortSignal): Promise<Uint8Array> {
+    async function readVerified(response: Response, signal: AbortSignal): Promise<Uint8Array<ArrayBuffer>> {
         if (!response.ok || !response.body || /text\/html/iu.test(response.headers.get('Content-Type') || '')) {
+            cancelUnreadResponseBody(response);
             throw new Error('PDF 导出字体来源不可用');
         }
         if (!response.headers.get('Content-Encoding') && Number(response.headers.get('Content-Length')) > PDF_READING_FONT_BYTES) {
+            cancelUnreadResponseBody(response);
             throw new Error('PDF 导出字体超过预期大小');
         }
         const reader = response.body.getReader();
@@ -73,7 +76,7 @@ export function createPdfReadingFontLoader(overrides: Partial<PdfReadingFontLoad
                 bytes.set(chunk.value, offset);
                 offset += chunk.value.byteLength;
             }
-        } finally {void reader.cancel().catch(() => undefined);}
+        } finally {void reader.cancel().catch(() => undefined); reader.releaseLock();}
         if (offset !== bytes.byteLength) throw new Error('PDF 导出字体不完整');
         const digest = await withAbort(() => deps.digest(bytes.buffer), signal);
         const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');

@@ -1,11 +1,12 @@
 /**
  * @file src/features/document-translation/ui/presentation.ts
- * 文件职责：提供文档翻译界面使用的纯展示派生规则，把 ParsedDocument 转换成空状态提示和格式特定的文本/样式标签。
- * 主要内容：相同译文保留原文且不重复展示；包含小型本地范例、基于有界编码与大型 JSON 摘录的导出预览、字幕与富文本格式判断、预览说明、DOCX 部件名称映射、阅读器文本清理（含整句送翻留下的编号占位符，ASS 的换行与空格代码显示成真正的换行和空格）、译文是否带占位符的判断及 source 节点 class 的选择。
+ * 文件职责：提供文档翻译界面使用的纯展示派生规则，把 ParsedDocument 转换成空状态提示和格式特定的文本标签。
+ * 主要内容：相同译文保留原文且不重复展示；包含小型本地范例、有界导出预览、格式判断、DOCX 部件名称映射、按二进制结构生成可本地化的位置索引、阅读器文本清理及译文占位符判断。
  * 模块边界：本文件不创建 DOM、不解析文件也不调用翻译；它只消费 core 模型并返回 UI 可直接使用的值，实际预览 HTML 归 core/preview，PDF 位图和导出分别归 pdfPreview 与 binary。
  */
 import {hasDistinctTranslation} from '@/src/core/translation/result';
 import {renderDocument, resolveDocumentTranslation, type DocumentFormat, type DocumentRenderMode, type ParsedDocument} from '@/src/features/document-translation/core/document';
+import {stripDocumentInlineMarkers} from '@/src/core/translation/documentInlineMarkers';
 
 /** 小型本地范例只走正常导入流程，不预填译文或自动发起翻译。 */
 export const DOCUMENT_QUICK_SAMPLES = [
@@ -23,9 +24,10 @@ export function isDocumentExportExcerpt(document: ParsedDocument): boolean {
 export function getDocumentExportPreview(document: ParsedDocument, translations: readonly string[], mode: DocumentRenderMode): string {
     const text = isDocumentExportExcerpt(document)
         ? document.segments.slice(0, 3).map(segment => {
-            const translation = resolveDocumentTranslation(segment.source, translations[segment.id]).slice(0, 1601);
+            const clean = segment.docxInline ? stripDocumentInlineMarkers : (value: string) => value;
+            const translation = clean(resolveDocumentTranslation(segment.source, translations[segment.id])).slice(0, 1601);
             return mode === 'bilingual' && hasDistinctTranslation(segment.source, translations[segment.id])
-                ? `${segment.source.slice(0, 1601)}\n${translation}` : translation;
+                ? `${clean(segment.source).slice(0, 1601)}\n${translation}` : translation;
         }).join('\n\n')
         : renderDocument(document, translations, mode, 1601);
     return text.length > 1600 ? `${text.slice(0, 1600)}\n…` : text;
@@ -64,6 +66,33 @@ export function getDocxPartLabel(path: string): string {
     return '文档内容';
 }
 
+/** 只本地化有解析结构证明的位置，不能根据中文形状猜测或改写用户章节、JSON 路径和历史标题。 */
+export function getDocumentGeneratedPositionLabels(
+    document: ParsedDocument,
+    pageLabel: (page: number) => string,
+    localize: (label: string) => string,
+): ReadonlyMap<number, string> {
+    const labels = new Map<number, string>();
+    if (document.binary?.kind === 'pdf') {
+        for (const page of document.binary.pages) {
+            const label = pageLabel(page.pageNumber);
+            for (const index of page.segmentIndexes) {
+                const segment = document.segments[index];
+                if (segment) labels.set(segment.id, label);
+            }
+        }
+    } else if (document.binary?.kind === 'docx') {
+        for (const part of document.binary.parts) {
+            const label = localize(getDocxPartLabel(part.path));
+            for (const {segmentIndex} of part.paragraphSegments) {
+                const segment = document.segments[segmentIndex];
+                if (segment) labels.set(segment.id, label);
+            }
+        }
+    }
+    return labels;
+}
+
 /** 整句送翻时代替行内标签和 Markdown 语法的编号占位符：`<g1>`、`</g1>`、`<g2/>`。 */
 const DOCUMENT_PLACEHOLDER = /<\/?g\d+\/?>/gu;
 
@@ -72,7 +101,8 @@ export function hasDocumentPlaceholder(value: string | undefined): boolean {
     return Boolean(value) && /<\/?g\d+\/?>/u.test(value!);
 }
 
-export function formatDocumentReaderText(format: DocumentFormat | undefined, value: string): string {
+export function formatDocumentReaderText(format: DocumentFormat | undefined, value: string, docxInline?: true): string {
+    if (docxInline) return stripDocumentInlineMarkers(value).trim();
     if (format === 'html' || format === 'epub') return value.replace(/<[^>]+>/gu, '').trim();
     if (format === 'markdown') {
         return value
@@ -91,10 +121,4 @@ export function formatDocumentReaderText(format: DocumentFormat | undefined, val
         return (format === 'ass' ? text.replace(/\\[Nn]/gu, '\n').replace(/\\h/gu, ' ') : text).trim();
     }
     return value.trim();
-}
-
-export function getDocumentReaderSourceClass(format: DocumentFormat | undefined, value: string): string {
-    return format === 'markdown' && /^\s{0,3}#{1,6}\s+/u.test(value)
-        ? 'reader-heading'
-        : '';
 }

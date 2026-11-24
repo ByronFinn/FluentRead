@@ -2,7 +2,7 @@ import {withProviderSnapshot} from './helpers/providerSnapshot';
 /**
  * @file tests/bilibiliFreeTranslation.test.ts
  * 文件职责：验证 B站匿名 API 协议、字幕以外的纯文本边界和免费池所需错误契约。
- * 主要内容：覆盖语言、分块、槽与空白保留、取消、思考输出、截断、HTTP 限流和损坏响应。
+ * 主要内容：覆盖语言、分块、槽与空白保留、取消、思考输出、截断、HTTP 限流和损坏响应；用合成技术文档复现短多行请求收到 504 后的有界恢复，核对错误正文取消与共享调度。
  * 模块边界：使用共享 HTTP 端口注入响应，不连接真实服务，不读取用户配置。
  */
 import {protectedDocumentLongMathParagraph} from './fixtures/documentLongMathParagraph';
@@ -14,6 +14,8 @@ import {services, servicesType, options} from '@/src/core/config/catalog';
 import {getMissingCredentialMessage} from '@/src/core/config/validation';
 import {attachTranslationProviderConfig, createTranslationProviderConfigSnapshot} from '@/src/services/translation/requestSnapshot';
 import {parseTranslationSlots, serializeTranslationSlots} from '@/src/core/translation/slotProtocol';
+import {createTranslationRequestScheduler} from '@/src/services/translation/requestScheduler';
+import {translateMicrosoftTextsWithTransport} from '@/src/providers/translation/microsoftTransport';
 
 vi.mock('@/src/services/config/store', () => ({config: {from: 'auto', to: 'zh-Hans'}}));
 
@@ -64,6 +66,7 @@ describe('B站官方免费翻译', () => {
         expect(body).toMatchObject({model: 'Index-Translate-35B-A3B', stream: false, chat_template_kwargs: {enable_thinking: false}});
         expect(JSON.stringify(init)).not.toContain('private');
         expect(body.messages[0].content).toContain('简体中文');
+        expect(body.messages[0].content).toContain('表情符号和 __FRTERM_...__ 内部占位符必须原样保留，包括全部下划线');
     });
 
     it('自动源语言与默认目标可用，繁体目标不会降为简体', async () => {
@@ -89,6 +92,119 @@ describe('B站官方免费翻译', () => {
         expect(fetch).toHaveBeenCalledTimes(3);
         const texts = fetch.mock.calls.map(([, init]) => JSON.parse(init.body).messages[0].content.split('\n\n')[1]);
         expect(texts.map(text => Array.from(text).length)).toEqual([1998, 3, 5]);
+    });
+
+    it('预算内的多段帖子只请求一次，按原顺序恢复段落间距与边缘空白', async () => {
+        const paragraphs = [
+            'このページには複数の段落があります。',
+            '翻訳したあとも、段落の順序と空白を保ちます。',
+            '最後にもう一度、表示を確認します。',
+        ];
+        const source = ` ${paragraphs[0]}\r\n\r\n\t${paragraphs[1]}  \n \n${paragraphs[2]}\n`;
+        const fetch = vi.fn().mockImplementation(async () => reply('本页包含多个段落。\n\n译后保留段落顺序和空白。\n最后再检查一次显示效果。'));
+        setRuntimeFetch(fetch);
+
+        await expect(translateBilibiliFree(request(source, {sourceLanguage: 'ja'})))
+            .resolves.toBe(' 本页包含多个段落。\r\n\r\n\t译后保留段落顺序和空白。  \n \n最后再检查一次显示效果。\n');
+        expect(fetch).toHaveBeenCalledOnce();
+        const prompt = JSON.parse(fetch.mock.calls[0][1].body).messages[0].content;
+        expect(prompt).toContain(source.trim());
+    });
+
+    it.each([
+        {case: '行数不匹配', content: '合在一起的译文。', finish: 'stop'},
+        {case: '截断', content: '未译完', finish: 'length'},
+        {case: '空译文', content: ' \n ', finish: 'stop'},
+    ])('整段响应为 $case 时回退逐行翻译并保留空行', async ({content, finish}) => {
+        const fetch = vi.fn().mockResolvedValueOnce(reply(content, finish))
+            .mockResolvedValueOnce(reply('第一段。')).mockResolvedValueOnce(reply('第二段。'));
+        setRuntimeFetch(fetch);
+
+        await expect(translateBilibiliFree(request('First paragraph.\n\nSecond paragraph.')))
+            .resolves.toBe('第一段。\n\n第二段。');
+        expect(fetch).toHaveBeenCalledTimes(3);
+    });
+
+    it('短技术段落合并请求返回 504 后逐行恢复原布局', async () => {
+        const lines = ['Set timeoutMs to 5000.', 'Do not enable retries.', 'Save the config.', 'Restart the service.'];
+        const source = ` ${lines[0]}  \r\n\r\n\t${lines[1]}\n${lines[2]}\n${lines[3]}\n`;
+        const cancelledBody = vi.fn(() => new Promise<void>(() => undefined));
+        const gatewayError = new Response(new ReadableStream({cancel: cancelledBody}), {status: 504});
+        const fetch = vi.fn().mockResolvedValueOnce(gatewayError)
+            .mockResolvedValueOnce(reply('将 timeoutMs 设为 5000。')).mockResolvedValueOnce(reply('不要启用重试。'))
+            .mockResolvedValueOnce(reply('保存配置。')).mockResolvedValueOnce(reply('重启服务。'));
+        setRuntimeFetch(fetch);
+
+        await expect(translateBilibiliFree(request(source)))
+            .resolves.toBe(' 将 timeoutMs 设为 5000。  \r\n\r\n\t不要启用重试。\n保存配置。\n重启服务。\n');
+        expect(cancelledBody).toHaveBeenCalledOnce();
+        const sent = fetch.mock.calls.map(([, init]) => JSON.parse(init.body).messages[0].content.split('\n\n').slice(1).join('\n\n'));
+        expect(sent).toEqual([source.trim(), ...lines]);
+    });
+
+    it.each([504, 200])('整段 HTTP %s 需逐行回退时，长缩进不会把首行拆成两次请求', async status => {
+        const padding = ' '.repeat(1960);
+        const first = 'Set timeoutMs to 4500 before restarting the background service and record the result.';
+        const lines = [first, 'Do not enable automatic retries.', 'Save the config before closing the editor.',
+            'Restart the service when the queue is empty.'];
+        const source = `${padding}${lines[0]}  \r\n\r\n\t${lines[1]}\r\n${lines[2]}\n${lines[3]}   `;
+        const output = lines.map(line => '译文 ' + line);
+        const fetch = vi.fn().mockResolvedValueOnce(status === 504 ? new Response(null, {status}) : reply('合并后的单行回复'))
+            .mockImplementation(async (_url, init) => reply('译文 ' + JSON.parse(init.body).messages[0].content.split('\n\n').at(-1)));
+        setRuntimeFetch(fetch);
+
+        const translated = await translateBilibiliFree(request(source));
+        const sent = fetch.mock.calls.map(([, init]) => JSON.parse(init.body).messages[0].content.split('\n\n').slice(1).join('\n\n'));
+        expect(sent).toEqual([source.trim(), ...lines]);
+        expect(translated).toBe(`${padding}${output[0]}  \r\n\r\n\t${output[1]}\r\n${output[2]}\n${output[3]}   `);
+    });
+
+    it.each([
+        {case: '五个正文行', origin: 'First\nSecond\nThird\nFourth\nFifth', headers: new Headers(), expected: {statusCode: 504}},
+        {case: '供应商要求等待', origin: 'First\nSecond', headers: new Headers({'Retry-After': '12'}), expected: {statusCode: 504, retryAfterMs: 12000}},
+    ])('504 遇到 $case 时不增加请求', async ({origin, headers, expected}) => {
+        const fetch = vi.fn().mockResolvedValue(new Response(null, {status: 504, headers}));
+        setRuntimeFetch(fetch);
+
+        await expect(translateBilibiliFree(request(origin))).rejects.toMatchObject(expected);
+        expect(fetch).toHaveBeenCalledOnce();
+    });
+
+    it('逐行恢复仍遇到 504 时立即返回错误', async () => {
+        const fetch = vi.fn().mockImplementation(async () => new Response(null, {status: 504}));
+        setRuntimeFetch(fetch);
+
+        await expect(translateBilibiliFree(request('First paragraph.\nSecond paragraph.')))
+            .rejects.toMatchObject({statusCode: 504});
+        expect(fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it('短技术段落逐行恢复时取消会停止余下请求', async () => {
+        const controller = new AbortController();
+        const reason = new Error('switched translation service');
+        const fetch = vi.fn().mockResolvedValueOnce(new Response(null, {status: 504}))
+            .mockImplementationOnce(async () => { controller.abort(reason); return reply('第一段。'); });
+        setRuntimeFetch(fetch);
+
+        await expect(translateBilibiliFree(request('First paragraph.\nSecond paragraph.', {abortSignal: controller.signal})))
+            .rejects.toBe(reason);
+        expect(fetch).toHaveBeenCalledTimes(2);
+        expect(fetch.mock.calls.every(([, init]) => init.signal === controller.signal)).toBe(true);
+    });
+
+    it('整段请求遇到限流时保留原错误，不拆出更多请求', async () => {
+        const fetch = vi.fn().mockResolvedValue(new Response('rate limited', {status: 429, headers: {'Retry-After': '12'}}));
+        setRuntimeFetch(fetch);
+
+        await expect(translateBilibiliFree(request('First paragraph.\nSecond paragraph.')))
+            .rejects.toMatchObject({statusCode: 429, retryAfterMs: 12000});
+        expect(fetch).toHaveBeenCalledOnce();
+    });
+
+    it('模型返回槽结构标记时不能把损坏分界重建为成功响应', async () => {
+        const packet = serializeTranslationSlots(['Read the first paragraph.', 'Continue here.'], 'bilibili-invalid-slot');
+        setRuntimeFetch(vi.fn().mockImplementation(async () => reply(packet.starts[0])));
+        await expect(translateBilibiliFree(request(packet.payload))).rejects.toThrow('B站翻译返回的文本槽结构无效');
     });
 
     it('内部文本槽保留原命名空间，标记不发送给模型', async () => {
@@ -136,34 +252,72 @@ describe('B站官方免费翻译', () => {
         setRuntimeFetch(async () => ({ok: true, json: async () => {parsing.abort(); return {};}} as Response));
         await expect(translateBilibiliFree(withProviderSnapshot(request('Hello', {abortSignal: parsing.signal}), {from: 'auto', to: 'zh-Hans'}))).rejects.toMatchObject({name: 'AbortError'});
     });
-    it.each(['http', 'abort'] as const)('B站 %s headers 后仍等待真实流式正文结算且保留错误分类', async mode => {
-        let body!: ReadableStreamDefaultController<Uint8Array>;
-        const response = new Response(new ReadableStream<Uint8Array>({start(controller) {body = controller;}}),
-            {status: mode === 'http' ? 429 : 200, headers: {'Retry-After': '12'}});
+    it.each(['http', 'abort'] as const)('B站 %s headers 后取消未读正文，不等待取消确认且保留错误分类', async mode => {
+        const cancel = vi.fn(() => new Promise<void>(() => undefined));
+        const response = new Response(new ReadableStream<Uint8Array>({cancel}),
+            {status: mode === 'http' ? 504 : 200, headers: {'Retry-After': '12'}});
         const signal = new AbortController();
         const reason = new Error('cancelled after headers');
         setRuntimeFetch(async () => {if (mode === 'abort') signal.abort(reason); return response;});
-        let settled = false;
-        const result = translateBilibiliFree(withProviderSnapshot(request('Hello', {abortSignal: signal.signal}), {from: 'auto', to: 'zh-Hans'})).then(
-            () => {settled = true; throw new Error('unexpected success');},
-            error => {settled = true; return error;},
-        );
-        await new Promise(resolve => setTimeout(resolve, 0));
-        expect(settled).toBe(false);
-        body.close();
-        const error = await result;
+        const error = await translateBilibiliFree(withProviderSnapshot(request('Hello', {abortSignal: signal.signal}), {from: 'auto', to: 'zh-Hans'})).catch(error => error);
+        expect(cancel).toHaveBeenCalledOnce();
         if (mode === 'abort') expect(error).toBe(reason);
-        else expect(error).toMatchObject({statusCode: 429, retryAfterMs: 12000});
+        else expect(error).toMatchObject({statusCode: 504, retryAfterMs: 12000});
     });
 
-    it('B站 错误正文读取失败不覆盖原 HTTP 状态', async () => {
-        let body!: ReadableStreamDefaultController<Uint8Array>;
-        const response = new Response(new ReadableStream<Uint8Array>({start(controller) {body = controller;}}), {status: 503});
+    it.each(['throw', 'reject'] as const)('B站 错误正文取消%s不覆盖原 HTTP 状态', async mode => {
+        const response = new Response(new ReadableStream<Uint8Array>({}), {status: 503});
+        vi.spyOn(response.body!, 'cancel').mockImplementation(() => {
+            if (mode === 'throw') throw new Error('cancel failed');
+            return Promise.reject(new Error('cancel failed'));
+        });
         setRuntimeFetch(async () => response);
-        const result = translateBilibiliFree(withProviderSnapshot(request(), {from: 'auto', to: 'zh-Hans'})).catch(error => error);
+        await expect(translateBilibiliFree(withProviderSnapshot(request(), {from: 'auto', to: 'zh-Hans'})))
+            .rejects.toMatchObject({statusCode: 503});
+    });
+
+    it('B站504的未结束正文和取消确认不挡住同一global调度器里的微软翻译', async () => {
+        const scheduler = createTranslationRequestScheduler(() => ({
+            maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 0,
+        }));
+        const cancel = vi.fn(() => new Promise<void>(() => undefined));
+        setRuntimeFetch(async () => new Response(new ReadableStream<Uint8Array>({cancel}), {status: 504, headers: {'Retry-After': '12'}}));
+        const first = scheduler.schedule(lease => {
+            const operation = translateBilibiliFree(withProviderSnapshot(request(), {from: 'auto', to: 'zh-Hans'}));
+            lease.holdUntil(operation);
+            return operation;
+        }, {identity: {service: services.bilibili}}).catch(error => error);
+        const microsoft = vi.fn(async () => Response.json([{translations: [{text: '微软译文'}]}]));
+        const next = scheduler.schedule(lease => translateMicrosoftTextsWithTransport(
+            microsoft, ['Next paragraph'], 'en', 'zh-Hans', undefined, true, lease,
+        ), {identity: {service: services.microsoft}});
+        await expect(first).resolves.toMatchObject({statusCode: 504, retryAfterMs: 12000});
+        await expect(next).resolves.toEqual(['微软译文']);
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(microsoft).toHaveBeenCalledOnce();
+    });
+
+    it('B站成功正文读取完成前仍持有global并发槽', async () => {
+        const scheduler = createTranslationRequestScheduler(() => ({
+            maxConcurrentTranslations: 1, translationRequestsPerSecond: 0, translationRequestsPerMinute: 0,
+        }));
+        let body!: ReadableStreamDefaultController<Uint8Array>;
+        const cancel = vi.fn();
+        setRuntimeFetch(async () => new Response(new ReadableStream<Uint8Array>({start(controller) {body = controller;}, cancel})));
+        const first = scheduler.schedule(lease => {
+            const operation = translateBilibiliFree(withProviderSnapshot(request(), {from: 'auto', to: 'zh-Hans'}));
+            lease.holdUntil(operation);
+            return operation;
+        }, {identity: {service: services.bilibili}});
+        const nextTask = vi.fn(async () => 'next');
+        const next = scheduler.schedule(nextTask, {identity: {service: services.microsoft}});
         await new Promise(resolve => setTimeout(resolve, 0));
-        body.error(new Error('body failed'));
-        expect(await result).toMatchObject({statusCode: 503});
+        expect(nextTask).not.toHaveBeenCalled();
+        body.enqueue(new TextEncoder().encode(JSON.stringify({choices: [{message: {content: '你好'}, finish_reason: 'stop'}]})));
+        body.close();
+        await expect(first).resolves.toBe('你好');
+        await expect(next).resolves.toBe('next');
+        expect(cancel).not.toHaveBeenCalled();
     });
 
 });

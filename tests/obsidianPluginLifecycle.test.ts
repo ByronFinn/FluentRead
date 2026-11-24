@@ -1,9 +1,4 @@
-import {mkdtempSync, rmSync} from 'node:fs';
-import {tmpdir} from 'node:os';
-import {join} from 'node:path';
-import {fileURLToPath, pathToFileURL} from 'node:url';
-import {build} from 'vite';
-import {afterAll, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
+import {beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {TFile as ObsidianFile} from 'obsidian';
 import {DOCUMENT_MAX_BYTES} from '../src/features/document-translation/core/document';
 
@@ -46,48 +41,13 @@ const state = {
     },
 };
 let ObsidianPlugin: new () => InspectablePlugin;
-let bundleDirectory: string;
-const globalKey = '__fluentreadObsidianLifecycleTest';
 
-// obsidian npm 包只有 API 类型。编译真实入口并注入受控端口，避免连接原生应用或日常库。
+// 正常加载实际插件入口，仅替换 Obsidian 应用 API、PDF 和翻译端口。
+vi.mock('obsidian', () => ({...state, requestUrl: () => {throw new Error('Unexpected real HTTP request');}}));
+vi.mock('../integrations/obsidian/pdf', () => ({extractPdfSegments: (...args: unknown[]) => state.pdf(...args), disposePdfWorker: () => state.dispose()}));
+vi.mock('../integrations/obsidian/translation', () => ({createObsidianTranslator: () => (...args: unknown[]) => state.translator(...args)}));
 beforeAll(async () => {
-    bundleDirectory = mkdtempSync(join(tmpdir(), 'fluentread-obsidian-lifecycle-'));
-    vi.stubGlobal(globalKey, state);
-    const entry = fileURLToPath(new URL('../integrations/obsidian/main.ts', import.meta.url));
-    await build({
-        configFile: false, publicDir: false, logLevel: 'silent',
-        resolve: {alias: {'@': fileURLToPath(new URL('../', import.meta.url))}},
-        plugins: [{
-            name: 'obsidian-lifecycle-controlled-ports',
-            enforce: 'pre',
-            resolveId(source, importer) {
-                if (source === 'obsidian') return '\0obsidian-lifecycle-api';
-                if (importer === entry && source === './pdf') return '\0obsidian-lifecycle-pdf';
-                if (importer === entry && source === './translation') return '\0obsidian-lifecycle-translation';
-                return null;
-            },
-            load(id) {
-                const port = `globalThis.${globalKey}`;
-                if (id === '\0obsidian-lifecycle-api') return `
-                    export const {TFile, MarkdownView, Notice, Plugin, PluginSettingTab, Setting} = ${port};
-                    export const requestUrl = () => { throw new Error('Unexpected real HTTP request'); };
-                `;
-                if (id === '\0obsidian-lifecycle-pdf') return `
-                    export const extractPdfSegments = (...args) => ${port}.pdf(...args);
-                    export const disposePdfWorker = () => ${port}.dispose();
-                `;
-                if (id === '\0obsidian-lifecycle-translation') return `export const createObsidianTranslator = () => (...args) => ${port}.translator(...args);`;
-                return null;
-            },
-        }],
-        build: {outDir: bundleDirectory, target: 'es2022', minify: false, sourcemap: 'inline',
-            lib: {entry, formats: ['es'], fileName: () => 'plugin.mjs'}},
-    });
-    ObsidianPlugin = (await import(/* @vite-ignore */ pathToFileURL(join(bundleDirectory, 'plugin.mjs')).href)).default;
-});
-afterAll(() => {
-    vi.unstubAllGlobals();
-    if (bundleDirectory) rmSync(bundleDirectory, {recursive: true, force: true});
+    ObsidianPlugin = (await import('../integrations/obsidian/main')).default as unknown as new () => InspectablePlugin;
 });
 
 type InspectablePlugin = Omit<import('../integrations/obsidian/main').default, 'translateFile'> & {
@@ -139,6 +99,12 @@ beforeEach(() => {
 });
 
 describe('Obsidian plugin job ownership', () => {
+    it('does not display a late translation failure after the plugin unloads', async () => {
+        const {plugin,file,create}=fixture(),translation=deferred<string[]>();state.translator.mockReturnValueOnce(translation.promise);
+        await plugin.onload();const work=plugin.translateFile(file);await vi.waitFor(()=>expect(state.translator).toHaveBeenCalledOnce());
+        plugin.onunload();const count=state.notices.length;translation.reject(new Error('native translation channel closed'));await work;
+        expect(state.notices).toHaveLength(count);expect(create).not.toHaveBeenCalled();
+    });
     it('cleans up a renamed job and prevents a second request for the same moved file', async () => {
         const {plugin, file, entries, create} = fixture();
         const pendingTranslation = deferred<string[]>();
@@ -411,6 +377,17 @@ describe('Obsidian plugin job ownership', () => {
 });
 
 describe('Obsidian plugin commands, menus and settings', () => {
+    it.each([0, 1])('handles a rejected native settings write from dropdown %i and allows the next save', async index => {
+        const {plugin} = fixture(); await plugin.onload();
+        vi.mocked(plugin.addSettingTab).mock.calls[0][0].display();
+        vi.mocked(plugin.saveData).mockRejectedValueOnce(new Error('native settings disk full'));
+        state.dropdowns[index].changed!('fr');
+        await vi.waitFor(() => expect(state.notices.at(-1)?.message).toContain('native settings disk full'));
+        state.dropdowns[index].changed!('de');
+        await vi.waitFor(() => expect(plugin.saveData).toHaveBeenCalledTimes(2));
+        expect(plugin.settings[index === 0 ? 'sourceLanguage' : 'targetLanguage']).toBe('de');
+        plugin.onunload();
+    });
     it('loads validated settings and exposes palette checks without starting work', async () => {
         const {plugin, file, workspace} = fixture();
         vi.mocked(plugin.loadData).mockResolvedValue({sourceLanguage: 'fr', targetLanguage: 'de'});

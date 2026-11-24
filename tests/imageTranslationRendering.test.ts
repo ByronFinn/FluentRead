@@ -1,17 +1,223 @@
+import {readFileSync} from 'node:fs';
+import {isSpaceGraphemeExtension, isSpaceGraphemePrepend} from '@/src/features/image-translation/graphemeSpaceData';
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {
     drawTranslatedImageText,
+    canDrawTranslatedImageText,
     getImageTextBackgroundColor,
     getImageTextColor,
+    getImageTextDirection,
+    getImageSourceFontLimit,
+    getImageSourceInkFontSize,
+    getImageSourceTextStyle,
+    getImageSourceTypographyStyle,
+    getImageSingleLineHeight,
+    getImageRgbContrast,
     layoutImageTranslationText,
 } from '@/src/features/image-translation/services/rendering';
 
 const segmenter = new Intl.Segmenter(undefined, {granularity: 'grapheme'});
+
+it.each([
+    ['A12 לכיוון צפון', 'rtl'],
+    ['A12 إلى اليمين', 'rtl'],
+    ['  B7\u00a0לכיוון צפון', 'rtl'],
+    ['A12 on the right', 'ltr'],
+    ['Gate B7 בצד שמאל', 'ltr'],
+    ['A12\nלכיוון צפון', 'ltr'],
+    ['\u200eA12 לכיוון צפון', 'ltr'],
+    ['A12', 'ltr'],
+] as const)('译文的开头方向符合编号所在行 %s', (text, direction) => {
+    expect(getImageTextDirection(text)).toBe(direction);
+});
+
+describe('倾角旁证的独立原文字号核对',()=>{
+    const source=()=>({text:'SOURCE WORDS',bbox:{x0:10,y0:10,x1:210,y1:70}});
+    const geometry=(line=source())=>({owner:line,sourceText:line.text,radians:-Math.PI/36,originX:110,originY:40,bounds:{x0:-50,y0:-7.5,x1:50,y1:7.5},width:100,height:15,count:1,heightGain:10});
+    const metric=(w=500,h=75)=>({width:w,actualBoundingBoxLeft:0,actualBoundingBoxRight:w,actualBoundingBoxAscent:h,actualBoundingBoxDescent:0});
+    it('原字宽高支持同一尺度时携带同源方向，不修改输入且只做一次原文度量',()=>{
+        const context=canvasContext(),line=source(),g=geometry(line),before=structuredClone({line,g});context.measureText.mockReturnValue(metric() as never);
+        const result=getImageSourceTypographyStyle(context as never,line,g)!;
+        expect(result.fontSize).toBeGreaterThan(19);expect(result.fontSize).toBeLessThan(20.1);expect(result.orientation).toBe(g);expect(result).not.toHaveProperty('inkBounds');
+        expect({line,g}).toEqual(before);expect(context.measureText).toHaveBeenCalledOnce();expect(context.restore).toHaveBeenCalledOnce();
+    });
+    it('像素量化区间只在旋转确实解释框高膨胀时采用，直立字形阶梯不可借此通过',()=>{
+        const context=canvasContext(),line=source(),g={...geometry(line),height:17,bounds:{x0:-50,y0:-8.5,x1:50,y1:8.5}};context.measureText.mockReturnValue(metric() as never);
+        expect(getImageSourceTypographyStyle(context as never,line,g)?.fontSize).toBeGreaterThan(20);
+        for(const heightGain of [0,-2,1])expect(getImageSourceTypographyStyle(context as never,line,{...g,heightGain})).toBeUndefined();
+        expect(getImageSourceTypographyStyle(context as never,line,{...g,height:30,bounds:{...g.bounds,y0:-15,y1:15}})).toBeUndefined();
+    });
+    it('多行同时检查未知断行空格的两端尺度，并保留经证实的行间距',()=>{
+        const context=canvasContext(),line={...source(),bbox:{x0:0,y0:0,x1:300,y1:120},sourceBoxes:[{x0:20,y0:10,x1:220,y1:50},{x0:20,y0:65,x1:220,y1:105}]},g={...geometry(line),originY:57.5,count:2,width:200,bounds:{x0:-50,y0:-35,x1:50,y1:35},linePitch:55};
+        context.measureText.mockImplementation(text=>metric(text===' '?20:1000,text===' '?0:75) as never);
+        expect(getImageSourceTypographyStyle(context as never,line,g)?.orientation?.linePitch).toBe(55);expect(context.measureText).toHaveBeenCalledTimes(2);
+        for(const space of [NaN,-1,1000,200]){context.measureText.mockImplementation(text=>metric(text===' '?space:1000,text===' '?0:75) as never);expect(getImageSourceTypographyStyle(context as never,line,g)).toBeUndefined();}
+    });
+    it('来源对象、原文快照和保护标记在任何原生字体度量之前检查',()=>{
+        const context=canvasContext(),line=source(),g=geometry(line);
+        expect(getImageSourceTypographyStyle(context as never,line,undefined)).toBeUndefined();expect(getImageSourceTypographyStyle(context as never,{...line},g)).toBeUndefined();
+        line.text='CHANGED';expect(getImageSourceTypographyStyle(context as never,line,g)).toBeUndefined();
+        for(const change of [{vertical:true as const},{ruby:[{text:'か',bbox:line.bbox}]},{guardOnly:true as const},{numericUncertain:true as const}]){const item={...source(),...change};expect(getImageSourceTypographyStyle(context as never,item,geometry(item))).toBeUndefined();}
+        expect(context.measureText).not.toHaveBeenCalled();
+    });
+    it('非法几何、越界中心、行数和间距不产生可绘制的方向样式',()=>{
+        const context=canvasContext(),line=source(),g=geometry(line);
+        for(const change of [
+            {bounds:undefined},{bounds:{...g.bounds,x0:NaN}},{bounds:{...g.bounds,x1:-50}},{bounds:{...g.bounds,y1:-7.5}},
+            {radians:0},{radians:Math.PI/2},{originX:NaN},{originX:5},{originX:215},{originY:5},{originY:75},
+            {count:0},{count:129},{count:1.5},{count:2},{height:0},{width:0},{height:1000},{width:1000},
+            {bounds:{...g.bounds,x1:1000}},{bounds:{...g.bounds,y1:1000}},
+            {linePitch:NaN},{linePitch:0},{linePitch:10},
+        ])expect(getImageSourceTypographyStyle(context as never,line,{...g,...change} as never)).toBeUndefined();
+        for(const bbox of [undefined,{...line.bbox,x1:10},{...line.bbox,y1:10},{...line.bbox,y1:Infinity}]){const item={...line,bbox:bbox!};expect(getImageSourceTypographyStyle(context as never,item,geometry(item))).toBeUndefined();}
+        const rows={...line,sourceBoxes:[line.bbox,line.bbox]};expect(getImageSourceTypographyStyle(context as never,rows,{...geometry(rows),count:2,linePitch:30})).toBeUndefined();
+        expect(context.measureText).not.toHaveBeenCalled();
+    });
+    it('缺失或无法解释源字形的指标保留未知；原生异常仍归还画布状态',()=>{
+        const context=canvasContext(),line=source(),g=geometry(line);
+        for(const [w,h]of [[0,75],[500,0],[NaN,75],[500,Infinity],[250,37.5],[1000,150]]){context.measureText.mockReturnValue(metric(w,h) as never);expect(getImageSourceTypographyStyle(context as never,line,g)).toBeUndefined();}
+        const failure=new Error('font context lost');context.measureText.mockImplementation(()=>{throw failure;});expect(()=>getImageSourceTypographyStyle(context as never,line,g)).toThrow(failure);
+        expect(context.save.mock.calls.length).toBe(context.restore.mock.calls.length);
+    });
+});
+
+describe('已观察源字形的独立字号核对',()=>{
+    const source=()=>({text:'SOURCE WORDS',fontSize:40,bbox:{x0:10,y0:10,x1:210,y1:50}});
+    const ink=()=>[{x0:20,y0:20,x1:120,y1:35}];
+    const metrics=(w=500,h=75)=>({width:w,actualBoundingBoxLeft:0,actualBoundingBoxRight:w,actualBoundingBoxAscent:h,actualBoundingBoxDescent:0});
+    it('去掉OCR留白膨胀但保持源框/原字号，未知字形继续原规则',()=>{
+        const context=canvasContext(),line=source(),boxes=ink(),snapshot=structuredClone({line,boxes});context.measureText.mockReturnValue(metrics() as never);
+        expect(getImageSourceFontLimit(context as never,line)).toBe(48);
+        expect(getImageSourceInkFontSize(context as never,line,boxes)).toBe(20);
+        expect(getImageSourceFontLimit(context as never,line,boxes)).toBe(20);expect({line,boxes}).toEqual(snapshot);
+        const style=getImageSourceTextStyle(context as never,line,boxes);expect(style).toEqual({fontSize:20,inkBounds:boxes[0]});expect(style.inkBounds).not.toBe(boxes[0]);
+        expect(getImageSourceTextStyle(context as never,line,[{...boxes[0],y1:48}])).toEqual({fontSize:48});
+        context.measureText.mockClear();expect(getImageSourceFontLimit(context as never,line,[{...boxes[0],y1:48}])).toBe(48);expect(context.measureText).toHaveBeenCalledOnce();
+    });
+    it('多行用逐行字高与总宽度，断行是否引入空格都须满足相同字号',()=>{
+        const context=canvasContext(),line={...source(),text:'AB CD EF GH',bbox:{x0:10,y0:10,x1:210,y1:100},sourceBoxes:[{x0:10,y0:10,x1:210,y1:50},{x0:10,y0:60,x1:210,y1:100}]},boxes=[ink()[0],{x0:20,y0:70,x1:120,y1:85}];
+        context.measureText.mockImplementation(text=>metrics(text===' '?20:1020,text===' '?0:75) as never);
+        expect(getImageSourceInkFontSize(context as never,line,boxes)).toBeCloseTo(19.901960784313726);
+        expect(getImageSourceFontLimit(context as never,line,boxes)).toBeCloseTo(19.901960784313726);
+        expect(getImageSourceTextStyle(context as never,line,boxes).inkBounds).toEqual({x0:20,y0:20,x1:120,y1:85});
+        // 更长的参照空格让上下两个宽度界不再一致，不能只挑一个可通过的界限。
+        context.measureText.mockImplementation(text=>metrics(text===' '?150:1020,text===' '?0:75) as never);
+        expect(getImageSourceInkFontSize(context as never,line,boxes)).toBeUndefined();
+        expect(getImageSourceFontLimit(context as never,line,boxes)).toBe(48);
+    });
+    it('多行顺序不修改输入，明显混合字号、重叠行和不同栏位不猜共同尺度',()=>{
+        const context=canvasContext(),line={...source(),text:'AB CD EF GH',bbox:{x0:10,y0:10,x1:310,y1:100},sourceBoxes:[{x0:10,y0:10,x1:210,y1:50},{x0:10,y0:60,x1:310,y1:100}]},boxes=[ink()[0],{x0:20,y0:70,x1:120,y1:85}];
+        context.measureText.mockImplementation(text=>metrics(text===' '?0:1000,text===' '?0:75) as never);
+        expect(getImageSourceInkFontSize(context as never,{...line,sourceBoxes:[...line.sourceBoxes].reverse()},[...boxes].reverse())).toBe(20);expect(boxes[0].y0).toBe(20);
+        expect(getImageSourceInkFontSize(context as never,line,[boxes[0],{...boxes[1],y1:96}])).toBeUndefined();
+        for(const second of [{...boxes[0],y0:30,y1:45},{...boxes[0],x0:30,x1:130}])expect(getImageSourceInkFontSize(context as never,{...line,sourceBoxes:[line.bbox,line.bbox]},[boxes[0],second])).toBeUndefined();
+        expect(getImageSourceInkFontSize(context as never,line,[boxes[0],{...boxes[1],x0:200,x1:300}])).toBeUndefined();
+    });
+    it('空/超额、竖排、注音、保护区域、换行和过长文本不启动度量',()=>{
+        const context=canvasContext(),line=source();
+        for(const boxes of [undefined,[],Array(129).fill(ink()[0])])expect(getImageSourceInkFontSize(context as never,line,boxes)).toBeUndefined();
+        for(const change of [{vertical:true as const},{ruby:[{text:'か',bbox:line.bbox}]},{guardOnly:true as const},{numericUncertain:true as const},{text:'AB'},{text:'X'.repeat(257)},{text:'A\nB'},{sourceBoxes:[]}])expect(getImageSourceInkFontSize(context as never,{...line,...change},ink())).toBeUndefined();
+        expect(context.measureText).not.toHaveBeenCalled();
+    });
+    it('未知几何与不属于原物理框的墨迹不提供字号',()=>{
+        const context=canvasContext(),line=source(),bad=[undefined,{...line.bbox,x0:-1},{...line.bbox,y0:-1},{...line.bbox,x1:NaN},{...line.bbox,y1:Infinity},{...line.bbox,x1:10},{...line.bbox,y1:10}];
+        for(const bbox of bad){expect(getImageSourceInkFontSize(context as never,{...line,bbox:bbox!},ink())).toBeUndefined();expect(getImageSourceInkFontSize(context as never,{...line,sourceBoxes:[bbox!]},ink())).toBeUndefined();expect(getImageSourceInkFontSize(context as never,line,[bbox!])).toBeUndefined();}
+        for(const change of [{x0:9},{y0:9},{x1:211},{y1:51}])expect(getImageSourceInkFontSize(context as never,{...line,sourceBoxes:[{...line.bbox,...change}]},ink())).toBeUndefined();
+        for(const change of [{x0:5},{y0:5},{x1:215},{y1:55}])expect(getImageSourceInkFontSize(context as never,line,[{...ink()[0],...change}])).toBeUndefined();
+        expect(context.measureText).not.toHaveBeenCalled();
+    });
+    it('原生指标缺失、极端字形比例和不可信断行空格不会产生尺度',()=>{
+        const context=canvasContext(),line=source(),boxes=ink();
+        for(const [w,h]of [[0,75],[NaN,75],[500,Infinity],[500,0],[250,37.5],[1000,150],[100,75]]){
+            context.measureText.mockReturnValue(metrics(w,h) as never);expect(getImageSourceInkFontSize(context as never,line,boxes)).toBeUndefined();
+        }
+        const multiple={...line,bbox:{x0:10,y0:10,x1:210,y1:100},sourceBoxes:[line.bbox,{x0:10,y0:60,x1:210,y1:100}]},two=[boxes[0],{...boxes[0],y0:70,y1:85}];
+        for(const space of [NaN,-1,Infinity,1000]){context.measureText.mockImplementation(text=>metrics(text===' '?space:1000,text===' '?0:75) as never);expect(getImageSourceInkFontSize(context as never,multiple,two)).toBeUndefined();}
+        expect(context.save.mock.calls.length).toBe(context.restore.mock.calls.length);
+    });
+    it('原生度量出错仍恢复画布并保留首因',()=>{
+        const context=canvasContext(),failure=new Error('source font unavailable');context.measureText.mockImplementation(()=>{throw failure;});
+        expect(()=>getImageSourceInkFontSize(context as never,source(),ink())).toThrow(failure);expect(context.restore).toHaveBeenCalledOnce();
+    });
+});
+
+describe('原文墨迹与字体尺度',()=>{
+    it('对比度使用未取整的RGB相对亮度，并保持正反对称',()=>{
+        expect(getImageRgbContrast([0,0,0],[255,255,255])).toBe(21);
+        expect(getImageRgbContrast([255,255,255],[0,0,0])).toBe(21);
+        expect(getImageRgbContrast([118,118,118],[255,255,255])).toBeGreaterThan(4.5);
+        expect(getImageRgbContrast([119,119,119],[255,255,255])).toBeLessThan(4.5);
+    });
+    it('单行所需高度包含实际墨迹、描边和余量，放不下一行时不借此扩大段落',()=>{
+        const context=canvasContext();context.measureText.mockReturnValue({width:80,actualBoundingBoxLeft:2,actualBoundingBoxRight:78,actualBoundingBoxAscent:16,actualBoundingBoxDescent:4} as never);
+        expect(getImageSingleLineHeight(context as never,'TEXT',100,20)).toBe(24);
+        expect(getImageSingleLineHeight(context as never,'TEXT',80,20)).toBeUndefined();
+        for(const [text,width,size] of [[' ',100,20],['X'.repeat(257),100,20],['X\nY',100,20],['TEXT',NaN,20],['TEXT',100,0]] as const)
+            expect(getImageSingleLineHeight(context as never,text,width,size)).toBeUndefined();
+        expect(context.measureText).toHaveBeenCalledTimes(2);expect(context.save).toHaveBeenCalledTimes(2);expect(context.restore).toHaveBeenCalledTimes(2);
+    });
+    it.each([{width:NaN},{actualBoundingBoxLeft:NaN},{actualBoundingBoxRight:-2},{actualBoundingBoxAscent:-4}])('不完整单行指标不授予新增高度 %j',change=>{
+        const context=canvasContext();context.measureText.mockReturnValue({width:80,actualBoundingBoxLeft:2,actualBoundingBoxRight:78,actualBoundingBoxAscent:16,actualBoundingBoxDescent:4,...change} as never);
+        expect(getImageSingleLineHeight(context as never,'TEXT',100,20)).toBeUndefined();expect(context.restore).toHaveBeenCalledOnce();
+    });
+    it('实际绘字使用已确认源色，未提供源色时仍使用原对比度选择',()=>{
+        const context=canvasContext(),colors:string[]=[];context.fillText.mockImplementation(()=>{colors.push((context as unknown as CanvasRenderingContext2D).fillStyle as string);});
+        drawTranslatedImageText(context as never,'TEXT',0,0,200,60,'rgb(255,255,255)',20,'left',undefined,'rgb(25,48,75)');
+        expect(colors).toEqual(['rgb(25,48,75)']);
+    });
+    it('渐变的源色使用细对比描边，保留全文与原裁切范围',()=>{
+        const context=canvasContext(),styles:unknown[]=[];
+        context.fillText.mockImplementation(()=>{const c=context as unknown as CanvasRenderingContext2D;styles.push([c.fillStyle,c.strokeStyle,c.lineWidth]);});
+        drawTranslatedImageText(context as never,'TITLE',10,15,200,60,'rgb(120,80,180)',20,'left',undefined,'rgb(245,245,250)','#111827');
+        expect(styles).toEqual([['rgb(245,245,250)','#111827',.5]]);expect(context.fillText.mock.calls[0][0]).toBe('TITLE');expect(context.rect).toHaveBeenCalledWith(10,15,200,60);
+    });
+    const source=(text='SOURCE',width=192,height=35)=>({text,bbox:{x0:10,y0:10,x1:10+width,y1:10+height}});
+    it('相同48px文字的x高度、大写和下伸笔画不会变成不同字号',()=>{
+        const context=canvasContext();
+        for(const inkHeight of [50,70,95]){
+            context.measureText.mockReturnValue({actualBoundingBoxLeft:0,actualBoundingBoxRight:400,actualBoundingBoxAscent:inkHeight-10,actualBoundingBoxDescent:10,width:400} as never);
+            expect(getImageSourceFontLimit(context as never,source('SAME FONT',192,inkHeight*.48))).toBeCloseTo(48,10);
+        }
+        expect(context.save).toHaveBeenCalledTimes(3);expect(context.restore).toHaveBeenCalledTimes(3);
+    });
+    it('字号层级跟随原图尺度，而不是把邻近文字统一缩成小字',()=>{
+        const context=canvasContext();context.measureText.mockReturnValue({actualBoundingBoxLeft:2,actualBoundingBoxRight:398,actualBoundingBoxAscent:70,actualBoundingBoxDescent:10,width:403} as never);
+        for(const size of [18,42,52,96])expect(getImageSourceFontLimit(context as never,source('TITLE',size*4,size*.8))).toBeCloseTo(size);
+    });
+    it('只用一个物理行估计，竖排、附属注音、多行与复杂段落不猜字体',()=>{
+        const context=canvasContext(),a=source();
+        expect(getImageSourceFontLimit(context as never,{...a,vertical:true})).toBe(Infinity);
+        for(const change of [{sourceBoxes:[]},{sourceBoxes:[a.bbox,a.bbox]},{ruby:[{text:'かな',bbox:a.bbox}]},{text:'A'},{text:'A'.repeat(257)},{text:'A\nB'},
+            {bbox:{...a.bbox,x1:10}},{bbox:{...a.bbox,y1:10}},{bbox:{...a.bbox,x1:NaN}}])
+            expect(getImageSourceFontLimit(context as never,{...a,fontSize:30,...change})).toBe(36);
+        expect(context.measureText).not.toHaveBeenCalled();
+    });
+    it.each([
+        {w:0,h:80},{w:NaN,h:80},{w:400,h:Infinity},{w:400,h:0},
+        {w:200,h:80},{w:400,h:30},{w:400,h:140},
+    ])('度量不完整、形状不符或不合理墨迹比例保留原上限 %j',({w,h})=>{
+        const context=canvasContext();context.measureText.mockReturnValue({actualBoundingBoxLeft:0,actualBoundingBoxRight:w,actualBoundingBoxAscent:h,actualBoundingBoxDescent:0,width:w} as never);
+        const height=h===30||h===140?h*.48:38.4;
+        expect(getImageSourceFontLimit(context as never,{...source('SOURCE',192,height),fontSize:30,sourceBoxes:[source().bbox]})).toBe(36);
+        expect(context.restore).toHaveBeenCalledOnce();
+    });
+    it('原生度量异常仍恢复Canvas状态且传播错误',()=>{
+        const context=canvasContext();context.measureText.mockImplementation(()=>{throw new Error('metrics unavailable');});
+        expect(()=>getImageSourceFontLimit(context as never,source())).toThrow('metrics unavailable');expect(context.restore).toHaveBeenCalledOnce();
+    });
+    it('单行实际墨迹可用满高度，不重复扣除CSS行高；无真实度量仍走旧行框',()=>{
+        const measure=(text:string,size:number)=>text.length*size*.5,ink=(_text:string,size:number)=>({ascent:size*.7,descent:size*.1});
+        const real=layoutImageTranslationText('FIT',500,40,measure,48,ink);
+        expect(real.fontSize).toBe(48);expect(real.ink!.height).toBeCloseTo(38.4);
+        const missing=layoutImageTranslationText('FIT',500,40,measure,48,()=>({ascent:NaN,descent:NaN}));
+        expect(missing).toEqual(layoutImageTranslationText('FIT',500,40,measure,48));
+    });
+});
 const measure = (text: string, fontSize: number) => Array.from(segmenter.segment(text)).length * fontSize;
 
 function canvasContext() {
     const context = {
-        font: '', save: vi.fn(), restore: vi.fn(), beginPath: vi.fn(), rect: vi.fn(), clip: vi.fn(),
+        font: '', save: vi.fn(), restore: vi.fn(), beginPath: vi.fn(), rect: vi.fn(), clip: vi.fn(), transform:vi.fn(),
         measureText: vi.fn((text: string) => ({width: measure(text, Number(context.font.match(/([\d.]+)px/)![1]))})),
         fillText: vi.fn(), strokeText: vi.fn(),
     };
@@ -20,7 +226,251 @@ function canvasContext() {
 
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.resetModules(); });
 
+describe('照片译文局部对比度', () => {
+    function paintFixture(sample: (x: number, y: number) => number[]) {
+        const width = 200, height = 80, pixels = new Uint8ClampedArray(width * height * 4);
+        for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+            pixels.set(sample(x, y), (y * width + x) * 4);
+        }
+        const context = canvasContext();
+        context.measureText.mockReturnValue({
+            width: 54, actualBoundingBoxLeft: 0, actualBoundingBoxRight: 54,
+            actualBoundingBoxAscent: 7, actualBoundingBoxDescent: 5,
+        } as never);
+        const colors: Array<[string, string]> = [];
+        const canvas = context as unknown as CanvasRenderingContext2D;
+        context.fillText.mockImplementation(() => colors.push([canvas.fillStyle as string, canvas.strokeStyle as string]));
+        return {canvas, context, colors, background: {pixels, width, height, remaining: 8192}};
+    }
+
+    const light = [234, 223, 201, 255], dark = [23, 30, 42, 255];
+    const ring = 'rgb(23,30,42)', oneLine = {lines:['译文'], fontSize:18, lineHeight:22};
+
+    it('外框是深色但文字实际落在浅色图案时，选择深色字', () => {
+        const {canvas, context, colors, background} = paintFixture((x, y) => x < 70 && y < 32 ? light : dark);
+        drawTranslatedImageText(canvas,'译文',12,10,170,60,ring,18,'left',oneLine,
+            undefined,undefined,undefined,undefined,background);
+        expect(colors).toEqual([['#111827',ring]]);
+        expect(context.rect).toHaveBeenCalledWith(12,10,170,60);
+        expect(context.fillText).toHaveBeenCalledWith('译文',14,22);
+    });
+
+    it('译文横跨明暗两块背景时保留一致的字色并增加对比描边', () => {
+        const {canvas, colors, background} = paintFixture(x => x < 41 ? light : dark);
+        drawTranslatedImageText(canvas,'译文',12,10,170,60,ring,18,'left',oneLine,
+            undefined,undefined,undefined,undefined,background);
+        expect(colors).toEqual([['#ffffff','#111827']]);
+    });
+
+    it('半透明区域继续使用既有字色与描边', () => {
+        const {canvas, colors, background} = paintFixture(() => [234,223,201,148]);
+        drawTranslatedImageText(canvas,'译文',12,10,170,60,ring,18,'left',oneLine,
+            undefined,undefined,undefined,undefined,background);
+        expect(colors).toEqual([['#ffffff',ring]]);
+    });
+
+    it('文字落在暗处时，外框采到的浅色也可以纠正', () => {
+        const {canvas, colors, background} = paintFixture(() => dark);
+        const border = 'rgb(234,223,201)';
+        drawTranslatedImageText(canvas,'译文',12,10,170,60,border,18,'left',oneLine,
+            undefined,undefined,undefined,undefined,background);
+        expect(colors).toEqual([['#ffffff',border]]);
+    });
+
+    it('使用深色字的混色区采用浅色描边', () => {
+        const {canvas, colors, background} = paintFixture(x => x < 41 ? light : dark);
+        drawTranslatedImageText(canvas,'译文',12,10,170,60,'rgb(234,223,201)',18,'left',oneLine,
+            undefined,undefined,undefined,undefined,background);
+        expect(colors).toEqual([['#111827','#ffffff']]);
+    });
+
+    it('从同张图扣除采样预算，每行没有足够样点时恢复该行原选色', () => {
+        const {canvas, colors, background} = paintFixture(() => light);
+        background.remaining = 32;
+        const layout = {...oneLine,lines:['第一行','第二行']};
+        drawTranslatedImageText(canvas,'第一行\n第二行',12,10,170,60,ring,18,'left',layout,
+            undefined,undefined,undefined,undefined,background);
+        expect(colors).toEqual([['#111827',ring],['#ffffff',ring]]);
+        expect(background.remaining).toBe(0);
+    });
+
+    it.each([
+        [25, -25, 7, 5],
+        [0, Infinity, 7, 5],
+        [25, 54, 7, 5],
+        [0, 220, 7, 5],
+        [0, 54, 23, 5],
+        [0, 54, 7, 77],
+    ])('不完整或越界的字形指标使用原选色 %j', (left, right, ascent, descent) => {
+        const {canvas, context, colors, background} = paintFixture(() => light);
+        context.measureText.mockReturnValue({
+            width:54, actualBoundingBoxLeft:left, actualBoundingBoxRight:right,
+            actualBoundingBoxAscent:ascent, actualBoundingBoxDescent:descent,
+        } as never);
+        drawTranslatedImageText(canvas,'译文',12,10,170,60,ring,18,'left',oneLine,
+            undefined,undefined,undefined,undefined,background);
+        expect(colors).toEqual([['#ffffff',ring]]);
+    });
+
+    it.each([
+        ['#eeeeee', undefined, '译文', ['#eeeeee', ring]],
+        [undefined, '#121212', '译文', ['#ffffff', '#121212']],
+        [undefined, undefined, 'x'.repeat(4097), ['#ffffff', ring]],
+    ] as const)('已确认的字色、描边或很长的行无需采样 %#', (foreground, outline, text, style) => {
+        const {canvas, colors, background} = paintFixture(() => light);
+        drawTranslatedImageText(canvas,text,12,10,170,60,ring,18,'left',{...oneLine,lines:[text]},
+            foreground,outline,undefined,undefined,background);
+        expect(colors).toEqual([style]);
+        expect(background.remaining).toBe(8192);
+    });
+
+    it('按倾角变换后的图像位置取样，并继续使用真实字体度量', () => {
+        const {canvas, context, colors, background} = paintFixture(() => light);
+        context.measureText.mockImplementation(text=>{
+            const size=Number(context.font.match(/([\d.]+)px/)![1]), width=text.length*size*.6;
+            return {width,actualBoundingBoxLeft:0,actualBoundingBoxRight:width,
+                actualBoundingBoxAscent:size*.8,actualBoundingBoxDescent:size*.2} as never;
+        });
+        const source={text:'SOURCE',bbox:{x0:12,y0:10,x1:182,y1:70}};
+        const orientation={owner:source,sourceText:source.text,radians:-Math.PI/12,originX:98,originY:40,
+            bounds:{x0:-52,y0:-10,x1:52,y1:10},width:104,height:20,count:1,heightGain:10};
+        drawTranslatedImageText(canvas,'译文',12,10,170,60,ring,18,'left',undefined,
+            undefined,undefined,undefined,orientation,background);
+        expect(context.transform).toHaveBeenCalledOnce();
+        expect(colors).toEqual([['#111827',ring]]);
+    });
+});
+
 describe('图片译文排版与绘制', () => {
+    it('倾斜译文只在原世界坐标裁剪后变换，保存全部正文并在异常时恢复状态',()=>{
+        const source={text:'SOURCE',bbox:{x0:10,y0:20,x1:210,y1:100}},orientation={owner:source,sourceText:source.text,radians:-Math.PI/36,originX:110,originY:60,bounds:{x0:-80,y0:-10,x1:80,y1:10},width:160,height:20,count:1,heightGain:10};
+        const context=canvasContext();context.measureText.mockImplementation(text=>{const size=Number(context.font.match(/([\d.]+)px/)![1]);return {width:text.length*size*.6,actualBoundingBoxLeft:0,actualBoundingBoxRight:text.length*size*.6,actualBoundingBoxAscent:size*.8,actualBoundingBoxDescent:size*.2} as never;});
+        const draw=()=>drawTranslatedImageText(context as never,'完整译文',10,20,200,80,'white',20,'left',undefined,undefined,undefined,undefined,orientation);
+        draw();expect(context.transform).toHaveBeenCalledOnce();expect(context.clip.mock.invocationCallOrder[0]).toBeLessThan(context.transform.mock.invocationCallOrder[0]);expect(context.fillText.mock.calls.map(c=>c[0]).join('')).toBe('完整译文');expect(context.rect).toHaveBeenCalledWith(10,20,200,80);
+        const failure=new Error('native transform failed');context.transform.mockImplementation(()=>{throw failure;});expect(draw).toThrow(failure);expect(context.restore).toHaveBeenCalledTimes(2);
+    });
+    it('缺少真实指标、无效平面、过长正文或已有透明避让计划时不旋转',()=>{
+        const source={text:'SOURCE',bbox:{x0:10,y0:20,x1:210,y1:100}},orientation={owner:source,sourceText:source.text,radians:-Math.PI/36,originX:110,originY:60,bounds:{x0:-80,y0:-10,x1:80,y1:10},width:160,height:20,count:1,heightGain:10};
+        for(const mode of ['metrics','plane','long','prepared']){
+            const context=canvasContext(),text=mode==='long'?'A'.repeat(4097):'完整译文',g=mode==='plane'?{...orientation,originX:NaN}:orientation;
+            drawTranslatedImageText(context as never,text,10,20,200,80,'white',20,'left',mode==='prepared'?{lines:[text],fontSize:20,lineHeight:24}:undefined,undefined,undefined,undefined,g);
+            expect(context.transform).not.toHaveBeenCalled();expect(context.fillText.mock.calls.map(c=>c[0]).join('')).toBe(text);expect(context.restore).toHaveBeenCalledOnce();
+        }
+    });
+    it.each(['left','center','right'] as const)('缩小后的%s译文按源墨迹边线与垂直中心定位，单行/换行都保留完整字形',align=>{
+        for(const count of [1,2]){
+            const context=canvasContext(),lines=Array(count).fill('TEXT'),height=count===1?21.2:51.2;
+            context.measureText.mockReturnValue({width:40,actualBoundingBoxLeft:3,actualBoundingBoxRight:37,actualBoundingBoxAscent:16,actualBoundingBoxDescent:4} as never);
+            drawTranslatedImageText(context as never,lines.join('\n'),10,20,200,80,'white',20,align,
+                {lines,fontSize:20,lineHeight:30,ink:{height,baselines:count===1?[16.6]:[16.6,46.6]}},undefined,undefined,{x0:50,y0:50,x1:150,y1:65});
+            const [,x,y]=context.fillText.mock.calls[0],last=context.fillText.mock.calls.at(-1)!,inkLeft=x-3-.6,inkRight=x+37+.6;
+            expect(align==='left'?inkLeft:align==='right'?inkRight:(inkLeft+inkRight)/2).toBeCloseTo(align==='left'?50:align==='right'?150:100);
+            expect((y-16-.6+last[2]+4+.6)/2).toBeCloseTo(57.5);
+            expect(context.fillText.mock.calls.map(call=>call[0])).toEqual(lines);expect(context.rect).toHaveBeenCalledWith(10,20,200,80);expect(context.restore).toHaveBeenCalledOnce();
+        }
+    });
+    it('偏离可绘范围的源位置只在原框内夹紧，不改变裁剪或压扁字形',()=>{
+        for(const anchor of [{x0:-100,y0:-100,x1:-10,y1:-80},{x0:300,y0:300,x1:400,y1:330}]){
+            const context=canvasContext();context.measureText.mockReturnValue({width:40,actualBoundingBoxLeft:3,actualBoundingBoxRight:37,actualBoundingBoxAscent:16,actualBoundingBoxDescent:4} as never);
+            drawTranslatedImageText(context as never,'TEXT',10,20,200,80,'white',20,'left',undefined,undefined,undefined,anchor);
+            const [text,x,y]=context.fillText.mock.calls[0];expect(text).toBe('TEXT');expect(context.font).toContain('20px');
+            expect(x-3-.6).toBeGreaterThanOrEqual(12-1e-9);expect(x+37+.6).toBeLessThanOrEqual(208+1e-9);
+            expect(y-16-.6).toBeGreaterThanOrEqual(21-1e-9);expect(y+4+.6).toBeLessThanOrEqual(99+1e-9);expect(context.rect).toHaveBeenCalledWith(10,20,200,80);
+        }
+    });
+    it('无效源位置或缺少实际字形高度时保持旧位置，缺失横向指标不应用新横向偏移',()=>{
+        const prepared={lines:['TEXT'],fontSize:20,lineHeight:24,ink:{height:20,baselines:[16]}};
+        for(const ink of [prepared.ink,undefined])for(const metric of [
+            {width:40,actualBoundingBoxLeft:3,actualBoundingBoxRight:37,actualBoundingBoxAscent:16,actualBoundingBoxDescent:4},
+            {width:40},
+            {width:40,actualBoundingBoxLeft:-20,actualBoundingBoxRight:0},
+        ]){
+            const before=canvasContext();before.measureText.mockReturnValue(metric as never);
+            drawTranslatedImageText(before as never,'TEXT',10,20,200,80,'white',20,'left',{...prepared,ink});
+            for(const anchor of [{x0:NaN,y0:30,x1:80,y1:50},{x0:20,y0:30,x1:20,y1:50},{x0:20,y0:50,x1:80,y1:30}]){
+                const after=canvasContext();after.measureText.mockReturnValue(metric as never);
+                drawTranslatedImageText(after as never,'TEXT',10,20,200,80,'white',20,'left',{...prepared,ink},undefined,undefined,anchor);
+                expect(after.fillText.mock.calls).toEqual(before.fillText.mock.calls);
+            }
+            if(!('actualBoundingBoxAscent' in metric)){
+                const after=canvasContext();after.measureText.mockReturnValue(metric as never);
+                drawTranslatedImageText(after as never,'TEXT',10,20,200,80,'white',20,'left',{...prepared,ink},undefined,undefined,{x0:50,y0:50,x1:150,y1:65});
+                expect(after.fillText.mock.calls[0][1]).toBe(before.fillText.mock.calls[0][1]);
+            }
+        }
+    });
+    it.each([['(2.0) مرحبا بالعالم!','rtl'],['123 שלום עולם','rtl'],['English العربية','ltr'],['中文 123','ltr']])
+    ('混合数字与标点的 %s 使用首个强文字方向 %s', (text,direction)=>{
+        const context=canvasContext();
+        drawTranslatedImageText(context as unknown as CanvasRenderingContext2D,text,0,0,1000,80,'rgb(255,255,255)',20);
+        expect((context as unknown as CanvasRenderingContext2D).direction).toBe(direction);
+        expect(context.fillText.mock.calls.map(call=>call[0]).join('')).toBe(text);
+    });
+    it('真实字形布局保留空段且长文本度量缓存有界，不丢失尾部文字',()=>{
+        const context=canvasContext();
+        const original=context.measureText.getMockImplementation()!;
+        context.measureText.mockImplementation(text=>({...original(text),actualBoundingBoxLeft:0,
+            actualBoundingBoxRight:original(text).width,actualBoundingBoxAscent:8,actualBoundingBoxDescent:2}));
+        const text=Array.from({length:600},(_,i)=>`word${i}`).join(' ');
+        drawTranslatedImageText(context as unknown as CanvasRenderingContext2D,text+'\n\nEND',0,0,100_000,100,'rgb(255,255,255)',12);
+        expect(context.fillText.mock.calls.map(call=>call[0])).toEqual([text,'','END']);
+        expect(context.measureText.mock.calls.length).toBeLessThan(650);
+    });
+    it('实际字体上下界和描边决定基线，多行高组合符号不会相互覆盖', () => {
+        const layout=layoutImageTranslationText('ONE TWO THREE',45,80,(text,size)=>text.length*size*.5,20,
+            (_text,size)=>({ascent:size*1.1,descent:size*.4}));
+        expect(layout.lines.join(' ')).toBe('ONE TWO THREE');
+        expect(layout.ink).toBeDefined();
+        expect(layout.ink!.height).toBeLessThanOrEqual(80);
+        expect(layout.lineHeight).toBeGreaterThanOrEqual(layout.fontSize*1.5);
+        for(let i=0;i<layout.lines.length;i++){
+            expect(layout.ink!.baselines[i]-layout.fontSize*1.1).toBeGreaterThanOrEqual(-1e-10);
+            expect(layout.ink!.baselines[i]+layout.fontSize*.4).toBeLessThanOrEqual(80+1e-10);
+        }
+    });
+
+    it.each(['left','center','right'] as const)('真实墨迹 %s 对齐包含左右外伸与高变音符号',align=>{
+        const context=canvasContext();
+        context.measureText.mockImplementation((text:string)=>{
+            const size=Number(context.font.match(/([\d.]+)px/)![1]);
+            const width=text.length*size*.5;
+            return {width,actualBoundingBoxLeft:2,actualBoundingBoxRight:width+1,actualBoundingBoxAscent:size*1.1,actualBoundingBoxDescent:size*.4};
+        });
+        drawTranslatedImageText(context as unknown as CanvasRenderingContext2D,'test',10,20,100,30,'rgb(255,255,255)',30,align);
+        const size=Number(context.font.match(/([\d.]+)px/)![1]);
+        const [text,x,y]=context.fillText.mock.calls[0];
+        const bleed=Math.max(.35,size*.06)/2;
+        expect(text).toBe('test');
+        expect(x-2-bleed).toBeGreaterThanOrEqual(10);
+        expect(x+4*size*.5+1+bleed).toBeLessThanOrEqual(110);
+        expect(y-size*1.1-bleed).toBeGreaterThanOrEqual(20-1e-8);
+        expect(y+size*.4+bleed).toBeLessThanOrEqual(50+1e-8);
+    });
+
+    it('Unicode17 空格阻断表逐标量对照独立官方属性 fixture，覆盖所有脚本', () => {
+        const fixture = readFileSync(new URL('./fixtures/unicode-17.0.0/GraphemeBreakProperty.txt', import.meta.url), 'utf8');
+        const expected = new Uint8Array(0x110000);
+        let extensionCount = 0, prependCount = 0;
+        for (const line of fixture.split('\n')) {
+            const row = /^([0-9A-F]+)(?:\.\.([0-9A-F]+))?\s*;\s*(Extend|SpacingMark|ZWJ|Prepend)\s*#/u.exec(line);
+            if (!row) continue;
+            const start = parseInt(row[1], 16), end = parseInt(row[2] || row[1], 16);
+            const flag = row[3] === 'Prepend' ? 2 : 1;
+            for (let point = start; point <= end; point++) expected[point] |= flag;
+            if (flag === 1) extensionCount += end - start + 1;
+            else prependCount += end - start + 1;
+        }
+        const mismatches: string[] = [];
+        for (let point = 0; point <= 0x10FFFF; point++) {
+            if (point >= 0xD800 && point <= 0xDFFF) continue;
+            if (isSpaceGraphemeExtension(point) !== !!(expected[point] & 1)
+                || isSpaceGraphemePrepend(point) !== !!(expected[point] & 2)) mismatches.push(point.toString(16));
+        }
+        expect(extensionCount).toBe(2619);
+        expect(prependCount).toBe(27);
+        expect(mismatches).toEqual([]);
+    });
+
     it('重复长段落减少测宽次数，完整单词换行后无需逐字测量', () => {
         const text = 'Translate each complete paragraph and keep the original reading order. '.repeat(30);
         const countedMeasure = vi.fn((value: string, size: number) => Array.from(value).length * size * 0.55);
@@ -62,6 +512,76 @@ describe('图片译文排版与绘制', () => {
         expect(layout.lines).toEqual([text]);
         expect(layout.fontSize).toBeGreaterThan(30);
         expect(layout.lineHeight).toBeLessThanOrEqual(100);
+    });
+
+    it.each(['𠀀', '𠀀\u{E0100}', '𛀁', '𛄠', 'ｶﾞ', 'ｶｰ', '가', '각', 'ㅋㅋ'])('扩展东亚字素 %s 不将紧邻的完整英文词拆开', eastAsian => {
+        const text = `${eastAsian}HELLO`;
+        const layout = layoutImageTranslationText(text, 5, 2.5, measure, 1);
+        expect(layout.lines).toEqual([eastAsian, 'HELLO']);
+        expect(layout.lines.join('')).toBe(text);
+    });
+
+    it('Unicode 词界不拆开组合字素、英文长词及原有空格和显式换行', () => {
+        const text = '𠀀\u{E0100} HELLO\nｶﾞWORLD 👨‍👩‍👧‍👦';
+        const layout = layoutImageTranslationText(text, 5, 10, measure, 1);
+        expect(layout.lines).toEqual(['𠀀\u{E0100}', 'HELLO', 'ｶﾞ', 'WORLD', '👨‍👩‍👧‍👦']);
+        expect(layout.lines.every(line => !/^[\uFF9E\uFF9F\p{Mark}]/u.test(line))).toBe(true);
+        expect(layoutImageTranslationText('𠀀ABCDEFGHIJ', 5, 4, measure, 1).lines).toEqual(['𠀀', 'ABCDE', 'FGHIJ']);
+        expect(layoutImageTranslationText('A B\nC', 20, 5, measure, 1).lines).toEqual(['A B', 'C']);
+    });
+
+    it('扩展汉字邻接 emoji ZWJ 时保持原始字素和完整文本', () => {
+        const text = '𠀀👨‍👩‍👧‍👦HELLO';
+        const layout = layoutImageTranslationText(text, 5, 4, measure, 1);
+        expect(layout.lines.join('')).toBe(text);
+        expect(layout.lines.filter(line => line.includes('👨'))).toHaveLength(1);
+        expect(layout.lines.find(line => line.includes('👨'))).toContain('👨‍👩‍👧‍👦');
+        expect(layout.lines.every(line => !line.startsWith('\u200d') && !line.endsWith('\u200d'))).toBe(true);
+    });
+
+    it('扩展汉字末尾的连接符不从原字素分离', () => {
+        const text = '𠀀\u200d👨HELLO';
+        const layout = layoutImageTranslationText(text, 1, 20, measure, 1);
+        expect(layout.lines.join('')).toBe(text);
+        expect(layout.lines[0]).toBe('𠀀\u200d');
+        expect(layout.lines.every(line => !line.startsWith('\u200d'))).toBe(true);
+    });
+
+    it('东亚符号组成的 emoji ZWJ 序列不在换行时拆散', () => {
+        for (const text of ['㊙️‍👨HELLO', 'x👩‍㊗️HELLO']) {
+            const layout = layoutImageTranslationText(text, 1, 20, measure, 1);
+            expect(layout.lines.join('')).toBe(text);
+            expect(layout.lines).toContain(text.startsWith('x') ? '👩‍㊗️' : '㊙️‍👨');
+        }
+        // 合成测宽模拟连接前后字形宽度变化，迫使排版在潜在词界处作换行决策。
+        const text = 'x👩‍㊗️HELLO';
+        const nonAdditive = (value: string, size: number) => (value === 'x👩‍' ? 1 : measure(value, 1)) * size;
+        const layout = layoutImageTranslationText(text, 1, 20, nonAdditive, 1);
+        expect(layout.lines).toContain('👩‍㊗️');
+        expect(layout.lines.join('')).toBe(text);
+    });
+
+    it('韩文音节与相邻 Jamo 不从同一字素中拆开', () => {
+        const text = '각HELLO';
+        const layout = layoutImageTranslationText(text, 1, 20, measure, 1);
+        expect(layout.lines.join('')).toBe(text);
+        expect(layout.lines[0]).toBe('각');
+    });
+
+    it.each(['かﾞ', 'ｶﾞﾞ', '漢🏽', '㊗️🏽', '\u0600𠀀', '\u0d4e𠀀', '가', '각', '\u0600 '])('跨词界字素 %s 不在窄框中拆开', cluster => {
+        const text = `${cluster}HELLO`;
+        const layout = layoutImageTranslationText(text, 1, 20, measure, 1);
+        expect(layout.lines.join('')).toBe(text);
+        expect(layout.lines[0]).toBe(cluster);
+    });
+
+    it('普通中日文与全角标点使用安全快路径，混合组合字符才校准词界', () => {
+        const split = vi.spyOn(Intl.Segmenter.prototype, 'segment');
+        const codepointMeasure = (value: string, size: number) => Array.from(value).length * size;
+        layoutImageTranslationText('𠀀HELLO，こんにちは！ｶｰ가', 100, 10, codepointMeasure, 1);
+        expect(split).not.toHaveBeenCalled();
+        layoutImageTranslationText('かﾞHELLO', 100, 10, codepointMeasure, 1);
+        expect(split).toHaveBeenCalledOnce();
     });
 
     it('长段落允许超过三行且全部保留，每一行和总高度均在 OCR 框内', () => {
@@ -121,13 +641,93 @@ describe('图片译文排版与绘制', () => {
         }
     });
 
-    it('旧环境缺少字素分割器时仍按完整 Unicode 码点换行', async () => {
+    it('旧环境缺少字素分割器时保留完整复杂词组并缩小字号', async () => {
         vi.stubGlobal('Intl', {Segmenter: undefined});
         const {layoutImageTranslationText: fallbackLayout} = await import('@/src/features/image-translation/services/rendering');
         const text = '😀'.repeat(10);
         const layout = fallbackLayout(text, 15, 30, (value, size) => Array.from(value).length * size);
         expect(layout.lines.join('')).toBe(text);
         expect(layout.lines.every(line => !line.includes('\ufffd'))).toBe(true);
+    });
+
+
+    it('组合标记跨空白词界也按真实字素边界合并', () => {
+        const text = 'x \u0301字HELLO';
+        const layout = layoutImageTranslationText(text, 1, 30, measure, 1);
+        expect(layout.lines.join('')).toBe(text);
+        expect(layout.lines).toContain(' \u0301');
+    });
+
+    it.each(['\u0e33', '\u0eb3'])('真实 SpacingMark %s 在空格后仍属于同一字素', spacingMark => {
+        const text = `a ${spacingMark}b`;
+        const layout = layoutImageTranslationText(text, 1, 30, measure, 1);
+        expect(layout.lines).toEqual(['a', ` ${spacingMark}`, 'b']);
+        expect(layout.lines.join('')).toBe(text);
+    });
+
+    it('无 Segmenter 时简单 ASCII、汉字和半角长音仍保留词界快路径', async () => {
+        vi.stubGlobal('Intl', {Segmenter: undefined});
+        const {layoutImageTranslationText: fallbackLayout} = await import('@/src/features/image-translation/services/rendering');
+        const codepointMeasure = (value: string, size: number) => Array.from(value).length * size;
+        for (const prefix of ['𠀀', '𛀁', 'ｶｰ', '가']) {
+            expect(fallbackLayout(prefix + 'HELLO', 5, 4, codepointMeasure, 1).lines).toEqual([prefix, 'HELLO']);
+        }
+        expect(fallbackLayout('abcdefghij', 5, 4, codepointMeasure, 1).lines).toEqual(['abcde', 'fghij']);
+        expect(fallbackLayout('A   B\nC', 20, 5, codepointMeasure, 1).lines).toEqual(['A B', 'C']);
+        expect(fallbackLayout('字'.repeat(10), 5, 4, codepointMeasure, 1).lines).toEqual(['字'.repeat(5), '字'.repeat(5)]);
+    });
+
+    it('无 Segmenter 的窄框保留复杂词组、IVS、Jamo、ZWJ 和空白后的 SpacingMark', async () => {
+        vi.stubGlobal('Intl', {Segmenter: undefined});
+        const {layoutImageTranslationText: fallbackLayout} = await import('@/src/features/image-translation/services/rendering');
+        const codepointMeasure = (value: string, size: number) => Array.from(value).length * size;
+        for (const text of ['e\u0301HELLO', '𠀀\u{E0100}HELLO', 'ｶﾞHELLO', '가HELLO', '각HELLO',
+            '👨‍👩‍👧‍👦HELLO', '漢🏽HELLO', '\u0600𠀀HELLO', 'x \u0301字HELLO', 'x \u0e33b', 'x \u0eb3b', 'x👩‍㊗️HELLO']) {
+            const layout = fallbackLayout(text, 1, 30, codepointMeasure, 1);
+            expect(layout.lines, text).toEqual([text]);
+            expect(layout.fontSize, text).toBeLessThan(1);
+            expect(codepointMeasure(text, layout.fontSize), text).toBeLessThanOrEqual(1);
+        }
+        // 不声称与现代排版等价：三个字素在 1 单位宽框内，现代路径字号 1，旧环境须降到约 1/3。
+        const text = 'e\u0301e\u0301e\u0301';
+        const native = layoutImageTranslationText(text, 1, 30, measure, 1);
+        const fallback = fallbackLayout(text, 1, 30, measure, 1);
+        expect(native.lines).toEqual(['e\u0301', 'e\u0301', 'e\u0301']);
+        expect(native.fontSize).toBe(1);
+        expect(fallback.lines).toEqual([text]);
+        expect(fallback.fontSize).toBeGreaterThan(0.32);
+        expect(fallback.fontSize).toBeLessThanOrEqual(1 / 3);
+        expect(fallbackLayout('e\u0301   words', 50, 10, measure, 1).lines).toEqual(['e\u0301 words']);
+        for (const prepend of ['\u0600', '\u{110BD}']) {
+            const layout = fallbackLayout(prepend + ' HELLO', 1, 30, measure, 1);
+            expect(layout.lines[0]).toBe(prepend + ' ');
+            expect(layout.lines.join('')).toBe(prepend + ' HELLO');
+        }
+        for (const text of ['x\uDC00 HELLO', '\uDC00 HELLO', '\uD800 HELLO']) {
+            expect(fallbackLayout(text, 100, 10, measure, 1).lines).toEqual([text]);
+        }
+        const normal = fallbackLayout('Read cafe\u0301 and de\u0301ja\u0300 vu words', 10, 20, measure, 1);
+        expect(normal.fontSize).toBe(1);
+        expect(normal.lines.length).toBeGreaterThan(1);
+        expect(normal.lines.join(' ').replace(/\s+/gu, ' ')).toBe('Read cafe\u0301 and de\u0301ja\u0300 vu words');
+    });
+
+    it.each([
+        'Read cafe\u0301 and de\u0301ja\u0300 vu words for the next page.',
+        'La traduction du cafe\u0301 est de\u0301ja\u0300 disponible avec les autres mots.',
+        'Это проверка перевода длинной страницы с несколькими словами.',
+        'นี่ คือ การทดสอบ ภาษาไทย หลาย คำ',
+        'ນີ້ ແມ່ນ ການທົດສອບ ຫຼາຍ ຄຳ',
+    ])('无 Segmenter 时多词段落保留正常空白换行与字号：%s', async text => {
+        vi.stubGlobal('Intl', {Segmenter: undefined});
+        const {layoutImageTranslationText: fallbackLayout} = await import('@/src/features/image-translation/services/rendering');
+        const native = layoutImageTranslationText(text, 12, 30, measure, 1);
+        const fallback = fallbackLayout(text, 12, 30, measure, 1);
+        expect(native.fontSize).toBe(1);
+        expect(fallback.fontSize).toBe(1);
+        expect(fallback.lines.length).toBeGreaterThan(1);
+        expect(fallback.lines.join(' ').replace(/\s+/gu, ' ')).toBe(text);
+        expect(fallback.lines.every(line => measure(line, 1) <= 12)).toBe(true);
     });
 
     it('真实字号绘制和裁剪限制在原区域内，绘制后恢复上下文状态', () => {
@@ -146,6 +746,17 @@ describe('图片译文排版与绘制', () => {
         }
         expect(context.strokeText.mock.calls).toEqual(context.fillText.mock.calls);
     });
+    it('孔避让已校验的prepared layout直接复用，绘字不再次度量或搜索字号',()=>{
+        const text='完整译文 Mixed words',width=100,height=40;
+        const direct=canvasContext();
+        drawTranslatedImageText(direct as unknown as CanvasRenderingContext2D,text,10,20,width,height,'rgb(240,240,240)',20,'left');
+        const prepared=layoutImageTranslationText(text,width-4,height-2,measure,20),reuse=canvasContext();
+        reuse.measureText.mockImplementation(()=>{throw new Error('prepared path must not search again');});
+        drawTranslatedImageText(reuse as unknown as CanvasRenderingContext2D,text,10,20,width,height,'rgb(240,240,240)',20,'left',prepared);
+        expect(reuse.measureText).not.toHaveBeenCalled();expect(reuse.fillText.mock.calls).toEqual(direct.fillText.mock.calls);
+        expect(reuse.strokeText.mock.calls).toEqual(direct.strokeText.mock.calls);expect(reuse.rect.mock.calls).toEqual(direct.rect.mock.calls);
+        expect(reuse.save).toHaveBeenCalledOnce();expect(reuse.restore).toHaveBeenCalledOnce();
+    });
 
     it('无可绘文字和绘制异常都会释放 Canvas 状态', () => {
         const empty = canvasContext();
@@ -161,10 +772,18 @@ describe('图片译文排版与绘制', () => {
 });
 
 describe('图片译文颜色', () => {
+    it('主色桶返回实际采样颜色，纯色和少量色彩噪声不会被粗色阶替换', () => {
+        const pixels=new Uint8ClampedArray(10*10*4);
+        for(let at=0;at<pixels.length;at+=4)pixels.set([128,218,184,255],at);
+        expect(getImageTextBackgroundColor(pixels,10,10,{x0:3,y0:3,x1:7,y1:7})).toBe('rgb(128,218,184)');
+        // 两个样本落在同一桶，返回真实均值；透明样本和另一少数桶不参与该均值。
+        pixels.fill(0);pixels.set([201,220,241,255],0);pixels.set([203,222,243,255],4);pixels.set([16,16,16,255],8);
+        expect(getImageTextBackgroundColor(pixels,10,10,{x0:3,y0:3,x1:7,y1:7})).toBe('rgb(202,221,242)');
+    });
     it('透明外围不会把背景主色误判为黑色，整图没有外围时使用可读兜底', () => {
         const pixels = new Uint8ClampedArray(8 * 8 * 4);
         pixels.set([200, 220, 240, 255], 0);
-        expect(getImageTextBackgroundColor(pixels, 8, 8, {x0: 3, y0: 3, x1: 5, y1: 5})).toBe('rgb(208,224,240)');
+        expect(getImageTextBackgroundColor(pixels, 8, 8, {x0: 3, y0: 3, x1: 5, y1: 5})).toBe('rgb(200,220,240)');
         expect(getImageTextBackgroundColor(pixels, 8, 8, {x0: 0, y0: 0, x1: 8, y1: 8})).toBe('rgb(255,255,255)');
         expect(getImageTextBackgroundColor(new Uint8ClampedArray(16), 2, 2, {x0: 1, y0: 1, x1: 2, y1: 2}))
             .toBe('rgb(255,255,255)');
@@ -184,5 +803,46 @@ describe('图片译文颜色', () => {
         expect(getImageTextColor('rgb(0,0,0)')).toBe('#ffffff');
         expect(getImageTextColor('invalid')).toBe('#111827');
         expect(getImageTextColor('rgb(12,34)')).toBe('#111827');
+    });
+});
+
+
+describe('完整译文字形使用实际绘制路径预检',()=>{
+    const budget=()=>({remaining:8192,characters:4_194_304});
+    function measured(){
+        const c=canvasContext();c.measureText.mockImplementation(text=>{
+            const size=Number(c.font.match(/([\d.]+)px/)![1]),width=text.length*size*.6;
+            return {width,actualBoundingBoxLeft:0,actualBoundingBoxRight:width,actualBoundingBoxAscent:size*.8,actualBoundingBoxDescent:size*.2}as never;
+        });return c;
+    }
+    it('预检不绘字、不创建裁剪路径，源墨迹锚点与完整译文沿用原绘制参数',()=>{
+        const c=measured();
+        expect(canDrawTranslatedImageText(budget(),c as never,'COMPLETE TEXT',10,10,200,80,'black',18,'center',undefined,'cyan',undefined,{x0:30,y0:25,x1:170,y1:55})).toBe(true);
+        expect(c.fillText).not.toHaveBeenCalled();expect(c.strokeText).not.toHaveBeenCalled();expect(c.beginPath).not.toHaveBeenCalled();expect(c.clip).not.toHaveBeenCalled();expect(c.restore).toHaveBeenCalledOnce();
+    });
+    it('未知真实指标、零墨迹、空文本及超出原裁剪框的预排版均拒绝',()=>{
+        const c=canvasContext();expect(canDrawTranslatedImageText(budget(),c as never,'TEXT',0,0,120,50,'black',18)).toBe(false);
+        c.measureText.mockReturnValue({width:10,actualBoundingBoxLeft:0,actualBoundingBoxRight:0,actualBoundingBoxAscent:0,actualBoundingBoxDescent:0}as never);
+        expect(canDrawTranslatedImageText(budget(),c as never,'TEXT',0,0,120,50,'black',18)).toBe(false);
+        expect(canDrawTranslatedImageText(budget(),c as never,'',0,0,120,50,'black',18)).toBe(false);
+        const m=measured();expect(canDrawTranslatedImageText(budget(),m as never,'TEXT',0,0,10,10,'black',18,'center',{lines:['TEXT'],fontSize:20,lineHeight:24})).toBe(false);
+    });
+    it('空行不制造可见墨迹；倾角预检使用变换后坐标且不变换Canvas',()=>{
+        const c=measured();expect(canDrawTranslatedImageText(budget(),c as never,'TEXT\n\nEND',0,0,200,100,'black',16,'center')).toBe(true);
+        const source={text:'SOURCE',bbox:{x0:10,y0:20,x1:210,y1:100}},orientation={owner:source,sourceText:source.text,radians:-Math.PI/36,originX:110,originY:60,bounds:{x0:-80,y0:-10,x1:80,y1:10},width:160,height:20,count:1,heightGain:10};
+        expect(canDrawTranslatedImageText(budget(),c as never,'完整译文',10,20,200,80,'black',20,'left',undefined,'cyan',undefined,undefined,orientation)).toBe(true);
+        expect(c.transform).not.toHaveBeenCalled();expect(c.fillText).not.toHaveBeenCalled();
+    });
+    it.each([0,.01])('浏览器描边往返舍入后只容忍数值噪声，附加宽度%s',extra=>{
+        const c=measured();let width=1;
+        Object.defineProperty(c,'lineWidth',{get:()=>width,set:value=>{width=Math.fround(value)+extra;}});
+        expect(canDrawTranslatedImageText(budget(),c as never,'COMPLETE TEXT',0,0,200,80,'black',18,'left')).toBe(extra===0);
+        expect(c.fillText).not.toHaveBeenCalled();expect(c.restore).toHaveBeenCalledOnce();
+    });
+    it('共享度量及字符预算耗尽时退出，原生字体错误仍抛出首因并恢复context',()=>{
+        const c=measured();expect(canDrawTranslatedImageText({remaining:0,characters:100},c as never,'TEXT',0,0,100,50,'black')).toBe(false);
+        expect(canDrawTranslatedImageText({remaining:100,characters:2},c as never,'TEXT',0,0,100,50,'black')).toBe(false);
+        expect(canDrawTranslatedImageText({remaining:1,characters:100},c as never,'TEXT',0,0,100,50,'black')).toBe(false);
+        const failure=new Error('native metrics');c.measureText.mockImplementation(()=>{throw failure;});expect(()=>canDrawTranslatedImageText(budget(),c as never,'TEXT',0,0,100,50,'black')).toThrow(failure);expect(c.restore).toHaveBeenCalledTimes(2);
     });
 });

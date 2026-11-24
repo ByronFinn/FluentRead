@@ -135,7 +135,7 @@ describe('options UI composition architecture', () => {
     const popup = source('src/app/popup/PopupApp.vue')
 
     expect(activeSectionSource(sections, 'settings-advanced')).toContain('<TranslationCacheSettings')
-    expect(sections).toContain('<TranslationCacheSettings :config="config" />')
+    expect(sections).toContain('<TranslationCacheSettings :config="config" :active="viewActive && props.activeSection === \'settings-advanced\' && (!props.activePanel || props.activePanel === \'cache\')" />')
     expect(sections).toContain("v-if=\"hasVisitedSection('settings-advanced')\"")
     expect(navigation).toContain('缓存容量、存储大小、缓存条数、缓存上限、缓存阈值、清空缓存、清除缓存、LRU')
     expect(navigation).not.toContain("id: 'settings-cache'")
@@ -147,22 +147,23 @@ describe('options UI composition architecture', () => {
     expect(cache).toContain('role="alert"')
     expect(cache).toContain('@submit.prevent="saveLimits"')
     expect(cache).toContain('requestConfigPatch(patch, browser.runtime.sendMessage.bind(browser.runtime))')
-    expect(cache).toContain('getTranslationCacheStats()')
-    expect(cache).toContain('clearManagedTranslationCache()')
+    expect(cache).toContain('getTranslationCacheStats(options)')
+    expect(cache).toContain('clearManagedTranslationCache(options)')
     expect(cache).not.toContain('indexedDB')
     expect(cache).not.toContain('v-model="props.config.')
     expect(cache).not.toContain(':disabled="!props.config.useCache"')
-    expect(cache).toContain("onUnmounted(() => { disposed = true; });")
+    expect(cache).toContain("useSettingsActionContext(() => props.active !== false, () => [])")
+    expect(cache).toContain('controller?.abort()')
     expect(cache).toContain('@media (max-width: 480px)')
     const advanced = activeSectionSource(sections, 'settings-advanced')
     expect(advanced).toContain('data-testid="api-key-recovery-setting"')
     expect(advanced).toContain("t('settings.requestLimits.apiKeyRecovery')")
-    expect(advanced).toContain('@change="handleApiKeyRecoveryChange"')
+    expect(advanced).toContain(':onChange="requestSettingsActions.keyRecovery"')
   })
 
   it('keeps the WXT options entrypoint as a thin app composition shell', () => {
     const entrypoint = sourceBody('entrypoints/options/main.ts')
-    expect(entrypoint).toBe("import { mountOptionsApp } from '@/src/app/options'\n\nmountOptionsApp('#app')\n")
+    expect(entrypoint).toBe("import { mountOptionsApp } from '@/src/app/options'\nimport { createPopupStartupFeedback } from '@/src/app/popup/startupFeedback'\n\nconst feedback = createPopupStartupFeedback('#app')\nvoid mountOptionsApp('#app').then(feedback.dispose, feedback.fail)\n")
     const optionsEntry = sourceBody('src/app/options/index.ts')
     const shadowPlatform = sourceBody('src/platform/shadow-ui/vue.ts')
     expect(optionsEntry).toMatch(/uiRoot\?:\s*HTMLElement\s*\|\s*null;/u)
@@ -188,8 +189,14 @@ describe('options UI composition architecture', () => {
     expect(optionsApp).toContain('defineAsyncComponent(() => import(\'@/src/features/settings/ui/SettingsSections.vue\'))')
     expect(optionsApp).toContain('defineAsyncComponent(() => import(\'@/src/features/settings/ui/LearningCenter.vue\'))')
     expect(optionsEntry).toContain('await configReady')
-    expect(optionsEntry).toContain('ensureUiLanguageBundle(config.uiLanguage)')
-    expect(optionsEntry).toContain('prepareInterfaceFont(config.interfaceFont)')
+    // Startup captures both configuration values for the same preparation round,
+    // awaits the selected resources and rechecks them before mounting. Detailed
+    // timing, exit and hydration behavior is exercised in popupBootstrap.test.ts.
+    expect(optionsEntry).toMatch(/const language = config\.uiLanguage,\s*font = config\.interfaceFont/u)
+    expect(optionsEntry).toContain('language === preparedLanguage ? undefined : ensureUiLanguageBundle(language)')
+    expect(optionsEntry).toContain('font === preparedFont ? undefined : prepareInterfaceFont(font)')
+    expect(optionsEntry).toMatch(/await Promise\.all\(\[[\s\S]*?ensureUiLanguageBundle\(language\)[\s\S]*?prepareInterfaceFont\(font\)[\s\S]*?\]\)/u)
+    expect(optionsEntry).toMatch(/\} while \(preparedLanguage !== config\.uiLanguage \|\| preparedFont !== config\.interfaceFont\)[\s\S]*?app\.mount\(selector\)/u)
     expect(optionsEntry).not.toContain('element-plus/dist/index.css')
     expect(sections).toContain('const visitedSections = ref(new Set<string>())')
     expect(sections).toContain('const hasVisitedSection = (section: string): boolean => visitedSections.value.has(section)')
@@ -586,13 +593,14 @@ describe('options UI composition architecture', () => {
     expect(localDataManagement).toContain('粘贴旧版配置 JSON')
     expect(localDataManagement).toContain('previewPastedImport')
     expect(localDataManagement).toContain('@click="exportCompleteBackup($event)"')
-    expect(localDataManagement).toContain('@click="chooseImport($event)"')
-    expect(localDataManagement).toContain('@click="previewPastedImport($event)"')
+    expect(localDataManagement).toContain('@click="restoreSourceActions.chooseFile"')
+    expect(localDataManagement).toContain('@click="restoreSourceActions.preview"')
     expect(localDataManagement).toContain('await focusTriggerAfterBusy(trigger, isCurrent)')
     expect(localDataManagement).toContain('restoreSourceVisible.value && !importPreviewVisible.value')
     expect(localDataManagement).toContain('activeElement === document.body || activeElement === document.documentElement')
     expect(localDataManagement).toContain('chooseBackupContext')
-    expect(localDataManagement).toContain("confirmButtonText: '不包含并导出'")
+    expect(localDataManagement).toContain("confirmExport({title: translateLegacy('导出备份')")
+    expect(localDataManagement).toContain("cancel: t('common.cancel')")
     expect(localDataManagement).toContain('prepareHydratedConfigForExport()')
     expect(localDataManagement).toContain('credentialMode: resolveBackupConfigCredentialMode(target.backup)')
     expect(localDataManagement).toContain("credentialIntent: target.kind === 'complete' && usesExactCredentialReplacement(target.backup)")
@@ -646,7 +654,8 @@ describe('options UI composition architecture', () => {
     expect(drawerSettings!.getAttribute('@click')).toBeNull()
     expect(videoRuntime).toContain("import {browserCapabilities} from '@/src/platform/browser/capabilities'")
     const playerMenu = source('src/features/video-subtitle/content/playerMenu.ts')
-    expect(videoRuntime).toContain('available: isXVideoPage() && browserCapabilities.extensionDom')
+    expect(videoRuntime).toContain('available: isMediaSubtitlePage() && browserCapabilities.extensionDom')
+    expect(videoRuntime).toContain('const isMediaSubtitlePage = () => isXVideoPage() || isHtmlMediaPage()')
     expect(videoRuntime).toContain('renderVideoAiMenu(menu,')
     expect(playerMenu).toContain('button.disabled = !state.available || state.checking || downloading')
     expect(playerMenu).toContain("!state.available ? 'video.aiUnavailable'")
@@ -741,7 +750,7 @@ describe('options UI composition architecture', () => {
     expect(document).toContain('documentServiceUnavailableMessage')
     expect(translationCenter).toContain('filterAvailableTranslationServices(withCompositeTranslationServiceOptions(withCustomOpenAIServiceOptions(')
     expect(translationCenter).toContain('getCustomOpenAIProviderModels(customOpenAIProviders.value')
-    expect(translationCenter).toContain('原配置会保留')
+    expect(translationCenter).toContain('部分对比服务在当前环境不可用')
     expect(translationCenter).toContain('if (!isTranslationServiceAvailable(service)) return [service]')
   })
 
@@ -822,8 +831,10 @@ describe('options UI composition architecture', () => {
     expect(indicator).toContain("attachShadow({mode: 'closed'})")
     expect(indicator).toContain("['animation', 'none']")
     expect(indicator).toContain("['all', 'initial']")
-    expect(indicator).toContain(':host::before')
-    expect(indicator).toContain('content: none !important')
+    const indicatorStyles = source('src/ui/styles/translation-loading-indicator.css')
+    expect(indicatorStyles).toContain(':host::before')
+    expect(indicatorStyles).toContain('content: none !important')
+    expect(indicator).toContain("from './styles/translation-loading-indicator.css?inline'")
     expect(indicator).not.toContain("classList.add('static')")
     expect(pageStyles).not.toMatch(/@keyframes\s+spin\b/u)
     expect(userscriptSettings).toContain('v-model="selectedLoadingStyle"')
@@ -916,11 +927,11 @@ describe('options UI composition architecture', () => {
     expect(testConnection).toContain('service: testedService')
   })
 
-  it('uses the configured language pair and exposes official Chrome help', () => {
+  it('presents browser translation in one status row for the active language pair', () => {
     const serviceConfiguration = source('src/features/settings/ui/services/ServiceConfiguration.vue')
     const chromePreparation = source('src/features/settings/model/chromeTranslationPreparation.ts')
 
-    expect(serviceConfiguration).toContain("t('settings.services.keys.checkConnection')")
+    expect(serviceConfiguration).toContain("'settings.services.chromePreparation.check' : 'settings.services.chromePreparation.action'")
     expect(serviceConfiguration).toContain("t('settings.services.chromePreparation.titleReady')")
     expect(serviceConfiguration).not.toContain('class="setup-status"')
     expect(serviceConfiguration).toContain("const { language, t, translateLegacy } = useUiI18n()")
@@ -928,16 +939,15 @@ describe('options UI composition architecture', () => {
     expect(serviceConfiguration).not.toContain('chromePreparationSourceLanguage')
     expect(serviceConfiguration).toContain('from: pair.sourceLanguage')
     expect(serviceConfiguration).toContain('chromeTranslationPreparationStore')
-    expect(serviceConfiguration).toContain('data-chrome-preparation-help')
-    expect(serviceConfiguration).toContain('helpSummary')
-    expect(serviceConfiguration).toContain("t('settings.services.chromePreparation.sourceDescription')")
+    expect(serviceConfiguration).toContain('data-chrome-preparation-language-pair')
+    expect(serviceConfiguration).toContain('chromePreparationHint')
+    expect(serviceConfiguration).not.toContain('data-chrome-preparation-help')
     expect(serviceConfiguration).toContain('CHROME_PREPARATION_TIMEOUT_MS = 300_000')
     expect(serviceConfiguration).toContain('activeConnection?.abort()')
-    expect(serviceConfiguration).toContain("'settings.services.chromePreparation.success'")
     expect(serviceConfiguration).toContain('ChromeTranslationPreparationError')
     expect(serviceConfiguration).toContain('CHROME_PREPARATION_ERROR_KEYS[error.code]')
     expect(serviceConfiguration).not.toContain('Chrome 本地翻译已全部准备')
-    expect(chromePreparation).toContain('再次点击“准备 Chrome 本地翻译”继续准备')
+    expect(chromePreparation).toContain('再次点击「准备语言包」继续准备')
     expect(chromePreparation).toContain("'user-activation-required'")
   })
 
@@ -985,6 +995,9 @@ describe('options UI composition architecture', () => {
       const attributeStart = serviceConfiguration.indexOf(`data-configuration-group="${group}"`)
       expect(attributeStart).toBeGreaterThanOrEqual(0)
       const start = serviceConfiguration.lastIndexOf('<', attributeStart)
+      if (serviceConfiguration.startsWith('<component', start)) {
+        return serviceConfiguration.slice(start, serviceConfiguration.indexOf('</component>', start) + '</component>'.length)
+      }
       return sectionAt(serviceConfiguration, start)
     }
     const connectionGroup = configurationGroup('connection')
@@ -1004,21 +1017,24 @@ describe('options UI composition architecture', () => {
     expect(customRequestGroup).toContain('data-api-key-auth-policy')
     expect(promptsGroup).toContain('data-testid="prompt-sync-all"')
     expect(translationGroup).toContain('data-testid="model-thinking-control"')
-    expect(promptsGroup).toContain('<PromptTemplateEditor v-model="config.system_role[service]" role="system" :active="active && activeSettingsTab === \'prompts\'" :context="config" :context-key="service" />')
-    expect(promptsGroup).toContain('<PromptTemplateEditor v-model="config.user_role[service]" role="user" :active="active && activeSettingsTab === \'prompts\'" :context="config" :context-key="service" />')
+    for (const [field, role] of [['system_role', 'system'], ['user_role', 'user']]) {
+      expect(promptsGroup).toContain(`<PromptTemplateEditor :model-value="config.${field}[service]" :onUpdate:modelValue="fieldActions.${field}" role="${role}" :active="active && activeSettingsTab === 'prompts'" :context="config" :context-key="service" />`)
+    }
     expect(requestsGroup).toContain('<RequestLimitSettings')
     expect(customRequestGroup).toContain('v-if="compute.showDeepseekApiType"')
     expect(customRequestGroup).toContain('v-if="customProvider"')
     expect(customRequestGroup).toContain('v-if="compute.showCustomBody"')
     expect(serviceConfiguration).not.toContain('data-configuration-group="advanced"')
     expect(serviceConfiguration).not.toContain('class="advanced-groups"')
+    expect(requestsGroup).toMatch(/^<component\b/u)
+    expect(requestsGroup).toContain(':is="singleSettingsTab ? SettingsDisclosure : \'section\'"')
     for (const group of [translationGroup, promptsGroup, requestsGroup, customRequestGroup]) {
-      expect(group).toMatch(/^<section\b/u)
+      if (group !== requestsGroup) expect(group).toMatch(/^<section\b/u)
       expect(group).toContain('class="service-settings-panel"')
       expect(group.match(/data-configuration-group=/gu)).toHaveLength(1)
       expect(connectionGroup).not.toContain(group)
     }
-    expect(serviceConfiguration).toContain('<Teleport v-if="connectionActionTarget && !publicPlanBlocked" :to="connectionActionTarget">')
+    expect(serviceConfiguration).toContain('<Teleport v-if="connectionActionTarget && !publicPlanBlocked && !browserTranslationUnavailable" :to="connectionActionTarget">')
     expect(catalog).toContain('class="hero-connection-action"')
     expect(apiKeyList).not.toContain('data-connection-test-button')
     expect(serviceConfiguration).toContain(':disabled="connectionTestDisabled"')
@@ -1033,7 +1049,7 @@ describe('options UI composition architecture', () => {
     expect(apiKeyList).toContain('const multiple = computed(() => props.keys.length > 1)')
     expect(apiKeyList).not.toContain('allowMultiple')
     expect(translationGroup).toContain(':model-value="selectedModelThinking"')
-    expect(translationGroup).toContain("$emit('update:model-thinking', Boolean($event))")
+    expect(translationGroup).toContain(':onUpdate:modelValue="fieldActions.modelThinking"')
     expect(modelPicker).toContain('model === CUSTOM_OPENAI_RESERVED_MODEL_ID')
     expect(providerDialog).toContain('data-testid="custom-service-dialog"')
     expect(providerDialog).not.toContain('data-testid="custom-service-model-thinking"')
@@ -1057,8 +1073,6 @@ describe('options UI composition architecture', () => {
     expect(serviceConfiguration).toContain('translation: !publicPlanBlocked.value && Boolean(compute.value.showAI && compute.value.showModel)')
     expect(serviceConfiguration).toContain('<el-tab-pane v-if="settingsTabs.prompts" name="prompts"')
     expect(serviceConfiguration).toContain('prompts: !publicPlanBlocked.value && Boolean(compute.value.showAI)')
-    expect(serviceConfiguration).toContain('<PromptTemplateEditor v-model="config.system_role[service]" role="system" :active="active && activeSettingsTab === \'prompts\'" :context="config" :context-key="service" />')
-    expect(serviceConfiguration).toContain('<PromptTemplateEditor v-model="config.user_role[service]" role="user" :active="active && activeSettingsTab === \'prompts\'" :context="config" :context-key="service" />')
     expect(promptEditor).toContain('data-prompt-token')
     expect(promptEditor).toContain("{value: '{{to}}', label: '目标语言'}")
     expect(promptEditor).toContain("{value: '{{origin}}', label: '待翻译原文'}")
@@ -1073,7 +1087,7 @@ describe('options UI composition architecture', () => {
     const services = activeSectionSource(settings, 'settings-services')
     const styles = sourceBody('src/features/settings/ui/settings-sections.css')
 
-    expect(settingsGroupTitles(general)).toEqual(['基础配置', '网页辅助', '基本偏好'])
+    expect(settingsGroupTitles(general)).toEqual(['基础配置', "t('settings.general.assistance')", "t('settings.general.preferences')"])
     expect(general).not.toContain('class="settings-subgroup-heading"')
     expect(general).not.toContain('id="translated-display-heading"')
     expect(general).toContain('data-testid="open-translation-settings"')
@@ -1103,8 +1117,8 @@ describe('options UI composition architecture', () => {
     expect(general).not.toContain('data-testid="bilingual-highlight-preview"')
     expect(general).toContain('data-testid="open-translation-style-settings"')
     expect(general).toContain("openSettingsSection('settings-interface')")
-    expect(general).toContain(":label=\"t('settings.translationStyle.title')\"")
-    expect(general).toContain("t('settings.translationStyle.openFromGeneral')")
+    expect(general).toContain("t('settings.translationStyle.title')")
+    expect(general).toContain('settings-heading-link')
     expect(settings).not.toContain('highlightPreviewSentence')
     expect(settings).not.toContain('styleGroups')
     expect(styles).not.toContain('.style-preview-text')
@@ -1169,7 +1183,7 @@ describe('options UI composition architecture', () => {
     // 朴素模式不需要规则；其余预设都必须在共享样式表中有对应类，逐行绘制的预设还要有行内译文规则。
     const presetSource = source('src/core/config/translationAppearance.ts')
     const presetClasses = [...presetSource.matchAll(/className: '(fluent-display-[a-z-]+)'[^\n]*/gu)]
-    expect(presetClasses).toHaveLength(49)
+    expect(presetClasses).toHaveLength(71)
     for (const [line, className] of presetClasses) {
       if (className === 'fluent-display-default') continue
       expect(displayCss, className).toMatch(new RegExp(`\\.${className}[\\s\\[:>{]`, 'u'))
@@ -1192,7 +1206,7 @@ describe('options UI composition architecture', () => {
     expect(catalog).toContain('data-testid="custom-service-add"')
     expect(catalog).not.toContain('service-add-dialog')
     expect(catalog).toContain('v-for="group in visibleDirectoryGroups"')
-    expect(catalog).toContain('<nav v-if="directoryGroups.length > 1" class="service-group-navigation"')
+    expect(catalog).toContain('class="service-group-navigation settings-subnavigation"')
     expect(catalog).toContain(':data-service-group-link="group.id"')
     expect(catalog).toContain(':aria-expanded="isGroupOpen(group.id)"')
     expect(catalog).toContain('v-show="isGroupOpen(group.id)"')
@@ -1212,6 +1226,7 @@ describe('options UI composition architecture', () => {
     const translation = activeSectionSource(settings, 'settings-translation')
     const inputTranslation = source('src/features/settings/ui/InputTranslationSettings.vue')
     const paragraphCopySettings = source('src/features/settings/ui/ParagraphCopySettings.vue')
+    const aiMultiSegmentSettings = source('src/features/settings/ui/AiMultiSegmentSettings.vue')
 
     expect(settingsGroupTitles(translation)).toEqual([
       '鼠标悬浮翻译',
@@ -1230,8 +1245,10 @@ describe('options UI composition architecture', () => {
     expect(inputTranslation).toContain('class="input-translation-service-control"')
     expect(inputTranslation).toContain('<ServiceIcon')
     expect(translation).toContain('label="全文翻译范围"')
-    expect(translation).toContain('aria-label="AI 多段翻译"')
-    expect(translation).toContain('v-model="config.enableAIMultiSegment"')
+    expect(translation).toContain('<AiMultiSegmentSettings :config="config"')
+    expect(aiMultiSegmentSettings).toContain(":aria-label=\"t('settings.fullPage.multiSegmentTitle')\"")
+    expect(aiMultiSegmentSettings).toContain(':model-value="config.enableAIMultiSegment"')
+    expect(aiMultiSegmentSettings).toContain('data-testid="ai-multi-segment-limits"')
     expect(translation.match(/<QuickTranslationProfiles\b/gu)).toHaveLength(2)
     expect(translation).toContain('action="hover"')
     expect(translation).toContain('action="full-page"')
@@ -1278,6 +1295,14 @@ describe('options UI composition architecture', () => {
     expect(tokens).toContain('--surface-soft: var(--fr-color-surface-soft);')
   })
 
+  it('keeps the off switch neutral instead of reusing a foreground text token', () => {
+    const controls = sourceBody('src/features/settings/ui/components/settings-controls.css')
+    const switchRule = controls.match(/:is\([^)]*\) \.el-switch \{([^}]*)\}/u)?.[1] ?? ''
+
+    expect(switchRule).toContain('--el-switch-on-color: var(--brand);')
+    expect(switchRule).not.toMatch(/--el-switch-off-color:\s*var\(--(?:muted|ink|brand)/u)
+  })
+
   it('keeps the desktop navigation scroll boundary stable while hovering its final item', () => {
     const pageStyles = sourceBody('src/features/settings/ui/settings-page.css')
 
@@ -1304,8 +1329,8 @@ describe('options UI composition architecture', () => {
     expect(item).toContain('<FieldHelp v-if="help" :content="help" />')
     expect(item).toContain('<slot name="description"><small v-if="description">{{ description }}</small></slot>')
     expect(settings).toContain(`label="划词触发方式" :help="t('selectionTrigger.modeDescription')">`)
-    expect(settings).toContain('<SettingsItem id="floating-ball-toggle" label="全文翻译悬浮球">')
-    expect(settings).toContain(`:description="t('settings.fullPage.multiSegmentDescription')" :help="t('settings.fullPage.multiSegmentHelp')"`)
+    expect(settings).toContain(`<SettingsItem id="floating-ball-toggle" :label="t('settings.general.floatingBall')">`)
+    expect(source('src/features/settings/ui/AiMultiSegmentSettings.vue')).toContain(`:description="t('settings.fullPage.multiSegmentDescription')" :help="t('settings.fullPage.multiSegmentHelp')"`)
   })
 
   it('uses one compact number field for delays, lengths and limits', () => {

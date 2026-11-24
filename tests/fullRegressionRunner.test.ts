@@ -10,6 +10,7 @@ const BROWSER_ARGS = [
     '--playwright-root', '/tmp/fluentread-playwright-runtime',
     '--browser-path', '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
     '--focus-safe-helper', 'scripts/focus-safe-browser.cjs',
+    '--runtime-diagnostics-helper', '/tmp/runtime-diagnostics.cjs',
     '--extension-dir', '.output/chrome-mv3',
     '--artifacts-dir', '/tmp/fluentread-regression-artifacts',
 ];
@@ -23,6 +24,7 @@ function runRunner(args: string[]) {
             FLUENTREAD_BROWSER_PATH: '',
             FLUENTREAD_EXTENSION_DIR: '',
             FLUENTREAD_FOCUS_SAFE_HELPER: '',
+            FLUENTREAD_RUNTIME_DIAGNOSTICS_HELPER: '',
             FLUENTREAD_REGRESSION_ARTIFACTS_DIR: '',
             PLAYWRIGHT_ROOT: '',
         },
@@ -77,7 +79,7 @@ describe('full regression runner', () => {
         expect(vitestSteps).toHaveLength(1);
         expect(vitestSteps[0]).toMatchObject({id: 'strict-coverage', command: 'pnpm',
             args: [
-                'exec', 'vitest', 'run', '--coverage', '--config', 'vitest.coverage.config.ts',
+                'exec', 'vitest', 'run', '--coverage', '--config', 'tests/config/vitest.coverage.config.ts',
                 '--reporter=default', '--reporter=json',
                 '--outputFile=/tmp/fluentread-local-only/vitest-results.json',
                 '--coverage.reportsDirectory=/tmp/fluentread-local-only/coverage',
@@ -233,6 +235,7 @@ describe('full regression runner', () => {
         expect(networkSteps[0].dependsOn).toEqual(['chrome-build']);
         expect(networkSteps[0].args).toContain('--allow-network');
         expect(networkSteps[0].args).toContain('--focus-safe-helper');
+        expect(networkSteps[0].args).toEqual(expect.arrayContaining(['--runtime-diagnostics-helper', '/tmp/runtime-diagnostics.cjs']));
         expect(networkSteps[0].args).toContain('--background');
         expect(networkSteps[0].networkPolicy).toBe('explicit-allow-network');
         expect(plan.steps.some((step: {phase: string}) => step.phase === 'browser')).toBe(false);

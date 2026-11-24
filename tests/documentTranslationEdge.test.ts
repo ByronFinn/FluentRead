@@ -10,6 +10,7 @@ import {
     type ParsedDocument,
 } from '@/src/features/document-translation/core/document';
 import {createDocumentPreviewHtml} from '@/src/features/document-translation/core/preview';
+import {decodeTextareaHtml} from '@/src/shared/text/htmlEntities';
 
 afterEach(() => {
     vi.unstubAllGlobals();
@@ -49,16 +50,77 @@ describe('document translation edge contracts', () => {
         expect(() => parseDocument('unknown.yaml', 'value')).toThrow('暂不支持该文件格式');
     });
 
-    it('浏览器 DOM 可用时使用 textarea 解码 HTML 实体', () => {
-        const textarea = {
-            value: '',
-            set innerHTML(value: string) {
-                this.value = value === 'A&amp;B' ? 'A&B' : value;
-            },
-        };
-        vi.stubGlobal('document', {createElement: () => textarea});
+    it('浏览器环境保留完整实体解码，且不再创建 textarea', () => {
+        const createElement = vi.fn(() => {throw new Error('entity decoder must not create DOM');});
+        vi.stubGlobal('document', {createElement});
+        expect(parseDocument('page.html', '<p>A&amp;B &NotEqualTilde;</p>').segments[0].source).toBe('A&B ≂̸');
+        expect(createElement).not.toHaveBeenCalled();
+    });
 
-        expect(parseDocument('page.html', '<p>A&amp;B</p>').segments[0].source).toBe('A&B');
+    it.each([
+        ['&amp;lt;', '&lt;'],
+        ['&notit;', '¬it;'],
+        ['&NotEqualTilde;', '≂̸'],
+        ['&#128;', '€'],
+        ['&#0;', '�'],
+        ['&#xD800;', '�'],
+        ['A&#13;&#10;B', 'A\nB'],
+        ['A\r\nB\rC', 'A\nB\nC'],
+        ['A\0B', 'AB'],
+        ['&am\0p;', '&amp;'],
+        ['&#1\0' + '3;', '\x013;'],
+        ['before</textarea><b>after', 'before</textarea><b>after'],
+    ])('不构造 DOM 时模拟 textarea 的一次解码与规范化：%j', (input, expected) => {
+        expect(decodeTextareaHtml(input)).toBe(expected);
+    });
+
+    it('使用固定文本探测浏览器对原始小于号后 NUL 的处理，不改变引用解码边界', () => {
+        function documentFor(result: string) {
+            let captured = '';
+            const doc = {
+                createElement: vi.fn(() => ({
+                    set innerHTML(value: string) {captured = value;},
+                    get value() {return result;},
+                })),
+            };
+            return {doc: doc as unknown as Document, getCaptured: () => captured};
+        }
+        const firefox = documentFor('<');
+        const chromium = documentFor('<�');
+        const input = '&lt;\0A<\0B&#1\0' + '3;';
+        expect(decodeTextareaHtml(input, firefox.doc)).toBe('<A<B\x013;');
+        expect(decodeTextareaHtml(input, chromium.doc)).toBe('<A<�B\x013;');
+        expect(firefox.getCaptured()).toBe('<\0');
+        expect(chromium.getCaptured()).toBe('<\0');
+        expect(chromium.doc.createElement).toHaveBeenCalledTimes(1);
+    });
+
+    it('未传入文档时使用当前浏览器文档探测特殊输入', () => {
+        const createElement = vi.fn(() => ({innerHTML: '', value: '<�'}));
+        vi.stubGlobal('document', {createElement});
+        expect(decodeTextareaHtml('</a\0 &amp;')).toBe('</a� &');
+        expect(createElement).toHaveBeenCalledWith('textarea');
+    });
+
+    it('没有 DOM 或文档不提供元素创建能力时仍能安全解码特殊输入', () => {
+        vi.stubGlobal('document', undefined);
+        expect(decodeTextareaHtml('</a\0 &amp;')).toBe('</a &');
+        vi.stubGlobal('document', {});
+        expect(decodeTextareaHtml('</a\0 &amp;')).toBe('</a &');
+    });
+
+    it.each([
+        ['<\0', '<�', '<'],
+        ['</\0', '</�', '</'],
+        ['</TEXTAREA\0>', '</TEXTAREA�>', '</TEXTAREA>'],
+        ['</foo\0\0', '</foo�', '</foo'],
+        ['</123\0', '</123', '</123'],
+        ['</foo-\0', '</foo-', '</foo-'],
+        ['&lt;\0', '<', '<'],
+    ])('保留浏览器 RCDATA 结束标签与空字符语义：%j', (input, chromiumExpected, firefoxExpected) => {
+        const mock = (value: string) => ({createElement: () => ({innerHTML: '', value})}) as unknown as Document;
+        expect(decodeTextareaHtml(input, mock('<�'))).toBe(chromiumExpected);
+        expect(decodeTextareaHtml(input, mock('<'))).toBe(firefoxExpected);
     });
 
     it('容忍未知或无效实体、HTML 注释、伪标签和未闭合保护标签', () => {

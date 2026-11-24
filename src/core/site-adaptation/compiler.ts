@@ -1,13 +1,19 @@
 /**
  * @file src/core/site-adaptation/compiler.ts
  * 文件职责：将网站适配 JSON 编译为既有候选引擎使用的适配器，并组合内置与用户规则。
- * 主要内容：展开单层模板、按域名和路径匹配规则、保护原文并执行自定义整条覆盖。
+ * 主要内容：编译精确元素禁译覆盖及其动态属性依赖，展开单层模板、匹配域名和路径并执行自定义整条覆盖；内置 Mastodon 发现应用外壳正文，man7 授予手册准备能力，BBC 保护纯署名图注，Facebook 核验帖子控件，X 保护 GIF 播放器标签；用户覆盖与停用会撤销内置能力。
  * 模块边界：仅匹配 URL 与声明内容边界，不注入脚本或样式，不监听页面生命周期。
  */
 
 import {isLiteralLabel, isLiteralToken} from './literalLabel';
+import {withBbcCreditCaptionProtection} from './bbcCreditCaption';
+import {withXGifLabelProtection} from './xGifLabel';
+import {withFacebookPublicPostDialogLabelProtection} from './facebookPublicPostDialogLabel';
+import {withFacebookPublicPostReplySummaryProtection} from './facebookPublicPostReplySummary';
+import {withFacebookPublicPostControlsProtection} from './facebookPublicPostControls';
 import {createDeclarativeAdapter} from '@/src/core/translation/adapters/declarative';
-import type {TranslationSiteAdapter} from '@/src/core/translation/types';
+import {hasContentEditableMarker, isHiddenTranslationElement} from '@/src/core/translation/dom';
+import type {AdapterContext, TranslationSiteAdapter} from '@/src/core/translation/types';
 import type {SiteAdaptationSettings, SiteContentRule, SiteRecipe, SiteRule, SiteRulePack} from './types';
 
 /** 只提取 CSS 的属性依赖；无法准确读取的语法使用全属性观察，不猜测其含义。 */
@@ -17,7 +23,7 @@ export function getSiteRuleObservedAttributes(recipe: SiteRecipe): string[] | nu
     const selectors = [
         ...(recipe.content ?? []).flatMap((content) => content.css),
         ...(recipe.protect ?? []), ...(recipe.exclude ?? []), ...(recipe.watchIgnore ?? []),
-        ...(recipe.omit ?? []), ...(recipe.literalLabels ?? []), ...(recipe.literalTokens ?? []),
+        ...(recipe.forceTranslate ?? []), ...(recipe.omit ?? []), ...(recipe.literalLabels ?? []), ...(recipe.literalTokens ?? []),
     ];
     const structuralPseudos = new Set(['is', 'where', 'not', 'nth-child', 'nth-last-child',
         'nth-of-type', 'nth-last-of-type', 'first-child', 'last-child', 'only-child',
@@ -76,7 +82,7 @@ function resolveRecipe(pack: SiteRulePack, rule: SiteRule): SiteRecipe {
     const content = unique([...(rule.content ?? []), ...(profile?.content ?? [])],
         (item: SiteContentRule) => JSON.stringify([item.css, item.resolve ?? 'self', item.atomic ?? true, item.splitOnBr ?? false, item.key ?? '']));
     const result: SiteRecipe = {mode: rule.mode ?? profile?.mode ?? 'augment', content};
-    for (const key of ['protect', 'exclude', 'watchIgnore', 'omit', 'literalLabels', 'literalTokens'] as const) {
+    for (const key of ['protect', 'exclude', 'watchIgnore', 'forceTranslate', 'omit', 'literalLabels', 'literalTokens'] as const) {
         result[key] = [...new Set([...(profile?.[key] ?? []), ...(rule[key] ?? [])])];
     }
     return result;
@@ -88,7 +94,7 @@ export function resolveSiteRule(pack: SiteRulePack, rule: SiteRule): SiteRule {
     const recipe = resolveRecipe(pack, rule);
     const resolved: SiteRule = {...standalone, mode: recipe.mode};
     // JSON 的可选列表应省略空值，展开后的规则也能通过相同解析边界。
-    for (const key of ['content', 'protect', 'exclude', 'watchIgnore', 'omit', 'literalLabels', 'literalTokens'] as const) {
+    for (const key of ['content', 'protect', 'exclude', 'watchIgnore', 'forceTranslate', 'omit', 'literalLabels', 'literalTokens'] as const) {
         if (recipe[key]!.length) Object.assign(resolved, {[key]: recipe[key]});
         else delete resolved[key];
     }
@@ -134,6 +140,7 @@ function compileRule(pack: SiteRulePack, rule: SiteRule): TranslationSiteAdapter
     return {
         ...adapter,
         allScopes: rule.allScopes,
+        forceTranslate: recipe.forceTranslate,
         get observedAttributes(): string[] | null {
             if (observedAttributes === undefined) observedAttributes = getSiteRuleObservedAttributes(recipe);
             return observedAttributes;
@@ -165,11 +172,46 @@ export function compileSiteRulePack(pack: SiteRulePack): TranslationSiteAdapter[
     return pack.rules.map((rule) => compileRule(pack, rule));
 }
 
+/** 公开页实测结构的窄例外；通用规则只通过 forceTranslate 显式覆盖指定元素的禁译标记。 */
+function* discoverMastodonApplicationShellTargets(root: Node, {url}: AdapterContext): Iterable<Element> {
+    if (url.hostname !== 'mastodon.social' || !/^\/@[^/]+(?:\/\d+)?\/?$/u.test(url.pathname)) return;
+    const document = root.nodeType === 9 ? root as Document : root.ownerDocument;
+    const shell = document?.getElementById('mastodon');
+    const validShell = () => Boolean(shell && shell.id === 'mastodon' && shell.parentElement === document?.body &&
+        shell.matches('div.app-holder.notranslate') && shell.getAttribute('translate')?.toLowerCase() !== 'no' &&
+        shell.getAttribute('data-notranslate') !== 'true' && !hasContentEditableMarker(shell) &&
+        !isHiddenTranslationElement(shell));
+    if (!validShell() || !shell || (!root.contains(shell) && !shell.contains(root))) return;
+    // 已通过 light-DOM 包含关系；外壳内的非元素节点必有元素父级。
+    const scanRoot = root.contains(shell) ? shell : root.nodeType === 1 ? root as Element : root.parentElement!;
+    const closestParagraph = scanRoot.closest('p');
+    const paragraphs = closestParagraph ? [closestParagraph] : scanRoot.querySelectorAll('p');
+    for (const paragraph of paragraphs) {
+        // 生成器让出后重新读取外壳，不能把刚被宿主移动或重新保护的节点继续放行。
+        if (!validShell()) return;
+        if (shell.contains(paragraph) && paragraph.matches('.status__content .status__content__text.translate p') &&
+            !paragraph.closest('form, nav, aside, header, footer, [role="navigation"], [role="banner"], [role="complementary"]')) {
+            yield paragraph;
+        }
+    }
+}
+
 /** 用户同名规则整条替换，保留内置位置；新增规则按声明顺序追加。 */
 export function composeSiteAdapters(builtinPack: SiteRulePack, settings: SiteAdaptationSettings): TranslationSiteAdapter[] {
     if (!settings.enabled) return [];
     const disabled = new Set(settings.disabledRuleIds);
     const adapters = new Map(compileSiteRulePack(builtinPack).map((adapter) => [adapter.id, adapter]));
+    const mastodon = adapters.get('mastodon');
+    if (mastodon) mastodon.discoverApplicationShellTargets = discoverMastodonApplicationShellTargets;
+    const manpage = adapters.get('man7');
+    if (manpage) manpage.preformattedProse = 'manpage';
+    const bbc = adapters.get('bbc-news');
+    if (bbc) adapters.set('bbc-news', withBbcCreditCaptionProtection(bbc));
+    const x = adapters.get('x');
+    if (x) adapters.set('x', withXGifLabelProtection(x));
+    const facebook = adapters.get('facebook-public-post');
+    if (facebook) adapters.set('facebook-public-post', withFacebookPublicPostControlsProtection(
+        withFacebookPublicPostReplySummaryProtection(withFacebookPublicPostDialogLabelProtection(facebook))));
     compileSiteRulePack(settings.custom).forEach((adapter) => adapters.set(adapter.id, adapter));
     return [...adapters.values()].filter((adapter) => !disabled.has(adapter.id));
 }

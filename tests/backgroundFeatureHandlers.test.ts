@@ -1040,9 +1040,9 @@ describe('后台 feature handlers', () => {
             translations: ['译:first', '译:second', '译:third'],
         });
         expect(translateTexts.mock.calls.map(([request]) => request)).toEqual([
-            {origin: 'first', context: 'Page', pageContext: '', useCache: true, serviceOverride: 'google', requestTimeoutMs: IMAGE_TEXT_TRANSLATION_TIMEOUT_MS},
-            {origin: 'second', context: 'Page', pageContext: '', useCache: true, serviceOverride: 'google', requestTimeoutMs: IMAGE_TEXT_TRANSLATION_TIMEOUT_MS},
-            {origin: 'third', context: 'Page', pageContext: '', useCache: true, serviceOverride: 'google', requestTimeoutMs: IMAGE_TEXT_TRANSLATION_TIMEOUT_MS},
+            {origin: 'first', context: 'Page\nOther text from the same image (reference only):\nsecond\nthird', pageContext: '', useCache: true, serviceOverride: 'google', requestTimeoutMs: IMAGE_TEXT_TRANSLATION_TIMEOUT_MS},
+            {origin: 'second', context: 'Page\nOther text from the same image (reference only):\nfirst\nthird', pageContext: '', useCache: true, serviceOverride: 'google', requestTimeoutMs: IMAGE_TEXT_TRANSLATION_TIMEOUT_MS},
+            {origin: 'third', context: 'Page\nOther text from the same image (reference only):\nfirst\nsecond', pageContext: '', useCache: true, serviceOverride: 'google', requestTimeoutMs: IMAGE_TEXT_TRANSLATION_TIMEOUT_MS},
         ].map(request => allowUnchangedTranslationResult(request)));
 
         translateTexts.mockReset()
@@ -1330,17 +1330,20 @@ describe('圈选视觉识别路由', () => {
 });
 
 
-it('opens a validated learning-memory tab without accepting arbitrary navigation data', async () => {
+it('opens validated learning-memory and material tabs without accepting arbitrary navigation data', async () => {
     const openDefaultPage = vi.fn(async () => undefined);
     const openSection = vi.fn(async () => undefined);
     const handler = createOpenOptionsPageHandler({openDefaultPage, openSection});
     await handler.handle({type: OPEN_OPTIONS_PAGE_MESSAGE_TYPE, section: 'settings-vocabulary', learningTab: 'memory'});
     expect(openSection).toHaveBeenLastCalledWith('settings-vocabulary', 'memory');
-    for (const learningTab of ['unknown', {}, null, 'memory&redirect=other']) {
+    await handler.handle({type: OPEN_OPTIONS_PAGE_MESSAGE_TYPE, section: 'settings-vocabulary', learningTab: 'materials'});
+    expect(openSection).toHaveBeenLastCalledWith('settings-vocabulary', 'materials');
+    for (const learningTab of ['unknown', {}, null, 'memory&redirect=other', 'materials&redirect=other']) {
         await expect(handler.handle({type: OPEN_OPTIONS_PAGE_MESSAGE_TYPE, section: 'settings-vocabulary', learningTab})).rejects.toThrow('无效的学习栏目');
     }
     await expect(handler.handle({type: OPEN_OPTIONS_PAGE_MESSAGE_TYPE, section: 'settings-selection', learningTab: 'memory'})).rejects.toThrow('无效的学习栏目');
-    expect(openSection).toHaveBeenCalledOnce(); expect(openDefaultPage).not.toHaveBeenCalled();
+    await expect(handler.handle({type: OPEN_OPTIONS_PAGE_MESSAGE_TYPE, section: 'settings-vocabulary', learningTab: 'materials', service: 'microsoft'})).rejects.toThrow('无效的翻译服务设置');
+    expect(openSection).toHaveBeenCalledTimes(2); expect(openDefaultPage).not.toHaveBeenCalled();
 });
 
 it('opens only registered form targets belonging to the requested settings section', async () => {

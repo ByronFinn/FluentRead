@@ -146,6 +146,24 @@ describe('全文翻译节点状态指示', () => {
     expect(target.hasAttribute('class')).toBe(false);
   });
 
+  it('用 SVG 节点保留失败图标，错误和服务名称只作为纯文本展示', () => {
+    mocks.config.service = 'custom:markup';
+    mocks.config.customOpenAIProviders = [{id: 'custom:markup', name: '<img src=x onerror=alert(1)>', endpoint: 'https://example.com', models: ['test']}];
+    const target = document.getElementById('target')!;
+    const wrapper = insertFailedTip(target, '<svg onload=alert(1)>quota exceeded', vi.fn());
+    const icons = wrapper.querySelectorAll('svg');
+    expect(icons).toHaveLength(2);
+    for (const svg of icons) {
+      expect(svg.namespaceURI).toBe('http://www.w3.org/2000/svg');
+      expect(svg.getAttribute('viewBox')).toBe('0 0 40 40');
+      expect(svg.querySelector('path')?.getAttribute('d')).toMatch(/^M[0-9]/u);
+      expect(svg.querySelector('path')?.getAttribute('fill')).toBe('#428ADF');
+    }
+    expect(wrapper.querySelector('[onload], [onerror], img')).toBeNull();
+    wrapper.querySelector<HTMLElement>('.fluent-read-reason')!.click();
+    expect(mocks.showPageNotice).toHaveBeenCalledWith(expect.stringContaining('<img src=x onerror=alert(1)>'), 'error');
+  });
+
   it('链接翻译失败时，错误图标和控件空白处只显示提示而不触发原链接', () => {
     document.body.innerHTML = '<a id="target" href="https://example.com/destination">Source</a>';
     const target = document.getElementById('target')!;

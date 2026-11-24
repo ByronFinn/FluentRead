@@ -1,15 +1,18 @@
+import {siteRuleTextRows} from '@/src/core/i18n/messages/siteRules';
+import {createUiLanguageBundleFiles} from '@/src/core/i18n/bundles';
+import {translateSharedVideoModelText} from '@/src/features/settings/model/sharedVideoModelText';
 import {readdirSync, readFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {describe, expect, it} from 'vitest';
 import {createLegacyPatternSet, localizedLegacyPatterns} from '@/src/core/i18n/messages/legacy-patterns';
-import {createRuntimeFeedbackLegacyText, getRuntimeFeedbackSources} from '@/src/core/i18n/messages/runtime-feedback';
-import {createLegacyCorrectionText, getLegacyCorrectionSources} from '@/src/core/i18n/messages/legacy-corrections';
+import {createRuntimeFeedbackLegacyText, runtimeFeedbackRows} from '@/src/core/i18n/messages/runtime-feedback';
+import {createLegacyCorrectionText, correctionRows} from '@/src/core/i18n/messages/legacy-corrections';
 import {runtimeFeedbackPatterns} from '@/src/core/i18n/messages/runtime-feedback-patterns';
 import * as onboardingMessages from '@/src/core/i18n/messages/onboarding';
 
 import {
   DEFAULT_UI_LANGUAGE,
-  getUiLanguageBilingualLabel,
+  getUiLanguageBundlePath,
   getUiLanguageDisplayLabel,
   UI_LANGUAGE_OPTIONS,
   normalizeUiLanguage,
@@ -17,6 +20,7 @@ import {
   translate,
   translateLegacyText,
   registerUiLanguageBundle,
+  type UiLanguageBundle,
 } from '@/src/core/i18n';
 import {enUSLegacyText, enUSMessages} from '@/src/core/i18n/messages/en-US';
 import {esESLegacyText, esESMessages} from '@/src/core/i18n/messages/es-ES';
@@ -38,13 +42,40 @@ import {renderContextMenuTitle} from '@/src/core/context-menu/presentation';
 import {navigationItems} from '@/src/features/settings/model/navigation';
 import {parseHotkey} from '@/src/core/hotkey';
 import {IMAGE_OCR_LANGUAGE_PACKS} from '@/src/features/image-translation/ocrLanguages';
-import {registerAllUiLanguageBundles} from '@/src/core/i18n/bundles';
+import {registerAllUiLanguageBundles} from './helpers/uiLanguageBundles';
 import {translateServiceLabel} from '@/src/core/i18n/serviceLabels';
 
 // 扩展运行时按需加载界面语言；本文件验证全部语言的文案契约，因此一次注册全部资源包。
 registerAllUiLanguageBundles();
 
 describe('界面 i18n 契约', () => {
+  it('两点选取的动态快捷键冲突说明翻译整句和实际占用功能名', () => {
+    const owners = ['鼠标悬停翻译', '全文翻译', '划词翻译', '圈选翻译', '段落复制', '局部翻译', '输入框翻译', '额外翻译方案'];
+    for (const language of ['en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as const) {
+      for (const owner of owners) {
+        const translatedOwner = translateLegacyText(owner, language);
+        expect(translatedOwner, `${language} ${owner}`).not.toBe(owner);
+        for (const source of [`快捷键已用于${owner}，请点击快捷键更换后使用`, `此快捷键已用于${owner}，请更换组合键`]) {
+          const result = translateLegacyText(source, language);
+          expect(result, `${language} ${source}`).not.toBe(source);
+          expect(result).toContain(translatedOwner);
+          if (language !== 'ja-JP') expect(result).not.toMatch(/[\u3400-\u9fff]/u);
+        }
+      }
+    }
+    expect(translateLegacyText('快捷键已用于段落复制，请点击快捷键更换后使用', 'en-US')).toBe('This shortcut is used for Paragraph copy. Click the shortcut to change it before use.');
+    expect(translateLegacyText('此快捷键已用于额外翻译方案，请更换组合键', 'en-US')).toBe('This shortcut is already used for Additional translation profile. Choose another combination.');
+  });
+
+  it('原型属性名既不是资源键也不是旧文案，不会被替换为原生函数或对象', () => {
+    for (const key of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      for (const language of ['zh-CN', 'en-US', 'ja-JP'] as const) {
+        expect(translate(key, language)).toBe(key);
+        expect(translateLegacyText(`  ${key}  `, language)).toBe(`  ${key}  `);
+      }
+    }
+  });
+
   it('Popup 站点规则的保存、暂停与网站范围反馈覆盖六种语言并保留用户域名', () => {
     for (const language of ['en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as const) {
       for (const text of ['自动翻译已暂停', '应用于此网站及其子域名，跳转后按新网站规则执行', '禁用会停止此网站的翻译，保留始终翻译偏好', '禁用优先于自动翻译', '恢复扩展后继续自动翻译', '请先恢复扩展', '无法读取当前网站，请重试']) {
@@ -208,6 +239,8 @@ describe('界面 i18n 契约', () => {
     expect(resolveUiLanguageFromLocale('zh-TW')).toBe('zh-CN');
     expect(resolveUiLanguageFromLocale('es-ES')).toBe('es-ES');
     expect(resolveUiLanguageFromLocale(null)).toBe('zh-CN');
+    expect(resolveUiLanguageFromLocale('ar-EG')).toBe('zh-CN');
+    expect(resolveUiLanguageFromLocale('')).toBe('zh-CN');
     expect(options.to.slice(0, 8).map(item => item.label)).toEqual([
       '简体中文', '繁體中文', 'English', '日本語', '한국어', 'Français', 'Русский', 'Español',
     ]);
@@ -227,6 +260,10 @@ describe('界面 i18n 契约', () => {
       'Español / Spanish / 西班牙语',
     ]);
     expect(getMultilingualTargetLanguageLabel('de', 'Deutsch')).toBe('Deutsch / German / 德语');
+    expect(getMultilingualTargetLanguageLabel('pt', 'Português')).toBe('Português / Portuguese / 葡萄牙语');
+    expect(getMultilingualTargetLanguageLabel('it', 'Italiano')).toBe('Italiano / Italian / 意大利语');
+    expect(getMultilingualTargetLanguageLabel('ja', '日本語', 'es-ES')).toBe('Japonés / Japanese / 日本語');
+    expect(getMultilingualTargetLanguageLabel('ja', '日本語', 'de-DE')).toBe('日本語 / Japanese / 日语');
     expect(getMultilingualTargetLanguageLabel('ja', '日本語', 'en-US')).toBe('Japanese');
     expect(getMultilingualTargetLanguageLabel('unknown', 'Custom language', 'en-US')).toBe('Custom language');
     expect(getMultilingualTargetLanguageLabel('unknown', '自定义语言')).toBe('自定义语言');
@@ -261,15 +298,15 @@ describe('界面 i18n 契约', () => {
     expect(getMultilingualTargetLanguageLabel('unknown')).toBe('unknown');
   });
 
-  it('完整本地化 Chrome 具体语言对准备流程及参数化状态', () => {
+  it('完整本地化浏览器语言包的简短状态、进度与操作', () => {
     const actionByLanguage = {
-      'zh-CN': '准备 Chrome 本地翻译',
-      'en-US': 'Prepare Chrome local translation',
-      'ja-JP': 'Chrome ローカル翻訳を準備',
-      'ko-KR': 'Chrome 로컬 번역 준비',
-      'fr-FR': 'Préparer la traduction locale de Chrome',
-      'ru-RU': 'Подготовить локальный перевод Chrome',
-      'es-ES': 'Preparar la traducción local de Chrome',
+      'zh-CN': '准备语言包',
+      'en-US': 'Prepare language pack',
+      'ja-JP': '言語パックを準備',
+      'ko-KR': '언어 팩 준비',
+      'fr-FR': 'Préparer le pack de langue',
+      'ru-RU': 'Подготовить языковой пакет',
+      'es-ES': 'Preparar el paquete de idioma',
     } as const;
     for (const [language, expectedAction] of Object.entries(actionByLanguage)) {
       expect(translate('settings.services.chromePreparation.action', language as keyof typeof actionByLanguage))
@@ -277,21 +314,16 @@ describe('界面 i18n 契约', () => {
       const status = translate(
         'settings.services.chromePreparation.statusDownloadingProgress',
         language as keyof typeof actionByLanguage,
-        {model: 'MODEL', percentage: 42, sourceLanguage: 'fr', targetLanguage: 'en'},
+        {percentage: 42},
       );
-      expect(status).toContain('MODEL');
       expect(status).toContain('42');
-      expect(status).toContain('fr');
-      expect(status).toContain('en');
-      expect(status).not.toMatch(/\{(?:model|percentage|sourceLanguage|targetLanguage)\}/u);
+      expect(status).not.toMatch(/\{\w+\}/u);
 
       const activationError = translate(
         'settings.services.chromePreparation.error.userActivationRequired',
         language as keyof typeof actionByLanguage,
-        {sourceLanguage: 'fr', targetLanguage: 'en'},
       );
-      expect(activationError).toContain('fr');
-      expect(activationError).toContain('en');
+      expect(activationError).toContain(expectedAction);
     }
 
     const englishChromeMessages = Object.entries(enUSMessages).filter(([key]) => (
@@ -363,16 +395,10 @@ describe('界面 i18n 契约', () => {
       'Russian / Русский',
       'Spanish / Español',
     ]);
-    expect(UI_LANGUAGE_OPTIONS.map((item) => getUiLanguageBilingualLabel(item.value))).toEqual([
-      '中文 / Chinese',
-      '英语 / English',
-      '日语 / Japanese',
-      '韩语 / Korean',
-      '法语 / French',
-      '俄语 / Russian',
-      '西班牙语 / Spanish',
-    ]);
     expect(getUiLanguageDisplayLabel('ja-JP', 'es-ES')).toBe('Japonés / Japanese / 日本語');
+    expect(getUiLanguageDisplayLabel('en-US')).toBe('English / 英语');
+    expect(getUiLanguageDisplayLabel('constructor' as never, 'en-US')).toBe('中文');
+    expect(getUiLanguageDisplayLabel('ja-JP', 'constructor' as never)).toBe('日本語 / Japanese / 日语');
     expect(translate('popup.current', 'en-US', {value: 'Ctrl'})).toBe('Current: Ctrl');
     expect(translate('popup.current', 'zh-CN', {value: 'Ctrl'})).toBe('当前：Ctrl');
     expect(translate('popup.current', 'es-ES', {value: 'Ctrl'})).toBe('Actual: Ctrl');
@@ -852,6 +878,63 @@ describe('界面 i18n 契约', () => {
     expect(translateLegacyText('最多 8192 字符', 'es-ES')).toBe('Máximo 8192 caracteres');
   });
 
+  it('两点选取的设置、起终点和拒绝原因在六种外语中有真实译文', () => {
+    const sources = [
+      '两点选取',
+      '编辑两点选取快捷键',
+      '开启后按快捷键，再依次点击文字起点和终点，无需按住鼠标；完成自动退出，Esc 取消',
+      '请选择带 Ctrl、Alt 或 Shift 的组合键',
+      '点击文字起点',
+      '点击文字终点',
+      '未点中文字，请点击起点',
+      '未点中文字，请点击终点',
+      '起点与终点相同，请换一个位置',
+      '选区过长，请点击较近的终点',
+      '此范围不支持，请换一个终点',
+      '额外翻译方案',
+    ];
+    expect(runtimeFeedbackRows.filter(row => sources.includes(row[0]))).toEqual([]);
+    for (const source of sources) expect(correctionRows.filter(row => row[0] === source)).toHaveLength(1);
+    for (const language of ['en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as const) {
+      for (const source of sources) {
+        const localized = translateLegacyText(source, language);
+        expect(localized, `${language}: ${source}`).not.toBe(source);
+        if (language !== 'ja-JP') expect(localized, `${language}: ${source}`).not.toMatch(/[\u3400-\u9fff]/u);
+      }
+    }
+  });
+
+  it('两点选取复合提示翻译真实状态前缀与 Esc 后缀，并保留扫描占位数字', () => {
+    const cancelSuffixes = {
+      'en-US': 'Esc to cancel',
+      'ja-JP': 'Esc でキャンセル',
+      'ko-KR': 'Esc로 취소',
+      'fr-FR': 'Échap pour annuler',
+      'ru-RU': 'Esc — отмена',
+      'es-ES': 'Esc para cancelar',
+    } as const;
+    for (const language of Object.keys(cancelSuffixes) as Array<keyof typeof cancelSuffixes>) {
+      for (const source of ['点击文字起点', '点击文字终点', '未点中文字，请点击起点', '未点中文字，请点击终点',
+        '起点与终点相同，请换一个位置', '选区过长，请点击较近的终点', '此范围不支持，请换一个终点']) {
+        const localized = translateLegacyText(`${source} · Esc 取消`, language);
+        expect(localized).toBe(`${translateLegacyText(source, language)} · ${cancelSuffixes[language]}`);
+        expect(localized).not.toContain(source);
+        const spacedSource = ` \t${source} · Esc 取消\n`;
+        expect(translateLegacyText(spacedSource, language)).toBe(` \t${localized}\n`);
+        expect(translateLegacyText(spacedSource, 'zh-CN')).toBe(spacedSource);
+      }
+      for (const count of [0, 1, 12, 125, 987654321]) {
+        const source = `${count} · Esc 取消`;
+        const localized = `${count} · ${cancelSuffixes[language]}`;
+        expect(translateLegacyText(source, language)).toBe(localized);
+        expect(translateLegacyText(` \t${source}\n`, language)).toBe(` \t${localized}\n`);
+        expect(translateLegacyText(` \t${source}\n`, 'zh-CN')).toBe(` \t${source}\n`);
+      }
+    }
+    expect(translateLegacyText('点击文字起点 · Esc 取消', 'zh-CN')).toBe('点击文字起点 · Esc 取消');
+    expect(runtimeFeedbackRows.some(row => row[0] === '12 · Esc 取消')).toBe(false);
+  });
+
   it('人工校正容易发生语义误判的高频设置文案', () => {
     expect(translateLegacyText('日本語', 'en-US')).toBe('Japanese');
     expect(translateLegacyText('显示 FluentRead 字幕', 'ja-JP')).toBe('FluentRead 字幕を表示');
@@ -946,14 +1029,31 @@ describe('i18n 全量界面扫描', () => {
   it('Vue 文案和展示注册表在非中文界面有本地化结果', async () => {
     const {collectUiSourceCopy} = await import('../scripts/testing/i18n-source-audit.mjs');
     const audit = collectUiSourceCopy(process.cwd());
+    const extensionCopyOwners = new Set([
+      'src/app/document-translation/DocumentApp.vue',
+      'src/features/settings/ui/SiteAdaptationSettings.vue',
+    ]);
+    const extensionLegacyText = new Map(createUiLanguageBundleFiles().map(({relativeDest, contents}) =>
+      [relativeDest, (JSON.parse(contents) as UiLanguageBundle).legacyText]));
     // 固定的中英术语演示、语言自身名称和装饰图标不属于界面译文。
     const examples = new Set(['中文', 'A中', '語言', '言語', 'large language model → 大语言模型', 'source,target,tgt_lng large language model,大语言模型,zh-Hans']);
+    const readingPreviewFile = 'src/features/settings/ui/VideoSubtitleAppearanceSettings.vue';
+    // 日语原句用于固定排版示例；仅豁免该组件的这句话，并要求保留本地化的演示数据说明。
+    expect(readFileSync(join(process.cwd(), readingPreviewFile), 'utf8'))
+      .toMatch(/data-video-subtitle-reading-sample>\s*\{\{\s*t\('video\.readingAnnotation\.previewSample'\)\s*\}\}/u);
     const missing: string[] = [];
     for (const {source, files} of audit.sources) {
       if (examples.has(source)) continue;
+      if (source === '今日はいい天気ですね。' && files.length === 1 && files[0] === readingPreviewFile) continue;
       for (const locale of ['en-US', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as const) {
-        const result = translateLegacyText(source, locale);
-        if (/[\u3400-\u9fff]/u.test(result)) missing.push(`${locale} ${files.join(', ')}: ${source}`);
+        for (const file of files) {
+          // 共享目录文案只由扩展设置加载，按该组件实际使用的本地词典与公共回退共同验收。
+          const local = file === 'src/features/settings/ui/VideoLocalModelSettings.vue'
+            ? translateSharedVideoModelText(source, locale) : undefined;
+          const extension = extensionCopyOwners.has(file) ? extensionLegacyText.get(getUiLanguageBundlePath(locale))?.[source] : undefined;
+          const result = local ?? extension ?? translateLegacyText(source, locale);
+          if (/[\u3400-\u9fff]/u.test(result)) missing.push(`${locale} ${file}: ${source}`);
+        }
       }
     }
     expect(audit.files.length).toBeGreaterThan(50);
@@ -978,13 +1078,15 @@ describe('i18n 全量界面扫描', () => {
       'contextMenu.groupPlain', 'contextMenu.standalone', 'contextMenu.withShortcut', 'contextMenu.withLanguage', 'contextMenuSettings.withReason']);
     // “Original” 在法语与西班牙语中拼写与英文相同，视频字幕菜单的短标签沿用该词。
     const videoOriginalLabels = ['video.modeOriginal', 'video.downloadOriginalShort'];
-    const frenchCognates = new Set(['learning.memoryNote', 'document.progressSegments', 'document.pageCount', 'document.pageNumber', 'options.aboutDocs', 'settings.advanced.animations', 'settings.advanced.translationLoadingStyle.minimal.label',
+    // Interface 与 Annotations 也是法语原生用词，PDF 菜单沿用紧凑的标准标签。
+    const frenchCognates = new Set(['document.pdfReading.theme.auto', 'document.pdfReading.annotations', 'learning.memoryNote', 'document.progressSegments', 'document.pageCount', 'document.pageNumber', 'options.aboutDocs', 'settings.advanced.animations', 'settings.advanced.translationLoadingStyle.minimal.label',
       // Style、Format、Original 同样是自然的法语短标签。
       'shareCard.style', 'shareCard.format', 'shareCard.original',
       // Page、Zoom 与 Original 也是 PDF 阅读器中自然的法语短标签。
       'document.pdfReading.pageLabel', 'document.pdfReading.pageNumber', 'document.pdfReading.zoom', 'document.pdfReading.original',
       'translationStats.filter.service', 'translationStats.source.network', 'translationStats.log.image', 'translationStats.routes.column.route', ...videoOriginalLabels]);
-    const spanishCognates = new Set([...videoOriginalLabels, 'shareCard.original', 'shareCard.theme.coral', 'document.pdfReading.zoom', 'document.pdfReading.original',
+    // Sepia 是西班牙语中棕褐色的标准名称。
+    const spanishCognates = new Set(['document.pdfReading.theme.sepia', ...videoOriginalLabels, 'shareCard.original', 'shareCard.theme.coral', 'document.pdfReading.zoom', 'document.pdfReading.original',
       // Color 是自然的西班牙语短标签，与英文同形。
       'informationHighlight.color']);
     for (const [locale, catalog] of Object.entries({'ja-JP': jaJPMessages, 'ko-KR': koKRMessages, 'fr-FR': frFRMessages, 'ru-RU': ruRUMessages, 'es-ES': esESMessages})) {
@@ -1082,7 +1184,7 @@ describe('运行期反馈文案资源', () => {
   it('每条精确反馈都来自真实源码，不重复，并在每种界面语言中完整本地化', () => {
     const sourceText = collectSourceText('src', (path) => !path.includes('/i18n/messages/'))
       + collectSourceText('userscript', () => true);
-    const sources = getRuntimeFeedbackSources();
+    const sources = runtimeFeedbackRows.map(row => row[0]);
     expect(new Set(sources).size).toBe(sources.length);
     expect(sources.filter((source) => !sourceText.includes(source))).toEqual([]);
     for (const locale of locales) {
@@ -1161,7 +1263,7 @@ describe('旧界面译文人工校正', () => {
       translate(unavailableServiceKey, 'zh-CN', {service: option.label})
     ));
     const generatedSourceText = generatedServiceSources.join('\n');
-    const sources = getLegacyCorrectionSources();
+    const sources = [...correctionRows, ...siteRuleTextRows].map(row => row[0]);
     expect(new Set(sources).size).toBe(sources.length);
     expect(sources.filter((source) => !sourceText.includes(source) && !generatedSourceText.includes(source))).toEqual([]);
     for (const locale of ['en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as const) {
@@ -1212,7 +1314,7 @@ it('中文展示使用流畅阅读，首启七语品牌与正式目录一致并�
     expect(translate('metadata.popupTitle', 'zh-CN')).toBe('流畅阅读');
     expect(translate('metadata.documentTitle', 'zh-CN')).toBe('流畅阅读 · 文档翻译');
     expect(translate('settings.cloud.deleteManualDrive', 'zh-CN')).toBe('请前往 Google Drive 设置 → 管理应用 → FluentRead，清理该应用的数据。');
-    expect(translate('settings.cloud.deleteManualWebDav', 'zh-CN')).toBe('请在 WebDAV 服务商页面手动删除 FluentRead/fluentread-config.encrypted.json，保留目录内其他文件。');
+    expect(translate('settings.cloud.deleteManualWebDav', 'zh-CN')).toBe('请在已配置的 WebDAV 备份目录中只删除 fluentread-config.encrypted.json。');
     for (const {value} of UI_LANGUAGE_OPTIONS) {
         expect(onboardingMessages.onboardingProductNames[value], value).toBe(translate('common.brand', value));
         expect(translate('common.brand', value)).toBe(value === 'zh-CN' ? '流畅阅读' : 'FluentRead');
@@ -1302,5 +1404,16 @@ describe('源码审计的只读本地语言表', () => {
   it('完整表之外同字脚本与模板仍收集，不按字串或文件豁免', async () => {
     const audit = await auditFixture(`${importType}${standard}const rawLabel = '清空';`, '<button title="清空">清空</button>');
     expect(audit.sources.find(item => item.source === '清空')?.files).toEqual(['src/Fixture.vue']);
+  });
+});
+
+
+describe('legacy compound whitespace boundaries', () => {
+  it('preserves blank compound segments while translating their registered neighbors', () => {
+    registerUiLanguageBundle('en-US', {messages: {}, legacyText: {'前': 'Before', '后': 'After'}, legacyPatterns: {early: [], late: []}});
+    try {
+      expect(translateLegacyText('前 ·  · 后', 'en-US')).toBe('Before ·  · After');
+      expect(translateLegacyText(' \t前\n', 'en-US')).toBe(' \tBefore\n');
+    } finally {registerAllUiLanguageBundles();}
   });
 });

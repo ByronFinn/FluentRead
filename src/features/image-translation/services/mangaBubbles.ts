@@ -1,55 +1,392 @@
 /**
  * @file src/features/image-translation/services/mangaBubbles.ts
+ * 普通图片分组前先登记已采用的词界来历，再衔接物理行的段落证据，避免可靠空格修正打断同一对白。
  * 文件职责：从漫画像素定位封闭浅色气泡，让小字以局部高分辨率识别并排除绘画噪声。
- * 主要内容：以四邻域扫描亮色连通区域，排除页面边缘、过小、过大和稀疏背景，最多返回二十四个局部区域；漫画单独合并每个气泡中的识别行并局部容许略宽行距并保留气泡外可靠旁白；普通图片去重局部结果后保留物理行，不套用漫画分组间距。
+ * 注音归属：最多4096条原始识别结果复用唯一注音关系；浅底可信且未属其他气泡或白卡的读音，可跟随唯一正文进入大型气泡分组，原文、字号及清字物理框不变。
+ * 主要内容：以扫描行四邻域填充亮色连通区域，按待处理行段增长轻量栈，不为整图预分配逐像素队列；最多二十四个小裁图参与局部识别，大型曲边浅底组件只提供保守内接区域且不增加推理；用上下边缘占比、行包络实心度、密度和面积界限排除大型矩形或多洞面板，行跨度数组按高度有界复用；同次扫描为大气泡记录最多一百二十八处内部独立浅色岛，超限撤回新增归属，仅排除完整落在岛内的物理框且不传输排除元数据；从已有原像素核对候选边缘浅底，成员绑定原 OCR 结果索引，角落与独立旁白维持原分组；按最小局部候选优先消除嵌套候选对同一物理行的重复，逐行以可靠局部识别替换重叠的全页结果，保留局部漏行与失败时的全页回退；漫画在最紧的所属气泡内合并局部及回退行并保留气泡外可靠旁白，整页仍按严格间距分组且只采纳同帧像素证实的额外续行；普通图片保留物理行供独立段落策略处理；漫画与图片均保留冲突数字证据并合并重复数字保护框。
  * 模块边界：纯像素和坐标算法，不创建 Canvas、不访问网络、不运行模型；气泡本身不作为文字证据，只有后续识别出的有效文本进入翻译。
+ * 视图边界：原图 owner 可提供有界词界证明；只选择两个已观测原文中的一个并保留局部几何，实际去重接受后确认采用，并按每次分组的实际对象及唯一源框记录内部来历，与原 SDK 观测分离。缺失或失效证明沿用原局部优先规则，不从空白推造字符。
+ * 段落关系：只将本次实际采用的原始识别对象关联到物理行；词界改写、去重或数字合并后的替代对象不能继承关系。漫画只对仍保持单原框身份的未分组页面行采用证明；最终数组包含数值及保护框后才封存私有布局旁证，不向正文或阅读属性添加证明。
+ * 气泡补绘：漫画段落仅私下记录实际局部气泡的搜索范围；该范围不是清字授权，后续仍需同源绑定并检查原图中的闭合组件与纯白空处。
  */
-import {groupMangaText,type MangaOcrItem,type MangaRegion} from './mangaRegions';
+import {groupMangaText,mergeMangaParagraphContinuations,type MangaOcrItem,type MangaRegion} from './mangaRegions';
+import {numericEvidenceKey,numericInformation,numericProtection} from './mangaNumeric';
+import {createMangaViewWordBoundaryConsumer,type MangaViewWordBoundaryProof} from './mangaViewWordBoundary';
+import type {ImageDetectionFrame} from './imageDetectionEvidence';
+import {bindImageParagraphGapEvidence,consumeImageParagraphGapEvidence,createImageParagraphGapConsumer,type ImageParagraphGapProof} from './imageParagraphGapEvidence';
+import {recordMangaBubblePlacement} from './mangaBubblePlacement';
+import {findImageRubyOwners} from '../ruby';
 type Box=MangaRegion['bbox'];
-export interface MangaOcrPage {results:MangaOcrItem[];bubbles?:Array<{bbox:Box;results:MangaOcrItem[]}>}
+export interface MangaLayoutOwner extends Box {exclusions?:Box[]}
+export interface MangaLayoutBubble {bbox:Box;members:number[]}
+export interface MangaOcrPage {results:MangaOcrItem[];numericEvidence?:MangaOcrItem[];bubbles?:Array<{bbox:Box;results:MangaOcrItem[];numericEvidence?:MangaOcrItem[]}>;layoutBubbles?:MangaLayoutBubble[];wordBoundaryProofs?:MangaViewWordBoundaryProof[];imageDetectionFrames?:ImageDetectionFrame[];largeAlphaHoles?:true;imageParagraphGapProofs?:ImageParagraphGapProof[]}
 
 export function findMangaBubbles(pixels:Uint8ClampedArray,width:number,height:number):Box[]{
-    const count=width*height;
-    if(![width,height].every(v=>Number.isSafeInteger(v)&&v>0)||count>16_777_216||pixels.length<count*4)return [];
-    const white=new Uint8Array(count),queue=new Uint32Array(count);
-    for(let i=0;i<count;i++){const p=i*4;white[i]=Number(pixels[p]>235&&pixels[p+1]>235&&pixels[p+2]>235&&pixels[p+3]>=128);}
-    const candidates:Array<{bbox:Box;area:number}>=[];
-    for(let start=0;start<count;start++){
-        if(!white[start])continue;
-        let head=0,tail=1,left=width,top=height,right=0,bottom=0;queue[0]=start;white[start]=0;
-        const add=(index:number)=>{if(white[index]){white[index]=0;queue[tail++]=index;}};
-        while(head<tail){
-            const index=queue[head++],x=index%width,y=Math.floor(index/width);
-            left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);
-            if(x>0)add(index-1);if(x+1<width)add(index+1);if(y>0)add(index-width);if(y+1<height)add(index+width);
-        }
-        const w=right-left+1,h=bottom-top+1;
-        if(left===0||top===0||right===width-1||bottom===height-1||w<30||h<30||tail<1000||tail/(w*h)<.45||tail>count*.15)continue;
-        candidates.push({bbox:{x0:left,y0:top,x1:right+1,y1:bottom+1},area:tail});
-    }
-    return candidates.sort((a,b)=>b.area-a.area).slice(0,24).map(item=>item.bbox);
+    return findMangaBubbleLayout(pixels,width,height).recognition;
 }
 
-/** 不跨气泡拼句；对白较多时，只保留气泡之外的整段旁白，避免把拟声字当成孤立台词。 */
-export function collectMangaRegions(page:MangaOcrPage,language:string,width:number,height:number,profile: 'manga' | 'image' = 'manga'):MangaRegion[]{
+/** 大型曲边气泡只提供段落归属，不扩大二十四处小裁图的模型推理预算。 */
+export function findMangaBubbleLayout(pixels:Uint8ClampedArray,width:number,height:number):{recognition:Box[];ownership:MangaLayoutOwner[]}{
+    const count=width*height;
+    if(![width,height].every(v=>Number.isSafeInteger(v)&&v>0&&v<=8192)||count>16_777_216||pixels.length<count*4)return {recognition:[],ownership:[]};
+    const white=new Uint8Array(count);
+    // 每行仅保留当前组件的跨度，复用两个高度数组；8192 高时合计 64KiB。
+    const rowLeft=new Int32Array(height).fill(width),rowRight=new Int32Array(height).fill(-1);
+    let stack=new Uint32Array(Math.min(count,4096)),size=0;
+    for(let i=0;i<count;i++){const p=i*4;white[i]=Number(pixels[p]>235&&pixels[p+1]>235&&pixels[p+2]>235&&pixels[p+3]>=128);}
+    const candidates:Array<{bbox:Box;area:number}>=[],ownership:MangaLayoutOwner[]=[];
+    // 大组件面积必须超过整页 15%，故最多六个；原外接框只留在本次扫描，不进入返回元数据。
+    const enclosures=new Map<MangaLayoutOwner,Box>();
+    // 每个相邻连续行段只压一个种子；状态 2 只表示已排队，横向扩张仍将其视为白色。
+    const addRow=(row:number,left:number,right:number)=>{
+        for(let x=left;x<=right;x++){
+            if(!white[row+x])continue;
+            if(white[row+x]===1){
+                if(size===stack.length){const expanded=new Uint32Array(Math.min(count,stack.length*2));expanded.set(stack);stack=expanded;}
+                stack[size++]=row+x;white[row+x]=2;
+            }
+            while(x<right&&white[row+x+1])x++;
+        }
+    };
+    for(let start=0;start<count;start++){
+        if(!white[start])continue;
+        let area=0,envelope=0,left=width,top=height,right=0,bottom=0,topCount=0,bottomCount=0;stack[0]=start;size=1;
+        while(size){
+            const index=stack[--size];
+            if(!white[index])continue;
+            const x=index%width,y=Math.floor(index/width),row=y*width;
+            let runLeft=x,runRight=x;
+            while(runLeft>0&&white[row+runLeft-1])runLeft--;
+            while(runRight+1<width&&white[row+runRight+1])runRight++;
+            const length=runRight-runLeft+1;
+            white.fill(0,row+runLeft,row+runRight+1);area+=length;
+            const previous=rowRight[y]<0?0:rowRight[y]-rowLeft[y]+1;
+            rowLeft[y]=Math.min(rowLeft[y],runLeft);rowRight[y]=Math.max(rowRight[y],runRight);
+            envelope+=rowRight[y]-rowLeft[y]+1-previous;
+            if(y<top)topCount=length;else if(y===top)topCount+=length;
+            if(y>bottom)bottomCount=length;else if(y===bottom)bottomCount+=length;
+            left=Math.min(left,runLeft);right=Math.max(right,runRight);top=Math.min(top,y);bottom=Math.max(bottom,y);
+            if(y>0)addRow(row-width,runLeft,runRight);if(y+1<height)addRow(row+width,runLeft,runRight);
+        }
+        const w=right-left+1,h=bottom-top+1;
+        const density=area/(w*h),bbox={x0:left,y0:top,x1:right+1,y1:bottom+1};
+        if(w>=5&&h>=5&&area>=25)for(let index=ownership.length-1;index>=0;index--){
+            const owner=ownership[index],enclosure=enclosures.get(owner)!;
+            // raster 起点按行递增，后发现组件的 top 不可能小于已记录大组件的 top。
+            if(left<enclosure.x0||right+1>enclosure.x1||bottom+1>enclosure.y1)continue;
+            // 独立白卡可能跨过保守内接框的上下边缘，仍须按原组件外接范围记录。
+            // 溢出时仅撤回新增大气泡归属，原有二十四个识别裁图仍按原规则选择。
+            if(owner.exclusions?.length===128){ownership.splice(index,1);enclosures.delete(owner);}
+            else(owner.exclusions??=[]).push(bbox);
+        }
+        if(left!==0&&top!==0&&right!==width-1&&bottom!==height-1&&w>=30&&h>=30&&area>=1000&&density>=.45){
+            if(area<=count*.15)candidates.push({bbox,area});
+            // 大面积闭合面板不能作为对白证据；曲边外接矩形的角落也不能代表真实内部。
+            else if(area<=count*.4&&density<=.9&&topCount<=w*.75&&bottomCount<=w*.75&&area/envelope>=.95){
+                const inset=Math.ceil(h/4),y0=top+inset,y1=bottom+1-inset;
+                let x0=left,x1=right+1;
+                for(let y=y0;y<y1;y++){x0=Math.max(x0,rowLeft[y]);x1=Math.min(x1,rowRight[y]+1);}
+                if(x1>x0){const owner={x0,y0,x1,y1};ownership.push(owner);enclosures.set(owner,bbox);}
+            }
+        }
+        rowLeft.fill(width,top,bottom+1);rowRight.fill(-1,top,bottom+1);
+    }
+    return {recognition:candidates.sort((a,b)=>b.area-a.area).slice(0,24).map(item=>item.bbox),ownership};
+}
+
+/** 用已有原像素核对物理框边缘的浅底；唯一附属注音可随正文归属，但不借走其他气泡或独立白卡的小字。仅输出原结果索引，不扩大清字范围。 */
+export function assignMangaLayoutBubbles(pixels:Uint8ClampedArray,width:number,height:number,owners:MangaLayoutOwner[],items:MangaOcrItem[]):MangaLayoutBubble[]{
+    if(![width,height].every(value=>Number.isSafeInteger(value)&&value>0&&value<=8192)||width*height>16_777_216||pixels.length<width*height*4)return [];
+    if(!owners.length)return [];
+    const points=[[0,0],[1/3,0],[2/3,0],[1,0],[0,1/3],[1,1/3],[0,2/3],[1,2/3],[0,1],[1/3,1],[2/3,1],[1,1]];
+    const supported=items.map(item=>{
+        const box=item.box;
+        if(![box.x,box.y,box.width,box.height].every(Number.isFinite)||box.x<0||box.y<0||box.width<1||box.height<1||box.x+box.width>width||box.y+box.height>height)return false;
+        let white=0;
+        for(const [x,y] of points){
+            const index=(Math.floor(box.y+(box.height-1)*y)*width+Math.floor(box.x+(box.width-1)*x))*4;
+            if(pixels[index]>235&&pixels[index+1]>235&&pixels[index+2]>235&&pixels[index+3]>=128)white++;
+        }
+        return white>=9;
+    });
+    const excluded=(item:MangaOcrItem,bbox:MangaLayoutOwner)=>bbox.exclusions?.some(exclusion=>item.box.x>=exclusion.x0&&item.box.y>=exclusion.y0
+        &&item.box.x+item.box.width<=exclusion.x1&&item.box.y+item.box.height<=exclusion.y1);
+    const memberships=owners.map(bbox=>items.flatMap((item,index)=>supported[index]&&itemCenterInside(item,bbox)&&!excluded(item,bbox)?[index]:[]));
+    // 内接矩形只表示大气泡中央的安全归属。注音可能在其上方，需复用完整物理行上的唯一关系。
+    // 独立限制新增转换规模；既有索引、像素取样和分组结果在超限时保持不变。
+    if(items.length<=4096){
+        const originalOwners=new Map<number,number[]>();
+        memberships.forEach((members,owner)=>members.forEach(index=>{
+            const values=originalOwners.get(index)??[];values.push(owner);originalOwners.set(index,values);
+        }));
+        const physical=items.flatMap((item,index)=>groupMangaText([item],'auto',width,height).map(line=>({...line,index})));
+        for(const [ruby,main] of findImageRubyOwners(physical)){
+            if(originalOwners.has(ruby.index)||!supported[ruby.index])continue;
+            const candidates=originalOwners.get(main.index);
+            if(candidates?.length!==1)continue;
+            const owner=candidates[0];
+            if(!excluded(items[ruby.index],owners[owner]))memberships[owner].push(ruby.index);
+        }
+    }
+    return owners.flatMap((bbox,index)=>{
+        const members=memberships[index].sort((a,b)=>a-b);
+        return members.length?[{bbox:{x0:bbox.x0,y0:bbox.y0,x1:bbox.x1,y1:bbox.y1},members}]:[];
+    });
+}
+
+function itemCenterInside(item: MangaOcrItem, bbox: Box): boolean {
+    const x = item.box.x + item.box.width / 2, y = item.box.y + item.box.height / 2;
+    return x >= bbox.x0 && x < bbox.x1 && y >= bbox.y0 && y < bbox.y1;
+}
+
+/** 同一行的全页与局部检测框可能略有偏移；双方至少覆盖一半才是替代证据，局部碎字不能删除整行。 */
+function overlapsOcrLine(item: MangaOcrItem, local: MangaOcrItem, minimum = .5): boolean {
+    const a = item.box, b = local.box;
+    const overlap = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x))
+        * Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+    return overlap > 0 && overlap >= Math.max(a.width * a.height, b.width * b.height) * minimum;
+}
+
+/** Paddle 有时会把整句内部的宽字距字形再次识别成一条重叠碎片，随后触发正确译文的原文保护。 */
+function spacedLatinFragment(text:string):string|undefined {
+    const normalized=/^[\x00-\x7f]+$/u.test(text)?text:text.normalize('NFKC');
+    if(!/^[A-Za-z0-9\s.,!?;:'’"()\-…]+$/u.test(normalized))return;
+    const letters=(normalized.match(/[A-Za-z]/gu)??[]).length,spaces=(normalized.match(/\s/gu)??[]).length;
+    if(letters<6||spaces<Math.ceil((letters-1)*.4))return;
+    return normalized.replace(/[^A-Za-z0-9]/gu,'').toUpperCase();
+}
+
+/** 有界 LCS 只用于很少的间隔字母候选；近似相似度不足时保留源行。 */
+function subsequenceCoverage(shorter:string,longer:string):number {
+    if(!shorter||shorter.length>64||longer.length>192||shorter.length>longer.length)return 0;
+    let previous=new Uint8Array(shorter.length+1),current=new Uint8Array(shorter.length+1);
+    for(const character of longer){
+        current[0]=0;
+        for(let index=1;index<=shorter.length;index++)current[index]=character===shorter[index-1]
+            ?previous[index-1]+1:Math.max(previous[index],current[index-1]);
+        [previous,current]=[current,previous];
+    }
+    return previous[shorter.length]/shorter.length;
+}
+
+/** 仅丢弃与更完整原文高度重叠、且字符序列近似为其子串的字距噪声；预算耗尽时全部保留。 */
+function removeOverlappingSpacedEchoes(regions:MangaRegion[]):MangaRegion[] {
+    const fragments=regions.flatMap(region=>{
+        const compact=spacedLatinFragment(region.text);
+        return compact?[{region,compact}]:[];
+    });
+    if(!fragments.length)return regions;
+    const fragmentRegions=new Set(fragments.map(fragment=>fragment.region));
+    const candidates=regions.map(region=>({region,compact:fragmentRegions.has(region)?undefined
+        :region.text.normalize('NFKC').replace(/[^A-Za-z0-9]/gu,'').toUpperCase()}));
+    const removed=new Set<MangaRegion>();let comparisons=0;
+    for(const fragment of fragments){
+        for(const candidate of candidates){
+            if(candidate.region===fragment.region||!candidate.compact)continue;
+            if(++comparisons>8192)return regions;
+            if(candidate.compact.length<fragment.compact.length+3||candidate.compact.length>192)continue;
+            const a=fragment.region.bbox,b=candidate.region.bbox;
+            const intersection=Math.max(0,Math.min(a.x1,b.x1)-Math.max(a.x0,b.x0))
+                *Math.max(0,Math.min(a.y1,b.y1)-Math.max(a.y0,b.y0));
+            const smaller=Math.min((a.x1-a.x0)*(a.y1-a.y0),(b.x1-b.x0)*(b.y1-b.y0));
+            if(smaller<=0||intersection<smaller*.55)continue;
+            if(subsequenceCoverage(fragment.compact,candidate.compact)>=.75){removed.add(fragment.region);break;}
+        }
+    }
+    return removed.size?regions.filter(region=>!removed.has(region)):regions;
+}
+
+/** 不跨气泡拼句；局部识别本身才是替代证据，气泡几何或其他对白的存在不能删除可靠原文。 */
+export function collectMangaRegions(page:MangaOcrPage,language:string,width:number,height:number,profile: 'manga' | 'image' = 'manga',image?:string):MangaRegion[]{
     const bubbles=page.bubbles??[];
+    const paragraphGaps=createImageParagraphGapConsumer(page,width,height,language);
+    const wordBoundaries=createMangaViewWordBoundaryConsumer(page.results,bubbles,page.wordBoundaryProofs,width,height);
+    const layouts=profile==='manga'?page.layoutBubbles??[]:[];
+    const owners=[...bubbles.map(bubble=>bubble.bbox),...layouts.map(layout=>layout.bbox)];
+    const memberships=new Map<MangaOcrItem,Set<number>>();
+    for(const [index,layout] of layouts.entries())for(const member of layout.members){
+        const item=Number.isSafeInteger(member)&&page.results[member];if(!item)continue;
+        if(!memberships.has(item))memberships.set(item,new Set());
+        memberships.get(item)!.add(bubbles.length+index);
+    }
+    const inside=(item:MangaOcrItem,index:number)=>index<bubbles.length?itemCenterInside(item,owners[index]):memberships.get(item)?.has(index)===true;
+    const context = (item: MangaOcrItem) => bubbles.some(bubble => itemCenterInside(item,bubble.bbox)) ? 'bubble' as const : 'page' as const;
+    const reliable = (item: MangaOcrItem) => groupMangaText([item], language, width, height, context(item)).length > 0;
+    // 即使识别置信不足或孤字被过滤，也不让邻近译文擦掉疑似数值的物理区域。
+    const guards:MangaRegion[]=[],guardEvidence=new Map<string,{text:string;uncertain:boolean}>();
+    const candidates=[...page.results,...bubbles.flatMap(bubble=>bubble.results)].map(item=>({item,force:false}));
+    candidates.push(...[...(page.numericEvidence??[]),...bubbles.flatMap(bubble=>bubble.numericEvidence??[])].map(item=>({item,force:true})));
+    for(const {item,force} of candidates){
+        const text=item.text?.replace(/\s+/gu,' ').trim();
+        if(!text||!numericProtection(text)||(!force&&reliable(item)))continue;
+        const b=item.box;
+        if(!b||![b.x,b.y,b.width,b.height].every(Number.isFinite)||b.width<=0||b.height<=0)
+            throw new Error('图片数字保护位置无效，已保留原图');
+        const bbox={x0:Math.max(0,b.x),y0:Math.max(0,b.y),x1:Math.min(width,b.x+b.width),y1:Math.min(height,b.y+b.height)};
+        if(bbox.x1<=bbox.x0||bbox.y1<=bbox.y0)continue;
+        const key=[bbox.x0,bbox.y0,bbox.x1,bbox.y1].join(','),previous=guardEvidence.get(key);
+        if(previous){previous.uncertain ||= !reliable(item) || numericEvidenceKey(previous.text) !== numericEvidenceKey(text);continue;}
+        if(guards.length>=4096)throw new Error('图片数字保护区域过于复杂，已保留原图');
+        guardEvidence.set(key,{text,uncertain:!reliable(item)});guards.push({text:'',bbox,fontSize:bbox.y1-bbox.y0,guardOnly:true});
+    }
+    const numeric = (item: MangaOcrItem) => item.confidence >= .9 && numericInformation(item.text.trim());
+    // 不同识别视图发生数字冲突时都保留，供后续按区域保守跳过绘制。
+    const numericConflict = (a: MangaOcrItem, b: MangaOcrItem) => numeric(a) || numeric(b);
+    // 先按原始物理行去重，再合段；否则跨气泡的包围框中心会误删整段，或局部漏行无法并回同一对白。
+    const bubbleOrder = bubbles.map((bubble,index)=>({index,area:(bubble.bbox.x1-bubble.bbox.x0)*(bubble.bbox.y1-bubble.bbox.y0)}))
+        .sort((a,b)=>a.area-b.area).map(bubble=>bubble.index);
+    const ownerOrder=owners.map((bbox,index)=>({index,area:(bbox.x1-bbox.x0)*(bbox.y1-bbox.y0)}))
+        .sort((a,b)=>a.area-b.area).map(owner=>owner.index);
+    const local = owners.map(() => [] as MangaOcrItem[]), accepted: Array<{item:MangaOcrItem;index:number}> = [];
+    for(const index of bubbleOrder)for(const original of bubbles[index].results.filter(reliable)){
+        const item=wordBoundaries.choose(original,bubbles[index]);
+        // 浅色面板和内部气泡可能同时入选；只按跨候选且双向高重叠的几何证据去重，
+        // 更紧的局部裁剪优先，同候选独立行、不同位置的相同对白均保留。
+        if(accepted.some(previous=>previous.index!==index&&overlapsOcrLine(item,previous.item,.65)&&!numericConflict(item,previous.item)))continue;
+        accepted.push({item,index});
+        wordBoundaries.accept(item,bubbles[index]);
+        // 检测来源和对白归属分别保留：外层裁剪补回的漏行也属于最紧的气泡，
+        // 不能在去重后把同一对白的首行与后续行分到内外两个段落。
+        const owner=profile==='manga'?ownerOrder.find(candidate=>candidate===index||inside(item,candidate))!:index;
+        local[owner].push(item);
+    }
+    const remaining = page.results.filter(reliable).filter(item => !local.some(items => items.some(candidate => overlapsOcrLine(item, candidate) && !numericConflict(item,candidate))));
     if (profile === 'image') {
         // 普通截图不能套用漫画宽松气泡间距：保留可靠物理行，交给普通段落策略合并。
-        const outside = page.results.filter(item => !bubbles.some(({bbox}) => {
-            const x = item.box.x + item.box.width / 2, y = item.box.y + item.box.height / 2;
-            return x >= bbox.x0 && x < bbox.x1 && y >= bbox.y0 && y < bbox.y1;
-        }));
-        return [...outside, ...bubbles.flatMap(bubble => bubble.results)]
-            .flatMap(item => groupMangaText([item],language,width,height))
-            .map(({sourceBoxes: _boxes, ...line}) => line)
+        const lines = [...remaining, ...local.flat()]
+            .flatMap(item => {
+                const physical=groupMangaText([item],language,width,height,context(item))
+                // 数字不能随普通正文合段，否则将来无法单独阻止翻译和保护原图。
+                    .map(({sourceBoxes: _boxes, ...line}) => numericInformation(line.text) || line.quarterTurn || line.preserveSource
+                        ? {...line,sourceBoxes:[line.bbox]} : line);
+                wordBoundaries.record(physical,[item]);
+                physical.forEach(line=>paragraphGaps.record(item,line));
+                return physical;
+            })
             .sort((a,b) => a.bbox.y0-b.bbox.y0 || a.bbox.x0-b.bbox.x0);
+        const regions=appendUncoveredNumericGuards(mergeNumericRegions(lines),guards,guardEvidence);
+        paragraphGaps.seal(regions);
+        return regions;
     }
-    const paragraphs=bubbles.map(bubble=>groupMangaText(bubble.results,language,width,height,'bubble'));
-    const dialogue=paragraphs.filter(regions=>regions.length>0).length>=2;
-    const outside=groupMangaText(page.results,language,width,height).filter(region=>{
-        const x=(region.bbox.x0+region.bbox.x1)/2,y=(region.bbox.y0+region.bbox.y1)/2;
-        if(bubbles.some(({bbox:b})=>x>=b.x0&&x<b.x1&&y>=b.y0&&y<b.y1))return false;
-        return !dialogue||(region.sourceBoxes!.length>=2&&region.text.length>=12);
+    const fallback = owners.map(() => [] as MangaOcrItem[]), outsideItems: MangaOcrItem[] = [];
+    for (const item of remaining) {
+        const index = ownerOrder.find(index => inside(item, index));
+        if (index === undefined) outsideItems.push(item); else fallback[index].push(item);
+    }
+    const paragraphs=owners.map((_bubble,index)=>{
+        const items=[...local[index],...fallback[index]];
+        const grouped=wordBoundaries.record(groupMangaText(items,language,width,height,'bubble',true),items);
+        // 只记录实际局部气泡的查找范围；它不授予清字权限，补绘仍需核对原图闭合组件和逐像素纯白。
+        if(index<bubbles.length)for(const region of grouped)recordMangaBubblePlacement(region,owners[index],width,height);
+        return grouped;
     });
-    return [...outside,...paragraphs.flat()].sort((a,b)=>a.bbox.y0-b.bbox.y0||b.bbox.x0-a.bbox.x0);
+    const outside=wordBoundaries.record(groupMangaText(outsideItems,language,width,height,'page',true),outsideItems);
+    const regions = [...outside,...paragraphs.flat()].sort((a,b)=>a.bbox.y0-b.bbox.y0||b.bbox.x0-a.bbox.x0);
+    const echoesRemoved=removeOverlappingSpacedEchoes(regions);
+    const result=appendUncoveredNumericGuards(mergeNumericRegions(echoesRemoved),guards,guardEvidence);
+    const physicalRegions=new Map<MangaRegion,Box>();
+    if(page.imageParagraphGapProofs?.length){
+        const byBox=new Map<string,MangaRegion[]>();
+        for(const region of result)if(!region.quarterTurn&&!region.preserveSource&&region.sourceBoxes?.length===1&&sameBox(region.sourceBoxes[0],region.bbox)){
+            const box=region.bbox,key=[box.x0,box.y0,box.x1,box.y1].join(',');
+            const matches=byBox.get(key);if(matches)matches.push(region);else byBox.set(key,[region]);
+        }
+        const endpoints=new Set(page.imageParagraphGapProofs.flatMap(proof=>[proof.previous,proof.next]));
+        for(const item of endpoints){
+            const box={x0:item.box.x,y0:item.box.y,x1:item.box.x+item.box.width,y1:item.box.y+item.box.height};
+            const key=[box.x0,box.y0,box.x1,box.y1].join(','),candidates=byBox.get(key);
+            if(!candidates?.length)continue;
+            const [physical]=groupMangaText([item],language,width,height,context(item));if(!physical)continue;
+            const matches=candidates.filter(region=>region.text===physical.text&&region.fontSize===physical.fontSize&&region.vertical===physical.vertical);
+            if(matches.length!==1)continue;
+            paragraphGaps.record(item,matches[0]);physicalRegions.set(matches[0],box);
+        }
+    }
+    if(image&&page.imageParagraphGapProofs?.length&&physicalRegions.size){
+        for(const region of physicalRegions.keys())delete region.sourceBoxes;
+        try{
+            paragraphGaps.seal(result);bindImageParagraphGapEvidence(result,image,width,height);
+            const support=consumeImageParagraphGapEvidence(result,image,width,height);
+            const grouped=mergeMangaParagraphContinuations(result,support);
+            for(const region of grouped)if(physicalRegions.has(region))region.sourceBoxes=[{...physicalRegions.get(region)!}];
+            return grouped;
+        }finally{
+            for(const [region,box] of physicalRegions)if(!region.sourceBoxes)region.sourceBoxes=[{...box}];
+        }
+    }
+    return result;
+}
+
+function sameBox(a:Box,b:Box):boolean{return a.x0===b.x0&&a.y0===b.y0&&a.x1===b.x1&&a.y1===b.y1;}
+
+/** 已有数值框完整覆盖时不重复计费；仍标记所有相交数值，比较超额保留未证明框。 */
+function appendUncoveredNumericGuards(regions:MangaRegion[],guards:MangaRegion[],evidence:Map<string,{text:string;uncertain:boolean}>):MangaRegion[]{
+    if(!guards.length)return regions;
+    const numericRegions=regions.filter(region=>numericProtection(region.text));
+    const numericKeys=new Map(numericRegions.map(region=>[region,numericEvidenceKey(region.text)]));
+    const boxes=numericRegions.map(region=>region.bbox);
+    if(!boxes.length)return [...regions,...guards];
+    const key=(box:Box)=>[box.x0,box.y0,box.x1,box.y1].join(',');
+    const exact=new Map<string,MangaRegion[]>();
+    for(const region of numericRegions){const k=key(region.bbox),items=exact.get(k);if(items)items.push(region);else exact.set(k,[region]);}
+    // 精确匹配仍须检查其他相交数值；按 x 建立有界索引避免每个相同框都退化为全量扫描。
+    const indexed=numericRegions.slice().sort((a,b)=>a.bbox.x0-b.bbox.x0),rightmost:number[]=[];
+    for(const [index,region] of indexed.entries())rightmost[index]=Math.max(index?rightmost[index-1]:-Infinity,region.bbox.x1);
+    let comparisons=0,exhausted=false;
+    const uncovered=guards.filter(guard=>{
+        const g=guard.bbox,k=key(g),item=evidence.get(k)!,matching=exact.get(k);
+        const itemKey=numericEvidenceKey(item.text);
+        const mark=(region:MangaRegion)=>{if(item.uncertain||itemKey!==numericKeys.get(region))region.numericUncertain=true;};
+        if(matching){
+            matching.forEach(mark);
+            let start=0,end=indexed.length;
+            // 排除所有右边界不可能越过 guard 左边界的前缀。
+            while(start<end){const mid=(start+end)>>>1;if(rightmost[mid]<=g.x0)start=mid+1;else end=mid;}
+            for(let index=start;index<indexed.length&&indexed[index].bbox.x0<g.x1;index++){
+                const region=indexed[index],b=region.bbox;
+                if(b.x0===g.x0&&b.y0===g.y0&&b.x1===g.x1&&b.y1===g.y1)continue; // 这些候选已全部在 matching 中处理。
+                if(++comparisons>1_000_000){exhausted=true;return true;}
+                if(Math.min(b.x1,g.x1)>Math.max(b.x0,g.x0)&&Math.min(b.y1,g.y1)>Math.max(b.y0,g.y0))mark(region);
+            }
+            return false;
+        }
+        let covered=false;
+        for(const region of numericRegions){
+            if(++comparisons>1_000_000){exhausted=true;return true;}
+            const b=region.bbox;
+            if(Math.min(b.x1,g.x1)>Math.max(b.x0,g.x0)&&Math.min(b.y1,g.y1)>Math.max(b.y0,g.y0))mark(region);
+            if(b.x0<=g.x0&&b.y0<=g.y0&&b.x1>=g.x1&&b.y1>=g.y1)covered=true;
+        }
+        return !covered;
+    });
+    if(exhausted)numericRegions.forEach(item=>item.numericUncertain=true);
+    return [...regions,...uncovered];
+}
+
+/** 同文重叠数字在阅读中只显示一次，但其保护框覆盖所有检测位置。 */
+function mergeNumericRegions(regions: MangaRegion[]): MangaRegion[] {
+    const merged: MangaRegion[] = [], numbers: MangaRegion[] = [], canonical=new Map<MangaRegion,string>(); let comparisons = 0;
+    for (const region of regions) {
+        let existing: MangaRegion | undefined;
+        const isNumber = numericInformation(region.text);
+        const normalized=isNumber?numericEvidenceKey(region.text):'';
+        if (isNumber) for (const candidate of numbers) {
+            if (++comparisons > 1_000_000) break;
+            const a = candidate.bbox, b = region.bbox;
+            const intersection = Math.max(0, Math.min(a.x1,b.x1)-Math.max(a.x0,b.x0))
+                * Math.max(0, Math.min(a.y1,b.y1)-Math.max(a.y0,b.y0));
+            const larger = Math.max((a.x1-a.x0)*(a.y1-a.y0),(b.x1-b.x0)*(b.y1-b.y0));
+            if (intersection < larger * .5) continue;
+            if (canonical.get(candidate) === normalized) {existing ??= candidate;continue;}
+            candidate.numericUncertain = true;region.numericUncertain = true;
+        }
+        if (!existing) {merged.push(region);if(isNumber){numbers.push(region);canonical.set(region,normalized);}continue;}
+        if(region.numericUncertain)existing.numericUncertain=true;
+        const a = existing.bbox, b = region.bbox;
+        existing.bbox = {x0:Math.min(a.x0,b.x0),y0:Math.min(a.y0,b.y0),x1:Math.max(a.x1,b.x1),y1:Math.max(a.y1,b.y1)};
+        existing.sourceBoxes = [existing.bbox];
+    }
+    // 预算耗尽时不能断言未检查的候选一致：提示核对而非猜测真实数值。
+    if(comparisons>1_000_000)numbers.forEach(region=>region.numericUncertain=true);
+    return merged;
 }

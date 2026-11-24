@@ -1,7 +1,7 @@
 /**
  * @file src/features/paragraph-copy/core.ts
  * 文件职责：把鼠标命中的段落节点转换成可写入剪贴板的文本，负责区分原文与 FluentRead 译文、保留代码块换行，并按配置口径组合最终内容。
- * 主要内容：导出 PARAGRAPH_COPY_BLOCK_SELECTOR、ParagraphTexts、ParagraphCopyPayload、findCopyableBlock、readParagraphTexts 与 composeParagraphCopyText，内部维护块级标签、跳过标签与插件 UI 选择器。
+ * 主要内容：导出 PARAGRAPH_COPY_BLOCK_SELECTOR、ParagraphTexts、ParagraphCopyPayload、findCopyableBlock、readParagraphTexts 与 composeParagraphCopyText，内部维护块级标签、跳过标签与插件 UI 选择器；普通正文折叠空白，代码块保留首行缩进和内部连续空行。
  * 模块边界：本模块只读取传入的 DOM 并返回纯字符串结果，不监听事件、不读取配置存储、不访问剪贴板，也不发起翻译；快捷键口径归 core/config/paragraphCopy，手势与提示归 content 运行时。
  */
 import type {ParagraphCopyContentMode} from '@/src/core/config/paragraphCopy';
@@ -92,7 +92,8 @@ function renderSegments(segments: readonly TextSegment[]): string {
         parts.push(segment.value);
     }
     flush();
-    return parts.join('').replace(/\n{3,}/gu, '\n\n').trim();
+    // 普通文本已在 flush 中规范化，只移除块边界的换行；整体 trim 或压缩换行会破坏 pre 的代码。
+    return parts.join('').replace(/^\n+|\n+$/gu, '');
 }
 
 function pushBreak(segments: TextSegment[]): void {

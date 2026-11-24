@@ -1,8 +1,9 @@
+import {siteRuleTextRows} from '@/src/core/i18n/messages/siteRules';
 /**
  * @file tests/implementationAudit48K.test.ts
  * 文件职责：经公开消费者验证第 48 批 K 的学习装配、词书状态、轻量引导资源及漫画排印边界。
- * 主要内容：执行真实功能注册表，验证写作与默认关闭的个人校订独立协调；覆盖词书公开生命周期、客户端 SFC 模板及界面翻译入口，以有界长输入、完整输出哈希和分段操作数验证排印。
- * 模块边界：Shadow UI、写作和个人校订公开挂载、扫描器、存储、Canvas 和模块加载为受控端口；不读取账号、不连接日常浏览器、不复制私有业务逻辑。
+ * 主要内容：执行真实功能注册表，验证材料续读、写作与默认关闭的个人校订独立协调；覆盖词书公开生命周期、客户端 SFC 模板及界面翻译入口，以有界长输入、完整输出哈希和分段操作数验证排印。
+ * 模块边界：Shadow UI、材料、写作和个人校订公开挂载、扫描器、存储、Canvas 和模块加载为受控端口；不读取账号、不连接日常浏览器、不复制私有业务逻辑。
  */
 import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
@@ -25,6 +26,8 @@ const ports = vi.hoisted(() => ({
     scanner: {setEntries: vi.fn(), dispose: vi.fn()}, writingMounted: false,
     mountWriting: vi.fn(), unmountWriting: vi.fn(), setLanguage: vi.fn(), language: undefined as unknown as Vue.Ref<string>,
     mountCorrections: vi.fn(), unmountCorrections: vi.fn(),
+    mountMaterial: vi.fn(), unmountMaterial: vi.fn(),
+    shareCardMounted: false, mountShareCard: vi.fn(), unmountShareCard: vi.fn(),
     appearance: vi.fn(), subscribe: vi.fn(), unsubscribe: vi.fn(), reload: vi.fn(),
 }));
 vi.mock('vue', async importOriginal => {
@@ -46,6 +49,12 @@ vi.mock('@/src/ui/interfaceAppearance', () => ({applyInterfaceSkin: ports.appear
 
 vi.mock('@/src/app/content/personalCorrections', () => ({mountPersonalCorrectionContent: ports.mountCorrections, unmountPersonalCorrectionContent: ports.unmountCorrections}));
 vi.mock('@/src/features/personal-corrections/public', () => ({unmountPersonalCorrections: vi.fn()}));
+vi.mock('@/src/features/vocabulary/material/content/public', () => ({mountMaterialContent: ports.mountMaterial}));
+vi.mock('@/src/features/share-card/public', () => ({
+    mountShareCard: () => {ports.shareCardMounted = true; ports.mountShareCard();},
+    unmountShareCard: () => {ports.shareCardMounted = false; ports.unmountShareCard();},
+    isShareCardMounted: () => ports.shareCardMounted,
+}));
 
 import {createLearningContentFeatures} from '@/src/app/content/learningFeatures';
 import {createContentFeatureRegistry, type ContentFeatureRegistry} from '@/src/app/content/featureRegistry';
@@ -55,7 +64,7 @@ import {registerUiLanguageBundle, translate, translateLegacyText, type Registere
 import * as i18n from '@/src/core/i18n';
 import * as onboardingMessages from '@/src/core/i18n/messages/onboarding';
 import brandTaglines from '@/src/core/i18n/messages/brand-taglines.json';
-import {createLegacyCorrectionText, getLegacyCorrectionSources} from '@/src/core/i18n/messages/legacy-corrections';
+import {createLegacyCorrectionText, correctionRows} from '@/src/core/i18n/messages/legacy-corrections';
 import {useSettingsActionContext} from '@/src/features/settings/model/useSettingsActionContext';
 import {layoutMangaTranslationText} from '@/src/features/image-translation/services/mangaTypography';
 import {drawMangaTranslations} from '@/src/features/image-translation/services/mangaRendering';
@@ -74,8 +83,10 @@ let focused: Element | null;
 beforeEach(() => {
     vi.clearAllMocks(); vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
     ports.config.vocabularyReencounterEnabled = true; ports.extension.inIncognitoContext = false; ports.writingMounted = false;
+    ports.shareCardMounted = false;
     ports.mountWriting.mockImplementation(() => {ports.writingMounted = true;});
     ports.unmountWriting.mockImplementation(() => {ports.writingMounted = false;});
+    ports.mountMaterial.mockReturnValue(ports.unmountMaterial);
     ports.installScanner.mockReturnValue(ports.scanner); ports.patch.mockResolvedValue(undefined);
     ports.subscribe.mockReturnValue(ports.unsubscribe); ports.language = Vue.ref('zh-CN');
     ports.setLanguage.mockResolvedValue(true); ports.send.mockResolvedValue({success: true, data: []});
@@ -185,8 +196,12 @@ describe('48K 当前写作学习装配公开消费者', () => {
         const runtime = learning({on, writing: {enabled: writing}}, browser);
         const active = activation();
         expect((await runtime.mountEnabled(active)).map(row => ({id: row.id, status: row.status}))).toEqual([
+            {id: 'vocabulary-reencounter', status: 'skipped'},
+            {id: 'material-resume', status: browser !== 'userscript' && on ? 'mounted' : 'skipped'},
             {id: 'personal-corrections', status: 'skipped'}, {id: 'writing-assistant', status},
+            {id: 'share-card', status: on ? 'mounted' : 'skipped'},
         ]);
+        expect(ports.mountMaterial).toHaveBeenCalledTimes(browser !== 'userscript' && on ? 1 : 0);
         expect(ports.mountCorrections).not.toHaveBeenCalled();
         expect(ports.mountWriting).toHaveBeenCalledTimes(status === 'mounted' ? 1 : 0);
     });
@@ -195,15 +210,21 @@ describe('48K 当前写作学习装配公开消费者', () => {
         const runtime = learning(config); await runtime.mountEnabled(activation());
         config.writing.enabled = true;
         expect((await runtime.reconcileEnabled()).map(row => ({id: row.id, status: row.status}))).toEqual([
+            {id: 'vocabulary-reencounter', status: 'skipped'},
+            {id: 'material-resume', status: 'mounted'},
             {id: 'personal-corrections', status: 'skipped'}, {id: 'writing-assistant', status: 'mounted'},
+            {id: 'share-card', status: 'mounted'},
         ]);
-        await runtime.reconcileEnabled(); expect(ports.mountWriting).toHaveBeenCalledOnce();
+        await runtime.reconcileEnabled(); expect(ports.mountWriting).toHaveBeenCalledOnce(); expect(ports.mountMaterial).toHaveBeenCalledOnce();
         config.on = false; await runtime.reconcileEnabled();
+        expect(ports.unmountMaterial).toHaveBeenCalledOnce();
         expect(ports.unmountWriting).toHaveBeenCalledOnce(); expect(ports.writingMounted).toBe(false);
         config.on = true; await runtime.reconcileEnabled();
         expect(ports.mountWriting).toHaveBeenCalledTimes(2); expect(ports.writingMounted).toBe(true);
+        expect(ports.mountMaterial).toHaveBeenCalledTimes(2);
         runtime.unmountAll(); registry = undefined;
         expect(ports.unmountWriting).toHaveBeenCalledTimes(2);
+        expect(ports.unmountMaterial).toHaveBeenCalledTimes(2);
     });
     it('个人校订显式开启才挂载，开关变化独立清理，不卸载或重复挂载写作', async () => {
         const config = {on: true, writing: {enabled: true}, personalCorrectionsEnabled: false};
@@ -253,27 +274,29 @@ describe('48K 再次遇见状态合同的公开消费者', () => {
 });
 
 describe('48K 轻量资源经实际运行时消费者', () => {
-    it('客户端欢迎、选择、等待、保存失败和成功阶段直接呈现中英文资源', async () => {
+    it('客户端单屏语言选择、等待、保存失败重试与立即交接使用轻量文案', async () => {
         const saved = vi.fn(), confirmed = vi.fn(); mountClient(loadClientComponent('src/ui/components/UiLanguageOnboarding.vue'), {initialLanguage: 'en-US', onSaved: saved, onConfirmed: confirmed}); await settle();
-        expect(element('#language-onboarding-title').textContent).toContain('欢迎使用'); expect(element('#language-onboarding-title').textContent).toContain('Welcome');
-        expect(element('[data-testid="onboarding-language-next"]').textContent).toContain('Set interface language');
-        click('[data-testid="onboarding-language-next"]'); await settle();
+        expect(element('#language-onboarding-title').textContent).toContain('选择界面语言');
+        expect(document.querySelector('[data-testid="onboarding-language-next"]')).toBeNull();
         expect(element('#language-onboarding-title').textContent).toContain('Choose interface language');
         expect(element('[role="radiogroup"]').getAttribute('aria-label')).toBe('语言 / Language');
-        expect(element('.onboarding-back').textContent).toBe('返回 / Back');
+        expect(document.querySelector('.onboarding-back')).toBeNull();
+        expect(element('[data-language="ja-JP"]').textContent).toContain('日本語');
         const gate = deferred<boolean>(); ports.setLanguage.mockReturnValueOnce(gate.promise); click('.onboarding-form > .onboarding-confirm'); await settle();
         expect(element('.onboarding-form > .onboarding-confirm').textContent).toContain('加载中…'); expect(element('.onboarding-form > .onboarding-confirm').textContent).toContain('Loading…');
+        expect(saved).not.toHaveBeenCalled(); expect(confirmed).not.toHaveBeenCalled();
         gate.reject(new Error('controlled persistence failure')); await settle();
-        expect(element('[role="alert"]').textContent).toBe('界面语言保存失败，请重新打开设置页后重试。 / The interface language could not be saved. Reopen settings and try again.');
+        expect(element('[role="alert"]').textContent).toBe('Could not confirm the language was saved. Confirm again to retry.');
         expect(element('.onboarding-form > .onboarding-confirm').textContent).toContain('确认'); expect(element('.onboarding-form > .onboarding-confirm').textContent).toContain('Confirm');
         click('.onboarding-form > .onboarding-confirm'); await settle(); expect(saved).toHaveBeenCalledWith('en-US');
-        expect(element('#language-onboarding-title').textContent).toContain('准备好了'); expect(element('#language-onboarding-title').textContent).toContain('You’re all set');
-        await vi.advanceTimersByTimeAsync(1200); expect(confirmed).toHaveBeenCalledWith('en-US');
+        expect(confirmed).toHaveBeenCalledOnce(); expect(confirmed).toHaveBeenCalledWith('en-US');
+        expect(element('.onboarding-confirm').hasAttribute('disabled')).toBe(true);
+        click('.onboarding-confirm'); await settle(); expect(saved).toHaveBeenCalledOnce(); expect(confirmed).toHaveBeenCalledOnce();
         expect(translate('language.onboardingWelcomeNext', 'zh-CN')).toBe('设置界面语言');
     });
     it('实际 Popup 模块加载失败同时显示双语反馈，重试释放订阅并调用重开端口', async () => {
-        mountClient(loadClientComponent('src/app/popup/PopupOnboarding.vue')); await settle(); click('[data-testid="onboarding-language-next"]'); await settle();
-        click('.onboarding-form > .onboarding-confirm'); await settle(); await vi.advanceTimersByTimeAsync(1200); await settle();
+        mountClient(loadClientComponent('src/app/popup/PopupOnboarding.vue')); await settle();
+        click('.onboarding-form > .onboarding-confirm'); await settle();
         expect(element('.onboarding-load-error').textContent).toContain('菜单加载失败，请重试。');
         expect(element('.onboarding-load-error').textContent).toContain('The menu could not be loaded. Please retry.');
         expect(element('.onboarding-load-error button').textContent).toBe('重试 / Retry');
@@ -290,7 +313,7 @@ describe('48K 轻量资源经实际运行时消费者', () => {
         expect(translateLegacyText('CSS 选择器', language)).toBe(selector);
         for (const userValue of ['example.test', 'article[data-title="网站偏好"]', '{"name":"CSS 选择器"}']) expect(translateLegacyText(userValue, language)).toBe(userValue);
         // 通过目录的公开消费者取源项，逐条验证真实登记结果可用，不复制私有行或键清单。
-        for (const source of getLegacyCorrectionSources()) expect(translateLegacyText(source, language)).toBe(legacyText[source]);
+        for (const source of [...correctionRows, ...siteRuleTextRows].map(row => row[0])) expect(translateLegacyText(source, language)).toBe(legacyText[source]);
     });
 });
 
@@ -324,7 +347,7 @@ describe('48K 漫画排印的数值、Unicode 与操作边界', () => {
         } finally {vi.stubGlobal('Intl', intl); vi.resetModules();}
     });
     it('短末行平衡保留字号、行数与完整标点，相近行宽无需重排', () => {
-        expect(layoutMangaTranslationText('我早就确认过了。', 70, 50, measure, 10)).toEqual({lines: ['我早就确', '认过了。'], fontSize: 10, lineHeight: 12});
+        expect(layoutMangaTranslationText('我早就确认过了。', 70, 50, measure, 10)).toEqual({lines: ['我早就确认', '过了。'], fontSize: 10, lineHeight: 12});
         expect(layoutMangaTranslationText('x Hello', 60, 100, measure, 10).lines).toEqual(['x', 'Hello']);
         expect(layoutMangaTranslationText('你好再见', 20, 100, measure, 10).lines).toEqual(['你好', '再见']);
     });

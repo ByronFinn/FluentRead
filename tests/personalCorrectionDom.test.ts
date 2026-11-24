@@ -1,17 +1,27 @@
 import {parseHTML} from 'linkedom';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
-const fixture = vi.hoisted(() => ({lookup: vi.fn(), states: new WeakMap<HTMLElement, any>(),
-    config: {on: true, personalCorrectionsEnabled: true}, artifact: true, source: true, refresh: vi.fn(), restore: vi.fn(), set: vi.fn()}));
+const fixture = vi.hoisted(() => ({lookup: vi.fn(), states: new Map<HTMLElement, any>(),
+    config: {on: true, personalCorrectionsEnabled: true}, artifact: true, source: true, refresh: vi.fn(), restore: vi.fn(), set: vi.fn(), indexedOwners: vi.fn(), stateListeners: new Set<(...args: any[]) => void>()}));
 vi.mock('@/src/services/config/store', () => ({config: fixture.config}));
 vi.mock('@/src/services/personal-corrections/public', () => ({personalCorrections: {lookup: fixture.lookup}}));
 vi.mock('@/src/features/full-page-translation/content/state', () => ({
     getTranslationState: (node: HTMLElement) => fixture.states.get(node), setBilingualContent: fixture.set,
+    getTranslationOwnersWithin: (root: Node) => [...fixture.states.keys()].filter(node => {
+        for (let ancestor: Node | null = node; ancestor; ancestor = ancestor.parentNode ?? (ancestor as ShadowRoot).host ?? null) {
+            if (ancestor === root) return true;
+        }
+        return false;
+    }),
+    getTranslationOwnersForIndexedNode: (node: Node) => fixture.indexedOwners(node),
+    subscribeTranslationStateChanges: (listener: (...args: any[]) => void) => {
+        fixture.stateListeners.add(listener); return () => {fixture.stateListeners.delete(listener);};
+    },
     restoreTranslation: fixture.restore,
 }));
 vi.mock('@/src/features/full-page-translation/content/translationStability', () => ({
     statefulSourceAndTextSlotsAreCurrent: () => fixture.source, isTranslationArtifactCurrent: () => fixture.artifact,
 }));
-vi.mock('@/src/features/full-page-translation/content/bilingualReplay', () => ({refreshBilingualTranslationSkeleton: fixture.refresh}));
+vi.mock('@/src/features/full-page-translation/content/displayMode', () => ({refreshTranslationPresentation: fixture.refresh}));
 vi.mock('@/src/features/full-page-translation/content/viewportStability', () => ({withFullPageViewportAnchor: (action: () => unknown) => action()}));
 import {createMaterialId} from '@/src/core/personal-corrections/public';
 import {listVisiblePersonalCorrectionPairs, lookupPersonalCorrection, personalCorrectionIsCurrent, readPersonalCorrectionContext,
@@ -33,7 +43,7 @@ function pair(baseline: boolean = true, recordId?: string) {
 beforeEach(() => {
     const {document} = parseHTML('<html><body><h2>Team</h2><p>The team is ready.<span class="fluent-read-bilingual-content">团队准备好了。</span></p></body></html>');
     vi.stubGlobal('document', document); vi.stubGlobal('location', {href});
-    fixture.states = new WeakMap(); fixture.artifact = true; fixture.source = true;
+    fixture.states = new Map(); fixture.artifact = true; fixture.source = true;
     Object.assign(fixture.config, {on: true, personalCorrectionsEnabled: true});
     fixture.lookup.mockReset().mockResolvedValue({suggestions: [], conflicts: []});
     fixture.refresh.mockReset().mockImplementation((_node, state) => {
@@ -42,9 +52,25 @@ beforeEach(() => {
         return true;
     });
     fixture.restore.mockReset(); fixture.set.mockReset();
+    fixture.indexedOwners.mockReset().mockImplementation(node => fixture.states.has(node) ? [node] : []);
+    fixture.stateListeners.clear();
 });
-afterEach(() => {vi.unstubAllGlobals(); vi.unstubAllEnvs();});
+afterEach(() => {disableVisiblePersonalCorrections(); vi.unstubAllGlobals(); vi.unstubAllEnvs();});
 describe('个人校订的网页所有权端口', () => {
+    it('初查预取消不发查询；查询失败时已取消不能当作普通翻译降级', async () => {
+        const node = document.querySelector('p')!;
+        const controller = new AbortController();
+        controller.abort();
+        await expect(lookupPersonalCorrection(node, query.source, 'en', 'zh', controller.signal)).rejects.toMatchObject({name: 'AbortError'});
+        expect(fixture.lookup).not.toHaveBeenCalled();
+        const inFlight = new AbortController();
+        let reject!: (reason: unknown) => void;
+        fixture.lookup.mockReturnValueOnce(new Promise((_resolve, fail) => {reject = fail;}));
+        const pending = lookupPersonalCorrection(node, query.source, 'en', 'zh', inFlight.signal);
+        inFlight.abort();
+        reject(new Error('late failure'));
+        await expect(pending).rejects.toMatchObject({name: 'AbortError'});
+    });
     it('关闭时零记忆查询；关闭再开启也丢弃上一启用代次的查询和提交', async () => {
         const node = document.querySelector('p')!;
         fixture.config.personalCorrectionsEnabled = false;
@@ -85,9 +111,13 @@ describe('个人校订的网页所有权端口', () => {
         fixture.artifact = true; const noBaseline = pair(false, 'saved'); fixture.source = false; disableVisiblePersonalCorrections();
         expect(noBaseline.state.bilingualReplay).toBeUndefined();
         fixture.source = true; pair(); fixture.refresh.mockClear(); disableVisiblePersonalCorrections(); expect(fixture.refresh).not.toHaveBeenCalled();
-        fixture.states = new WeakMap(); disableVisiblePersonalCorrections();
+        fixture.states = new Map(); disableVisiblePersonalCorrections();
         const orphan = document.createElement('span'); orphan.className = 'fluent-read-bilingual-content';
         vi.spyOn(document, 'querySelectorAll').mockReturnValueOnce([orphan] as any); disableVisiblePersonalCorrections();
+    });
+    it('宿主改写了尚未应用个人记录的译文时，关闭不会重新写入底稿',()=>{
+        const plain=pair();plain.content.textContent='Host replacement';fixture.artifact=false;
+        disableVisiblePersonalCorrections();expect(plain.content.textContent).toBe('Host replacement');expect(fixture.refresh).not.toHaveBeenCalled();expect(fixture.restore).not.toHaveBeenCalled();
     });
     it('关闭的刷新零 IO，在途刷新也不能在关闭后采用返回的个人结果', async () => {
         fixture.config.personalCorrectionsEnabled = false; await refreshVisiblePersonalCorrections(); expect(fixture.lookup).not.toHaveBeenCalled();
@@ -97,6 +127,27 @@ describe('个人校订的网页所有权端口', () => {
         resolve({exact: {id: 'late', translation: '迟到'}}); await pending;
         expect(state.bilingualReplay.translations).toEqual(['团队准备好了。']); expect(state.bilingualReplay.personalCorrectionId).toBeUndefined();
     });
+    it.each(['new-refresh', 'disable', 'ordinary-failure'] as const)(
+        '校订刷新遇到失败时按 %s 的所有权决定是否继续读取', async scenario => {
+            const first = pair(true, 'saved');
+            const secondNode = first.node.cloneNode(true) as HTMLElement;
+            document.body.append(secondNode);
+            const secondContent = secondNode.querySelector<HTMLElement>('.fluent-read-bilingual-content')!;
+            const secondState = {...first.state, bilingualContent: secondContent,
+                bilingualReplay: {...first.state.bilingualReplay, translations: [...first.state.bilingualReplay.translations]}};
+            fixture.states.set(secondNode, secondState);
+            registerPersonalCorrectionResult(secondNode, secondState as any, {...first.snapshot});
+            let rejectOld!: (reason: unknown) => void;
+            fixture.lookup.mockReturnValueOnce(new Promise((_resolve, reject) => {rejectOld = reject;}));
+            const oldRefresh = refreshVisiblePersonalCorrections();
+            expect(fixture.lookup).toHaveBeenCalledTimes(1);
+            if (scenario === 'new-refresh') await refreshVisiblePersonalCorrections();
+            if (scenario === 'disable') disableVisiblePersonalCorrections();
+            const callsBeforeReject = fixture.lookup.mock.calls.length;
+            rejectOld(new Error('lookup unavailable'));
+            await oldRefresh;
+            expect(fixture.lookup).toHaveBeenCalledTimes(callsBeforeReject + (scenario === 'ordinary-failure' ? 1 : 0));
+        });
     it('主动开启后按原请求语言校订现有服务译文，准备编辑对不查询记忆或改译文', () => {
         fixture.config.personalCorrectionsEnabled = false; const {content, state} = pair();
         fixture.config.personalCorrectionsEnabled = true;
@@ -224,7 +275,7 @@ describe('个人校订的网页所有权端口', () => {
         for (const field of ['source', 'sourceLanguage', 'targetLanguage', 'context', 'materialId']) {
             expect(listVisiblePersonalCorrectionPairs({...query, [field]: 'different'})).toHaveLength(0);
         }
-        fixture.states = new WeakMap(); expect(listVisiblePersonalCorrectionPairs(query)).toHaveLength(0);
+        fixture.states = new Map(); expect(listVisiblePersonalCorrectionPairs(query)).toHaveLength(0);
         const orphan = document.createElement('span'); orphan.className = 'fluent-read-bilingual-content'; expect(readPersonalCorrectionPair(orphan)).toBeNull();
     });
     it('删除或范围退出回滚服务底稿；复用而无底稿的单元恢复原文', async () => {
@@ -236,7 +287,7 @@ describe('个人校订的网页所有权端口', () => {
         await refreshVisiblePersonalCorrections(); expect(fixture.restore).not.toHaveBeenCalled();
         const reused = pair(false, 'saved'); await refreshVisiblePersonalCorrections(); expect(fixture.restore).toHaveBeenCalledWith(reused.node);
         fixture.lookup.mockRejectedValueOnce(Error('unavailable')); await refreshVisiblePersonalCorrections();
-        fixture.states = new WeakMap(); await refreshVisiblePersonalCorrections();
+        fixture.states = new Map(); await refreshVisiblePersonalCorrections();
         const unattached = document.createElement('span'); unattached.className = 'fluent-read-bilingual-content';
         const queryAll = vi.spyOn(document, 'querySelectorAll').mockReturnValueOnce([] as any).mockReturnValueOnce([unattached] as any);
         await refreshVisiblePersonalCorrections(); queryAll.mockRestore();
@@ -261,7 +312,7 @@ describe('个人校订的网页所有权端口', () => {
         vi.stubGlobal('location', {href: href + '#/new-material'});
         await refreshVisiblePersonalCorrections(); expect(fixture.restore).toHaveBeenCalledWith(node);
         expect(fixture.lookup).not.toHaveBeenCalled();
-        fixture.states = new WeakMap(); invalidateStalePersonalCorrectionContexts();
+        fixture.states = new Map(); invalidateStalePersonalCorrectionContexts();
         const unattached = document.createElement('span'); unattached.setAttribute('data-fr-personal-correction', 'true');
         const queryAll = vi.spyOn(document, 'querySelectorAll').mockReturnValueOnce([unattached] as any);
         invalidateStalePersonalCorrectionContexts(); queryAll.mockRestore();
@@ -298,5 +349,58 @@ describe('个人校订的网页所有权端口', () => {
         expect(fixture.restore).not.toHaveBeenCalled(); expect(disconnect).toHaveBeenCalledOnce();
         const second = new AbortController(); watchPersonalCorrectionContext(second.signal); second.abort();
         expect(disconnect).toHaveBeenCalledTimes(2); expect(fixture.lookup).not.toHaveBeenCalled();
+    });
+
+    it('局部索引排除无校订和仅租用祖先的外部分支，开放 ShadowRoot 内的移动仍失效', () => {
+        let callback!: (mutations: MutationRecord[]) => void;
+        vi.stubGlobal('MutationObserver', class {constructor(handler: typeof callback) {callback = handler;} observe() {} disconnect() {}});
+        const controller = new AbortController(); watchPersonalCorrectionContext(controller.signal);
+        expect(fixture.stateListeners.size).toBe(1);
+        const {node, state} = pair(true, 'saved');
+        const changed = document.createElement('div'); changed.innerHTML = '<span>Unrelated content</span>';
+        document.body.appendChild(changed);
+        const record = (element: Element) => [{type: 'childList', target: document.body, addedNodes: [element], removedNodes: []}] as unknown as MutationRecord[];
+        fixture.indexedOwners.mockImplementation(indexed => indexed === changed ? [node] : []);
+        callback(record(changed)); expect(fixture.restore).not.toHaveBeenCalled();
+        const noMetadata = document.createElement('p'); changed.appendChild(noMetadata);
+        fixture.states.set(noMetadata, {});
+        fixture.indexedOwners.mockImplementation(indexed => indexed === noMetadata ? [noMetadata] : []);
+        callback(record(changed)); expect(fixture.restore).not.toHaveBeenCalled();
+        fixture.states.delete(noMetadata);
+        const shadow = changed.attachShadow({mode: 'open'}); shadow.appendChild(node);
+        fixture.indexedOwners.mockImplementation(indexed => indexed === node ? [node] : []);
+        callback(record(changed));
+        expect(fixture.restore).toHaveBeenCalledWith(node);
+        expect(fixture.states.get(node)).toBe(state);
+        controller.abort(); expect(fixture.stateListeners.size).toBe(0); expect(fixture.lookup).not.toHaveBeenCalled();
+    });
+
+    it('登记复用弱引用，状态替换、取消与回收不会保留过期校订单元', () => {
+        let callback!: (mutations: MutationRecord[]) => void;
+        vi.stubGlobal('MutationObserver', class {constructor(handler: typeof callback) {callback = handler;} observe() {} disconnect() {}});
+        const references: Array<{value: HTMLElement; live: boolean}> = [];
+        const deref = vi.fn();
+        vi.stubGlobal('WeakRef', class {
+            reference: {value: HTMLElement; live: boolean};
+            constructor(value: HTMLElement) {this.reference = {value, live: true}; references.push(this.reference);}
+            deref() {deref(); return this.reference.live ? this.reference.value : undefined;}
+        });
+        const {node} = pair(); pair();
+        expect(references).toHaveLength(1); expect(references[0].value).toBe(node);
+        const controller = new AbortController(); watchPersonalCorrectionContext(controller.signal);
+        const record = [{type: 'childList', target: document.body, addedNodes: [document.createElement('div')], removedNodes: []}] as unknown as MutationRecord[];
+        callback(record); expect(deref).toHaveBeenCalledOnce(); deref.mockClear();
+        document.createDocumentFragment().appendChild(node);
+        callback(record); expect(deref).toHaveBeenCalledOnce(); deref.mockClear();
+        document.body.appendChild(node);
+        fixture.states.set(node, {});
+        callback(record); expect(deref).toHaveBeenCalledOnce(); deref.mockClear();
+        callback(record); expect(deref).not.toHaveBeenCalled();
+        pair(); references[0].live = false;
+        callback(record); expect(deref).toHaveBeenCalledOnce(); deref.mockClear();
+        callback(record); expect(deref).not.toHaveBeenCalled();
+        pair(); disableVisiblePersonalCorrections();
+        callback(record); expect(deref).not.toHaveBeenCalled();
+        controller.abort(); expect(fixture.lookup).not.toHaveBeenCalled();
     });
 });

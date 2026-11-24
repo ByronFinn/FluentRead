@@ -1,5 +1,6 @@
 /**
  * @file src/providers/translation/deepseek.ts
+ * 字幕参考：将后台规范化的相邻 cue 标记交给共用提示模板，供应商协议与返回结构保持原契约。
  *
  * 文件职责：适配 DeepSeek 官方或代理端点，并根据配置选择 Chat Completions 或 Responses 协议进行翻译。
  * 主要内容：从快照解析 thinking/API 模式和 endpoint，将受信选区图片传给 Chat/Responses 多模态模板，执行 Bearer 请求、HTTP/JSON 校验、上报协议对应的 token 用量并清理模型推理标记；路由改写与 Responses 输出读取复用 responses-api 共享模块。 可核对的公开符号包括 buildDeepSeekEndpoint、default:deepseek。
@@ -15,9 +16,10 @@ import {
 import {stripTranslationReasoning as contentPostHandler} from '@/src/core/translation/prompts';
 import { appendOptionalBearer } from './auth';
 import {createHttpStatusError, createImageInputHttpError, readJsonResponse} from '@/src/platform/http/errors';
-import {abortErrorFromSignal, runtimeFetch} from '@/src/platform/http/runtime';
+import {abortErrorFromSignal, cancelUnreadResponseBody, runtimeFetch} from '@/src/platform/http/runtime';
 import {
     requireTranslationProviderConfig,
+    observeTranslationHttpResponse,
     getTranslationImageInput,
     reportTranslationModelUsage,
     reportTranslationModelUsageFailure,
@@ -51,6 +53,7 @@ async function deepseek(message: TranslationProviderRequest<string>) {
         ? deepseekResponsesMsgTemplate({
             origin: message.origin,
             context: message.pageContext,
+            subtitleContext: message.subtitleContext,
             prompt: message.summaryPrompt,
             systemPrompt: message.summarySystemPrompt,
             serviceOverride: service,
@@ -63,6 +66,7 @@ async function deepseek(message: TranslationProviderRequest<string>) {
         : deepseekMsgTemplate({
             origin: message.origin,
             context: message.pageContext,
+            subtitleContext: message.subtitleContext,
             prompt: message.summaryPrompt,
             systemPrompt: message.summarySystemPrompt,
             serviceOverride: service,
@@ -81,17 +85,48 @@ async function deepseek(message: TranslationProviderRequest<string>) {
             body,
             signal: message.abortSignal,
         });
+        observeTranslationHttpResponse(message, resp);
         if (!resp.ok) {
             reportTranslationModelUsageFailure(message, undefined, startedAt, configuredModel, resp.status);
             attemptReported = true;
-            throw getTranslationImageInput(message) ? await createImageInputHttpError(resp, '翻译失败') : createHttpStatusError(resp, '翻译失败');
+            const error = getTranslationImageInput(message) ? await createImageInputHttpError(resp, '翻译失败') : createHttpStatusError(resp, '翻译失败');
+            cancelUnreadResponseBody(resp);
+            throw error;
         }
 
-        const result = await readJsonResponse<any>(resp, 'DeepSeek 返回的不是有效 JSON');
+        const result = await readJsonResponse<any>(resp, 'DeepSeek 返回的不是有效 JSON', message.abortSignal);
         if (message.abortSignal?.aborted) throw abortErrorFromSignal(message.abortSignal);
         const actualModel = typeof result?.model === 'string' && result.model.trim()
             ? result.model
             : configuredModel;
+        // 兼容省略 status 的旧代理；显式非完成状态或错误不能作为部分译文成功返回。
+        const incompleteResponse = isResponses && (
+            result?.error != null
+            || result?.incomplete_details != null
+            || (result?.status !== undefined && result.status !== 'completed')
+            || (Array.isArray(result?.output) && result.output.some((item: any) =>
+                // 已完成的服务端搜索可随最终译文返回；客户端工具调用和未知输出仍不可当作译文。
+                (item?.type !== 'message' && item?.type !== 'reasoning'
+                    && !(item?.type === 'web_search_call' && item?.status === 'completed'))
+                || (item?.status !== undefined && item.status !== 'completed')
+                || (item?.type === 'message' && Array.isArray(item.content)
+                    && item.content.some((part: any) => part?.type === 'refusal'))))
+        );
+        if (incompleteResponse) {
+            const error = Object.assign(new Error('DeepSeek Responses 未完整完成，已拒绝部分输出'), {
+                kind: 'response', retryable: false, statusCode: resp.status,
+            });
+            attemptReported = true;
+            reportTranslationModelUsage(message, {
+                ...normalizeDeepSeekResponsesUsage(result?.usage, actualModel),
+                startedAt,
+                durationMs: Math.max(0, Date.now() - startedAt),
+                outcome: 'error',
+                statusCode: resp.status,
+            });
+            throw error;
+        }
+
         const translatedText = isResponses
             ? extractResponsesContent(result)
             : extractChatContent(result);

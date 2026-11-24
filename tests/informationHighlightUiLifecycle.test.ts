@@ -12,13 +12,22 @@ import {createServer, type ViteDevServer} from 'vite'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import type {InformationHighlightModelStatus} from '@/src/features/information-highlight/protocol'
 import {compileScript, compileTemplate, parse} from 'vue/compiler-sfc'
+import Preferences from '@/src/features/settings/ui/InformationHighlightPreferences.vue'
+
+const preferencePorts = vi.hoisted(() => ({warnings: vi.fn()}))
+vi.mock('element-plus', () => ({ElOption: {render: () => null}, ElSwitch: {render: () => null}, ElMessage: {warning: preferencePorts.warnings}}))
+vi.mock('@/src/ui/i18n', () => ({useUiI18n: () => ({t: (key: string) => key})}))
+vi.mock('@/src/ui/components/UiSelect.vue', async () => {
+  const {h} = await import('vue'); return {default: {setup(_: unknown, {slots}: any) {return () => h('div', null, slots.default?.())}}}
+})
+vi.mock('@/src/ui/components/CustomHotkeyInput.vue', () => ({default: {render: () => null}}))
 
 const runtime = createRequire(import.meta.url)('vue') as typeof import('vue')
 const key = '__informationHighlightUiFixture'
 let server: ViteDevServer, app: import('vue').App, state: Record<string, any>, props: Record<string, any>
 const send = vi.fn()
-const ready = vi.fn(), preparing = vi.fn()
-const model = (overrides: Partial<InformationHighlightModelStatus> = {}): InformationHighlightModelStatus => ({modelId: 'qwen2.5-0.5b', phase: 'absent', downloaded: false, initialized: false, downloadedBytes: 0, totalBytes: 490043908, supported: true, modelName: 'Qwen2.5 0.5B', downloadSizeBytes: 490043908, ...overrides})
+const ready = vi.fn(), preparing = vi.fn(), warnings = preferencePorts.warnings
+const model = (overrides: Partial<InformationHighlightModelStatus> = {}): InformationHighlightModelStatus => ({modelId: 'qwen2.5-0.5b', phase: 'absent', downloaded: false, initialized: false, downloadedBytes: 0, totalBytes: 490043908, supported: true, modelName: 'Qwen2.5 0.5B Base', downloadSizeBytes: 490043908, ...overrides})
 function deferred<T = unknown>() {let resolve!: (value: T) => void, reject!: (error: unknown) => void; const promise = new Promise<T>((yes, no) => {resolve = yes; reject = no}); return {promise, resolve, reject}}
 async function settle() {for (let i = 0; i < 8; i++) {await Promise.resolve(); await runtime.nextTick()}}
 function openConfirmation(action: 'prepare' | 'remove') {
@@ -31,8 +40,8 @@ function openConfirmation(action: 'prepare' | 'remove') {
 function confirmAction(action: 'prepare' | 'remove') {return openConfirmation(action).confirm()}
 async function mount(name: 'InformationHighlightPreferences' | 'InformationHighlightModelCard') {
   const path = `/src/features/settings/ui/${name}.vue`
-  const component = (await server.ssrLoadModule(path)).default
-  component.ssrRender = undefined; component.render = () => null
+  const component = name === 'InformationHighlightPreferences' ? Preferences : (await server.ssrLoadModule(path)).default
+  if (name === 'InformationHighlightModelCard') {component.ssrRender = undefined; component.render = () => null}
   const renderer = runtime.createRenderer<Record<string, never>, Record<string, unknown>>({patchProp: () => {}, insert: () => {}, remove: () => {}, createElement: () => ({}), createText: () => ({}), createComment: () => ({}), setText: () => {}, setElementText: () => {}, parentNode: () => null, nextSibling: () => null, querySelector: () => null, setScopeId: () => {}, cloneNode: () => ({}), insertStaticContent: () => [{}, {}]})
   props = runtime.reactive({active: true, selected: true, selectable: true, contextIdentity: {}, modelId: 'qwen2.5-0.5b', config: {on: true, informationHighlight: {enabled: false, hotkey: 'Alt+H', hotkeyEnabled: true, model: 'qwen2.5-0.5b', mode: 'keywords', density: 'medium', color: 'amber', style: 'background', intensity: 'standard'}}, onReady: ready, onPreparing: preparing})
   app = renderer.createApp({setup: () => () => runtime.h(component, {...props, ref: (vm: any) => {if (vm) state = vm.$.setupState}})})
@@ -40,7 +49,7 @@ async function mount(name: 'InformationHighlightPreferences' | 'InformationHighl
 }
 beforeEach(async () => {
   vi.useFakeTimers({toFake: ['setInterval', 'clearInterval']}); ready.mockReset(); preparing.mockReset(); send.mockReset(); send.mockResolvedValue({success: true, status: model()})
-  Object.assign(globalThis, {[key]: {send}})
+  warnings.mockClear(); Object.assign(globalThis, {[key]: {send, warnings}})
   // 模块加载与轮询测试不观察文件变化；观察器不应参与组件的虚拟时钟。
   server = await createServer({appType: 'custom', configFile: false, logLevel: 'silent', root: process.cwd(), resolve: {alias: {'@': resolve(process.cwd(), '.')}}, ssr: {noExternal: ['webextension-polyfill', 'element-plus']}, server: {hmr: false, middlewareMode: true, watch: null}, plugins: [{name: 'information-highlight-ui-mocks', enforce: 'pre', resolveId(id) {
     if (id === 'webextension-polyfill') return '\0information-browser'
@@ -49,7 +58,7 @@ beforeEach(async () => {
     if (id.endsWith('.vue') && !/InformationHighlight(?:Preferences|ModelCard)\.vue$/u.test(id)) return '\0information-child'
     return null
   }, load(id) {
-    if (id === '\0information-elements') return 'export const ElOption = {}, ElSwitch = {}, ElDialog = {};'
+    if (id === '\0information-elements') return `export const ElMessage = {warning: globalThis.${key}.warnings}; export const ElOption = {}, ElSwitch = {}, ElDialog = {};`
     if (id === '\0information-browser') return `export default {runtime: {sendMessage: globalThis.${key}.send}}`
     if (id === '\0information-i18n') return 'export const useUiI18n = () => ({t: key => key});'
     if (id === '\0information-child') return 'export default {}'
@@ -59,6 +68,13 @@ beforeEach(async () => {
 afterEach(async () => {app?.unmount(); await server?.close(); delete (globalThis as any)[key]; vi.useRealTimers(); vi.unstubAllGlobals()})
 
 describe('信息高亮真实偏好组件', () => {
+  it('loads the hotkey dialog only when opened and rejects callbacks retained across unmount', async () => {
+    await mount('InformationHighlightPreferences');state.actions.editHotkey();await settle();
+    expect(state.hotkeyDialog).toBe(true);state.closeHotkey();await settle();expect(state.hotkeyDialog).toBe(false);
+    const edit=state.actions.editHotkey,enable=state.actions.enabled,original={...props.config.informationHighlight};
+    app.unmount();edit();enable(true);await settle();
+    expect(state.hotkeyDialog).toBe(false);expect(props.config.informationHighlight).toEqual(original);
+  })
   it('设置偏好不依赖全局 Element Plus 注册：模式选择器与选项编译到明确的本地组件', () => {
     const filename = resolve(process.cwd(), 'src/features/settings/ui/InformationHighlightPreferences.vue')
     const {descriptor} = parse(readFileSync(filename, 'utf8'), {filename})
@@ -86,6 +102,41 @@ describe('信息高亮真实偏好组件', () => {
     state.actions.enabled('yes'); await settle(); expect(props.config.informationHighlight.enabled).toBe(false)
     state.densityChoices.find((item: any) => item.value === 'high').choose(); await settle(); state.colorChoices.find((item: any) => item.value === 'mint').choose(); await settle(); state.styleChoices.find((item: any) => item.value === 'underline').choose()
     expect(props.config.informationHighlight).toEqual({enabled: false, hotkey: 'Alt+H', hotkeyEnabled: true, model: 'qwen2.5-0.5b', mode: 'surprisal-local', density: 'high', color: 'mint', style: 'underline', intensity: 'standard'})
+  })
+  it('拒绝输入框快捷键冲突，并只保留已启用圈选功能的占用', async () => {
+    await mount('InformationHighlightPreferences')
+    props.config.inputBoxTranslationTrigger = 'ctrl_enter'
+    expect(state.hotkeyConflict('Control+Enter')).toBe('informationHighlight.hotkey.conflict')
+    props.config.inputBoxTranslationTrigger = 'none'
+    expect(state.hotkeyConflict('Control+Enter')).toBe('')
+    props.config.selectionAreaHotkey = 'custom'; props.config.customSelectionAreaHotkey = 'Alt+J'; props.config.selectionAreaEnabled = false
+    expect(state.hotkeyConflict('Alt+J')).toBe('')
+    props.config.selectionAreaEnabled = true
+    expect(state.hotkeyConflict('Alt+J')).toBe('informationHighlight.hotkey.conflict')
+  })
+  it('停用草稿可改被点选保留的组合；重新启用明确拒绝，隐藏后的旧回调不借用恢复视图', async () => {
+    await mount('InformationHighlightPreferences')
+    Object.assign(props.config, {on: false, selectionTranslatorMode: 'bilingual', disableSelectionTranslator: false, selectionClickSelectEnabled: true, selectionClickSelectHotkey: 'Alt+Shift+S'})
+    state.actions.hotkeyEnabled(false); await settle(); state.actions.editHotkey(); state.actions.hotkey('shift+alt+s'); await settle()
+    expect(props.config.informationHighlight).toMatchObject({hotkey: 'Alt+Shift+S', hotkeyEnabled: false})
+    state.actions.hotkeyEnabled(true); expect(warnings).toHaveBeenCalledWith('informationHighlight.hotkey.conflict'); expect(props.config.informationHighlight.hotkeyEnabled).toBe(false)
+    const enable = state.actions.hotkeyEnabled, intensity = state.intensityChoices.find((item: any) => item.value === 'strong').choose
+    props.active = false; await settle(); props.active = true; await settle(); enable(true); intensity()
+    expect(warnings).toHaveBeenCalledOnce(); expect(props.config.informationHighlight).toMatchObject({hotkeyEnabled: false, intensity: 'standard'})
+    props.config.selectionClickSelectEnabled = false; state.actions.hotkeyEnabled(true); await settle()
+    state.intensityChoices.find((item: any) => item.value === 'strong').choose(); await settle()
+    expect(props.config.informationHighlight).toMatchObject({hotkeyEnabled: true, hotkey: 'Alt+Shift+S', intensity: 'strong'})
+  })
+  it('划词兼容停用状态释放高亮占用检查，已启用局部与段落复制保留其组合', async () => {
+    await mount('InformationHighlightPreferences')
+    Object.assign(props.config, {selectionTranslatorMode: 'disabled', selectionTranslatorTrigger: 'custom', customSelectionTranslatorHotkey: 'Alt+J'})
+    expect(state.hotkeyConflict('Alt+J')).toBe('')
+    props.config.selectionTranslatorMode = 'bilingual'; props.config.disableSelectionTranslator = true; expect(state.hotkeyConflict('Alt+J')).toBe('')
+    props.config.disableSelectionTranslator = false; expect(state.hotkeyConflict('Alt+J')).toBe('informationHighlight.hotkey.conflict')
+    props.config.selectionTranslatorTrigger = 'none'; props.config.sectionTranslationHotkeyEnabled = true; props.config.sectionTranslationHotkey = 'custom'; props.config.customSectionTranslationHotkey = 'Alt+K'
+    expect(state.hotkeyConflict('Alt+K')).toBe('informationHighlight.hotkey.conflict')
+    props.config.paragraphCopyEnabled = true; props.config.paragraphCopyHotkey = 'custom'; props.config.customParagraphCopyHotkey = 'Alt+P'
+    expect(state.hotkeyConflict('Alt+P')).toBe('informationHighlight.hotkey.conflict')
   })
   it('偏好更换、视图关闭又重开和卸载时，缓存控件不能借用新配置', async () => {
     await mount('InformationHighlightPreferences'); const oldMode = state.actions.mode, oldDensity = state.densityChoices[0].choose
@@ -175,7 +226,7 @@ describe('信息高亮真实本地模型组件', () => {
   })
   it.each([{phase: 'absent', downloadedBytes: 0, resuming: false}, {phase: 'paused', downloadedBytes: 20, resuming: true}] as const)('下载或续传 $phase 先确认，取消保留字节状态，旧确认不能复活', async snapshot => {
     send.mockResolvedValue({success: true, status: model(snapshot)}); await mount('InformationHighlightModelCard')
-    const dialog = openConfirmation('prepare'); expect(dialog).toMatchObject({name: 'Qwen2.5 0.5B', resuming: snapshot.resuming})
+    const dialog = openConfirmation('prepare'); expect(dialog).toMatchObject({name: 'Qwen2.5 0.5B Base', resuming: snapshot.resuming})
     state.actions.prepare(); expect(state.confirmation).toBe(dialog); expect(send).toHaveBeenCalledOnce(); expect(preparing).not.toHaveBeenCalled()
     dialog.cancel(); expect(state.confirmation).toBeNull(); await dialog.confirm(); expect(send).toHaveBeenCalledOnce()
     expect(state.status.downloadedBytes).toBe(snapshot.downloadedBytes)
@@ -193,33 +244,34 @@ describe('信息高亮真实本地模型组件', () => {
     expect(send.mock.calls.filter(call => call[0].type === 'REMOVE_INFORMATION_HIGHLIGHT_MODEL')).toHaveLength(1)
     command.resolve({success: true, status: model()}); await removing
   })
-  it.each((['prepare', 'remove'] as const).flatMap(action => (['hidden', 'unmounted', 'model', 'selected', 'identity'] as const).map(reason => ({action, reason}))))('$action 在 $reason 后撤销旧确认所有权，旧取消不会关闭新确认', async ({action, reason}) => {
+  it.each((['prepare', 'remove'] as const).flatMap(action => (['hidden', 'unmounted', 'selected', 'identity'] as const).map(reason => ({action, reason}))))('$action 在 $reason 后撤销旧确认所有权，旧取消不会关闭新确认', async ({action, reason}) => {
     send.mockResolvedValue({success: true, status: model(action === 'remove' ? {phase: 'ready', downloaded: true} : {})}); await mount('InformationHighlightModelCard')
     const oldAction = state.actions[action], old = openConfirmation(action)
     if (reason === 'hidden') props.active = false
     else if (reason === 'unmounted') app.unmount()
     else if (reason === 'selected') props.selected = false
-    else if (reason === 'identity') props.contextIdentity = {}
-    else {send.mockResolvedValue({success: true, status: model({modelId: 'qwen3-0.6b', modelName: 'Qwen3 0.6B'})}); props.modelId = 'qwen3-0.6b'}
+    else props.contextIdentity = {}
     await settle(); expect(state.confirmation).toBeNull(); await old.confirm(); await oldAction()
     expect(send.mock.calls.every(call => call[0].type === 'GET_INFORMATION_HIGHLIGHT_MODEL_STATUS')).toBe(true)
     if (reason === 'unmounted') return
     if (reason === 'hidden') {props.active = true; await settle()}
-    const next = openConfirmation(reason === 'model' ? 'prepare' : action); old.cancel(); expect(state.confirmation).toBe(next)
+    const next = openConfirmation(action); old.cancel(); expect(state.confirmation).toBe(next)
     next.cancel(); expect(state.confirmation).toBeNull()
   })
-  it('模型切换使旧查询与命令失效，所有消息带所选模型标识并拒绝不匹配的回复', async () => {
+  it('配置归属切换使旧查询与命令失效，Base 卡拒绝已退役模型的回复', async () => {
     const oldQuery = deferred(); send.mockReturnValueOnce(oldQuery.promise); await mount('InformationHighlightModelCard')
-    send.mockResolvedValue({success: true, status: model({modelId: 'qwen3-0.6b', modelName: 'Qwen3 0.6B', downloadSizeBytes: 580000000})})
-    props.modelId = 'qwen3-0.6b'; await settle()
-    expect(send).toHaveBeenLastCalledWith({type: 'GET_INFORMATION_HIGHLIGHT_MODEL_STATUS', modelId: 'qwen3-0.6b'})
-    oldQuery.resolve({success: true, status: model({downloaded: true, phase: 'ready'})}); await settle(); expect(state.status.modelId).toBe('qwen3-0.6b'); expect(state.status.downloaded).toBe(false)
+    send.mockResolvedValue({success: true, status: model()}); props.contextIdentity = {}; await settle()
+    expect(send).toHaveBeenLastCalledWith({type: 'GET_INFORMATION_HIGHLIGHT_MODEL_STATUS', modelId: 'qwen2.5-0.5b'})
+    oldQuery.resolve({success: true, status: {...model({downloaded: true, phase: 'ready'}), modelId: 'qwen3-0.6b'}}); await settle()
+    expect(state.status.modelId).toBe('qwen2.5-0.5b'); expect(state.status.downloaded).toBe(false)
     const command = deferred(); send.mockReturnValueOnce(command.promise); const prepare = confirmAction('prepare'); await settle()
-    expect(send).toHaveBeenLastCalledWith({type: 'PREPARE_INFORMATION_HIGHLIGHT_MODEL', modelId: 'qwen3-0.6b'})
-    send.mockResolvedValue({success: true, status: model()}); props.modelId = 'qwen2.5-0.5b'; await settle()
-    command.resolve({success: true, status: model({modelId: 'qwen3-0.6b', downloaded: true, phase: 'ready'})}); await prepare
-    expect(state.status.modelId).toBe('qwen2.5-0.5b'); expect(ready).not.toHaveBeenCalled()
-    send.mockResolvedValueOnce({success: true, status: model({modelId: 'qwen3-0.6b'})}); await state.actions.refresh(); expect(state.error).toBe(true); expect(state.status.modelId).toBe('qwen2.5-0.5b')
+    expect(send).toHaveBeenLastCalledWith({type: 'PREPARE_INFORMATION_HIGHLIGHT_MODEL', modelId: 'qwen2.5-0.5b'})
+    props.contextIdentity = {}; await settle()
+    command.resolve({success: true, status: model({downloaded: true, phase: 'ready'})}); await prepare
+    expect(state.status.downloaded).toBe(false); expect(ready).not.toHaveBeenCalled()
+    send.mockResolvedValueOnce({success: true, status: {...model(), modelId: 'qwen3-0.6b'}}); await state.actions.refresh()
+    expect(state.error).toBe(true); expect(state.status.modelId).toBe('qwen2.5-0.5b')
+    expect(send.mock.calls.every(([message]) => message.modelId === 'qwen2.5-0.5b')).toBe(true)
   })
   it('卸载后的查询异常和命令完成不再改变资源状态或启动轮询', async () => {
     await mount('InformationHighlightModelCard'); const query = deferred(); send.mockReturnValueOnce(query.promise); const pending = state.actions.refresh(); const old = state.actions.prepare

@@ -1,8 +1,14 @@
 {
   "extends": "./.wxt/tsconfig.json",
   "compilerOptions": {
+    "allowArbitraryExtensions": true,
+    "module": "ESNext",
+    "verbatimModuleSyntax": false,
+    "noUncheckedIndexedAccess": false,
+    "noImplicitOverride": false,
+    "types": ["node", "chrome"],
     "noUnusedLocals": true,
     "noUnusedParameters": true
   },
-  "exclude": ["node_modules", ".output", "storybook", ".storybook"]
+  "exclude": ["node_modules", ".output", "docs/development/storybook"]
 }

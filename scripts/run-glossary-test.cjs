@@ -301,7 +301,8 @@ async function main() {
       assert.equal(await ui.getByRole('cell', {name: '大语言模型', exact: true}).count(), 1, '排序保留正在编辑的词库');
       await priority.locator(':scope > summary').click();
       await toolbarAction('导入术语库');
-      await importDialog.getByLabel('或粘贴文件内容').fill('source,target,tgt_lng\ncomponent,组件,zh-CN');
+      await importDialog.getByRole('radio', {name:'粘贴内容',exact:true}).check();
+      await importDialog.getByRole('textbox', {name:'粘贴内容',exact:true}).fill('source,target,tgt_lng\ncomponent,组件,zh-CN');
       await importDialog.getByRole('button', {name: '确认导入', exact: true}).click();
       await importDialog.waitFor({state: 'hidden'});
       await waitConfig(config => config.glossaryLibraries.length === 3);
@@ -409,8 +410,8 @@ async function main() {
     };
     await toggleBuiltin(1);
     assert((await builtinPage.locator('#glossary-primary').innerText()).includes('大语言模型'));
-    assert.equal(fixture.requests.at(-1).terms.length, 2);
-    assert(fixture.requests.at(-1).terms.every(term => term.source.startsWith('__FRTERM_') && term.source === term.target));
+    assert.deepEqual(fixture.requests.at(-1).terms, [], '本地回填的恒等占位符不再重复发送词表');
+    assert.equal((fixture.requests.at(-1).source.match(/__FRTERM_[a-z0-9_]+?__/gu) || []).length, 2);
     assert(!fixture.requests.at(-1).source.includes('large language model'));
     await shot(builtinPage, 'builtin-actual-translation');
     await toggleBuiltin(0);
@@ -474,7 +475,8 @@ async function main() {
     await showSection('我的术语库');
     await toolbarAction('导入术语库');
     const dialog = options.getByRole('dialog', {name: '导入术语库'});
-    await dialog.getByLabel('或粘贴文件内容').fill('source,target,tgt_lng\nunused_private_term,未命中隐私词,zh-CN\nagent,通用智能体,zh-CN');
+    await dialog.getByRole('radio', {name:'粘贴内容',exact:true}).check();
+    await dialog.getByRole('textbox', {name:'粘贴内容',exact:true}).fill('source,target,tgt_lng\nunused_private_term,未命中隐私词,zh-CN\nagent,通用智能体,zh-CN');
     await dialog.getByRole('button', {name: '确认导入', exact: true}).click();
     await dialog.waitFor({state: 'hidden'});
     await waitConfig(config => config.glossaryLibraries.length === 2);
@@ -523,8 +525,8 @@ async function main() {
     };
     await toggle(1);
     assert((await paragraph.innerText()).includes('智能体'));
-    assert.equal(fixture.requests.at(-1).terms.length, 2);
-    assert(fixture.requests.at(-1).terms.every(term => term.source.startsWith('__FRTERM_') && term.source === term.target));
+    assert.deepEqual(fixture.requests.at(-1).terms, [], '本地回填的恒等占位符不再重复发送词表');
+    assert.equal((fixture.requests.at(-1).source.match(/__FRTERM_[a-z0-9_]+?__/gu) || []).length, 2);
     const countBeforeCache = fixture.requests.length;
     await toggle(0); await toggle(1);
     assert.equal(fixture.requests.length, countBeforeCache, '再次翻译应命中缓存');
@@ -575,11 +577,13 @@ async function main() {
     const withoutGlossaryRequests = fixture.requests.length;
     await documentSettings.getByRole('button', {name: '开始翻译', exact: true}).click();
     await documentSettings.waitFor({state: 'hidden'});
-    await documentPage.locator('.document-status').filter({hasText: /^翻译完成\s*·\s*1\s*\/\s*1$/}).waitFor();
+    await documentPage.locator('.document-status').filter({hasText: /^翻译完成/}).waitFor();
+    assert.match(await documentPage.getByTestId('document-translation-count').innerText(), /1\s*\/\s*1/u, '文档必须完整翻译唯一片段');
+    assert.equal(await documentPage.getByTestId('document-translation-progress').getAttribute('aria-valuenow'), '100');
     assert(fixture.requests.length > withoutGlossaryRequests, '文档禁用词库必须实际请求当前文本');
     const literalSource = 'The agent uses FluentRead to understand this document.';
     const brandToken = documentTermToken(literalSource, 0);
-    assert.deepEqual(fixture.requests.at(-1).terms, [{source: brandToken, target: brandToken}], '文档自动保护 CamelCase 品牌；禁用词库后不能发送 agent 用户术语');
+    assert.deepEqual(fixture.requests.at(-1).terms, [], '文档本地回填名称，不重复发送恒等词表');
     assert.equal(fixture.requests.at(-1).source, literalSource.replace('FluentRead', brandToken));
     assert.equal(await documentPage.frameLocator('.rich-preview-frame').locator('.fluentread-translation').innerText(), '测试译文：The 代理人 uses FluentRead to understand this document.', 'agent 使用普通供应商译法，FluentRead 原样回填且无占位符残留');
     report.crossPageSync = 'document selection persisted through shared background store';
@@ -598,14 +602,13 @@ async function main() {
     await waitConfig(config => config.documentGlossaryIds?.length === 1 && config.documentGlossaryIds[0] === persisted.glossaryLibraries[1].id);
     await documentSettings.getByRole('button', {name: '开始翻译', exact: true}).click();
     await documentSettings.waitFor({state: 'hidden'});
-    await documentPage.locator('.document-status').filter({hasText: /^翻译完成\s*·\s*1\s*\/\s*1$/}).waitFor();
+    await documentPage.locator('.document-status').filter({hasText: /^翻译完成/}).waitFor();
+    assert.match(await documentPage.getByTestId('document-translation-count').innerText(), /1\s*\/\s*1/u, '文档必须完整翻译唯一片段');
+    assert.equal(await documentPage.getByTestId('document-translation-progress').getAttribute('aria-valuenow'), '100');
     const selectedSource = 'The agent uses FluentRead.';
     const selectedAgentToken = documentTermToken(selectedSource, 0);
     const selectedBrandToken = documentTermToken(selectedSource, 1);
-    assert.deepEqual(fixture.requests.at(-1).terms, [
-      {source: selectedAgentToken, target: selectedAgentToken},
-      {source: selectedBrandToken, target: selectedBrandToken},
-    ], '指定词库的 agent 与自动保护的品牌都必须逐个保留');
+    assert.deepEqual(fixture.requests.at(-1).terms, [], '指定词库与自动保护的品牌仍只通过原文中的占位符传递');
     assert.equal(fixture.requests.at(-1).source, `The ${selectedAgentToken} uses ${selectedBrandToken}.`);
     assert.equal(await documentPage.frameLocator('.rich-preview-frame').locator('.fluentread-translation').innerText(), '测试译文：The 通用智能体 uses FluentRead.', '只应用选择的通用词库，不复用网站词库译法，品牌仍原样保留');
     await shot(documentPage, 'glossary-document-selected');

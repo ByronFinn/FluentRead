@@ -1,11 +1,40 @@
 import {describe, expect, it} from 'vitest';
 import {Config, normalizeConfig} from '@/src/core/config/model';
 import {CONFIG_CREDENTIAL_FIELDS} from '@/src/core/config/credentials';
+import {builtinSiteRulePack} from '@/src/core/site-adaptation/catalog';
 import {buildDriveSyncDiff, driveSyncPayload as completePayload, driveValuesEqual, parseDriveSyncPayload, resolveDriveSyncDiff, toDriveSyncConfig, projectDriveSyncConfig, restoreDriveSyncSettings, parseDriveSyncSnapshot, validateDriveSyncConsent} from '@/src/core/config/driveSync';
 
 const driveSyncPayload = (config: Record<string, unknown>) => completePayload(config, true);
 function complete(patch: Record<string, unknown> = {}) {return toDriveSyncConfig(normalizeConfig({...new Config(), videoServiceDefaultMigrated: true, ...patch}));}
 describe('Google Drive 完整快照和安全合并', () => {
+    it('previews signed margin units and keeps selected remote values through backup restoration', () => {
+        const local = complete({floatingBallDefaultMargin: 0, floatingBallPopoutMargin: 20});
+        const remote = complete({floatingBallDefaultMargin: -18, floatingBallPopoutMargin: -18});
+        const parsed = parseDriveSyncPayload(completePayload(remote));
+        expect(restoreDriveSyncSettings(local, parsed)).toMatchObject({floatingBallDefaultMargin: -18, floatingBallPopoutMargin: -18});
+        const diff = buildDriveSyncDiff(local, local, remote);
+        expect(diff.changes.find(change => change.label === '悬浮球默认边距')).toMatchObject({local:'0 px',remote:'-18 px'});
+        expect(diff.changes.find(change => change.label === '悬浮球弹出边距')).toMatchObject({local:'20 px',remote:'-18 px'});
+        const merged = resolveDriveSyncDiff(diff, Object.fromEntries(diff.changes.map(change => [change.id,'remote'])));
+        expect(merged).toMatchObject({floatingBallDefaultMargin: -18, floatingBallPopoutMargin: -18});
+    });
+    it('浏览器默认译文字体属于普通备份设置，恢复和双向同步保留布尔选择及中文差异名称', () => {
+        for (const enabled of [true, false]) {
+            const local = complete({browserDefaultTranslationFont: !enabled, translationAppearance: {fontFamily: 'mono'}});
+            const remote = complete({browserDefaultTranslationFont: enabled, translationAppearance: {fontFamily: 'mono'}});
+            const publicSettings = projectDriveSyncConfig(remote);
+            expect(publicSettings.browserDefaultTranslationFont).toBe(enabled);
+            const restored = restoreDriveSyncSettings(local, parseDriveSyncPayload(completePayload(remote)));
+            expect(restored.browserDefaultTranslationFont).toBe(enabled);
+            expect(restored.translationAppearance).toEqual(remote.translationAppearance);
+            expect(parseDriveSyncPayload(driveSyncPayload(remote)).browserDefaultTranslationFont).toBe(enabled);
+            const diff = buildDriveSyncDiff(local, local, remote);
+            expect(diff.changes).toHaveLength(1);
+            expect(diff.changes[0]).toMatchObject({label: '浏览器默认译文字体', sensitive: false, conflict: false,
+                local: enabled ? '关闭' : '开启', remote: enabled ? '开启' : '关闭'});
+            expect(resolveDriveSyncDiff(diff, {}).browserDefaultTranslationFont).toBe(enabled);
+        }
+    });
     it('普通备份携带公开组合策略，无运行统计或凭据；完整备份拒绝孤儿组合引用', () => {
         const composite = {id: 'composite:work', name: '工作组合', strategy: 'smart', services: ['google', 'custom:fixture'], timeoutMs: 12_000};
         const fixture = complete({service: composite.id, compositeTranslationProviders: [composite], customOpenAIProviders: [
@@ -51,7 +80,7 @@ describe('Google Drive 完整快照和安全合并', () => {
     it('拒绝不完整快照、恶意原型字段和复杂树', () => {
         const fixture = complete();
         for (const invalid of [null, [], {}, {format: 'fluentread-complete-config', version: 2, config: fixture}, {format: 'fluentread-complete-config', version: 1, config: {}}, {format: 'fluentread-complete-config', version: 1, config: {...fixture, token: undefined, on: null}}]) expect(() => parseDriveSyncPayload(invalid)).toThrow();
-        for (const field of CONFIG_CREDENTIAL_FIELDS) {const missing = {...fixture}; delete missing[field]; expect(() => parseDriveSyncPayload(driveSyncPayload(missing))).toThrow('完整');}
+        for (const field of CONFIG_CREDENTIAL_FIELDS.filter(field => field !== 'privacyProtectionSecretTerms')) {const missing = {...fixture}; delete missing[field]; expect(() => parseDriveSyncPayload(driveSyncPayload(missing))).toThrow('完整');}
         const malicious = JSON.parse('{"future":{"__proto__":{"polluted":true}}}');
         expect(() => toDriveSyncConfig({...fixture, ...malicious})).toThrow('无效字段');
         let deep: unknown = 1;
@@ -59,6 +88,15 @@ describe('Google Drive 完整快照和安全合并', () => {
         expect(() => toDriveSyncConfig({...fixture, deep})).toThrow('复杂');
         expect(() => toDriveSyncConfig({...fixture, huge: Array.from({length: 50_001}, () => 0)})).toThrow('复杂');
         expect({}).not.toHaveProperty('polluted');
+    });
+    it('旧完整备份可缺省新增的隐私词，普通备份同步策略但排除自定义敏感词', () => {
+        const fixture = complete({privacyProtection: {enabled: true, mode: 'mask', categories: ['email']}, privacyProtectionSecretTerms: ['内部示例']});
+        const legacy = {...fixture}; delete legacy.privacyProtectionSecretTerms;
+        expect(parseDriveSyncPayload(driveSyncPayload(legacy)).privacyProtectionSecretTerms).toEqual([]);
+        const ordinary = projectDriveSyncConfig(fixture);
+        expect(ordinary.privacyProtection).toEqual(fixture.privacyProtection);
+        expect(JSON.stringify(ordinary)).not.toContain('内部示例');
+        expect(restoreDriveSyncSettings(fixture, ordinary).privacyProtectionSecretTerms).toEqual(['内部示例']);
     });
     it('按共同基线自动选择单边修改，并要求显式解决双方冲突', () => {
         const base = {to: 'en', theme: 'light', future: {a: 1, b: 2}, list: [1, 2]};
@@ -149,6 +187,64 @@ describe('Google Drive 完整快照和安全合并', () => {
 
 
 describe('普通云备份范围与 v1 兼容', () => {
+    it.each([false, true])('自定义网站规则保留正文标签和模板，content.key 存在：%s', withKey => {
+        const reddit = structuredClone(builtinSiteRulePack.rules.find(rule => rule.id === 'reddit')!);
+        expect(reddit.content![0].key).toBe('reddit-post-title');
+        if (!withKey) reddit.content!.forEach(content => {delete content.key;});
+        const siteAdaptation = {
+            enabled: false, disabledRuleIds: ['reddit'],
+            custom: {version: 1, profiles: {custom: {content: [{css: ['article p'], ...(withKey ? {key: 'article-body'} : {})}]}},
+                rules: [reddit, {id: 'mine', name: '我的规则', match: {hosts: ['example.com']}, profile: 'custom'}]},
+        };
+        const local = complete({siteAdaptation});
+        expect(local.siteAdaptation).toEqual(siteAdaptation);
+        const settings = projectDriveSyncConfig(local);
+        expect(settings.siteAdaptation).toEqual(siteAdaptation);
+        const payload = completePayload(local);
+        expect(parseDriveSyncSnapshot(payload)).toEqual({config: settings, includesSensitive: false});
+        expect(projectDriveSyncConfig(parseDriveSyncPayload(completePayload(local, true))).siteAdaptation).toEqual(siteAdaptation);
+        (settings.siteAdaptation as typeof siteAdaptation).custom.rules[0].name = 'changed clone';
+        expect(local.siteAdaptation).toEqual(siteAdaptation);
+    });
+    it('普通备份保留默认网站规则开关，恢复和合并可覆盖已有本机规则', () => {
+        const base = complete();
+        expect(projectDriveSyncConfig(base).siteAdaptation).toEqual(new Config().siteAdaptation);
+        const local = complete({siteAdaptation: {...new Config().siteAdaptation, disabledRuleIds: ['reddit']}});
+        const remote = projectDriveSyncConfig(base);
+        expect(restoreDriveSyncSettings(local, remote).siteAdaptation).toEqual(base.siteAdaptation);
+        const diff = buildDriveSyncDiff(null, projectDriveSyncConfig(local), remote);
+        expect(diff.changes).toHaveLength(1);
+        expect(diff.changes[0]).toMatchObject({label: '网站规则', sensitive: true});
+        const merged = resolveDriveSyncDiff(diff, {'0': 'remote'});
+        expect(restoreDriveSyncSettings(local, merged).siteAdaptation).toEqual(base.siteAdaptation);
+        // 旧普通快照从未带入网站规则，恢复时不能把本机规则重置为空。
+        const {siteAdaptation: _omitted, ...oldSettings} = remote;
+        expect(restoreDriveSyncSettings(local, oldSettings).siteAdaptation).toEqual(local.siteAdaptation);
+    });
+    it('网站规则的结构白名单拒绝嵌套凭据、未知字段与伪装标量', () => {
+        const base = complete();
+        const siteAdaptation = new Config().siteAdaptation;
+        const reddit = structuredClone(builtinSiteRulePack.rules.find(rule => rule.id === 'reddit')!);
+        const invalid = [
+            {...siteAdaptation, token: 'fixture-secret'},
+            {...siteAdaptation, enabled: 'fixture-secret'},
+            {...siteAdaptation, disabledRuleIds: [{key: 'fixture-secret'}]},
+            {...siteAdaptation, custom: {...siteAdaptation.custom, opaque: 'fixture-secret'}},
+            {...siteAdaptation, custom: {version: 1, rules: [{...reddit, apiKey: 'fixture-secret'}]}},
+            {...siteAdaptation, custom: {version: 1, rules: [{...reddit, content: [{css: ['p'], key: {token: 'fixture-secret'}}]}]}},
+            {...siteAdaptation, custom: {version: 1, rules: [{...reddit, content: [{css: ['p'], authorization: 'fixture-secret'}]}]}},
+            {...siteAdaptation, custom: {version: 1, profiles: {mine: {token: 'fixture-secret'}}, rules: []}},
+        ];
+        for (const value of invalid) {
+            expect(projectDriveSyncConfig({siteAdaptation: value})).toEqual({});
+            const payload = {format: 'fluentread-complete-config', version: 2, scope: 'settings',
+                config: {...projectDriveSyncConfig(base), siteAdaptation: value}};
+            expect(() => parseDriveSyncSnapshot(payload)).toThrow('不属于此范围');
+        }
+        // 规则字段的例外不能作用于连接配置或其他偏好中的同名字段。
+        expect(projectDriveSyncConfig({key: 'fixture-secret', custom: 'https://fixture.invalid',
+            shareCard: {...base.shareCard as object, css: ['p'], key: 'fixture-secret'}})).toEqual({});
+    });
     it('普通旧备份的标量列表去重或移除退役服务时仍可读取，嵌入对象仍拒绝', () => {
         const payload = completePayload(complete()) as {config: Record<string, unknown>};
         const order = ['microsoft', 'deeplx', 'google', 'lingvaFree', 'google'];

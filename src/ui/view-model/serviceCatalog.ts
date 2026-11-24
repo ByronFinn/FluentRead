@@ -1,5 +1,6 @@
 /**
  * @file src/ui/view-model/serviceCatalog.ts
+ * 启用边界：只把 machine/cloud/ai 标记视为目录标题；关闭的真实服务保留在原分组，供目录重新启用。
  * 文件职责：为服务与模型选择界面提供无框架的视图模型转换，把扁平配置选项整理成可搜索、可分层和可稳定展示的数据。
  * 主要内容：定义服务目录分组与官方网站入口，提供云服务厂商的免费额度与开通指引，安全派生自定义服务站点，按服务与模型关键词搜索，并把选择面板的服务拆成按使用意图排序的常用区与更多区。
  * 模块边界：这些函数不读取 Vue 状态、不修改 Config，也不判断平台能力或发起连接测试；原始目录由 core/config 提供，Popup/Options 等调用方负责交互与渲染。
@@ -13,7 +14,7 @@ export interface ServiceWebsite {
   kind: 'website' | 'documentation'
 }
 
-const serviceGuide = 'https://fluent.thinkstu.com/config/translation-engines'
+const serviceGuide = 'https://read.thinkstu.com/config/translation-engines'
 
 // 这里只保存供人操作的官网/控制台，不使用翻译 API endpoint 或推广链接。
 const serviceWebsites = {
@@ -67,6 +68,10 @@ const serviceWebsites = {
   cerebras: 'https://cloud.cerebras.ai/',
   deepinfra: 'https://deepinfra.com/dash',
   perplexity: 'https://www.perplexity.ai/account/api',
+  runcrate: 'https://www.runcrate.ai/dashboard/api-keys',
+  cloudgpu: 'https://cloudgpu.app/api/console',
+  cheaperinference: 'https://cheaperinference.com',
+  cheapaimodel: 'https://console.cheapaimodel.ai/keys',
 } satisfies Record<keyof typeof services, string>
 
 /**
@@ -172,9 +177,15 @@ export function getServiceCredentialGuide(service: string): ServiceCredentialGui
 /** 自建服务只打开 HTTP(S) origin，避免把 API 路径、账号、密钥或查询参数带入跳转。 */
 export function getServiceWebsite(
   service: string,
-  context: { endpoint?: string; minimaxRegion?: string } = {},
+  context: { endpoint?: string; minimaxRegion?: string; browser?: string } = {},
 ): ServiceWebsite | undefined {
   if (isCompositeTranslationProviderId(service)) return {url: serviceGuide, kind: 'documentation'}
+  if (service === services.chromeTranslator) {
+    const url = context.browser === 'edge' ? 'https://learn.microsoft.com/microsoft-edge/web-platform/translator-api'
+      : context.browser === 'firefox' ? 'https://support.mozilla.org/kb/website-translation'
+        : serviceWebsites.chromeTranslator
+    return {url, kind: 'documentation'}
+  }
   if (isCustomOpenAIProviderId(service) || service === services.custom || service === services.newapi) {
     try {
       const endpoint = new URL(context.endpoint || '')
@@ -195,7 +206,7 @@ export function getServiceWebsite(
     url: service === services.minimax && context.minimaxRegion === 'global'
       ? 'https://platform.minimax.io/login'
       : serviceWebsites[service as keyof typeof serviceWebsites],
-    kind: [services.freeTranslation, services.bilibili, services.chromeTranslator, services.myMemory, services.localTranslation].includes(service)
+    kind: [services.freeTranslation, services.bilibili, services.myMemory, services.localTranslation].includes(service)
       ? 'documentation'
       : 'website',
   }
@@ -208,6 +219,11 @@ export interface ServiceOption {
   searchTerms?: string[]
   disabled?: boolean
   catalogKind?: string
+}
+
+/** 目录和恢复列表共用服务关键词，无需解析模型选项。 */
+export function serviceDirectorySearchText(item: ServiceOption): string {
+  return [item.label, item.value, item.description, ...(item.searchTerms || [])].join(' ').normalize('NFKC').toLocaleLowerCase()
 }
 
 export interface ServiceGroup {
@@ -240,7 +256,7 @@ export function buildServiceGroups(options: ServiceOption[]): ServiceGroup[] {
   let current: ServiceGroup = { id: 'other', label: '其他服务', items: [] }
 
   for (const option of options) {
-    if (option.disabled) {
+    if (option.disabled && (option.value === 'machine' || option.value === 'cloud' || option.value === 'ai')) {
       if (current.items.length) groups.push(current)
       current = {
         id: option.value,

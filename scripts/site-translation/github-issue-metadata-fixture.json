@@ -1,0 +1,42 @@
+{
+  "scope": "Authored regression fixture independently recreating the semantic components observed on the official vuejs/core issue 1932 on 2026-10-25. Names and prose are original; not a captured issue or online acceptance.",
+  "observedSource": "https://github.com/vuejs/core/issues/1932",
+  "url": "https://github.com/example/project/issues/123",
+  "html": "<main id=\"issue-page\">\n<section id=\"issue-body-viewer\">\n<div class=\"IssueBodyHeaderContainer__FFEvZk\" id=\"issue-header\">\n<a id=\"issue-author\" data-testid=\"issue-body-header-author\" data-hovercard-type=\"user\" href=\"https://github.com/FixtureIssueAuthor\">Fixture Issue Author</a>\n<div>opened <a href=\"#issue-body\"><relative-time id=\"issue-time\" datetime=\"2026-10-25T01:00:00Z\">one hour ago</relative-time></a></div>\n</div>\n<div class=\"markdown-body\"><div class=\"markdown-body\" id=\"issue-body\">\n<h3 id=\"body-heading\">A reproducible reading boundary</h3>\n<p id=\"body-paragraph\">This issue explains a complete example with <a id=\"body-mention\" data-testid=\"issue-body-header-author\" data-hovercard-type=\"user\" href=\"/FixtureIssueAuthor\">Fixture Issue Author</a>, <a id=\"body-link\" href=\"https://example.test/guide\">an ordinary reading link</a>, and <code id=\"body-code\">iterator.next()</code>.</p>\n<ol><li id=\"body-step\">Read the complete reproduction before comparing the resulting values.</li></ol>\n<blockquote><p id=\"body-quote\">The quoted explanation remains part of the readable discussion.</p></blockquote>\n<div id=\"body-header-lookalike\" data-testid=\"comment-header\"><p id=\"body-lookalike-prose\">A quoted component example remains readable prose.</p></div>\n<a id=\"body-actor-lookalike\" data-testid=\"actor-link\" href=\"/ReadingReference\">A timeline style link inside the body remains readable.</a>\n</div></div>\n</section>\n<ol id=\"issue-timeline\">\n<li id=\"comment-item\"><div id=\"comment-header\" data-testid=\"comment-header\" class=\"ActivityHeaderContainer__sf0_ID\">\n<div class=\"activityHeader__V45NcJ\"><h3 class=\"sr-only\">Fixture Comment Author commented</h3>\n<div data-testid=\"comment-header-left-side-items\"><a id=\"comment-author\" data-testid=\"avatar-link\" data-hovercard-type=\"user\" href=\"/FixtureCommentAuthor\">Fixture Comment Author</a><relative-time id=\"comment-time\">yesterday</relative-time></div>\n<div data-testid=\"comment-header-right-side-items\"><span id=\"comment-association\" data-testid=\"comment-author-association\">Maintainer of the example project</span><button id=\"edit-history\" aria-label=\"Last edited by Fixture Comment Author\">Last edited by Fixture Comment Author</button><button id=\"comment-actions\" aria-label=\"Comment actions\">Comment actions</button></div>\n</div></div>\n<div class=\"markdown-body\"><div class=\"markdown-body\" id=\"comment-body\"><p id=\"comment-paragraph\">This separate comment explains the expected behavior and preserves <a id=\"comment-link\" href=\"/FixtureCommentAuthor\">an ordinary author mention</a>.</p><pre id=\"comment-code\"><code>const original = iterator.next();</code></pre></div></div></li>\n<li data-timeline-event-id=\"example-closed\"><div><a id=\"event-actor\" data-testid=\"actor-link\" data-hovercard-type=\"user\" href=\"/FixtureEventActor\"><img alt=\"\"><span id=\"event-name\">Fixture Event Actor</span></a><span id=\"event-prose\">closed the example after the complete discussion</span><relative-time>yesterday</relative-time></div></li>\n<li data-timeline-event-id=\"example-locked\"><div><a id=\"bot-actor\" data-testid=\"actor-link\" href=\"/apps/fixture-automation\"><img alt=\"\"><span id=\"bot-name\">Fixture Automation Bot</span></a><span>locked this issue</span></div></li>\n<li id=\"contaminated-header\" data-testid=\"comment-header\"><div class=\"markdown-body\"><p id=\"nested-body\">A full body nested in a lookalike header must remain readable.</p></div><p id=\"mixed-prose\">A sibling paragraph in that mixed component also remains readable.</p></li>\n</ol>\n<div class=\"markdown-body\" id=\"markdown-root-lookalike\" data-testid=\"comment-header\"><p id=\"root-body\">The Markdown root itself is never an identity header.</p></div>\n<div id=\"near-misses\"><a id=\"ordinary-profile\" href=\"/FixtureIssueAuthor\">An ordinary profile link remains readable prose</a><a id=\"missing-user\" data-testid=\"issue-body-header-author\" href=\"/Reading\">A same test identifier without the user component</a><a id=\"missing-href\" data-testid=\"issue-body-header-author\" data-hovercard-type=\"user\">An incomplete author shaped example without a destination</a><a id=\"outside-timeline-actor\" data-testid=\"actor-link\" href=\"/Reading\">An actor styled link outside the native timeline</a><div class=\"IssueBodyHeaderContainer__FFEvZk\"><p id=\"class-only\">A hashed class alone cannot identify protected metadata.</p></div></div>\n<div class=\"IssueBodyHeader-module__IssueBodyHeaderContainer--legacy\"><a id=\"legacy-author\" href=\"/Legacy\">Legacy Header Author</a></div>\n<textarea id=\"editor\">An unsent private draft remains original.</textarea>\n</main><section><a id=\"outside-main-author\" data-testid=\"issue-body-header-author\" data-hovercard-type=\"user\" href=\"/Reading\">A header styled reading link outside the issue main area</a></section>",
+  "protectedIds": [
+    "issue-author",
+    "comment-header",
+    "comment-author",
+    "comment-association",
+    "edit-history",
+    "event-actor",
+    "event-name",
+    "bot-actor",
+    "bot-name",
+    "legacy-author"
+  ],
+  "bodyIds": [
+    "body-heading",
+    "body-paragraph",
+    "body-step",
+    "body-quote",
+    "body-lookalike-prose",
+    "comment-paragraph",
+    "nested-body",
+    "mixed-prose",
+    "root-body"
+  ],
+  "nearMissIds": [
+    "body-mention",
+    "body-header-lookalike",
+    "body-actor-lookalike",
+    "markdown-root-lookalike",
+    "ordinary-profile",
+    "missing-user",
+    "missing-href",
+    "outside-timeline-actor",
+    "class-only",
+    "outside-main-author"
+  ],
+  "dynamicHtml": "<li><div data-testid=\"comment-header\"><a id=\"dynamic-author\" data-testid=\"avatar-link\" href=\"/NewAuthor\">A Newly Rendered Comment Author</a><span>Member</span></div><div class=\"markdown-body\"><p id=\"dynamic-body\">A newly loaded discussion paragraph remains independently readable.</p></div></li>"
+}

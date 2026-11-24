@@ -1,0 +1,547 @@
+{
+  "version": 1,
+  "designedAt": "2026-10-25T08:56:01.488867+00:00",
+  "beforeAnyOcr": true,
+  "repositoryCommit": "c302a6f5bdb269fcf8f1eaefe75ebdff10dcdf19",
+  "pillowVersion": "12.3.0",
+  "pageHelperSha256": "b4ea525e72d30828577720eef5028d2e319e49a2772d051bf09a4112f07f9ac8",
+  "fontFiles": [
+    {
+      "key": "cjk",
+      "path": "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
+      "sha256": "cf8cf2c882e1e344ac2e6207fe172657a30dc2c6e1ee65a9e29a7b582c4d4154"
+    },
+    {
+      "key": "bold",
+      "path": "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+      "sha256": "d72db21f9242aedd6b917d8549ad5921766b24d5f8d0becfda2ff4c620b3c2e0"
+    },
+    {
+      "key": "regular",
+      "path": "/System/Library/Fonts/Supplemental/Arial.ttf",
+      "sha256": "525979822591a3447cfc49d943d6f7683508e25543407871c0ed8fed05fd2bd9"
+    }
+  ],
+  "resourceBounds": {
+    "sceneCount": 5,
+    "sourceAnchors": 29,
+    "maxDimension": 1600,
+    "totalPixels": 7760000,
+    "modelDownloads": 0,
+    "browserRunsBeforeFreeze": 0
+  },
+  "groupingContract": "paragraphGroups requires ordered complete source anchors within each declared physical paragraph and distinct actual paragraphs for independent source groups. Single-card groups remain one unsplit source region. Fields readingOrder/readingOrderGroups are not emitted.",
+  "license": "Original geometric artwork and original source wording authored for FluentRead regression. Fonts read locally only and never distributed.",
+  "scenes": [
+    {
+      "name": "narrow-inset-card-dialogue",
+      "size": [
+        1000,
+        1200
+      ],
+      "language": "ja",
+      "structure": "Detached24px white card inside a >15% curved speech component; entire narrow card source is one unsplit vertical region.",
+      "regions": [
+        {
+          "id": "body-right",
+          "text": "明日は出発",
+          "x": 650,
+          "y": 270,
+          "fontSize": 40,
+          "fontKey": "cjk",
+          "vertical": true,
+          "paragraphId": "dialogue",
+          "advance": 52
+        },
+        {
+          "id": "body-left",
+          "text": "地図を持とう",
+          "x": 500,
+          "y": 270,
+          "fontSize": 40,
+          "fontKey": "cjk",
+          "vertical": true,
+          "paragraphId": "dialogue",
+          "advance": 52
+        },
+        {
+          "id": "inset-card",
+          "text": "別の案内",
+          "x": 336,
+          "y": 330,
+          "fontSize": 18,
+          "fontKey": "cjk",
+          "vertical": true,
+          "paragraphId": "independent-card",
+          "advance": 24
+        },
+        {
+          "id": "caption",
+          "text": "THE GLASS GARDEN",
+          "x": 230,
+          "y": 920,
+          "fontSize": 36,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "caption"
+        }
+      ],
+      "negativeRegions": [
+        [
+          80,
+          1030,
+          920,
+          1150
+        ]
+      ],
+      "protectedPoints": [
+        [
+          180,
+          1090
+        ],
+        [
+          60,
+          60
+        ]
+      ]
+    },
+    {
+      "name": "midband-crossing-detached-cards",
+      "size": [
+        1200,
+        1200
+      ],
+      "language": "ja",
+      "structure": "Two detached narrow cards cross top/bottom of conservative central ownership band, without touching the enclosing curved outline.",
+      "regions": [
+        {
+          "id": "body-right",
+          "text": "安全を確認",
+          "x": 540,
+          "y": 330,
+          "fontSize": 42,
+          "fontKey": "cjk",
+          "vertical": true,
+          "paragraphId": "dialogue",
+          "advance": 52
+        },
+        {
+          "id": "body-left",
+          "text": "門へ向かう",
+          "x": 380,
+          "y": 330,
+          "fontSize": 42,
+          "fontKey": "cjk",
+          "vertical": true,
+          "paragraphId": "dialogue",
+          "advance": 52
+        },
+        {
+          "id": "upper-card",
+          "text": "上の注記",
+          "x": 706,
+          "y": 240,
+          "fontSize": 18,
+          "fontKey": "cjk",
+          "vertical": true,
+          "paragraphId": "upper-independent-card",
+          "advance": 24
+        },
+        {
+          "id": "lower-card",
+          "text": "下の補記",
+          "x": 806,
+          "y": 590,
+          "fontSize": 18,
+          "fontKey": "cjk",
+          "vertical": true,
+          "paragraphId": "lower-independent-card",
+          "advance": 24
+        },
+        {
+          "id": "caption",
+          "text": "TWO NOTES STAY SEPARATE",
+          "x": 160,
+          "y": 1010,
+          "fontSize": 34,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "caption"
+        }
+      ],
+      "negativeRegions": [
+        [
+          80,
+          900,
+          1100,
+          970
+        ]
+      ],
+      "protectedPoints": [
+        [
+          600,
+          935
+        ],
+        [
+          60,
+          60
+        ]
+      ]
+    },
+    {
+      "name": "bound-spread-gutter-caption",
+      "size": [
+        1600,
+        1050
+      ],
+      "language": "en",
+      "structure": "Bound double spread with a dark curved gutter; complete heading crosses the binding, page-specific dialogue and spine lettering remain separate.",
+      "regions": [
+        {
+          "id": "fold-title",
+          "text": "READ ACROSS THE FOLD",
+          "x": 445,
+          "y": 140,
+          "fontSize": 54,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "fold-title"
+        },
+        {
+          "id": "left-first",
+          "text": "KEEP THE LEFT PAGE",
+          "x": 140,
+          "y": 350,
+          "fontSize": 38,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "left-dialogue"
+        },
+        {
+          "id": "left-second",
+          "text": "OPEN BESIDE THE MAP",
+          "x": 140,
+          "y": 415,
+          "fontSize": 38,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "left-dialogue"
+        },
+        {
+          "id": "right-first",
+          "text": "THE STORY CONTINUES",
+          "x": 900,
+          "y": 350,
+          "fontSize": 38,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "right-dialogue"
+        },
+        {
+          "id": "right-second",
+          "text": "ON THE OTHER SIDE",
+          "x": 900,
+          "y": 415,
+          "fontSize": 38,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "right-dialogue"
+        },
+        {
+          "id": "spine",
+          "text": "VOL 08",
+          "x": 780,
+          "y": 610,
+          "fontSize": 24,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "spine",
+          "rotation": 90,
+          "fill": [
+            245,
+            241,
+            224
+          ]
+        }
+      ],
+      "negativeRegions": [
+        [
+          100,
+          650,
+          600,
+          940
+        ],
+        [
+          1010,
+          650,
+          1480,
+          940
+        ]
+      ],
+      "protectedPoints": [
+        [
+          350,
+          800
+        ],
+        [
+          1260,
+          800
+        ],
+        [
+          800,
+          1000
+        ]
+      ]
+    },
+    {
+      "name": "multisize-margin-callouts",
+      "size": [
+        1200,
+        1400
+      ],
+      "language": "ja",
+      "structure": "Large vertical main columns,14px ruby,22px field caption and18px callouts surround a botanical diagram with leader lines.",
+      "regions": [
+        {
+          "id": "title",
+          "text": "GLASSHOUSE OBSERVATION",
+          "x": 80,
+          "y": 65,
+          "fontSize": 36,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "title"
+        },
+        {
+          "id": "main-right",
+          "text": "小さな芽を見よう",
+          "x": 660,
+          "y": 190,
+          "fontSize": 40,
+          "fontKey": "cjk",
+          "vertical": true,
+          "paragraphId": "main-dialogue",
+          "advance": 47
+        },
+        {
+          "id": "main-left",
+          "text": "光を向けて育てる",
+          "x": 500,
+          "y": 190,
+          "fontSize": 40,
+          "fontKey": "cjk",
+          "vertical": true,
+          "paragraphId": "main-dialogue",
+          "advance": 47
+        },
+        {
+          "id": "ruby-right",
+          "text": "め",
+          "x": 708,
+          "y": 330,
+          "fontSize": 14,
+          "fontKey": "cjk",
+          "vertical": true,
+          "paragraphId": "ruby-right",
+          "advance": 18
+        },
+        {
+          "id": "ruby-left",
+          "text": "ひかり",
+          "x": 548,
+          "y": 190,
+          "fontSize": 14,
+          "fontKey": "cjk",
+          "vertical": true,
+          "paragraphId": "ruby-left",
+          "advance": 18
+        },
+        {
+          "id": "field-note",
+          "text": "FIELD NOTE 12",
+          "x": 100,
+          "y": 780,
+          "fontSize": 22,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "field-note"
+        },
+        {
+          "id": "leaf-callout",
+          "text": "new leaf",
+          "x": 850,
+          "y": 900,
+          "fontSize": 18,
+          "fontKey": "regular",
+          "vertical": false,
+          "paragraphId": "leaf-callout"
+        },
+        {
+          "id": "root-callout",
+          "text": "root tip",
+          "x": 820,
+          "y": 1130,
+          "fontSize": 18,
+          "fontKey": "regular",
+          "vertical": false,
+          "paragraphId": "root-callout"
+        }
+      ],
+      "negativeRegions": [
+        [
+          420,
+          850,
+          720,
+          1320
+        ],
+        [
+          30,
+          1100,
+          250,
+          1320
+        ]
+      ],
+      "protectedPoints": [
+        [
+          600,
+          1050
+        ],
+        [
+          100,
+          1200
+        ]
+      ]
+    },
+    {
+      "name": "photographed-perspective-note",
+      "size": [
+        1600,
+        1100
+      ],
+      "language": "en",
+      "structure": "Whole illustrated paper undergoes one fixed homography on a deterministic wood-like desk with shadow; separate upright sticky note does not share its paragraph.",
+      "paperSize": [
+        1180,
+        760
+      ],
+      "paperQuad": [
+        [
+          140,
+          150
+        ],
+        [
+          1320,
+          90
+        ],
+        [
+          1430,
+          930
+        ],
+        [
+          220,
+          1010
+        ]
+      ],
+      "regions": [
+        {
+          "id": "paper-title",
+          "text": "CHECK THE SOUTH GATE",
+          "x": 200,
+          "y": 90,
+          "fontSize": 42,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "paper-title",
+          "paper": true
+        },
+        {
+          "id": "paper-first",
+          "text": "THE KEY IS UNDER THE BLUE CUP",
+          "x": 100,
+          "y": 265,
+          "fontSize": 34,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "paper-dialogue",
+          "paper": true
+        },
+        {
+          "id": "paper-second",
+          "text": "PLEASE RETURN BEFORE SUNSET",
+          "x": 100,
+          "y": 330,
+          "fontSize": 34,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "paper-dialogue",
+          "paper": true
+        },
+        {
+          "id": "paper-footer",
+          "text": "FIELD SKETCH 09",
+          "x": 80,
+          "y": 650,
+          "fontSize": 22,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "paper-footer",
+          "paper": true
+        },
+        {
+          "id": "sticky-title",
+          "text": "SIDE NOTE",
+          "x": 1380,
+          "y": 135,
+          "fontSize": 20,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "sticky-title"
+        },
+        {
+          "id": "sticky-body",
+          "text": "DRY TOOLS",
+          "x": 1375,
+          "y": 195,
+          "fontSize": 20,
+          "fontKey": "bold",
+          "vertical": false,
+          "paragraphId": "sticky-body"
+        }
+      ],
+      "negativeRegions": [
+        [
+          20,
+          1020,
+          180,
+          1080
+        ],
+        [
+          1030,
+          600,
+          1300,
+          810
+        ]
+      ],
+      "protectedPoints": [
+        [
+          40,
+          40
+        ],
+        [
+          1500,
+          900
+        ]
+      ]
+    }
+  ],
+  "preOcrDesignRefinement": {
+    "at": "2026-10-25T08:57:52.897206+00:00",
+    "reason": "Move body columns to within existing same-owner geometric gap and move narrow card to a separate x position. This is source-layout authoring before first OCR, not recognition-driven selection.",
+    "oldDraftOutput": "draft-before-column-gap-review",
+    "ocrRuns": 0
+  },
+  "paragraphMetadataBeforeAnyOcr": {
+    "at": "2026-10-25T08:59:19.758495+00:00",
+    "reason": "Use root-added generic paragraphGroups contract to enforce genuine single-region independent cards; no source pixels or wording changed."
+  }
+}

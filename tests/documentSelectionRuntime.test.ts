@@ -51,6 +51,12 @@ function range(start: Node, end = start, html = ''): Range {
 }
 
 describe('PDF source selection adapter', () => {
+    it('releases an invalidation subscription independently and makes repeated release harmless', () => {
+        const {root}=dom(),adapter=createPdfSelectionAdapter(root),first=vi.fn(),second=vi.fn();
+        const stop=adapter.subscribeInvalidation!(first);adapter.subscribeInvalidation!(second);
+        adapter.invalidate();expect(first).toHaveBeenCalledOnce();expect(second).toHaveBeenCalledOnce();
+        stop();stop();adapter.invalidate();expect(first).toHaveBeenCalledOnce();expect(second).toHaveBeenCalledTimes(2);
+    });
     it('accepts source glyphs and rejects document controls, translated text and disconnected ranges', () => {
         const {root} = dom('<section data-fluentread-pdf-text><span>Source words</span></section><textarea>Editor words</textarea><div data-fluentread-pdf-translation>Translated words</div>');
         const source = root.querySelector('span')!.firstChild!;
@@ -155,6 +161,17 @@ function lifecycleFixture(source = true) {
 }
 
 describe('document selection lazy lifecycle', () => {
+    it('does not report a rejected overlay mount after disposal has revoked its owner', async () => {
+        const f=lifecycleFixture();f.ready.resolve();await tick();expect(f.mountOverlay).toHaveBeenCalledOnce();
+        f.runtime.dispose();f.mounts[0].pending.reject(new Error('late overlay module failure'));await tick();
+        expect(f.onError).not.toHaveBeenCalled();expect(f.unsubscribe).toHaveBeenCalledOnce();
+    });
+    it.each([false,true])('reports rejected config readiness only for a live owner (disposed=%s)', async disposed => {
+        const f=lifecycleFixture(),failure=new Error('configuration hydration unavailable');
+        if(disposed)f.runtime.dispose();f.ready.reject(failure);await tick();
+        expect(f.mountOverlay).not.toHaveBeenCalled();
+        if(disposed)expect(f.onError).not.toHaveBeenCalled();else expect(f.onError).toHaveBeenCalledWith(failure);
+    });
     it('does not load the card before config hydration or while the page has no PDF source text', async () => {
         const fixture = lifecycleFixture(false);
         fixture.runtime.refresh();
@@ -452,7 +469,7 @@ describe('document-page context menu routing', () => {
         expect(listener(request, background, reply)).toBeUndefined();
     });
 
-    it('responds disabled or failed accurately and does not respond after disposal', async () => {
+    it.each(['fulfilled','rejected'] as const)('responds accurately and ignores a %s result after disposal', async outcome => {
         const test = fixture();
         test.current.resolve({id: 18}); await tick();
         const listener = test.event.addListener.mock.calls[0][0], reply = vi.fn();
@@ -465,7 +482,7 @@ describe('document-page context menu routing', () => {
         const late = deferred<boolean>();
         test.translate.mockImplementation(() => late.promise);
         reply.mockClear(); listener(request, background, reply);
-        test.dispose(); late.resolve(true); await tick();
+        test.dispose(); if(outcome==='fulfilled')late.resolve(true);else late.reject(new Error('late translation failure')); await tick();
         expect(reply).not.toHaveBeenCalled();
     });
 
@@ -483,4 +500,34 @@ describe('document-page context menu routing', () => {
         failed.current.reject(new Error('tab closed')); await tick();
         expect(failed.event.addListener).not.toHaveBeenCalled();
     });
+});
+
+it('allows translated/reflow selection only with the document model owner and forwards capture without generic inference', () => {
+    const {root} = dom('<article data-page-number="1"><div data-fluentread-pdf-translation><p class="pdf-translation-text">译文</p></div><p class="pdf-reading-paragraph" data-pdf-segment-index="1">重排</p><button>Control</button></article>');
+    const selection = {source: {kind: 'document' as const, fingerprint: 'a'.repeat(32)}, locator: {kind: 'document' as const, page: 1}};
+    const capture = vi.fn(() => selection), adapter = createPdfSelectionAdapter(root, capture);
+    for (const node of [root.querySelector('.pdf-translation-text')!.firstChild!, root.querySelector('.pdf-reading-paragraph')!.firstChild!]) {
+        const picked = range(node); expect(adapter.acceptsRange(picked)).toBe(true); expect(adapter.captureMaterial?.(picked, '选中')).toBe(selection);
+    }
+    expect(adapter.captureMaterial?.(range(root.querySelector('button')!.firstChild!), 'Control')).toBeUndefined();
+    expect(capture).toHaveBeenCalledTimes(2);
+});
+
+it('routes annotation actions only for owned source or reflow ranges and preserves the requested kind', () => {
+    const {root} = dom('<main><div data-fluentread-pdf-text><span>Source quote</span></div><p class="pdf-reading-paragraph" data-pdf-segment-index="0">Reflow quote</p><button>Control</button></main>');
+    const mark = vi.fn(() => true), adapter = createPdfSelectionAdapter(root, () => undefined, mark);
+    for(const selector of ['[data-fluentread-pdf-text] span', '.pdf-reading-paragraph']) {
+        const selected = range(root.querySelector(selector)!.firstChild!);
+        expect(adapter.markSelection?.(selected, 'underline')).toBe(true);
+        expect(mark).toHaveBeenLastCalledWith(selected, 'underline');
+    }
+    expect(adapter.markSelection?.(range(root.querySelector('button')!.firstChild!), 'highlight')).toBe(false);
+    expect(mark).toHaveBeenCalledTimes(2);
+    expect(createPdfSelectionAdapter(root).markSelection).toBeUndefined();
+    expect(createPdfSelectionAdapter(root).canMarkSelection).toBeUndefined();
+    for(const selector of ['[data-fluentread-pdf-text] span', '.pdf-reading-paragraph']) expect(adapter.canMarkSelection?.(range(root.querySelector(selector)!.firstChild!))).toBe(true);
+    expect(adapter.canMarkSelection?.(range(root.querySelector('button')!.firstChild!))).toBe(false);
+    expect(adapter.canMarkSelection?.(range(root.querySelector('[data-fluentread-pdf-text] span')!.firstChild!,root.querySelector('.pdf-reading-paragraph')!.firstChild!))).toBe(false);
+    const translation=root.ownerDocument.createElement('p');translation.className='pdf-translation-text';translation.textContent='Translated quote';root.append(translation);
+    expect(adapter.canMarkSelection?.(range(translation.firstChild!))).toBe(false);
 });

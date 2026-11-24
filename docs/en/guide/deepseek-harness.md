@@ -1,68 +1,73 @@
 # Selection translation
 
-Select a word or sentence to open its translation card, look up words, explore sentence structure or continue learning.
+Select a word or sentence to translate, look up a word, listen to it or request an AI explanation in one card.
 
 <GuideVisual kind="selection" en />
 
 ## Translation card
 
-Open **Settings → Selection translation** and enable the feature. Every selection uses one card, opening the first **Translate** tab. Choose **Understand, Grammar, Usage, Practice or History** when needed. Switching tabs reuses the translation. The settings preview uses fixed examples and sends no requests.
+1. Enable **Settings → Selection translation**.
+2. Select text on a webpage and click the icon beside it.
+3. The card opens on **Translate**. English dictionary lookup works without AI setup.
 
-English dictionary lookup does not require AI. Dictionary meanings are grouped by word class; these describe possible uses, not necessarily the word’s role in the current sentence. If lookup fails, the translation remains available.
+A bilingual card shows the **Original** above the **Translation**, each with its own copy and playback controls. The tabs wrap in narrow cards. In very short cards, scroll the toolbar horizontally.
 
-If translation shows “Invalid key or permission”, choose **Configure service**. In General settings, find the **Selection translation** row under service assignments and choose **Configure connection** to check the selected service’s key and permissions. Retry the translation manually after making changes. Opening settings preserves the default page translation service and does not retry automatically.
+Use the share or save buttons to keep a result. Drag the top or blank space around the card to move it, and drag its edges to resize. Long content scrolls inside. The next selection restores the default size near the selected text.
+
+For “Invalid key or permission”, choose **Configure service**, then check the key and permissions under **General → Service assignments → Selection translation → Configure connection**. Return and retry manually.
+
+## Optional AI explanations
+
+Enable **AI explanations** in selection settings, choose a service and model, then select an action in the card. Opening the card alone does not request an AI explanation.
+
+| Action | What it explains |
+| --- | --- |
+| Understand | Meaning, tone and references |
+| Parts of speech & syntax | Sentence structure, word classes and syntactic roles |
+| Usage | Common collocations and natural expressions |
+| Practice | A short exercise based on the source |
+
+<GrammarDemo en />
+
+**Bilibili translation · Free** provides basic **Understand** and **Usage** without an API key. Select **Free AI explanations** in the card to use it for the current selection. Syntax, practice and follow-up conversations require a general AI service; configure it under [Translation providers](/en/config/translation-engines). Existing service and action preferences are preserved.
+
+Click a grammar fragment or use the left/right arrow keys to explore it. The original appears above its role and word class. Analysis that cannot be matched to the source remains a text answer. AI explanations can be wrong; check them against the original.
+
+## Check the source behind an explanation
+
+Small quote marks at sentence ends show source references. Hover to read a quote; click or press **Enter / Space** to return to the original sentence. After the page changes or you leave it, old references remain readable but no longer locate the current page.
+
+Use **More actions** (⋯) to view the original, regenerate an answer, expand to a sentence, listen or open history. Switching learning actions within the card reuses completed answers. After changing the source, model, language or explanation preferences, old answers are not reused; request an explanation again when needed.
+
+## Read-aloud settings
+
+Choose an online voice or local speech in selection settings. An empty voice is selected by language. **Local only** never uses an online fallback; local models must first be downloaded to this browser.
+
+Use the bottom bar to stop, see playback time or skip backward and forward 5 seconds. Skipping is unavailable for browser system speech. Word highlighting follows playback; audio without word timestamps uses estimated timing and may be imprecise. Stopping, closing the card or changing the selection ends playback.
 
 <details class="guide-details">
 <summary>Activation and display</summary>
 
 ## Activation and display
 
-The card supports icon, dot, direct popup, hover-over-icon, shortcut and context-menu activation settings. Hovering opens the popup after the configured wait; moving away cancels it. Shortcuts and context-menu mode do not show an extra toolbar.
+Choose an icon, dot, direct popup, hover-over-icon, shortcut or context-menu activation under **Activation and display**. Adjust the delay there. Hover mode opens after you pause over the icon. Shortcut and context-menu modes hide floating entries.
 
-For fewer interruptions, keep the default **Show icon** and click only when needed. A custom shortcut or context-menu mode hides floating entries entirely. Direct popup is suited to repeated lookups; it can interrupt people who select text while reading. Upgrades preserve your chosen activation method.
+The default **Show icon** lets you open the card when needed. **Dismiss when continuing to read** is on by default: scrolling the page, copying the original or leaving an unopened entry hides it. Scrolling and copying inside the card keep it open. Turn this off to compare a translation while scrolling the page.
 
-**Dismiss when continuing to read** is on by default. Scrolling the page or copying the original dismisses the popup, and moving away from an unopened entry hides it after a short grace period. Native selection and copying remain intact. Scrolling or copying within the card keeps it open. Turn this preference off to compare a translation while scrolling the page.
-
-Escape or a click elsewhere closes the popup. A dismissed selection does not reopen by itself. Disabling Selection translation stops the card while keeping learning preferences.
+Press **Escape** or click another page control to close. The old selection does not reopen on its own; select again or use your shortcut. Disabling selection translation stops the card and learning features while keeping their preferences.
 
 </details>
 
 <details class="guide-details">
-<summary>Dictionary and card controls</summary>
+<summary>English dictionary and bidirectional translation</summary>
 
 ## Dictionary and card controls
 
-The card includes 3,000 common English dictionary entries that work without a separate download. For other words, the online dictionary can show a result while FluentRead downloads and verifies the full dictionary for later local lookup. The complete file is about 3.9 MB and is cached after downloading. If the download is unavailable, common local entries and the online dictionary remain usable. The dictionary download URL does not include the word you are looking up.
+Choose a source in **Selection translation → Translation card → Dictionary source**. **Default (automatic)** uses the local dictionary first, then online sources when needed. You can also select ECDICT, Youdao, Free Dictionary API, Wiktionary, WiktApi, or Datamuse. ECDICT is available in the browser extension. A selected source is queried on its own; if it has no entry, the ordinary translation remains available and you can retry the dictionary. Changing the source refreshes an open English word card while keeping its ordinary translation.
 
-The card keeps its position when switching learning tabs, streaming answers, or starting and stopping speech. Long content scrolls within the available space. Drag the card by its top or surrounding blank space to move it. Drag an edge or corner to resize it; long text scrolls inside. The next selection opens a new card at its default size near the selected text.
+The default strategy and ECDICT source include 3,000 common English entries with no extra download. A missing entry starts a background download of the verified complete dictionary, about 3.9 MB, for later local lookup; the default strategy also queries online sources. Common entries remain available if the download fails. The dictionary download URL does not include the queried word.
 
-The card starts with the FluentRead icon and Translate tab, with share, save and close controls on the right. Translation follows your language settings. For a Chinese or English target, enable bidirectional selection translation under **Selection translation** to reverse the direction based on the selected language. Activation preferences are configured there too.
-
-</details>
-
-## Optional AI explanations
-
-Enable **AI explanations** and select a service and model. **Bilibili translation · Free** uses the official `Index-Translate-35B-A3B` model without an API key for basic **Understand** and **Usage** explanations. Full syntax analysis, practice and follow-ups require a general AI service. Other services keep their configured connection details. Opening a card does not call AI. Trigger an action to request an explanation:
-
-- **Understand** explains meaning, tone and references.
-- **Parts of speech & syntax** explains the sentence structure and labels source fragments.
-- **Usage** teaches natural expressions and collocations.
-- **Practice** provides a short exercise.
-
-<GrammarDemo en />
-
-Choose a phrase to read its explanation, or ask a follow-up below the answer. Opening the card itself does not call AI.
-
-If no explanation service or model has been selected, and the default service is Bilibili or a translation service without explanation support, the card offers **Free AI explanations**. Click to enable Bilibili for the current selection. Existing preferences for other AI services are preserved; you can change services in settings. Bilibili currently excludes syntax analysis, practice and multi-turn follow-ups. Your saved actions and default action become available again when you switch to a general AI service. Explanations remain off by default. If the free endpoint is temporarily unavailable, retry later. This translation model can help explain meaning and usage, but reference resolution and source citation formatting can be inconsistent. Explanations do not establish that an answer is correct.
-
-<details class="guide-details">
-<summary>Explanation controls and answer reuse</summary>
-
-Meaning, Grammar, Usage and Practice start at the explanation. Short answers fit their content; long answers scroll inside the card. Manually resized cards keep the chosen size. Choose View original in More actions to expand the complete source and its matching ordinary translation, then Back to current reading to close the comparison. Entering learning lets ordinary translation finish; late translations and streaming updates preserve your reading position. Clicking the current tab preserves your position and unsent follow-up. Changing the source or expanding a sentence never attaches an old selection’s translation to different text.
-
-The compact Grammar tab opens parts-of-speech and syntax analysis. Grounded sentence structure appears at the top of the answer, even when the AI places its analysis table after a long explanation. Source fragments appear in order as compact two-line annotations: the original above, with the syntactic role and word class always visible below. Punctuation stays with the preceding fragment. This gives an overview without clicking every word. Common role names and word classes use the interface language. Units retain meaningful phrases, such as “subject · noun phrase”; unrecognized names retain the AI’s existing summary, while duplicate or unknown labels are reduced without inventing a classification. Click a fragment or use the left/right arrow keys for its meaning and complete role explanation. General word-class explanations expand on demand. A noun may be a subject in one sentence and an object in another. The default grammar prompt requests a compact table that the interface matches to the source in order. Unmatched or incomplete output, and custom formats, remain readable as ordinary text. AI analysis may be wrong; check the original when in doubt.
-
-Completed answers are reused when switching learning actions within the current card. Choose Regenerate in More actions for a new answer, return to the translation, or ask a follow-up. More actions also contains source speech, sentence expansion, saving, reading history and settings. Changing the source, model, language or learning preferences invalidates related cached answers.
+Dictionary word classes describe possible uses, not necessarily a word's role in the current sentence. For a Chinese or English target language, enable bidirectional selection translation to reverse direction based on the selected text.
 
 </details>
 
@@ -71,30 +76,15 @@ Completed answers are reused when switching learning actions within the current 
 
 ## Context and records
 
-**Source context**, **Study notes** and **Custom instructions** have their own visible sections. Choose the selection alone or allow its paragraph with a length limit; the whole page is not read. You can save and manage notes at any time. **Use study notes in answers** is off by default and, when enabled, supplies relevant notes to AI explanations and writing. Turning it off preserves your notes. The instruction editor applies only to AI explanations, leaving translation and dictionary lookup unchanged. Custom prompts are preserved.
+**Source context** can send the selection alone or allow its paragraph up to a length limit; it does not read the entire page. **Custom instructions** affect AI explanations only, leaving translation and dictionary lookup unchanged.
 
-**Save original** adds expressions to **Words & sentences** in the [Learning center](/en/guide/vocabulary-book). **Save study note** stores the source and explanation in **Study notes**. After saving, **View study notes** opens that tab directly; entries are kept until you edit or delete them. Reading conversations stay on this device for 30 days. Viewing records sends no model request. Private windows do not read or save history. See [Data and privacy](/en/guide/privacy).
+**Save original** adds text to **Words & sentences** in the [Learning center](/en/guide/vocabulary-book). **Save study note** adds the source and explanation to **Study notes**, where you can keep, edit or delete them. **Use study notes in answers** is off by default; enabling it supplies relevant notes to explanations and writing. Turning it off keeps the notes.
 
-</details>
-
-<details class="guide-details">
-<summary>Existing preferences</summary>
-
-## Existing preferences
-
-Upgrades preserve services, custom models, actions, context and prompts. Existing standalone cards migrate to the unified feature, including their activation method when ordinary selection translation was disabled. Old settings links still work.
-
-Learning conversations continue to use the browser adaptation of DeepSeek Harness, without requiring a DeepSeek model. [Source and license](https://github.com/FluentRead/FluentRead/blob/main/public/third-party-notices/deepseek-harness-MIT.txt)
+Reading conversations stay on this device for 30 days. Viewing history does not call AI, and private windows do not read or save history. Only requesting an action, regeneration or follow-up sends the selection, permitted context and necessary conversation to your chosen provider. See [Data and privacy](/en/guide/privacy).
 
 </details>
-
-## Read-aloud settings
-
-Online voices and local speech settings are available in selection translation settings. The source policy controls which is tried first. Choosing local-only keeps reading text local.
-
-Local speech models are downloaded on demand and stored in the current browser. The model row shows a progress bar, percentage and downloaded size while downloading, and reopening settings picks up a download that is still running. Simplified Chinese browser environments try two Hugging Face mirrors first; other environments try the official source first. Connection or transfer failures advance to another source. Downloaded files are reused, with one cached copy per pinned version.
 
 ## Related guides
 
-- [All guides](/en/docs/)
+- [Parts of speech & syntax](/en/guide/sentence-analysis)
 - [Troubleshooting](/en/guide/faq)

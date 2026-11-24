@@ -1,7 +1,7 @@
 <!--
  * @file src/features/settings/ui/SelectionSettings.vue
  * 文件职责：作为统一划词翻译的设置入口，说明翻译卡片与按需学习，并提供即时预览。
- * 主要内容：用共享预览布局说明卡片的单词与句子效果，直接组织触发、AI 学习与朗读分区及页内导航；预览不发送请求。
+ * 主要内容：用共享预览布局说明卡片的单词与句子效果，以单行选择器提供默认自动与指定词典来源，组织触发、AI 学习与朗读分区及页内导航；再启用时检查保留的点选快捷键，避免静默丢失入口；预览与来源选择不发送查询请求。
  * 模块边界：仅编辑父级配置副本，沿用 SettingsSections 的保存和快捷键校验；不建立第二份存储或调用供应商。
  -->
 <template>
@@ -25,6 +25,12 @@
             <ReadingAnswer v-else :text="sentenceAnalysis" :source-text="sentenceSource" />
         </div></template>
       </SettingsPreviewLayout>
+      <SettingsItem :label="t('selection.dictionary.source')" :help="t('selection.dictionary.help')" data-settings-anchor="dictionary" :data-settings-anchor-label="t('selection.dictionary.source')">
+        <UiSelect v-model="dictionarySource" :filterable="false" :aria-label="t('selection.dictionary.source')" data-testid="selection-dictionary-source">
+          <ElOption v-for="option in dictionarySourceOptions" :key="option.value" :value="option.value" :label="option.label" :disabled="option.value === 'ecdict-local' && browserCapabilities.browser === 'userscript'" />
+        </UiSelect>
+      </SettingsItem>
+      <DictionaryWorkspaceSettings v-if="extensionDictionaryWorkspace && config.selectionDictionaryWorkspace" :config="config" />
     </SettingsGroup>
     <slot />
     <HarnessSettings :config="config" @navigate="emit('navigate', $event)" />
@@ -33,20 +39,44 @@
 </template>
 <script setup lang="ts">
 import {computed, ref} from 'vue';
+import {ElMessage, ElOption} from 'element-plus';
+import {findClickSelectionHotkeyConflict, normalizeClickSelectionHotkey} from '@/src/core/config/clickSelection';
+import {WORD_DICTIONARY_SOURCE_OPTIONS} from '@/src/core/config/selectionDictionary';
+import {browserCapabilities} from '@/src/platform/browser/capabilities';
 import {useUiI18n} from '@/src/ui/i18n';
-const {t} = useUiI18n();
+const {t, translateLegacy} = useUiI18n();
 import type {Config} from '@/src/core/config/model';
 import FeatureEnableCard from '@/src/ui/components/FeatureEnableCard.vue';
 import SettingsGroup from './components/SettingsGroup.vue';
+import SettingsItem from './components/SettingsItem.vue';
 import SettingsPreviewLayout from './components/SettingsPreviewLayout.vue';
+import UiSelect from '@/src/ui/components/UiSelect.vue';
 import HarnessSettings from './HarnessSettings.vue';
+import DictionaryWorkspaceSettings from './DictionaryWorkspaceSettings.vue';
 import {sentenceAnalysis, sentenceSource, sentenceTranslation} from '@/src/core/config/selectionPreview';
 import {ReadingAnswer} from '@/src/features/reading-assistant/ui/answer/public';
 const props = defineProps<{config: Config}>();
 const emit = defineEmits<{navigate: [section: string]}>();
 const sentence = ref(false);
+const extensionDictionaryWorkspace = import.meta.env.BROWSER !== 'userscript';
+const dictionarySourceOptions = computed(() => [...WORD_DICTIONARY_SOURCE_OPTIONS.map(option => ({
+  value: option.value,
+  label: option.value === 'auto' ? t('selection.dictionary.auto')
+    : option.value === 'ecdict-local' ? t('selection.dictionary.local') : translateLegacy(option.label),
+})), ...(extensionDictionaryWorkspace ? props.config.selectionDictionaryWorkspace?.recipes || [] : []).map(recipe => ({value: `recipe:${recipe.id}`, label: recipe.name}))]);
+const dictionarySource = computed({get: () => extensionDictionaryWorkspace && props.config.selectionDictionaryRecipe ? `recipe:${props.config.selectionDictionaryRecipe}` : props.config.selectionDictionarySource,
+  set: (value: string) => {
+    if (extensionDictionaryWorkspace && value.startsWith('recipe:')) props.config.selectionDictionaryRecipe = value.slice(7);
+    else {props.config.selectionDictionaryRecipe = ''; props.config.selectionDictionarySource = value as Config['selectionDictionarySource'];}
+  }});
 const previousMode = ref(props.config.selectionTranslatorMode === 'translation-only' ? 'translation-only' : 'bilingual');
 const enabled = computed({get: () => props.config.selectionTranslatorMode !== 'disabled', set: (value: boolean) => {
+  if (value && props.config.selectionClickSelectEnabled) {
+    const owner = findClickSelectionHotkeyConflict({...props.config,
+      selectionTranslatorMode: previousMode.value, disableSelectionTranslator: false},
+      normalizeClickSelectionHotkey(props.config.selectionClickSelectHotkey));
+    if (owner) {ElMessage.warning(t('quickTranslation.legacyConflictEdit', {feature: translateLegacy(owner)}));return;}
+  }
   if (!value && props.config.selectionTranslatorMode !== 'disabled') previousMode.value = props.config.selectionTranslatorMode;
   props.config.selectionTranslatorMode = value ? previousMode.value : 'disabled';
   props.config.disableSelectionTranslator = !value;
@@ -68,5 +98,8 @@ const enabled = computed({get: () => props.config.selectionTranslatorMode !== 'd
 .selection-preview-word { border-top:1px solid var(--line); padding-top:14px; font-size:12px; }
 .selection-pos { display:inline-block; background:color-mix(in srgb, var(--brand) 10%, transparent); color:var(--brand); padding:3px 7px; border-radius:5px; margin-right:10px; }
 .selection-preview-word p { line-height:1.7; }
-.selection-preview-word small, button:focus-visible, summary:focus-visible { outline:2px solid var(--brand); outline-offset:3px; }
+button:focus-visible, summary:focus-visible { outline:2px solid var(--brand); outline-offset:3px; }
+@media (any-pointer: coarse) {
+  .selection-preview-tabs button { min-width:44px; min-height:44px; padding:8px 12px; font-size:13px; }
+}
 </style>

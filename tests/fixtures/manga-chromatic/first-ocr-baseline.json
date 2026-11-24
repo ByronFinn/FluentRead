@@ -1,0 +1,2462 @@
+{
+  "version": 1,
+  "scope": "First complete eight-scene stock manga OCR baseline from the frozen V6 product artifact. Earlier interrupted harness attempts are retained separately. Exact original source and all failures are retained; this is not a candidate quality pass.",
+  "sourceFrozenAtUtc": "2026-10-25T10:04:02.866672+00:00",
+  "sourceBeforeAnyOcr": true,
+  "sourceDesignSha256": "1287de36a49b5002a2ee1e0a2be683a685ca30db40a9efa5288e35fa605935e6",
+  "originalSourceManifestSha256": "6df6d41cbeba20ff239fe7ca533333f0c2b7957b100333b23aefdcf42d6556fb",
+  "sourceAuthoredBeforeResultSelection": true,
+  "productionBaselineCommit": "43f99105bcb7d573df65a85494acb38312a447d8",
+  "commitBinding": "Root-controlled stock V6 artifact for head 43f991. Its archive was produced on c302 with uncommitted V6 changes; the five recorded product modules match 43f991 exactly and all 515 compiled file hashes were rechecked. This archival step does not rebuild or assert a clean 43f991 build.",
+  "runnerArchivedSha256": null,
+  "runnerArchiveLimitation": "The native stock run did not archive its runner source hash. It included actual-response no-bitmap/wordless handling and preceded the later initial/cache source-visibility helper. No present runner hash is assigned to this historical run.",
+  "qualityHelperSha256": "698fc68ce83ff2f0eb8e2b74cbb2c9db7c9b76887a31239f4114c391c0aab7ce",
+  "artifacts": {
+    "report": {
+      "evidencePath": "iteration-v7/chromatic-corpus/browser-stock-eight/report.json",
+      "sha256": "32f758a085e7d38ad961acdb0453fdf1f957acdb8afee3269e9584d9201ae085"
+    },
+    "runtimeDiagnostics": {
+      "evidencePath": "iteration-v7/chromatic-corpus/browser-stock-eight/runtime-diagnostics.json",
+      "sha256": "7fd41549c87e11a9ff4eff0a38775be71e6a087c6020c2c1a14415cf78674444"
+    },
+    "runLog": {
+      "evidencePath": "iteration-v7/chromatic-corpus/browser-stock-eight.log",
+      "sha256": "9fe92833717fe31f06e6375729e62ff1dab47fa48a5378208240d98cf46f17fa"
+    },
+    "productFreeze": {
+      "evidencePath": "iteration-v6/build-final/chrome-frozen.json",
+      "sha256": "615d989883c89cfe8973ce7a3cd8126e648d3436821bd14f3b83aa9d59c56fc7",
+      "fileCount": 515,
+      "fileMapSha256": "7da64a2132e40a47b60ecaa7fa9bd60ad8073d42022384246598938646eedf57",
+      "fileMapDigestAlgorithm": "SHA256 of UTF8 compact JSON object {relativePath:SHA256}, keys sorted by JavaScript UTF16 code units, no final newline.",
+      "allActualFilesRehashed": true,
+      "recordedSourceHead": "c302a6f5bdb269fcf8f1eaefe75ebdff10dcdf19",
+      "recordedSourceUncommitted": true,
+      "recordedSourceHashes": {
+        "src/features/image-translation/services/mangaRendering.ts": "f3e001c05b313eb48f03200f44a42c539465f49435e637c94163faad91742404",
+        "src/features/image-translation/services/mangaTypography.ts": "f9ee9ec67437907dce1f4b1a57275a5dd64a126b84e640ae1d7beadcf763d183",
+        "src/features/image-translation/services/mangaOcr.ts": "8da914b9e5582185f6edb421cc13cafa7dbdd9809e616c91f430c5bdf9af6a4d",
+        "src/features/image-translation/services/mangaBubbles.ts": "e2d320acf9f416793faa83bafebb74bf814f6aba4abe2b10cf44a1f53278849e",
+        "src/features/image-translation/services/mangaRegions.ts": "05a3dcc0e35584e3ae60f34365a649f72549f9be0e665c1cf4453580df3d7b54"
+      },
+      "recordedModulesMatchBaselineHead": true
+    },
+    "observerPatch": null
+  },
+  "strictExit": 1,
+  "strictPass": false,
+  "qualitySummary": {
+    "completedScenes": 8,
+    "expectedScenes": 8,
+    "anchors": {
+      "total": 23,
+      "matched": 14,
+      "failed": 9
+    },
+    "negativeRegions": {
+      "declared": 8,
+      "falsePositives": 0
+    },
+    "wordlessPages": [
+      {
+        "scene": "wordless-chromatic-diagram",
+        "noTextTransport": true,
+        "noBitmap": true,
+        "sourcePreserved": true
+      }
+    ],
+    "failures": [
+      {
+        "scene": "white-red-magenta-independent-labels",
+        "round": 0,
+        "type": "ocr-anchor",
+        "anchor": "CLOSE THE RED VALVE",
+        "occurrences": 0,
+        "expectedOccurrences": 1,
+        "reason": "Actual production OCR does not contain the normalized expected anchor"
+      },
+      {
+        "scene": "white-red-magenta-independent-labels",
+        "round": 0,
+        "type": "ocr-anchor",
+        "anchor": "KEEP THE PINK TAG",
+        "occurrences": 0,
+        "expectedOccurrences": 1,
+        "reason": "Actual production OCR does not contain the normalized expected anchor"
+      },
+      {
+        "scene": "white-red-magenta-independent-labels",
+        "round": 0,
+        "type": "paragraph-order",
+        "anchors": [
+          "CLOSE THE RED VALVE"
+        ],
+        "paragraphIndex": -1,
+        "found": false,
+        "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+      },
+      {
+        "scene": "white-red-magenta-independent-labels",
+        "round": 0,
+        "type": "paragraph-order",
+        "anchors": [
+          "KEEP THE PINK TAG"
+        ],
+        "paragraphIndex": -1,
+        "found": false,
+        "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+      },
+      {
+        "scene": "black-cyan-oxygen-hud",
+        "round": 0,
+        "type": "ocr-anchor",
+        "anchor": "CHECK THE OXYGEN",
+        "occurrences": 0,
+        "expectedOccurrences": 1,
+        "reason": "Actual production OCR does not contain the normalized expected anchor"
+      },
+      {
+        "scene": "black-cyan-oxygen-hud",
+        "round": 0,
+        "type": "ocr-anchor",
+        "anchor": "BEFORE OPENING",
+        "occurrences": 0,
+        "expectedOccurrences": 1,
+        "reason": "Actual production OCR does not contain the normalized expected anchor"
+      },
+      {
+        "scene": "black-cyan-oxygen-hud",
+        "round": 0,
+        "type": "paragraph-order",
+        "anchors": [
+          "CHECK THE OXYGEN",
+          "BEFORE OPENING"
+        ],
+        "paragraphIndex": -1,
+        "found": false,
+        "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+      },
+      {
+        "scene": "translucent-red-dialogue-overlay",
+        "round": 0,
+        "type": "ocr-anchor",
+        "anchor": "SPEAK THROUGH THE GLASS",
+        "occurrences": 0,
+        "expectedOccurrences": 1,
+        "reason": "Actual production OCR does not contain the normalized expected anchor"
+      },
+      {
+        "scene": "translucent-red-dialogue-overlay",
+        "round": 0,
+        "type": "ocr-anchor",
+        "anchor": "KEEP THE SIGNAL CLEAR",
+        "occurrences": 0,
+        "expectedOccurrences": 1,
+        "reason": "Actual production OCR does not contain the normalized expected anchor"
+      },
+      {
+        "scene": "translucent-red-dialogue-overlay",
+        "round": 0,
+        "type": "paragraph-order",
+        "anchors": [
+          "SPEAK THROUGH THE GLASS"
+        ],
+        "paragraphIndex": -1,
+        "found": false,
+        "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+      },
+      {
+        "scene": "translucent-red-dialogue-overlay",
+        "round": 0,
+        "type": "paragraph-order",
+        "anchors": [
+          "KEEP THE SIGNAL CLEAR"
+        ],
+        "paragraphIndex": -1,
+        "found": false,
+        "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+      },
+      {
+        "scene": "translucent-cyan-night-hud",
+        "round": 0,
+        "type": "ocr-anchor",
+        "anchor": "STAY INSIDE THE LIGHT",
+        "occurrences": 0,
+        "expectedOccurrences": 1,
+        "reason": "Actual production OCR does not contain the normalized expected anchor"
+      },
+      {
+        "scene": "translucent-cyan-night-hud",
+        "round": 0,
+        "type": "ocr-anchor",
+        "anchor": "WAIT FOR MY SIGNAL",
+        "occurrences": 0,
+        "expectedOccurrences": 1,
+        "reason": "Actual production OCR does not contain the normalized expected anchor"
+      },
+      {
+        "scene": "translucent-cyan-night-hud",
+        "round": 0,
+        "type": "paragraph-order",
+        "anchors": [
+          "STAY INSIDE THE LIGHT"
+        ],
+        "paragraphIndex": -1,
+        "found": false,
+        "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+      },
+      {
+        "scene": "translucent-cyan-night-hud",
+        "round": 0,
+        "type": "paragraph-order",
+        "anchors": [
+          "WAIT FOR MY SIGNAL"
+        ],
+        "paragraphIndex": -1,
+        "found": false,
+        "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+      },
+      {
+        "scene": "thin-aa-gray-and-chromatic-tail",
+        "round": 0,
+        "type": "ocr-anchor",
+        "anchor": "KEEP THE LAST LIGHT",
+        "occurrences": 0,
+        "expectedOccurrences": 1,
+        "reason": "Actual production OCR does not contain the normalized expected anchor"
+      },
+      {
+        "scene": "thin-aa-gray-and-chromatic-tail",
+        "round": 0,
+        "type": "paragraph-order",
+        "anchors": [
+          "KEEP THE LAST LIGHT"
+        ],
+        "paragraphIndex": -1,
+        "found": false,
+        "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+      }
+    ],
+    "normalization": "NFKC, uppercase, retain Unicode letters/numbers; count overlapping substring anchors in actual OCR text; exact occurrence counts follow manifest metadata or source-proven unique anchors",
+    "scope": "Exact OCR anchors, source occurrence counts, declared reading order, excess source-character counts and wordless artwork false positives are aggregated independently. Character inventories do not prove absence of omissions or preserve order. Protected pixels, source restoration, cached bitmap and request counts remain immediate structural assertions. No CER or translation-provider quality claim."
+  },
+  "passingScenes": [
+    "equal-luma-red-green-cards",
+    "mixed-color-edge-screenshot",
+    "wordless-chromatic-diagram"
+  ],
+  "failingScenes": [
+    "white-red-magenta-independent-labels",
+    "black-cyan-oxygen-hud",
+    "translucent-red-dialogue-overlay",
+    "translucent-cyan-night-hud",
+    "thin-aa-gray-and-chromatic-tail"
+  ],
+  "failuresRetained": true,
+  "scenes": [
+    {
+      "scene": "white-red-magenta-independent-labels",
+      "sourceLanguage": "en",
+      "texts": [
+        "GRAY CONTROL LINE"
+      ],
+      "expectedSource": [
+        "CLOSE THE RED VALVE",
+        "KEEP THE PINK TAG",
+        "GRAY CONTROL LINE"
+      ],
+      "ocrLines": [
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "GRAY CONTROL LINE",
+          "bbox": {
+            "x0": 96,
+            "y0": 435,
+            "x1": 437,
+            "y1": 457
+          },
+          "fontSize": 22,
+          "sourceBoxes": [
+            {
+              "x0": 96,
+              "y0": 435,
+              "x1": 437,
+              "y1": 457
+            }
+          ]
+        }
+      ],
+      "observedNoBitmap": false,
+      "anchors": [
+        {
+          "anchor": "CLOSE THE RED VALVE",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "found": false
+        },
+        {
+          "anchor": "KEEP THE PINK TAG",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "found": false
+        },
+        {
+          "anchor": "GRAY CONTROL LINE",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        }
+      ],
+      "paragraphGroups": [
+        {
+          "anchors": [
+            "CLOSE THE RED VALVE"
+          ],
+          "paragraphIndex": -1,
+          "found": false
+        },
+        {
+          "anchors": [
+            "KEEP THE PINK TAG"
+          ],
+          "paragraphIndex": -1,
+          "found": false
+        },
+        {
+          "anchors": [
+            "GRAY CONTROL LINE"
+          ],
+          "paragraphIndex": 0,
+          "found": true
+        }
+      ],
+      "sourceCharacterInventory": {
+        "expected": {
+          "C": 2,
+          "L": 4,
+          "O": 3,
+          "S": 1,
+          "E": 8,
+          "T": 4,
+          "H": 2,
+          "R": 3,
+          "D": 1,
+          "V": 2,
+          "A": 3,
+          "K": 2,
+          "P": 2,
+          "I": 2,
+          "N": 3,
+          "G": 2,
+          "Y": 1
+        },
+        "actual": {
+          "G": 1,
+          "R": 2,
+          "A": 1,
+          "Y": 1,
+          "C": 1,
+          "O": 2,
+          "N": 2,
+          "T": 1,
+          "L": 2,
+          "I": 1,
+          "E": 1
+        },
+        "excess": [],
+        "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+      },
+      "qualityFailures": [
+        {
+          "type": "ocr-anchor",
+          "anchor": "CLOSE THE RED VALVE",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "reason": "Actual production OCR does not contain the normalized expected anchor"
+        },
+        {
+          "type": "ocr-anchor",
+          "anchor": "KEEP THE PINK TAG",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "reason": "Actual production OCR does not contain the normalized expected anchor"
+        },
+        {
+          "type": "paragraph-order",
+          "anchors": [
+            "CLOSE THE RED VALVE"
+          ],
+          "paragraphIndex": -1,
+          "found": false,
+          "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+        },
+        {
+          "type": "paragraph-order",
+          "anchors": [
+            "KEEP THE PINK TAG"
+          ],
+          "paragraphIndex": -1,
+          "found": false,
+          "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+        }
+      ],
+      "negativeDetections": [],
+      "protectedPixels": {
+        "source": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ],
+            [
+              255,
+              0,
+              255,
+              255
+            ],
+            [
+              80,
+              80,
+              80,
+              255
+            ]
+          ]
+        },
+        "translated": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ],
+            [
+              255,
+              0,
+              255,
+              255
+            ],
+            [
+              80,
+              80,
+              80,
+              255
+            ]
+          ]
+        }
+      },
+      "restoreAndRedisplay": {
+        "sourcePreserved": true,
+        "bitmapPreserved": true,
+        "additionalOcrOperations": 0,
+        "additionalTextRequests": 0
+      }
+    },
+    {
+      "scene": "black-cyan-oxygen-hud",
+      "sourceLanguage": "en",
+      "texts": [
+        "08:45"
+      ],
+      "expectedSource": [
+        "CHECK THE OXYGEN",
+        "BEFORE OPENING",
+        "08:45"
+      ],
+      "ocrLines": [
+        {
+          "text": "08:45",
+          "sourceText": "08:45",
+          "bbox": {
+            "x0": 96,
+            "y0": 379,
+            "x1": 181,
+            "y1": 405
+          },
+          "fontSize": 26,
+          "sourceBoxes": [
+            {
+              "x0": 96,
+              "y0": 379,
+              "x1": 181,
+              "y1": 405
+            }
+          ]
+        }
+      ],
+      "observedNoBitmap": true,
+      "anchors": [
+        {
+          "anchor": "CHECK THE OXYGEN",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "found": false
+        },
+        {
+          "anchor": "BEFORE OPENING",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "found": false
+        },
+        {
+          "anchor": "08:45",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        }
+      ],
+      "paragraphGroups": [
+        {
+          "anchors": [
+            "CHECK THE OXYGEN",
+            "BEFORE OPENING"
+          ],
+          "paragraphIndex": -1,
+          "found": false
+        },
+        {
+          "anchors": [
+            "08:45"
+          ],
+          "paragraphIndex": 0,
+          "found": true
+        }
+      ],
+      "sourceCharacterInventory": {
+        "expected": {
+          "0": 1,
+          "4": 1,
+          "5": 1,
+          "8": 1,
+          "C": 2,
+          "H": 2,
+          "E": 6,
+          "K": 1,
+          "T": 1,
+          "O": 3,
+          "X": 1,
+          "Y": 1,
+          "G": 2,
+          "N": 3,
+          "B": 1,
+          "F": 1,
+          "R": 1,
+          "P": 1,
+          "I": 1
+        },
+        "actual": {
+          "0": 1,
+          "4": 1,
+          "5": 1,
+          "8": 1
+        },
+        "excess": [],
+        "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+      },
+      "qualityFailures": [
+        {
+          "type": "ocr-anchor",
+          "anchor": "CHECK THE OXYGEN",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "reason": "Actual production OCR does not contain the normalized expected anchor"
+        },
+        {
+          "type": "ocr-anchor",
+          "anchor": "BEFORE OPENING",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "reason": "Actual production OCR does not contain the normalized expected anchor"
+        },
+        {
+          "type": "paragraph-order",
+          "anchors": [
+            "CHECK THE OXYGEN",
+            "BEFORE OPENING"
+          ],
+          "paragraphIndex": -1,
+          "found": false,
+          "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+        }
+      ],
+      "negativeDetections": [],
+      "protectedPixels": {
+        "source": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              0,
+              255,
+              255,
+              255
+            ],
+            [
+              255,
+              190,
+              0,
+              255
+            ],
+            [
+              0,
+              255,
+              255,
+              255
+            ]
+          ]
+        },
+        "translated": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              0,
+              255,
+              255,
+              255
+            ],
+            [
+              255,
+              190,
+              0,
+              255
+            ],
+            [
+              0,
+              255,
+              255,
+              255
+            ]
+          ]
+        }
+      },
+      "restoreAndRedisplay": {
+        "sourcePreserved": true,
+        "bitmapPreserved": true,
+        "additionalOcrOperations": 0,
+        "additionalTextRequests": 0
+      }
+    },
+    {
+      "scene": "equal-luma-red-green-cards",
+      "sourceLanguage": "en",
+      "texts": [
+        "RED INK ON GREEN",
+        "GREEN INK ON RED",
+        "KEEP COLOR CONTRAST"
+      ],
+      "expectedSource": [
+        "RED INK ON GREEN",
+        "GREEN INK ON RED",
+        "KEEP COLOR CONTRAST"
+      ],
+      "ocrLines": [
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "RED INK ON GREEN",
+          "bbox": {
+            "x0": 84,
+            "y0": 164,
+            "x1": 454,
+            "y1": 192
+          },
+          "fontSize": 28,
+          "sourceBoxes": [
+            {
+              "x0": 84,
+              "y0": 164,
+              "x1": 454,
+              "y1": 192
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "GREEN INK ON RED",
+          "bbox": {
+            "x0": 67,
+            "y0": 375,
+            "x1": 459,
+            "y1": 434
+          },
+          "fontSize": 59,
+          "sourceBoxes": [
+            {
+              "x0": 67,
+              "y0": 375,
+              "x1": 459,
+              "y1": 434
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "KEEP COLOR CONTRAST",
+          "bbox": {
+            "x0": 86.501953125,
+            "y0": 627.9417989417989,
+            "x1": 478.8287760416667,
+            "y1": 650.9206349206348
+          },
+          "fontSize": 22.978835978835978,
+          "sourceBoxes": [
+            {
+              "x0": 86.501953125,
+              "y0": 627.9417989417989,
+              "x1": 478.8287760416667,
+              "y1": 650.9206349206348
+            }
+          ]
+        }
+      ],
+      "observedNoBitmap": false,
+      "anchors": [
+        {
+          "anchor": "RED INK ON GREEN",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "GREEN INK ON RED",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "KEEP COLOR CONTRAST",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        }
+      ],
+      "paragraphGroups": [
+        {
+          "anchors": [
+            "RED INK ON GREEN"
+          ],
+          "paragraphIndex": 0,
+          "found": true
+        },
+        {
+          "anchors": [
+            "GREEN INK ON RED"
+          ],
+          "paragraphIndex": 1,
+          "found": true
+        },
+        {
+          "anchors": [
+            "KEEP COLOR CONTRAST"
+          ],
+          "paragraphIndex": 2,
+          "found": true
+        }
+      ],
+      "sourceCharacterInventory": {
+        "expected": {
+          "R": 6,
+          "E": 8,
+          "D": 2,
+          "I": 2,
+          "N": 7,
+          "K": 3,
+          "O": 5,
+          "G": 2,
+          "P": 1,
+          "C": 2,
+          "L": 1,
+          "T": 2,
+          "A": 1,
+          "S": 1
+        },
+        "actual": {
+          "R": 6,
+          "E": 8,
+          "D": 2,
+          "I": 2,
+          "N": 7,
+          "K": 3,
+          "O": 5,
+          "G": 2,
+          "P": 1,
+          "C": 2,
+          "L": 1,
+          "T": 2,
+          "A": 1,
+          "S": 1
+        },
+        "excess": [],
+        "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+      },
+      "qualityFailures": [],
+      "negativeDetections": [],
+      "protectedPixels": {
+        "source": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              0,
+              130,
+              0,
+              255
+            ],
+            [
+              255,
+              0,
+              0,
+              255
+            ],
+            [
+              0,
+              130,
+              0,
+              255
+            ]
+          ]
+        },
+        "translated": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              0,
+              130,
+              0,
+              255
+            ],
+            [
+              255,
+              0,
+              0,
+              255
+            ],
+            [
+              0,
+              130,
+              0,
+              255
+            ]
+          ]
+        }
+      },
+      "restoreAndRedisplay": {
+        "sourcePreserved": true,
+        "bitmapPreserved": true,
+        "additionalOcrOperations": 0,
+        "additionalTextRequests": 0
+      }
+    },
+    {
+      "scene": "translucent-red-dialogue-overlay",
+      "sourceLanguage": "en",
+      "texts": [
+        "GRAY REFERENCE LINE"
+      ],
+      "expectedSource": [
+        "SPEAK THROUGH THE GLASS",
+        "KEEP THE SIGNAL CLEAR",
+        "GRAY REFERENCE LINE"
+      ],
+      "ocrLines": [
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "GRAY REFERENCE LINE",
+          "bbox": {
+            "x0": 95,
+            "y0": 649,
+            "x1": 426,
+            "y1": 670
+          },
+          "fontSize": 21,
+          "sourceBoxes": [
+            {
+              "x0": 95,
+              "y0": 649,
+              "x1": 426,
+              "y1": 670
+            }
+          ]
+        }
+      ],
+      "observedNoBitmap": false,
+      "anchors": [
+        {
+          "anchor": "SPEAK THROUGH THE GLASS",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "found": false
+        },
+        {
+          "anchor": "KEEP THE SIGNAL CLEAR",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "found": false
+        },
+        {
+          "anchor": "GRAY REFERENCE LINE",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        }
+      ],
+      "paragraphGroups": [
+        {
+          "anchors": [
+            "SPEAK THROUGH THE GLASS"
+          ],
+          "paragraphIndex": -1,
+          "found": false
+        },
+        {
+          "anchors": [
+            "KEEP THE SIGNAL CLEAR"
+          ],
+          "paragraphIndex": -1,
+          "found": false
+        },
+        {
+          "anchors": [
+            "GRAY REFERENCE LINE"
+          ],
+          "paragraphIndex": 0,
+          "found": true
+        }
+      ],
+      "sourceCharacterInventory": {
+        "expected": {
+          "S": 4,
+          "P": 2,
+          "E": 11,
+          "A": 5,
+          "K": 2,
+          "T": 3,
+          "H": 4,
+          "R": 5,
+          "O": 1,
+          "U": 1,
+          "G": 4,
+          "L": 4,
+          "I": 2,
+          "N": 3,
+          "C": 2,
+          "Y": 1,
+          "F": 1
+        },
+        "actual": {
+          "G": 1,
+          "R": 3,
+          "A": 1,
+          "Y": 1,
+          "E": 5,
+          "F": 1,
+          "N": 2,
+          "C": 1,
+          "L": 1,
+          "I": 1
+        },
+        "excess": [],
+        "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+      },
+      "qualityFailures": [
+        {
+          "type": "ocr-anchor",
+          "anchor": "SPEAK THROUGH THE GLASS",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "reason": "Actual production OCR does not contain the normalized expected anchor"
+        },
+        {
+          "type": "ocr-anchor",
+          "anchor": "KEEP THE SIGNAL CLEAR",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "reason": "Actual production OCR does not contain the normalized expected anchor"
+        },
+        {
+          "type": "paragraph-order",
+          "anchors": [
+            "SPEAK THROUGH THE GLASS"
+          ],
+          "paragraphIndex": -1,
+          "found": false,
+          "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+        },
+        {
+          "type": "paragraph-order",
+          "anchors": [
+            "KEEP THE SIGNAL CLEAR"
+          ],
+          "paragraphIndex": -1,
+          "found": false,
+          "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+        }
+      ],
+      "negativeDetections": [],
+      "protectedPixels": {
+        "source": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ],
+            [
+              255,
+              0,
+              0,
+              255
+            ],
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        },
+        "translated": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              255,
+              0,
+              0,
+              255
+            ],
+            [
+              255,
+              0,
+              0,
+              255
+            ],
+            [
+              255,
+              0,
+              0,
+              255
+            ]
+          ]
+        }
+      },
+      "restoreAndRedisplay": {
+        "sourcePreserved": true,
+        "bitmapPreserved": true,
+        "additionalOcrOperations": 0,
+        "additionalTextRequests": 0
+      }
+    },
+    {
+      "scene": "translucent-cyan-night-hud",
+      "sourceLanguage": "en",
+      "texts": [
+        "WHITE REFERENCE LINE"
+      ],
+      "expectedSource": [
+        "STAY INSIDE THE LIGHT",
+        "WAIT FOR MY SIGNAL",
+        "WHITE REFERENCE LINE"
+      ],
+      "ocrLines": [
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "WHITE REFERENCE LINE",
+          "bbox": {
+            "x0": 103,
+            "y0": 492,
+            "x1": 462,
+            "y1": 511
+          },
+          "fontSize": 19,
+          "sourceBoxes": [
+            {
+              "x0": 103,
+              "y0": 492,
+              "x1": 462,
+              "y1": 511
+            }
+          ]
+        }
+      ],
+      "observedNoBitmap": false,
+      "anchors": [
+        {
+          "anchor": "STAY INSIDE THE LIGHT",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "found": false
+        },
+        {
+          "anchor": "WAIT FOR MY SIGNAL",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "found": false
+        },
+        {
+          "anchor": "WHITE REFERENCE LINE",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        }
+      ],
+      "paragraphGroups": [
+        {
+          "anchors": [
+            "STAY INSIDE THE LIGHT"
+          ],
+          "paragraphIndex": -1,
+          "found": false
+        },
+        {
+          "anchors": [
+            "WAIT FOR MY SIGNAL"
+          ],
+          "paragraphIndex": -1,
+          "found": false
+        },
+        {
+          "anchors": [
+            "WHITE REFERENCE LINE"
+          ],
+          "paragraphIndex": 0,
+          "found": true
+        }
+      ],
+      "sourceCharacterInventory": {
+        "expected": {
+          "S": 3,
+          "T": 5,
+          "A": 3,
+          "Y": 2,
+          "I": 7,
+          "N": 4,
+          "D": 1,
+          "E": 8,
+          "H": 3,
+          "L": 3,
+          "G": 2,
+          "W": 2,
+          "F": 2,
+          "O": 1,
+          "R": 3,
+          "M": 1,
+          "C": 1
+        },
+        "actual": {
+          "W": 1,
+          "H": 1,
+          "I": 2,
+          "T": 1,
+          "E": 6,
+          "R": 2,
+          "F": 1,
+          "N": 2,
+          "C": 1,
+          "L": 1
+        },
+        "excess": [],
+        "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+      },
+      "qualityFailures": [
+        {
+          "type": "ocr-anchor",
+          "anchor": "STAY INSIDE THE LIGHT",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "reason": "Actual production OCR does not contain the normalized expected anchor"
+        },
+        {
+          "type": "ocr-anchor",
+          "anchor": "WAIT FOR MY SIGNAL",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "reason": "Actual production OCR does not contain the normalized expected anchor"
+        },
+        {
+          "type": "paragraph-order",
+          "anchors": [
+            "STAY INSIDE THE LIGHT"
+          ],
+          "paragraphIndex": -1,
+          "found": false,
+          "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+        },
+        {
+          "type": "paragraph-order",
+          "anchors": [
+            "WAIT FOR MY SIGNAL"
+          ],
+          "paragraphIndex": -1,
+          "found": false,
+          "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+        }
+      ],
+      "negativeDetections": [],
+      "protectedPixels": {
+        "source": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              0,
+              255,
+              255,
+              255
+            ],
+            [
+              0,
+              255,
+              255,
+              255
+            ],
+            [
+              0,
+              255,
+              255,
+              255
+            ]
+          ]
+        },
+        "translated": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              0,
+              255,
+              255,
+              255
+            ],
+            [
+              0,
+              255,
+              255,
+              255
+            ],
+            [
+              0,
+              255,
+              255,
+              255
+            ]
+          ]
+        }
+      },
+      "restoreAndRedisplay": {
+        "sourcePreserved": true,
+        "bitmapPreserved": true,
+        "additionalOcrOperations": 0,
+        "additionalTextRequests": 0
+      }
+    },
+    {
+      "scene": "thin-aa-gray-and-chromatic-tail",
+      "sourceLanguage": "ja",
+      "texts": [
+        "FOLLOW THE SOFT LIGHT",
+        "KEEP",
+        "gray gypq 107",
+        "細い光をたどる"
+      ],
+      "expectedSource": [
+        "FOLLOW THE SOFT LIGHT",
+        "KEEP THE LAST LIGHT",
+        "gray gypq 107",
+        "細い光をたどる"
+      ],
+      "ocrLines": [
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "FOLLOW THE SOFT LIGHT",
+          "bbox": {
+            "x0": 82,
+            "y0": 99,
+            "x1": 460,
+            "y1": 120
+          },
+          "fontSize": 21,
+          "sourceBoxes": [
+            {
+              "x0": 82,
+              "y0": 99,
+              "x1": 460,
+              "y1": 120
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "KEEP",
+          "bbox": {
+            "x0": 81,
+            "y0": 241,
+            "x1": 452,
+            "y1": 263
+          },
+          "fontSize": 22,
+          "sourceBoxes": [
+            {
+              "x0": 81,
+              "y0": 241,
+              "x1": 452,
+              "y1": 263
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "gray gypq 107",
+          "bbox": {
+            "x0": 79,
+            "y0": 389,
+            "x1": 222,
+            "y1": 411
+          },
+          "fontSize": 22,
+          "sourceBoxes": [
+            {
+              "x0": 79,
+              "y0": 389,
+              "x1": 222,
+              "y1": 411
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "細い光をたどる",
+          "bbox": {
+            "x0": 81,
+            "y0": 503,
+            "x1": 285,
+            "y1": 526
+          },
+          "fontSize": 23,
+          "sourceBoxes": [
+            {
+              "x0": 81,
+              "y0": 503,
+              "x1": 285,
+              "y1": 526
+            }
+          ]
+        }
+      ],
+      "observedNoBitmap": false,
+      "anchors": [
+        {
+          "anchor": "FOLLOW THE SOFT LIGHT",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "KEEP THE LAST LIGHT",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "found": false
+        },
+        {
+          "anchor": "gray gypq 107",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "細い光をたどる",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        }
+      ],
+      "paragraphGroups": [
+        {
+          "anchors": [
+            "FOLLOW THE SOFT LIGHT"
+          ],
+          "paragraphIndex": 0,
+          "found": true
+        },
+        {
+          "anchors": [
+            "KEEP THE LAST LIGHT"
+          ],
+          "paragraphIndex": -1,
+          "found": false
+        },
+        {
+          "anchors": [
+            "gray gypq 107"
+          ],
+          "paragraphIndex": 2,
+          "found": true
+        },
+        {
+          "anchors": [
+            "細い光をたどる"
+          ],
+          "paragraphIndex": 3,
+          "found": true
+        }
+      ],
+      "sourceCharacterInventory": {
+        "expected": {
+          "0": 1,
+          "1": 1,
+          "7": 1,
+          "F": 2,
+          "O": 3,
+          "L": 5,
+          "W": 1,
+          "T": 6,
+          "H": 4,
+          "E": 4,
+          "S": 2,
+          "I": 2,
+          "G": 4,
+          "K": 1,
+          "P": 2,
+          "A": 2,
+          "R": 1,
+          "Y": 2,
+          "Q": 1,
+          "細": 1,
+          "い": 1,
+          "光": 1,
+          "を": 1,
+          "た": 1,
+          "ど": 1,
+          "る": 1
+        },
+        "actual": {
+          "0": 1,
+          "1": 1,
+          "7": 1,
+          "F": 2,
+          "O": 3,
+          "L": 3,
+          "W": 1,
+          "T": 3,
+          "H": 2,
+          "E": 3,
+          "S": 1,
+          "I": 1,
+          "G": 3,
+          "K": 1,
+          "P": 2,
+          "R": 1,
+          "A": 1,
+          "Y": 2,
+          "Q": 1,
+          "細": 1,
+          "い": 1,
+          "光": 1,
+          "を": 1,
+          "た": 1,
+          "ど": 1,
+          "る": 1
+        },
+        "excess": [],
+        "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+      },
+      "qualityFailures": [
+        {
+          "type": "ocr-anchor",
+          "anchor": "KEEP THE LAST LIGHT",
+          "occurrences": 0,
+          "expectedOccurrences": 1,
+          "reason": "Actual production OCR does not contain the normalized expected anchor"
+        },
+        {
+          "type": "paragraph-order",
+          "anchors": [
+            "KEEP THE LAST LIGHT"
+          ],
+          "paragraphIndex": -1,
+          "found": false,
+          "reason": "Each general group must match a complete normalized actual source paragraph in order, without borrowing text from other groups"
+        }
+      ],
+      "negativeDetections": [],
+      "protectedPixels": {
+        "source": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              110,
+              110,
+              110,
+              255
+            ],
+            [
+              255,
+              170,
+              210,
+              255
+            ],
+            [
+              35,
+              100,
+              220,
+              255
+            ]
+          ]
+        },
+        "translated": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              110,
+              110,
+              110,
+              255
+            ],
+            [
+              255,
+              170,
+              210,
+              255
+            ],
+            [
+              35,
+              100,
+              220,
+              255
+            ]
+          ]
+        }
+      },
+      "restoreAndRedisplay": {
+        "sourcePreserved": true,
+        "bitmapPreserved": true,
+        "additionalOcrOperations": 0,
+        "additionalTextRequests": 0
+      }
+    },
+    {
+      "scene": "mixed-color-edge-screenshot",
+      "sourceLanguage": "en",
+      "texts": [
+        "COLORONTHEEDGE",
+        "SOUTH DOOR",
+        "NORTH DOOR",
+        "MIXED BORDER CONTROL"
+      ],
+      "expectedSource": [
+        "COLOR ON THE EDGE",
+        "NORTH DOOR",
+        "SOUTH DOOR",
+        "MIXED BORDER CONTROL"
+      ],
+      "ocrLines": [
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "COLORONTHEEDGE",
+          "bbox": {
+            "x0": 70,
+            "y0": 103,
+            "x1": 522,
+            "y1": 134
+          },
+          "fontSize": 31,
+          "sourceBoxes": [
+            {
+              "x0": 70,
+              "y0": 103,
+              "x1": 522,
+              "y1": 134
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "SOUTH DOOR",
+          "bbox": {
+            "x0": 505,
+            "y0": 349,
+            "x1": 696,
+            "y1": 370
+          },
+          "fontSize": 21,
+          "sourceBoxes": [
+            {
+              "x0": 505,
+              "y0": 349,
+              "x1": 696,
+              "y1": 370
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "NORTH DOOR",
+          "bbox": {
+            "x0": 104,
+            "y0": 349,
+            "x1": 296,
+            "y1": 370
+          },
+          "fontSize": 21,
+          "sourceBoxes": [
+            {
+              "x0": 104,
+              "y0": 349,
+              "x1": 296,
+              "y1": 370
+            }
+          ]
+        },
+        {
+          "text": "流畅阅读：看懂每一页漫画",
+          "sourceText": "MIXED BORDER CONTROL",
+          "bbox": {
+            "x0": 79,
+            "y0": 510,
+            "x1": 466,
+            "y1": 532
+          },
+          "fontSize": 22,
+          "sourceBoxes": [
+            {
+              "x0": 79,
+              "y0": 510,
+              "x1": 466,
+              "y1": 532
+            }
+          ]
+        }
+      ],
+      "observedNoBitmap": false,
+      "anchors": [
+        {
+          "anchor": "COLOR ON THE EDGE",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "NORTH DOOR",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "SOUTH DOOR",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        },
+        {
+          "anchor": "MIXED BORDER CONTROL",
+          "occurrences": 1,
+          "expectedOccurrences": 1,
+          "found": true
+        }
+      ],
+      "paragraphGroups": [
+        {
+          "anchors": [
+            "COLOR ON THE EDGE"
+          ],
+          "paragraphIndex": 0,
+          "found": true
+        },
+        {
+          "anchors": [
+            "NORTH DOOR"
+          ],
+          "paragraphIndex": 2,
+          "found": true
+        },
+        {
+          "anchors": [
+            "SOUTH DOOR"
+          ],
+          "paragraphIndex": 1,
+          "found": true
+        },
+        {
+          "anchors": [
+            "MIXED BORDER CONTROL"
+          ],
+          "paragraphIndex": 3,
+          "found": true
+        }
+      ],
+      "sourceCharacterInventory": {
+        "expected": {
+          "C": 2,
+          "O": 12,
+          "L": 2,
+          "R": 7,
+          "N": 3,
+          "T": 4,
+          "H": 3,
+          "E": 5,
+          "D": 5,
+          "G": 1,
+          "S": 1,
+          "U": 1,
+          "M": 1,
+          "I": 1,
+          "X": 1,
+          "B": 1
+        },
+        "actual": {
+          "C": 2,
+          "O": 12,
+          "L": 2,
+          "R": 7,
+          "N": 3,
+          "T": 4,
+          "H": 3,
+          "E": 5,
+          "D": 5,
+          "G": 1,
+          "S": 1,
+          "U": 1,
+          "M": 1,
+          "I": 1,
+          "X": 1,
+          "B": 1
+        },
+        "excess": [],
+        "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+      },
+      "qualityFailures": [],
+      "negativeDetections": [],
+      "protectedPixels": {
+        "source": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              250,
+              170,
+              80,
+              255
+            ],
+            [
+              60,
+              210,
+              200,
+              255
+            ],
+            [
+              170,
+              140,
+              240,
+              255
+            ]
+          ]
+        },
+        "translated": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              250,
+              170,
+              80,
+              255
+            ],
+            [
+              60,
+              210,
+              200,
+              255
+            ],
+            [
+              170,
+              140,
+              240,
+              255
+            ]
+          ]
+        }
+      },
+      "restoreAndRedisplay": {
+        "sourcePreserved": true,
+        "bitmapPreserved": true,
+        "additionalOcrOperations": 0,
+        "additionalTextRequests": 0
+      }
+    },
+    {
+      "scene": "wordless-chromatic-diagram",
+      "sourceLanguage": "auto",
+      "texts": [],
+      "expectedSource": [],
+      "ocrLines": [],
+      "observedNoBitmap": true,
+      "anchors": [],
+      "sourceCharacterInventory": {
+        "expected": {},
+        "actual": {},
+        "excess": [],
+        "scope": "Normalized Unicode character counts detect additions; they do not prove complete recognition, text order, or artwork provenance"
+      },
+      "qualityFailures": [],
+      "negativeDetections": [],
+      "protectedPixels": {
+        "source": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              255,
+              255,
+              255,
+              255
+            ],
+            [
+              0,
+              0,
+              0,
+              255
+            ],
+            [
+              255,
+              0,
+              255,
+              255
+            ]
+          ]
+        },
+        "translated": {
+          "width": 900,
+          "height": 900,
+          "pixels": [
+            [
+              255,
+              255,
+              255,
+              255
+            ],
+            [
+              0,
+              0,
+              0,
+              255
+            ],
+            [
+              255,
+              0,
+              255,
+              255
+            ]
+          ]
+        }
+      },
+      "restoreAndRedisplay": {
+        "sourcePreserved": true,
+        "bitmapPreserved": true,
+        "additionalOcrOperations": 0,
+        "additionalTextRequests": 0
+      },
+      "wordlessPage": {
+        "noTextTransport": true,
+        "noBitmap": true,
+        "sourcePreserved": true
+      }
+    }
+  ],
+  "modelReuse": {
+    "directoryPolicy": "Shared integrity-pinned model cache; models are not bundled with fixtures.",
+    "files": [
+      {
+        "key": "detection",
+        "kind": "ocr",
+        "filename": "PP-OCRv6_small_det.onnx",
+        "bytes": 9880512,
+        "sha256": "d73e0058b7a8086bbd57f3d10b8bcd4ff95363f67e06e2762b5e814fe9c9410e",
+        "cache": "hit"
+      },
+      {
+        "key": "recognition",
+        "kind": "ocr",
+        "filename": "PP-OCRv6_small_rec.onnx",
+        "bytes": 21159378,
+        "sha256": "5435fd747c9e0efe15a96d0b378d5bd157e9492ed8fd80edf08f30d02fa24634",
+        "cache": "hit"
+      },
+      {
+        "key": "charactersDictionary",
+        "kind": "ocr",
+        "filename": "ppocrv6_dict.txt",
+        "bytes": 74948,
+        "sha256": "41557512862dfe31970cf22407742b629725461dd84c0d8771bde9c87c2202c8",
+        "cache": "hit"
+      },
+      {
+        "key": "inpainting",
+        "kind": "inpaint",
+        "filename": "lama-manga-dynamic.onnx",
+        "bytes": 206291843,
+        "sha256": "de31ffa5ba26916b8ea35319f6c12151ff9654d4261bccf0583a69bb095315f9",
+        "cache": "hit"
+      }
+    ],
+    "networkDownloads": 0,
+    "modelRequests": 0
+  },
+  "runtime": {
+    "functionalSuccess": false,
+    "standard": {
+      "entries": [],
+      "coverage": {
+        "pages": [
+          {
+            "label": "auto-page",
+            "status": "listening"
+          },
+          {
+            "label": "test-page-before-navigation",
+            "status": "listening"
+          }
+        ],
+        "workers": [
+          {
+            "targetId": "9EBE312F0F215D94A4CD4092E98FDBD6",
+            "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/background.js",
+            "status": "closed",
+            "attached": true,
+            "logStatus": "listening"
+          }
+        ],
+        "failures": [],
+        "limitations": [
+          "采集从连接隔离浏览器后开始；连接前的首次后台启动异常和扩展管理页历史记录无法追溯。",
+          "浏览器 API 自动打开的页面在 page 事件后立即附加；其附加前日志不能保证完整。",
+          "未启用跨进程 iframe 子 target 的自动附加；相关测试需要另行检查其控制台。",
+          "后台启动或重启后，从发现 target 到 Runtime.enable 生效之间存在附加空窗；未输出到 Runtime/Log 的 API 失败不会自动变成日志。"
+        ]
+      },
+      "completeCoverage": false,
+      "coverageScope": "attached-top-level-pages-and-extension-service-workers",
+      "counts": {
+        "errors": 0,
+        "warnings": 0,
+        "expected": 0,
+        "site": 0
+      },
+      "workerObserved": true,
+      "passed": true,
+      "blockerIds": []
+    },
+    "offscreenAndWorkers": {
+      "counts": {
+        "errors": 0,
+        "warnings": 1,
+        "rawErrors": 0,
+        "rawWarnings": 2,
+        "advisories": 0
+      },
+      "blockerIds": [
+        1
+      ],
+      "advisories": [],
+      "entries": [
+        {
+          "id": 1,
+          "timestamp": "2026-10-25T10:23:32.087Z",
+          "phase": "test-actions",
+          "surface": "worker",
+          "targetId": "15D62981791A32F6F3C0EDA3DB6F5A9B",
+          "targetType": "worker",
+          "targetUrl": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/mangaInferenceWorker.js",
+          "diagnosticSessionId": "78909DD6279CE6469151ED9777378841",
+          "parentDiagnosticSessionId": "EE565CC217639775ACFD7BD07277118F",
+          "ownership": "fluentread",
+          "type": "console",
+          "level": "warning",
+          "message": "2026-10-25 18:23:32.082299 [W:onnxruntime:, session_state.cc:1367 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.",
+          "sourceUrl": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+          "stack": [
+            {
+              "functionName": "fluentReadWasmStderr",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+              "line": 31,
+              "column": 23
+            },
+            {
+              "functionName": "Qc",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+              "line": 129,
+              "column": 232
+            },
+            {
+              "functionName": "$func11927",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+              "line": 1,
+              "column": 17528994
+            },
+            {
+              "functionName": "$func2183",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+              "line": 1,
+              "column": 3086998
+            },
+            {
+              "functionName": "$func949",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+              "line": 1,
+              "column": 1014392
+            },
+            {
+              "functionName": "$func11794",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+              "line": 1,
+              "column": 17469533
+            },
+            {
+              "functionName": "$func826",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+              "line": 1,
+              "column": 833436
+            },
+            {
+              "functionName": "$Hd",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+              "line": 1,
+              "column": 17180381
+            },
+            {
+              "functionName": "b",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+              "line": 90,
+              "column": 53
+            },
+            {
+              "functionName": "bd",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+              "line": 144,
+              "column": 49
+            },
+            {
+              "functionName": "$func165",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+              "line": 1,
+              "column": 60990
+            },
+            {
+              "functionName": "$func12990",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+              "line": 1,
+              "column": 18591914
+            },
+            {
+              "functionName": "$func197",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+              "line": 1,
+              "column": 93996
+            },
+            {
+              "functionName": "$func2027",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+              "line": 1,
+              "column": 2774045
+            },
+            {
+              "functionName": "$Ld",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+              "line": 1,
+              "column": 17179496
+            },
+            {
+              "functionName": "b",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+              "line": 90,
+              "column": 53
+            },
+            {
+              "functionName": "Yc",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+              "line": 142,
+              "column": 425
+            },
+            {
+              "functionName": "$func5125",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+              "line": 1,
+              "column": 8463616
+            },
+            {
+              "functionName": "$ic",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+              "line": 1,
+              "column": 21245879
+            },
+            {
+              "functionName": "b",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+              "line": 90,
+              "column": 53
+            },
+            {
+              "functionName": "",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+              "line": 49,
+              "column": 45
+            },
+            {
+              "functionName": "Ut",
+              "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/chunks/wasmBinary-mW6U3Axi.js",
+              "line": 6,
+              "column": 22915
+            }
+          ],
+          "contextOrigin": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/mangaInferenceWorker.js",
+          "contextName": "",
+          "protocolTimestamp": 1792923812084.884,
+          "observations": [
+            {
+              "id": 1,
+              "timestamp": "2026-10-25T10:23:32.087Z",
+              "phase": "test-actions",
+              "surface": "worker",
+              "targetId": "15D62981791A32F6F3C0EDA3DB6F5A9B",
+              "targetType": "worker",
+              "targetUrl": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/mangaInferenceWorker.js",
+              "diagnosticSessionId": "78909DD6279CE6469151ED9777378841",
+              "parentDiagnosticSessionId": "EE565CC217639775ACFD7BD07277118F",
+              "ownership": "fluentread",
+              "type": "console",
+              "level": "warning",
+              "message": "2026-10-25 18:23:32.082299 [W:onnxruntime:, session_state.cc:1367 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.",
+              "sourceUrl": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+              "stack": [
+                {
+                  "functionName": "fluentReadWasmStderr",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 31,
+                  "column": 23
+                },
+                {
+                  "functionName": "Qc",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 129,
+                  "column": 232
+                },
+                {
+                  "functionName": "$func11927",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 17528994
+                },
+                {
+                  "functionName": "$func2183",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 3086998
+                },
+                {
+                  "functionName": "$func949",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 1014392
+                },
+                {
+                  "functionName": "$func11794",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 17469533
+                },
+                {
+                  "functionName": "$func826",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 833436
+                },
+                {
+                  "functionName": "$Hd",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 17180381
+                },
+                {
+                  "functionName": "b",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 90,
+                  "column": 53
+                },
+                {
+                  "functionName": "bd",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 144,
+                  "column": 49
+                },
+                {
+                  "functionName": "$func165",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 60990
+                },
+                {
+                  "functionName": "$func12990",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 18591914
+                },
+                {
+                  "functionName": "$func197",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 93996
+                },
+                {
+                  "functionName": "$func2027",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 2774045
+                },
+                {
+                  "functionName": "$Ld",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 17179496
+                },
+                {
+                  "functionName": "b",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 90,
+                  "column": 53
+                },
+                {
+                  "functionName": "Yc",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 142,
+                  "column": 425
+                },
+                {
+                  "functionName": "$func5125",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 8463616
+                },
+                {
+                  "functionName": "$ic",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 21245879
+                },
+                {
+                  "functionName": "b",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 90,
+                  "column": 53
+                },
+                {
+                  "functionName": "",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 49,
+                  "column": 45
+                },
+                {
+                  "functionName": "Ut",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/chunks/wasmBinary-mW6U3Axi.js",
+                  "line": 6,
+                  "column": 22915
+                }
+              ],
+              "contextOrigin": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/mangaInferenceWorker.js",
+              "contextName": "",
+              "protocolTimestamp": 1792923812084.884
+            },
+            {
+              "id": 2,
+              "timestamp": "2026-10-25T10:23:32.088Z",
+              "phase": "test-actions",
+              "surface": "offscreen",
+              "targetId": "930581CC2053EA4F9BFE4AD311EA52C9",
+              "targetType": "page",
+              "targetUrl": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/offscreen.html",
+              "diagnosticSessionId": "EE565CC217639775ACFD7BD07277118F",
+              "parentDiagnosticSessionId": null,
+              "ownership": "fluentread",
+              "type": "browser-log",
+              "level": "warning",
+              "message": "2026-10-25 18:23:32.082299 [W:onnxruntime:, session_state.cc:1367 VerifyEachNodeIsAssignedToAnEp] Some nodes were not assigned to the preferred execution providers which may or may not have an negative impact on performance. e.g. ORT explicitly assigns shape related ops to CPU to improve perf.",
+              "sourceUrl": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+              "stack": [
+                {
+                  "functionName": "fluentReadWasmStderr",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 31,
+                  "column": 23
+                },
+                {
+                  "functionName": "Qc",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 129,
+                  "column": 232
+                },
+                {
+                  "functionName": "$func11927",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 17528994
+                },
+                {
+                  "functionName": "$func2183",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 3086998
+                },
+                {
+                  "functionName": "$func949",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 1014392
+                },
+                {
+                  "functionName": "$func11794",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 17469533
+                },
+                {
+                  "functionName": "$func826",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 833436
+                },
+                {
+                  "functionName": "$Hd",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 17180381
+                },
+                {
+                  "functionName": "b",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 90,
+                  "column": 53
+                },
+                {
+                  "functionName": "bd",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 144,
+                  "column": 49
+                },
+                {
+                  "functionName": "$func165",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 60990
+                },
+                {
+                  "functionName": "$func12990",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 18591914
+                },
+                {
+                  "functionName": "$func197",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 93996
+                },
+                {
+                  "functionName": "$func2027",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 2774045
+                },
+                {
+                  "functionName": "$Ld",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 17179496
+                },
+                {
+                  "functionName": "b",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 90,
+                  "column": 53
+                },
+                {
+                  "functionName": "Yc",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 142,
+                  "column": 425
+                },
+                {
+                  "functionName": "$func5125",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 8463616
+                },
+                {
+                  "functionName": "$ic",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm",
+                  "line": 1,
+                  "column": 21245879
+                },
+                {
+                  "functionName": "b",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 90,
+                  "column": 53
+                },
+                {
+                  "functionName": "",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/fluent-read-ai/ort-wasm-simd-threaded.asyncify.mjs",
+                  "line": 49,
+                  "column": 45
+                },
+                {
+                  "functionName": "Ut",
+                  "url": "chrome-extension://djnlaiohfaaifbibleebjggkghlmcpcj/chunks/wasmBinary-mW6U3Axi.js",
+                  "line": 6,
+                  "column": 22915
+                }
+              ],
+              "browserSource": "worker",
+              "protocolTimestamp": 1792923812084.935
+            }
+          ]
+        }
+      ],
+      "failures": [],
+      "limitations": [
+        "Discovery attaches Offscreen after its creation; events emitted before Runtime.enable cannot be guaranteed.",
+        "Existing dedicated workers are attached when discovered; new children are paused only after their Offscreen owner has enabled auto-attach.",
+        "This observer covers this isolated extension Offscreen and dedicated/shared worker targets; it does not prove every iframe or browser API failure was emitted as Runtime/Log.",
+        "Worker Log domain can be unavailable; Runtime warning/error/exception collection remains mandatory.",
+        "Duplicate forwarded known-placement logs are associated only when one worker console event has the identical full timestamp-bearing message and complete stack; raw observations remain in rawEntries.",
+        "Third-party placement advisories are non-blocking only after the independent functional script reports success; this does not measure GPU coverage or claim every operation used the preferred backend."
+      ]
+    },
+    "finalizationErrors": []
+  },
+  "cleanup": {
+    "browserClosed": true,
+    "profileRemoved": true,
+    "cleanupErrors": []
+  },
+  "limitations": [
+    "14/23 source anchors and 3/8 strict scenes are distinct counts, not CER. Five scenes retain missing colored dialogue or a missing colored tail.",
+    "8 declared wordless regions have 0 detections; protected opaque pixels, source restore and cached redisplay checks passed on all 8 scenes. This does not establish absence of all artwork false positives or full original-text removal.",
+    "The native stock artifact has no SDK observer patch. Offscreen pipeline samples do not count native inference inside its separate worker; runs:0 is not zero model inference.",
+    "The unchanged numeric time 08:45 legitimately completes with empty manga patches; the wordless page returns the original image and no source lines. Missing anchors still fail.",
+    "The runtime report retains 1 unique/2 raw placement warnings and blockerIds:[1] because functional quality failed. It is not a runtime-clean pass. Attachment coverage remains bounded as recorded.",
+    "Text translation transport is deterministic fixture data, not a live provider or linguistic-quality evaluation.",
+    "No current runner SHA is substituted for the unarchived historical runner. No whole-pipeline performance or preferred-backend coverage claim.",
+    "The wordless page is manga-only and must be excluded from ordinary-image profile manifests."
+  ]
+}

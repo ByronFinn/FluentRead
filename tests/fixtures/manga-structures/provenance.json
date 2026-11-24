@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "repositoryInputPreparedAt": "2026-10-25T09:16:40.999912+00:00",
+  "originalFreezeBeforeAnyOcr": true,
+  "originalFreezeManifestSha256": "fdb861632dc91ff8175ef8f5d1f7e8eb34c0c6ae67e239812bf5841367f35dd7",
+  "originalDesignSha256": "04801c1cc084412785d426ba635d6bda286988c3d3fd4f6ca3272dae53393530",
+  "originalGeneratorSha256": "a3cbd37a026024161d8224029a40e18b7a6d5fc2059580481133cd79ec77dd06",
+  "originalCheckerSha256": "662a282108bfe2ca0171e0046d666bc5a03d4e76781690bf2352eb4c6c8b2a55",
+  "historicalCheckerSourceReplay": {
+    "sha256": "662a282108bfe2ca0171e0046d666bc5a03d4e76781690bf2352eb4c6c8b2a55",
+    "negativeCases": 51,
+    "scope": "Historical source/PNG/helper-contract replay, before paragraphGroups switched from ordered substrings to exact complete paragraph matching. No OCR accuracy claim."
+  },
+  "portabilityChanges": {
+    "generator": "Maintained Page helper and fixture design default to repository paths; explicit overrides retain exact SHA enforcement. Only manifest top-level generator path changes. Before any mkdir or file write, the complete rendered manifest must equal the repository-frozen manifest, including all source records and PNG hashes. The sole approved top-level source adaptation is the generator path already declared here.",
+    "checker": "Repository/fixture defaults and explicit --design via strict Node built-in argument parsing. Conflated-all-groups now requires paragraph-order from exact complete-paragraph matching rather than historical paragraph-separation. Still51 strict counterexamples."
+  },
+  "manifestTopLevelChanges": {
+    "generator": {
+      "before": "generate-structure-fixtures.py",
+      "after": "scripts/testing/generate-manga-structure-fixtures.py"
+    }
+  },
+  "allFivePngAndDesignBytesAndFullFixtureObjectsIdenticalToFreeze": true,
+  "nominalCardDimensionNote": "Original design uses24px coordinate difference for the white rectangle. Pillow includes the final pixel: actual connected white cards are25px wide, below30px recognition minimum. Frozen source glyph bboxes and pixels are unchanged.",
+  "license": "Original geometric art and wording authored for FluentRead tests. Fonts are read locally by SHA and never bundled. No external artwork/models downloaded.",
+  "firstActualOcrBaseline": {
+    "file": "first-ocr-baseline.json",
+    "sha256": "b436af92bbcfc94ba75ca2de910616a90017f01929d02d6594c2cfe369e28821",
+    "productionCommit": "c302a6f5bdb269fcf8f1eaefe75ebdff10dcdf19",
+    "qualityHelperSha256": "698fc68ce83ff2f0eb8e2b74cbb2c9db7c9b76887a31239f4114c391c0aab7ce",
+    "strictPass": false,
+    "anchors": {
+      "matched": 26,
+      "total": 29
+    },
+    "passingScenes": [
+      "narrow-inset-card-dialogue",
+      "midband-crossing-detached-cards",
+      "multisize-margin-callouts"
+    ],
+    "failingScenes": [
+      "bound-spread-gutter-caption",
+      "photographed-perspective-note"
+    ],
+    "inputTruthUnchanged": true
+  },
+  "independentReview": "Input design and source pixels reviewed by root before first OCR. This repository portability patch still awaits different-author review.",
+  "renderDriftGuard": "All five PNGs and full metadata are rendered/validated in memory before exclusive output creation. Any pixel/hash/record mismatch rejects; repository source freeze is never rewritten.",
+  "checkerIntegrityFix": {
+    "initialIndependentFinding": "Changed grouping and substituted duplicate scene could previously pass because the manifest was self-referential.",
+    "previousPortableCheckerSha256": "3d2d9ba21838c1545648c2227017b6e284a966cbfbfa6cc3fb10de81ef45e5cf",
+    "fixedCheckerSha256": "436679f51bab6c1f06a4ad1fe442b2bbf8cae041bbfbdc9b138bd61d5c8c6498",
+    "canonicalFixtureDigest": "5631dffc2b25a8bcfab4ea6b8b55eaf34a9888f32b0b7fa8f4d72755eaf2056f",
+    "canonicalManifestDigest": "180c17a1b18eec4a3b89c8aed32258ab032ec54bc40811dd98c0bc7ca2618f7d",
+    "actualCliNegatives": 18,
+    "allowedCanonicalControls": 2,
+    "originalTruthAndPngUnchanged": true
+  }
+}

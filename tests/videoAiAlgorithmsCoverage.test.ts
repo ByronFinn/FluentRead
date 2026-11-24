@@ -1,10 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   VideoAiStreamingResampler,
   measureVideoAiSpeechActivity,
-  getVideoAiStreamProfile,
-  getVideoAiAdaptiveSubmitStepMs,
 } from '@/src/features/video-subtitle/content/video-ai/audioWindow';
 import {
   getVisibleVideoAiCue,
@@ -21,12 +19,39 @@ import {
 } from '@/src/features/video-subtitle/content/video-ai/streamingTranscript';
 
 describe('Video AI algorithm boundary coverage', () => {
-  it('Small keeps the Base eight-second streaming profile and duty-cycle budget', () => {
-    expect(getVideoAiStreamProfile('small')).toEqual(getVideoAiStreamProfile('base'));
-    expect(getVideoAiStreamProfile('small').targetWindowMs).toBe(8_000);
-    expect(getVideoAiAdaptiveSubmitStepMs('small', 5_000)).toBe(getVideoAiAdaptiveSubmitStepMs('base', 5_000));
-    expect(getVideoAiAdaptiveSubmitStepMs('tiny', 5_000)).toBeLessThan(getVideoAiAdaptiveSubmitStepMs('small', 5_000));
+  it.each([
+    ['早安，今天晴朗。', '嗯，早安，今天晴朗。接着出发。', '接着出发。'],
+    ['今天天气晴朗。', '，天气晴朗。继续出发。', '继续出发。'],
+    ['𠀀，天气。', '嗯，𠀀，天气。继续😀', '继续😀'],
+    ['天气，晴朗。', '嗯，天气，晴朗。😀继续', '😀继续'],
+    ['天气。', '嗯，天气，继续', '，继续'],
+    ['e\u0301，天气。', '嗯，e\u0301，天气。新消息', '新消息'],
+    ['the quick', 'well , the quick brown', 'brown'],
+    ['the quick', 'well the , quick brown', 'brown'],
+    ['traffic move', ', traffic , moved slowly', 'slowly'],
+    ['the quick', 'well, the quick brown', 'brown'],
+    ['今天天气', '，天气很好', '很好'],
+    ['天气。', '天气。', ''],
+    ['天气', '😀世界和平', '😀世界和平'],
+    ['i', 'İ新', 'İ新'],
+  ])('maps comparison boundaries back to complete original characters: %s → %s', (previous, current, expected) => {
+    expect(getVideoAiTranscriptNovelSuffix(previous, current)).toBe(expected);
   });
+
+  it.each(['tr', 'lt'])('preserves display boundaries under contextual %s lowercasing', locale => {
+    const nativeLowerCase = String.prototype.toLocaleLowerCase;
+    const lowerCase = vi.spyOn(String.prototype, 'toLocaleLowerCase').mockImplementation(function (this: string) {
+      return nativeLowerCase.call(this, locale);
+    });
+    try {
+      const prefix = locale === 'tr' ? 'I\u0307' : 'I\u0301';
+      expect(getVideoAiTranscriptNovelSuffix('AB，', `${prefix}AB，😀新`)).toBe('😀新');
+      expect(getVideoAiTranscriptNovelSuffix('AB，', 'İAB，😀新')).toBe('😀新');
+    } finally {
+      lowerCase.mockRestore();
+    }
+  });
+
   it('handles empty and malformed audio while preserving resampler phase', () => {
     expect(measureVideoAiSpeechActivity(new Float32Array())).toEqual({
       active: false,

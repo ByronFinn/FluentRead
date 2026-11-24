@@ -1,7 +1,7 @@
 /**
  * @file tests/videoSubtitleTrackPriorityRuntime.test.ts
  * 文件职责：从实际 mountVideoSubtitleTranslation 公共入口验证 X 轨道优先与 YouTube 同轮选择、人工字幕回退及卸载后的异步资格。
- * 主要内容：真实桥消息、video、TextTrack 与配置订阅驱动播放器、轨道 loader、缓存和 DOM；覆盖同句调用预算、时钟漂移、NaN、seek、偏移、人工轨空档与迟到结果。
+ * 主要内容：真实桥消息、video、TextTrack 与配置订阅驱动播放器、轨道 loader、缓存和 DOM；覆盖 YouTube 仅原文使用自有样式并按时间轴显示完整 cue、原生字幕接管、移动端兄弟底控显隐与字幕布局自动同步、重绑和清理、菜单入口展开语义、两站菜单关闭字幕后保留入口与重新挂载恢复、功能总开关移除入口、关闭后的迟到结果与下载清理、重复外部启用重建、真实模式项保存、同句调用预算、实际服务线路或套餐变化后的缓存失效、时钟漂移、NaN、seek、偏移、人工轨空档与迟到结果。
  * 模块边界：linkedom 补齐缺失的浏览器媒体/几何接口并按观察器订阅过滤记录；只 mock 外部端口，命名 selector spy 保留真实实现，不替换业务算法或修改全局数组原型。
  */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
@@ -10,7 +10,7 @@ import {parseHTML} from 'linkedom';
 const ports = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
   subscribers: new Set<(value: unknown) => void>(),
-  translate: vi.fn(), send: vi.fn(), fetch: vi.fn(), watchProgress: vi.fn(), stopProgress: vi.fn(),
+  translate: vi.fn(), annotate: vi.fn(), send: vi.fn(), fetch: vi.fn(), patch: vi.fn(), watchProgress: vi.fn(), stopProgress: vi.fn(),
 }));
 vi.mock('@/src/services/config/store', () => ({
   config: ports.config,
@@ -19,11 +19,13 @@ vi.mock('@/src/services/config/store', () => ({
     return () => ports.subscribers.delete(listener);
   },
   requestConfigPatch: async (patch: Record<string, unknown>) => {
+    ports.patch(patch);
     Object.assign(ports.config, patch);
     for (const listener of [...ports.subscribers]) listener(ports.config);
   },
 }));
 vi.mock('@/src/services/translation/client', () => ({translateVideoText: ports.translate}));
+vi.mock('@/src/features/video-subtitle/content/readingAnnotationClient', () => ({annotateVideoReading: ports.annotate}));
 vi.mock('@/src/platform/browser/runtimeMessages', () => ({sendRuntimeMessage: ports.send}));
 vi.mock('webextension-polyfill', () => ({default: {runtime: {getURL: (path: string) => 'chrome-extension://fixture/' + path}}}));
 vi.mock('@/src/platform/storage/downloadProgress', () => ({watchContentDownloadProgress: ports.watchProgress}));
@@ -31,19 +33,53 @@ vi.mock('@/src/platform/browser/capabilities', async original => ({
   ...await original<typeof import('@/src/platform/browser/capabilities')>(),
   browserCapabilities: {extensionDom: true},
 }));
+vi.mock('@/src/ui/i18n', () => ({useUiI18n: () => ({t: (key: string) => key})}));
+vi.mock('@/src/features/reading-assistant/ui/answer/public', () => ({ReadingAnswer: {render: () => null}}));
+vi.mock('@/src/features/reading-assistant/public', () => ({streamReading: vi.fn()}));
+vi.mock('vue', async original => {
+  const vue = await original<typeof import('vue')>();
+  // Node 没有预先存在的 document；只适配 DOM renderer，真实 SFC setup、模板与事件照常执行。
+  return {...vue, createApp: (...args: Parameters<typeof vue.createApp>) => {
+    const doc = globalThis.document;
+    return vue.createRenderer<Node, Element>({
+      insert: (node, parent, anchor) => parent.insertBefore(node, anchor || null), remove: node => node.parentNode?.removeChild(node),
+      createElement: (tag, namespace) => vue.markRaw(namespace === 'svg' ? doc.createElementNS('http://www.w3.org/2000/svg', tag) : doc.createElement(tag)),
+      createText: value => doc.createTextNode(value), createComment: value => doc.createComment(value),
+      setText: (node, value) => {node.nodeValue = value;}, setElementText: (node, value) => {node.textContent = value;},
+      parentNode: node => node.parentElement, nextSibling: node => node.nextSibling,
+      patchProp: (node, key, previous, next) => {
+        if (/^on[A-Z]/.test(key)) {const event = key.slice(2).toLowerCase();if (previous) node.removeEventListener(event, previous);if (next) node.addEventListener(event, next);}
+        else if (key === 'style') Object.assign((node as HTMLElement).style, next || {});
+        else if (next == null || next === false && !/^(aria-|data-)/.test(key)) node.removeAttribute(key);
+        else node.setAttribute(key, next === true && !/^(aria-|data-)/.test(key) ? '' : String(next));
+      },
+    }).createApp(...args);
+  }};
+});
 
 import {Config} from '@/src/core/config/model';
+import {services} from '@/src/core/config/catalog';
+import {registerAllUiLanguageBundles} from './helpers/uiLanguageBundles';
 // 唯一 runtime import：移入 repo 后默认消费真实源码；私有 runner 可 alias 两份完整字节快照做同一测试对照。
-import {mountVideoSubtitleTranslation} from '@/src/features/video-subtitle/content/runtime';
+import {mountVideoSubtitleTranslation} from '@/src/features/video-subtitle/public';
 import {
   VIDEO_AI_CAPTION_CONTAINER_ID, VIDEO_NORMALIZED_CAPTION_OVERLAY_ID,
   VIDEO_SUBTITLE_PANEL_ACTIVE_CLASS, VIDEO_SUBTITLE_PANEL_ID,
-  VIDEO_TRANSLATION_BUTTON_ID, VIDEO_TRANSLATION_LAYER_ID, VIDEO_TRANSLATION_MENU_ID,
+  VIDEO_TRANSLATION_ACTIVE_CLASS, VIDEO_TRANSLATION_BUTTON_ID, VIDEO_TRANSLATION_LAYER_ID, VIDEO_TRANSLATION_MENU_ID,
   VIDEO_TRANSLATION_OVERLAY_ID, X_SUBTITLE_RESOURCE_MESSAGE,
+  markVideoUi,
 } from '@/src/features/video-subtitle/content/ui';
 import {audioInit} from './fixtures/hlsAudio';
-import {YOUTUBE_TIMED_TEXT_MESSAGE} from '@/src/features/video-subtitle/content/youtubeTimedTextBridgeCore';
+import {YOUTUBE_BRIDGE_REPLAY_EVENT, YOUTUBE_TIMED_TEXT_MESSAGE} from '@/src/features/video-subtitle/content/youtubeTimedTextBridgeCore';
 import * as subtitleLogic from '@/src/features/video-subtitle/content/subtitleLogic';
+import {createSubtitleLayoutObserver} from '@/src/features/video-subtitle/content/subtitleLayoutObserver';
+import {VIDEO_SUBTITLE_SCROLL_HOST_ID} from '@/src/features/video-subtitle/content/subtitleControlLayout';
+import {createVideoSentenceLearningHost} from '@/src/features/video-subtitle/content/sentenceLearningHost';
+import {createVideoSentenceLearningPlacement} from '@/src/features/video-subtitle/content/sentenceLearningPlacement';
+import {normalizeVideoSentenceLearningAppearance} from '@/src/core/config/videoSentenceLearningAppearance';
+
+// 英文状态刷新依赖运行时已加载的资源包；测试注册真实文案，生产仍按当前语言加载。
+registerAllUiLanguageBundles();
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -72,12 +108,15 @@ beforeEach(() => {
     videoSubtitleDisplayMode: 'bilingual', videoSourceLanguage: 'auto', videoLocalModel: 'tiny',
   });
   ports.translate.mockReset().mockImplementation((source: string) => Promise.resolve(translation(source)));
+  ports.annotate.mockReset().mockImplementation(async (text: string, language: string) => ({text: `Reading: ${text}`, language, scheme: 'fixture'}));
   ports.send.mockReset().mockImplementation(async (message: {type: string}) => {
     if (message.type === 'fluentReadGetVideoAiSubtitleCache') return {success: true, hit: false};
+    if (message.type === 'selectionWordLookup') return {success: true, data: {meanings: [{definitions: [{definition: 'Fixture dictionary definition.'}]}]}};
     if (message.type === 'fluentReadCancelLocalVideoTranscription' || message.type === 'fluentReadSetVideoAiSubtitleCache') return {success: true};
     throw new Error('Unexpected model/runtime boundary: ' + message.type);
   });
   ports.fetch.mockReset().mockRejectedValue(new Error('Unexpected network request in subtitle fixture'));
+  ports.patch.mockReset();
   ports.stopProgress.mockReset(); ports.watchProgress.mockReset().mockReturnValue(ports.stopProgress);
 });
 afterEach(async () => {
@@ -97,25 +136,29 @@ afterEach(async () => {
   }
 });
 
-function fixture(nativeText?: string, platform: 'x' | 'youtube' = 'x') {
+function fixture(nativeText?: string, platform: 'x' | 'youtube' | 'html-audio' | 'html-video' = 'x') {
   const markup = platform === 'youtube'
     ? '<!doctype html><html><head></head><body><div id="movie_player" class="html5-video-player"><video class="html5-main-video"></video><div class="ytp-right-controls"><button class="ytp-subtitles-button" aria-pressed="true">Subtitles</button></div><div id="ytp-caption-window-container"><span class="ytp-caption-segment"></span></div></div><p id="host">host original</p></body></html>'
+    : platform.startsWith('html-') ? `<!doctype html><html><head></head><body><section id="html-player"><${platform === 'html-audio' ? 'audio' : 'video'} controls></${platform === 'html-audio' ? 'audio' : 'video'}></section><p id="host">host original</p></body></html>`
     : '<!doctype html><html><head></head><body><div data-testid="videoPlayer"><video></video><div><button aria-label="Play">Play</button><button aria-label="Settings">Settings</button></div></div><p id="host">host original</p></body></html>';
   const {document, window} = parseHTML(markup);
-  const player = document.querySelector<HTMLElement>(platform === 'youtube' ? '#movie_player' : '[data-testid="videoPlayer"]')!;
-  const video = player.querySelector<HTMLVideoElement>('video')!;
+  const player = document.querySelector<HTMLElement>(platform === 'youtube' ? '#movie_player' : platform.startsWith('html-') ? '#html-player' : '[data-testid="videoPlayer"]')!;
+  const video = player.querySelector<HTMLVideoElement>('video, audio')!;
   const bounds = {left: 20, top: 20, width: 640, height: 360, right: 660, bottom: 380, x: 20, y: 20, toJSON: () => ({})};
   // linkedom 无布局引擎；标准媒体属性由 fixture 提供，产品选择/渲染仍使用实际实现。
   defineBrowserPort(window.HTMLElement.prototype, 'getBoundingClientRect', {configurable: true, value: () => bounds});
-  defineBrowserPort(window, 'location', {configurable: true, value: new URL(platform === 'youtube' ? 'https://www.youtube.com/watch?v=cue-proof' : 'https://x.com/example/status/100')});
+  defineBrowserPort(window, 'location', {configurable: true, value: new URL(platform === 'youtube' ? 'https://www.youtube.com/watch?v=cue-proof' : platform.startsWith('html-') ? 'https://podcast.example/episode' : 'https://x.com/example/status/100')});
   defineBrowserPort(window, 'innerWidth', {configurable: true, value: 1280});
   defineBrowserPort(window, 'innerHeight', {configurable: true, value: 900});
+  defineBrowserPort(Object.getPrototypeOf(document.createElement('div').style), 'getPropertyPriority', {configurable: true, value: () => ''});
   const selectValues = new WeakMap<object, string>();
   defineBrowserPort(window.HTMLSelectElement.prototype, 'value', {
     configurable: true, get() { return selectValues.get(this) || ''; },
     set(value: string) { selectValues.set(this, value); },
   });
-  const computed = (element: Element) => ({display: (element as HTMLElement).style.display || 'block', visibility: 'visible', opacity: '1', position: 'relative', objectFit: 'contain', objectPosition: '50% 50%'});
+  const computed = (element: Element) => ({display: (element as HTMLElement).style.display || 'block',
+    visibility: (element as HTMLElement).style.visibility || 'visible', opacity: (element as HTMLElement).style.opacity || '1',
+    position: 'relative', objectFit: 'contain', objectPosition: '50% 50%'});
   defineBrowserPort(window, 'getComputedStyle', {configurable: true, writable: true, value: computed});
   const trackEvents = new window.EventTarget();
   const tracks = Object.assign([] as TextTrack[], {
@@ -130,7 +173,7 @@ function fixture(nativeText?: string, platform: 'x' | 'youtube' = 'x') {
   };
   const native = nativeText ? makeTrack(nativeText) : undefined;
   if (native) tracks.push(native);
-  video.setAttribute('src', platform === 'youtube' ? 'https://www.youtube.com/fixture.mp4' : 'https://video.twimg.com/ext_tw_video/123/pu/vid/fixture.mp4');
+  video.setAttribute('src', platform === 'youtube' ? 'https://www.youtube.com/fixture.mp4' : platform.startsWith('html-') ? 'https://podcast.example/episode.mp3' : 'https://video.twimg.com/ext_tw_video/123/pu/vid/fixture.mp4');
   Object.defineProperties(video, {
     src: {configurable: true, get: () => video.getAttribute('src') || '', set: (value: string) => video.setAttribute('src', value)},
     currentSrc: {configurable: true, get: () => video.src},
@@ -149,16 +192,20 @@ function fixture(nativeText?: string, platform: 'x' | 'youtube' = 'x') {
   for (const name of ['Node', 'Element', 'HTMLElement', 'HTMLButtonElement', 'HTMLVideoElement', 'HTMLStyleElement', 'MutationObserver', 'CustomEvent']) {
     vi.stubGlobal(name, window[name as keyof typeof window]);
   }
-  if (platform === 'youtube') {
-    // linkedom childList 会错发未订阅 attributes；此端口只按 observe 选项过滤，保留真实 DOM 记录与业务回调。
+  const observerRegistrations = new Set<Map<Node, MutationObserverInit>>();
+  {
+    // linkedom 会错发未订阅 attributes，disconnect 后也可能派发旧批次；按浏览器订阅与断开契约过滤。
     const NativeObserver = window.MutationObserver;
     const budget = {maxDeliveries: 0, exceeded: false}; observerDiagnosticBudgets.add(budget);
     class SubscribedObserver {
       private readonly registrations = new Map<Node, MutationObserverInit>();
       private readonly observer: MutationObserver;
       private deliveries = 0;
+      private connected = false;
       constructor(callback: MutationCallback) {
+        observerRegistrations.add(this.registrations);
         this.observer = new NativeObserver(records => {
+          if (!this.connected) return;
           const delivered = records.filter(record => record.type !== 'attributes' || [...this.registrations].some(([target, options]) =>
             options.attributes && (target === record.target || options.subtree && target.contains(record.target))
             && (!options.attributeFilter || options.attributeFilter.includes(record.attributeName!))));
@@ -168,8 +215,8 @@ function fixture(nativeText?: string, platform: 'x' | 'youtube' = 'x') {
           callback(delivered, this as unknown as MutationObserver);
         });
       }
-      observe(target: Node, options: MutationObserverInit) {this.registrations.set(target, {...options}); this.observer.observe(target, {...options});}
-      disconnect() {this.registrations.clear(); this.observer.disconnect();}
+      observe(target: Node, options: MutationObserverInit) {this.connected = true;this.registrations.set(target, {...options}); this.observer.observe(target, {...options});}
+      disconnect() {this.connected = false;this.registrations.clear(); this.observer.disconnect();}
       takeRecords() {return this.observer.takeRecords();}
     }
     vi.stubGlobal('MutationObserver', SubscribedObserver);
@@ -211,27 +258,906 @@ function fixture(nativeText?: string, platform: 'x' | 'youtube' = 'x') {
   });
   const callsFor = (text: string) => ports.translate.mock.calls.filter(([source]) => source === text).length;
   const setCaption = (text: string) => {document.querySelector('.ytp-caption-segment')!.textContent = text;};
-  const emitTimedText = (cues: readonly {startMs: number; durationMs: number; text: string}[]) => {
+  const setCaptionSegments = (parts: readonly string[]) => {
+    const line = document.createElement('span'); line.className = 'caption-visual-line';
+    for (const text of parts) {
+      const segment = document.createElement('span'); segment.className = 'ytp-caption-segment'; segment.textContent = text;
+      line.appendChild(segment);
+    }
+    document.getElementById('ytp-caption-window-container')!.replaceChildren(line);
+  };
+  const emitTimedText = (cues: readonly {startMs: number; durationMs: number; text: string}[], url = 'https://www.youtube.com/api/timedtext?v=cue-proof&lang=en&fmt=json3') => {
     const event = new window.Event('message');
     Object.defineProperties(event, {
       source: {value: window}, origin: {value: window.location.origin},
       data: {value: {source: 'fluent-read', type: YOUTUBE_TIMED_TEXT_MESSAGE,
-        url: 'https://www.youtube.com/api/timedtext?v=cue-proof&lang=en&fmt=json3',
+        url,
         responseText: JSON.stringify({events: cues.map(cue => ({tStartMs: cue.startMs, dDurationMs: cue.durationMs, segs: [{utf8: cue.text}]}))})}},
     });
     window.dispatchEvent(event);
   };
-  return {document, window, player, video, tracks, native, makeTrack, start, emitResource, emitCue, emitVideo, changeTracks, changeConfig, displayed, callsFor, setCaption, emitTimedText};
+  return {document, window, player, video, tracks, native, makeTrack, start, emitResource, emitCue, emitVideo, changeTracks, changeConfig, displayed, callsFor, setCaption, setCaptionSegments, emitTimedText, observerRegistrations};
 }
 const settle = () => vi.advanceTimersByTimeAsync(0);
 const nativeSource = 'The native caption remains visible.';
-function clickMenu(f: ReturnType<typeof fixture>, selector: string) {
-  const event = new f.window.Event('click', {bubbles: true});
-  Object.defineProperty(event, 'isTrusted', {value: true});
-  f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!.querySelector(selector)!.dispatchEvent(event);
+
+describe('public mounted reading annotation integration', () => {
+  it('retries a failed reading from the actual menu without translating again', async () => {
+    Object.assign(ports.config, {from: 'ja', videoSubtitleDisplayMode: 'original-only'});
+    (ports.config as unknown as Config).videoSubtitleAppearance.readingAnnotation = true;
+    ports.annotate.mockRejectedValueOnce(new Error('reading worker unavailable'));
+    const f = fixture(undefined, 'youtube');f.setCaption('今日も勉強します。');f.start();await settle();
+    const menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;
+    dispatchVideoClick(f, f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)!); await settle();
+    const retry = menu.querySelector<HTMLButtonElement>('[data-action="retry-reading-annotation"]')!;expect(retry.hidden).toBe(false);
+    clickMenu(f, '[data-action="retry-reading-annotation"]');await settle();
+    expect(f.document.getElementById('fluent-read-video-subtitle-reading')?.textContent).toBe('Reading: 今日も勉強します。');
+    expect(ports.annotate).toHaveBeenCalledTimes(2);expect(ports.translate).not.toHaveBeenCalled();expect(retry.hidden).toBe(true);
+  });
+
+  it('双语字幕切换界面语言时同步更新已有读音的可访问名称且不重新计算', async () => {
+    Object.assign(ports.config, {from: 'ja', uiLanguage: 'zh-CN'});
+    (ports.config as unknown as Config).videoSubtitleAppearance.readingAnnotation = true;
+    const f = fixture(undefined, 'youtube'); f.setCaption('今日はいい天気です。'); f.start(); await vi.advanceTimersByTimeAsync(300);
+    const reading = f.document.getElementById('fluent-read-video-subtitle-reading')!;
+    expect(reading.getAttribute('aria-label')).toBe('日语罗马音');
+    const count = ports.annotate.mock.calls.length;
+    f.changeConfig({uiLanguage: 'en-US'}); await vi.advanceTimersByTimeAsync(100);
+    expect(reading.getAttribute('aria-label')).toBe('Japanese romaji');
+    expect(ports.annotate).toHaveBeenCalledTimes(count);
+  });
+
+  it('默认关闭不请求读音，启用日语仅原文模式后显示独立读音并保持原文正文', async () => {
+    Object.assign(ports.config, {from: 'ja', videoSubtitleDisplayMode: 'original-only'});
+    const f = fixture(undefined, 'youtube'); f.setCaption('今日はいい天気です。'); f.start(); await vi.advanceTimersByTimeAsync(100);
+    expect(ports.annotate).not.toHaveBeenCalled();
+    expect(f.document.getElementById('fluent-read-video-subtitle-reading')).toBeNull();
+    const appearance = (ports.config as unknown as Config).videoSubtitleAppearance;
+    f.changeConfig({videoSubtitleAppearance: {...appearance, readingAnnotation: true}}); await vi.advanceTimersByTimeAsync(100);
+    expect(ports.annotate).toHaveBeenCalledWith('今日はいい天気です。', 'ja', expect.any(AbortSignal));
+    expect(f.document.getElementById('fluent-read-video-subtitle-reading')?.textContent).toBe('Reading: 今日はいい天気です。');
+    expect(f.displayed().source).toBe('今日はいい天気です。');
+    expect(f.document.querySelector('.ytp-caption-segment')?.textContent).toBe('今日はいい天気です。');
+    expect(ports.translate).not.toHaveBeenCalled();
+    expect(ports.send.mock.calls.some(([message]) => message.type === 'fluentReadAnnotateVideoReading')).toBe(false);
+    await vi.advanceTimersByTimeAsync(1200); expect(ports.annotate).toHaveBeenCalledOnce();
+  });
+
+  it('仅原文带读音切回双语时同一cue立即开始翻译，保留原句与缓存读音', async () => {
+    const source = '今日はいい天気です。';
+    Object.assign(ports.config, {from: 'ja', videoSubtitleDisplayMode: 'original-only', videoPreferHumanSubtitles: false});
+    (ports.config as unknown as Config).videoSubtitleAppearance.readingAnnotation = true;
+    const f = fixture(undefined, 'youtube'); f.setCaption(source); f.start(); await vi.advanceTimersByTimeAsync(300);
+    const reading = f.document.getElementById('fluent-read-video-subtitle-reading')!;
+    expect(f.displayed().source).toBe(source); expect(reading.textContent).toBe('Reading: ' + source);
+    expect(ports.translate).not.toHaveBeenCalled(); expect(ports.annotate).toHaveBeenCalledOnce();
+    f.changeConfig({videoSubtitleDisplayMode: 'bilingual'}); await vi.advanceTimersByTimeAsync(300);
+    expect(ports.translate).toHaveBeenCalledWith(source, expect.any(AbortSignal), undefined);
+    expect(f.callsFor(source)).toBe(1); expect(f.displayed()).toMatchObject({source, translated: translation(source), active: true});
+    expect(f.document.getElementById('fluent-read-video-subtitle-reading')).toBe(reading);
+    expect(reading.textContent).toBe('Reading: ' + source); expect(ports.annotate).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1200); expect(f.callsFor(source)).toBe(1); expect(ports.annotate).toHaveBeenCalledOnce();
+  });
+
+  it('换句、仅译文与关闭作废旧读音，恢复原文模式复用当前句结果', async () => {
+    Object.assign(ports.config, {from: 'ja', videoSubtitleDisplayMode: 'original-only'});
+    (ports.config as unknown as Config).videoSubtitleAppearance.readingAnnotation = true;
+    const old = deferred<{text: string; language: string; scheme: string}>(); ports.annotate.mockReturnValueOnce(old.promise);
+    const f = fixture(undefined, 'youtube'); f.setCaption('最初の文。'); const dispose = f.start(); await vi.advanceTimersByTimeAsync(100);
+    const firstSignal = ports.annotate.mock.calls[0][2] as AbortSignal;
+    f.setCaption('次の文。'); await vi.advanceTimersByTimeAsync(100);
+    expect(firstSignal.aborted).toBe(true);
+    expect(f.document.getElementById('fluent-read-video-subtitle-reading')?.textContent).toBe('Reading: 次の文。');
+    old.resolve({text: '古い読み', language: 'ja', scheme: 'fixture'}); await settle();
+    expect(f.document.getElementById('fluent-read-video-subtitle-reading')?.textContent).toBe('Reading: 次の文。');
+    f.changeConfig({videoSubtitleDisplayMode: 'translation-only'}); await vi.advanceTimersByTimeAsync(100);
+    expect(f.document.getElementById('fluent-read-video-subtitle-reading')?.textContent || '').toBe('');
+    expect((ports.config as unknown as Config).videoSubtitleAppearance.readingAnnotation).toBe(true);
+    f.changeConfig({videoSubtitleDisplayMode: 'original-only'}); await vi.advanceTimersByTimeAsync(100);
+    expect(f.document.getElementById('fluent-read-video-subtitle-reading')?.textContent).toBe('Reading: 次の文。');
+    const late = deferred<{text: string; language: string; scheme: string}>(); ports.annotate.mockReturnValueOnce(late.promise);
+    f.setCaption('最後の文。'); await vi.advanceTimersByTimeAsync(100);
+    const finalSignal = ports.annotate.mock.calls.at(-1)![2] as AbortSignal;
+    f.changeConfig({videoSubtitleVisible: false}); expect(finalSignal.aborted).toBe(true);
+    late.resolve({text: '非表示後の読み', language: 'ja', scheme: 'fixture'}); await vi.advanceTimersByTimeAsync(100);
+    expect(f.document.getElementById('fluent-read-video-subtitle-reading')?.textContent || '').toBe('');
+    dispose(); expect(f.document.getElementById('fluent-read-video-subtitle-reading')).toBeNull();
+  });
+
+  it('真实菜单开关保存偏好、更新ARIA且保留菜单节点和焦点', async () => {
+    Object.assign(ports.config, {from: 'ja', videoSubtitleDisplayMode: 'original-only'});
+    const f = fixture(undefined, 'youtube'); f.setCaption('今日はいい天気です。'); f.start(); await vi.advanceTimersByTimeAsync(100);
+    const menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;
+    const entry = f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)!;
+    const open = new f.window.Event('click', {bubbles: true}); Object.defineProperty(open, 'isTrusted', {value: true}); entry.dispatchEvent(open); await settle();
+    const toggle = menu.querySelector<HTMLButtonElement>('[data-action="toggle-reading-annotation"]')!;
+    let focused: HTMLElement | null = null;
+    defineBrowserPort(f.document, 'activeElement', {configurable: true, get: () => focused?.isConnected ? focused : f.document.body});
+    defineBrowserPort(toggle, 'focus', {configurable: true, value: () => {focused = toggle;}}); toggle.focus();
+    clickMenu(f, '[data-action="toggle-reading-annotation"]'); await vi.advanceTimersByTimeAsync(100);
+    expect((ports.config as unknown as Config).videoSubtitleAppearance.readingAnnotation).toBe(true);
+    expect(toggle.getAttribute('aria-checked')).toBe('true'); expect(menu.hidden).toBe(false);
+    expect(menu.querySelector('[data-action="toggle-reading-annotation"]')).toBe(toggle); expect(f.document.activeElement).toBe(toggle);
+    expect(f.document.getElementById('fluent-read-video-subtitle-reading')?.textContent).toBe('Reading: 今日はいい天気です。');
+    clickMenu(f, '[data-action="toggle-reading-annotation"]'); await vi.advanceTimersByTimeAsync(100);
+    expect(toggle.getAttribute('aria-checked')).toBe('false'); expect(f.document.activeElement).toBe(toggle);
+    expect(f.document.getElementById('fluent-read-video-subtitle-reading')?.textContent || '').toBe('');
+  });
+});
+
+function mobileYoutubeLayoutFixture() {
+  const f = fixture(undefined, 'youtube');
+  // linkedom 缺标准 CSS priority 接口；保留实际 style 序列化，只补浏览器单属性优先级端口。
+  const stylePrototype = Object.getPrototypeOf(f.player.style);
+  const priorities = new WeakMap<object, Map<string, string>>();
+  const set = stylePrototype.setProperty, remove = stylePrototype.removeProperty;
+  defineBrowserPort(stylePrototype, 'getPropertyPriority', {configurable: true, value: function (this: object, name: string) {return priorities.get(this)?.get(name) || '';}});
+  defineBrowserPort(stylePrototype, 'setProperty', {configurable: true, value: function (this: object, name: string, value: string, priority = '') {
+    if (!priorities.has(this)) priorities.set(this, new Map());
+    priorities.get(this)!.set(name, priority); return set.call(this, name, value);
+  }});
+  defineBrowserPort(stylePrototype, 'removeProperty', {configurable: true, value: function (this: object, name: string) {priorities.get(this)?.delete(name); return remove.call(this, name);}});
+  defineBrowserPort(f.window, 'location', {configurable: true, value: new URL('https://m.youtube.com/watch?v=cue-proof')});
+  const bounds = {left: 0, top: 48, width: 402, height: 226, right: 402, bottom: 274, x: 0, y: 48, toJSON: () => ({})};
+  defineBrowserPort(f.window.HTMLElement.prototype, 'getBoundingClientRect', {configurable: true, value: () => bounds});
+  defineBrowserPort(f.video, 'videoWidth', {configurable: true, value: 400});
+  defineBrowserPort(f.video, 'videoHeight', {configurable: true, value: 300});
+  defineBrowserPort(f.video, 'offsetWidth', {configurable: true, value: 402});
+  defineBrowserPort(f.video, 'offsetHeight', {configurable: true, value: 226});
+  f.player.classList.add('ytp-mweb-player');
+  // 继承的桌面入口端口只供按钮挂载；移动几何没有这条桌面控件，不给它虚构整个播放器的障碍矩形。
+  defineBrowserPort(f.player.querySelector('.ytp-right-controls')!, 'getBoundingClientRect', {value: () => ({...bounds, width: 0, height: 0, right: 0, bottom: 48})});
+  const scope = f.document.createElement('div'); scope.id = 'player-container-id'; scope.className = 'player-container sticky-player';
+  f.player.before(scope); scope.appendChild(f.player);
+  const root = f.document.createElement('ytm-custom-control');
+  root.innerHTML = '<ytm-watch-player-controls><div id="player-control-overlay"><div class="player-controls-content"><div class="player-controls-bottom player-controls-bottom-left"></div><div class="player-controls-bottom player-controls-bottom-right"></div></div></div></ytm-watch-player-controls>';
+  scope.appendChild(root);
+  const controls = root.querySelectorAll<HTMLElement>('.player-controls-bottom');
+  for (const [index, control] of [...controls].entries()) {
+    const left = index === 0 ? 12 : 324, width = index === 0 ? 312 : 66;
+    defineBrowserPort(control, 'getBoundingClientRect', {configurable: true, value: () => ({...bounds, left, width, right: left + width, top: 200, y: 200, height: 44, bottom: 244})});
+  }
+  const bottom = () => f.document.getElementById(VIDEO_SUBTITLE_PANEL_ID)?.style.getPropertyValue('--fluent-read-video-subtitle-bottom');
+  const layoutSubscriptions = (target: Node) => [...f.observerRegistrations].filter(registrations => registrations.get(target)?.attributeFilter?.includes('hidden')).length;
+  return {...f, scope, root, controls, bottom, layoutSubscriptions};
 }
 
+describe('public mounted mobile YouTube subtitle control layout', () => {
+  it.each(['resize', 'orientationchange', 'visualViewport-resize', 'visualViewport-scroll'] as const)('calibrates the mobile viewport menu host before real menu measurement in the next %s frame', async eventName => {
+    const f = mobileYoutubeLayoutFixture();
+    const viewport = f.document.createElement('div');
+    Object.assign(viewport, {width: 402, height: 720, offsetLeft: 0, offsetTop: 0, scale: 1});
+    defineBrowserPort(f.window, 'visualViewport', {configurable: true, value: viewport});
+    const geometry = {left: 0, top: 48, width: 402, height: 226};
+    const rect = (left: number, top: number, width: number, height: number) => ({left, top, width, height,
+      right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({})});
+    defineBrowserPort(f.player, 'getBoundingClientRect', {configurable: true, value: () => rect(geometry.left, geometry.top, geometry.width, geometry.height)});
+    defineBrowserPort(f.player, 'clientWidth', {configurable: true, get: () => geometry.width});
+    defineBrowserPort(f.player, 'clientHeight', {configurable: true, get: () => geometry.height});
+    const nativeRect = f.window.HTMLElement.prototype.getBoundingClientRect;
+    defineBrowserPort(f.window.HTMLElement.prototype, 'getBoundingClientRect', {configurable: true, value: function (this: HTMLElement) {
+      return this.classList.contains('fluent-read-video-menu-host')
+        ? rect(0, 0, Number.parseFloat(this.style.width), Number.parseFloat(this.style.height)) : nativeRect.call(this);
+    }});
+    const dispose = f.start(); await vi.advanceTimersByTimeAsync(32);
+    const menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!, host = menu.parentElement!;
+    defineBrowserPort(host, 'clientWidth', {configurable: true, get: () => Number.parseFloat(host.style.width)});
+    defineBrowserPort(host, 'clientHeight', {configurable: true, get: () => Number.parseFloat(host.style.height)});
+    defineBrowserPort(menu, 'scrollHeight', {configurable: true, get: () => 250});
+    const button = f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)!;
+    const click = new f.window.Event('click', {bubbles: true}); Object.defineProperty(click, 'isTrusted', {value: true}); button.dispatchEvent(click);
+    expect(menu.hidden).toBe(false); expect(menu.dataset.layout).toBe('wide'); expect(host.clientWidth).toBe(402);
+    expect(host.parentElement).toBe(f.document.documentElement); expect(host.clientHeight).toBe(720);
+    // 手机菜单随实际可见视口缩放和平移，播放器可保持独立的尺寸与位置。
+    Object.assign(geometry, {left: 40, top: 70, width: 320, height: 180});
+    Object.assign(viewport, {width: 240, height: 320, offsetLeft: 12, offsetTop: 36});
+    if (eventName.startsWith('visualViewport-')) viewport.dispatchEvent(new f.window.Event(eventName.slice('visualViewport-'.length)));
+    else f.window.dispatchEvent(new f.window.Event(eventName));
+    // 只推进实际事件调度的一帧，远短于1秒播放器同步；不调用 binding.sync 或媒体/配置刷新。
+    await vi.advanceTimersByTimeAsync(16);
+    expect(menu.parentElement).toBe(host); expect(host.clientWidth).toBe(240); expect(host.clientHeight).toBe(320);
+    expect(host.style.transform).toBe('translate(12px, 36px) scale(1, 1)'); expect(menu.dataset.layout).toBe('stack');
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).toBe(button);
+    expect(f.document.querySelectorAll('#' + VIDEO_TRANSLATION_MENU_ID)).toHaveLength(1);
+    f.window.dispatchEvent(new f.window.Event('resize')); dispose(); await vi.advanceTimersByTimeAsync(16);
+    expect(f.document.querySelector('.fluent-read-video-menu-host')).toBeNull();
+  });
+
+  it.each([false, true])('学习宿主增删在一帧内撤回/恢复字幕host，scroll=%s，模式与Off保持正确', async scrolling => {
+    ports.config.videoPreferHumanSubtitles = false;
+    const f = mobileYoutubeLayoutFixture();
+    for (const [className, left, top, width, height] of [
+      ['player-controls-middle-core-buttons', 91, 133, 220, 56], ['player-controls-top', 234, 48, 144, 48],
+    ] as const) {
+      const node = f.document.createElement('div'); node.className = className; f.root.appendChild(node);
+      defineBrowserPort(node, 'getBoundingClientRect', {value: () => ({left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON() {return {};}})});
+    }
+    const text = scrolling ? 'A long paused caption. '.repeat(40) : 'Good morning. How are you?';
+    f.start(); f.emitTimedText([{startMs: 0, durationMs: 20000, text}]); f.setCaption(text); await vi.advanceTimersByTimeAsync(32);
+    const panel = f.document.getElementById(VIDEO_SUBTITLE_PANEL_ID)!, layer = f.document.getElementById(VIDEO_TRANSLATION_LAYER_ID)!;
+    // 浏览器测量端口区分普通卡片与极长卡片；学习宿主的真实增删由实际host实现负责。
+    const height = () => Math.min(scrolling ? 600 : 60, Number.parseFloat(panel.style.maxHeight) || 600);
+    defineBrowserPort(panel, 'getBoundingClientRect', {value: () => {
+      const width = Math.min(153, Number.parseFloat(panel.style.maxWidth) || 153), h = height();
+      const left = Number.parseFloat(panel.style.left) || 56, explicitTop = Number.parseFloat(panel.style.top);
+      const top = 48 + (Number.isFinite(explicitTop) ? explicitTop : 226 - Number.parseFloat(panel.style.getPropertyValue('--fluent-read-video-subtitle-bottom')) - h);
+      return {left, top, width, height: h, right: left + width, bottom: top + h, x: left, y: top, toJSON() {return {};}};
+    }});
+    defineBrowserPort(panel, 'scrollHeight', {get: () => scrolling ? 600 : 60}); defineBrowserPort(panel, 'clientHeight', {get: height});
+    f.emitVideo('timeupdate'); await vi.advanceTimersByTimeAsync(32);
+    expect(panel.dataset.fluentReadSubtitleLayout).toBe(scrolling ? 'scroll' : 'free'); expect(panel.parentElement?.id).toBe(VIDEO_SUBTITLE_SCROLL_HOST_ID);
+    panel.scrollTop = scrolling ? 120 : 0;
+    const learning = createVideoSentenceLearningHost({markUi: markVideoUi, mount: host => {
+      const view = f.document.createElement('section'); host.appendChild(view); return () => view.remove();
+    }, place: (host, player) => createVideoSentenceLearningPlacement({host, player,
+      appearance: normalizeVideoSentenceLearningAppearance(ports.config.videoSentenceLearningAppearance), onDragPosition() {}})});
+    const open = () => learning.open(f.player, {video: f.video, cues: [], platform: 'youtube', title: 'Learning', sourceLanguage: 'en', targetLanguage: 'zh-CN', translate: async value => value});
+    try {
+      open(); await vi.advanceTimersByTimeAsync(16);
+      const learningPanel = f.document.getElementById('fluent-read-video-learning-panel')!;
+      const learningFrame = learningPanel.parentElement!;
+      expect(learningFrame.classList.contains('fluent-read-video-learning-frame')).toBe(true); expect(learningFrame.parentElement).toBe(f.scope);
+      expect(learning.isConnected(f.player)).toBe(true); expect(panel.parentElement).toBe(layer);
+      expect(f.document.getElementById(VIDEO_SUBTITLE_SCROLL_HOST_ID)).toBeNull(); expect(panel.hasAttribute('tabindex')).toBe(false);
+      // 整块frame变更也要通知真实字幕runtime；此视图端口不负责自动修复第三方DOM删除。
+      learningFrame.remove(); await vi.advanceTimersByTimeAsync(16);
+      expect(learning.isConnected(f.player)).toBe(false); expect(panel.parentElement?.id).toBe(VIDEO_SUBTITLE_SCROLL_HOST_ID);
+      f.scope.appendChild(learningFrame); await vi.advanceTimersByTimeAsync(16); expect(panel.parentElement).toBe(layer);
+      const frame = vi.spyOn(f.window, 'requestAnimationFrame');
+      learningPanel.setAttribute('style', learningPanel.getAttribute('style') + ';max-height:170px'); learningPanel.firstElementChild!.append('Learning content');
+      learningFrame.setAttribute('style', learningFrame.getAttribute('style') + ';transform:translate(0px,0px)');
+      panel.setAttribute('style', panel.getAttribute('style') + ';opacity:1'); await settle(); expect(frame).not.toHaveBeenCalled(); frame.mockRestore();
+      learning.close(); await vi.advanceTimersByTimeAsync(16);
+      expect(panel.parentElement?.id).toBe(VIDEO_SUBTITLE_SCROLL_HOST_ID); expect(panel.scrollTop).toBe(scrolling ? 120 : 0);
+      open(); await vi.advanceTimersByTimeAsync(16);
+      // 切换仅原文按既有runtime契约清空翻译会话；同句滚动保留已在未换模式的关闭路径独立验证。
+      f.changeConfig({videoSubtitleDisplayMode: 'original-only'}); await settle();
+      expect(f.document.getElementById(VIDEO_SUBTITLE_SCROLL_HOST_ID)).toBeNull(); expect(layer.classList.contains('fluent-read-video-display-original-only')).toBe(true);
+      learning.close(); await vi.advanceTimersByTimeAsync(16);
+      expect(panel.parentElement?.id).toBe(VIDEO_SUBTITLE_SCROLL_HOST_ID);
+      expect(panel.parentElement?.classList.contains('fluent-read-video-display-original-only')).toBe(true);
+      open(); await vi.advanceTimersByTimeAsync(16); f.changeConfig({videoTranslationEnabled: false}); await settle();
+      learning.close(); await vi.advanceTimersByTimeAsync(1100);
+      expect(f.document.getElementById(VIDEO_SUBTITLE_SCROLL_HOST_ID)).toBeNull(); expect(panel.hasAttribute('tabindex')).toBe(false);
+    } finally {learning.close();}
+  });
+
+  it('滚动字幕通过真实入口开菜单时撤回兄弟host，关闭恢复同句位置，Off彻底清理', async () => {
+    ports.config.videoPreferHumanSubtitles = false;
+    const f = mobileYoutubeLayoutFixture();
+    for (const [className, left, top, width, height] of [
+      ['player-controls-middle-core-buttons', 91, 133, 220, 56], ['player-controls-top', 234, 48, 144, 48],
+    ] as const) {
+      const node = f.document.createElement('div'); node.className = className; f.root.appendChild(node);
+      defineBrowserPort(node, 'getBoundingClientRect', {value: () => ({left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON() {return {};}})});
+    }
+    const text = 'This unusually long caption remains paused while the menu opens. '.repeat(10);
+    f.start(); f.emitTimedText([{startMs: 0, durationMs: 20000, text}]); f.setCaption(text); await vi.advanceTimersByTimeAsync(32);
+    const panel = f.document.getElementById(VIDEO_SUBTITLE_PANEL_ID)!;
+    defineBrowserPort(panel, 'scrollHeight', {get: () => 600}); defineBrowserPort(panel, 'clientHeight', {get: () => 75});
+    panel.scrollTop = 120;
+    const layer = f.document.getElementById(VIDEO_TRANSLATION_LAYER_ID)!, menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;
+    expect(panel.parentElement?.id).toBe(VIDEO_SUBTITLE_SCROLL_HOST_ID); expect(layer.parentElement).toBe(f.player);
+    const toggleMenu = async () => {
+      const event = new f.window.Event('click', {bubbles: true}); Object.defineProperty(event, 'isTrusted', {value: true});
+      f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)!.dispatchEvent(event); await settle();
+    };
+    await toggleMenu();
+    expect(menu.hidden).toBe(false); expect(menu.parentElement?.classList.contains('fluent-read-video-menu-host')).toBe(true);
+    expect(menu.parentElement?.parentElement).toBe(f.scope);
+    expect(f.document.getElementById(VIDEO_SUBTITLE_SCROLL_HOST_ID)).toBeNull(); expect(panel.parentElement).toBe(layer);
+    expect(panel.hasAttribute('data-fluent-read-subtitle-scrollable')).toBe(false); expect(panel.hasAttribute('tabindex')).toBe(false);
+    expect(panel.style.getPropertyValue('--fluent-read-video-subtitle-padding')).toBeFalsy();
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(f.document.getElementById(VIDEO_SUBTITLE_SCROLL_HOST_ID)).toBeNull(); expect(f.displayed().source).toBe(text.trim());
+    await toggleMenu();
+    expect(menu.hidden).toBe(true); expect(panel.parentElement?.id).toBe(VIDEO_SUBTITLE_SCROLL_HOST_ID); expect(panel.scrollTop).toBe(120);
+    expect(f.document.querySelectorAll('#' + VIDEO_SUBTITLE_PANEL_ID)).toHaveLength(1);
+    await toggleMenu(); clickMenu(f, '[data-mode="off"]'); await settle();
+    expect(ports.config.videoTranslationEnabled).toBe(true); expect(ports.config.videoSubtitleVisible).toBe(false);
+    expect(menu.isConnected).toBe(true);
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).not.toBeNull();
+    expect(f.document.getElementById(VIDEO_SUBTITLE_SCROLL_HOST_ID)).toBeNull(); expect(panel.hasAttribute('tabindex')).toBe(false);
+  });
+
+  it('中部和顶部控件单独显隐也触发空区重排，不依赖媒体或周期同步', async () => {
+    ports.config.videoPreferHumanSubtitles = false;
+    const f = mobileYoutubeLayoutFixture();
+    const middle = f.document.createElement('div'); middle.className = 'player-controls-middle-core-buttons';
+    const top = f.document.createElement('div'); top.className = 'player-controls-top';
+    const bounds = (left: number, y: number, width: number, height: number) => ({left, top: y, width, height, right: left + width, bottom: y + height, x: left, y, toJSON() {return {};}});
+    defineBrowserPort(middle, 'getBoundingClientRect', {value: () => bounds(91, 133, 220, 56)});
+    defineBrowserPort(top, 'getBoundingClientRect', {value: () => bounds(234, 48, 144, 48)});
+    middle.setAttribute('style', 'visibility:hidden'); top.setAttribute('style', 'visibility:hidden'); f.root.append(middle, top);
+    const text = 'The controls change while this caption remains paused.';
+    f.start(); f.emitTimedText([{startMs: 0, durationMs: 20000, text}]); f.setCaption(text); await vi.advanceTimersByTimeAsync(32);
+    expect(f.displayed().active).toBe(true); expect(f.displayed().source).toBe(text);
+    const panel = f.document.getElementById(VIDEO_SUBTITLE_PANEL_ID)!;
+    expect(Number.parseFloat(panel.style.maxWidth)).toBeGreaterThan(250);
+    middle.setAttribute('style', 'visibility:visible'); top.setAttribute('style', 'visibility:visible'); await vi.advanceTimersByTimeAsync(16);
+    expect(Number.parseFloat(panel.style.maxWidth)).toBeLessThan(180); expect(Number.parseFloat(panel.style.maxHeight)).toBeLessThan(80);
+    middle.setAttribute('style', 'visibility:hidden'); top.setAttribute('style', 'visibility:hidden'); await vi.advanceTimersByTimeAsync(16);
+    expect(Number.parseFloat(panel.style.maxWidth)).toBeGreaterThan(250);
+  });
+
+  it('没有ResizeObserver的环境仍可调度，销毁后迟到帧与控件记录不能重新布局', () => {
+    const f = fixture(undefined, 'youtube');
+    const callbacks: MutationCallback[] = [], frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('ResizeObserver', undefined);
+    vi.stubGlobal('MutationObserver', class {constructor(callback: MutationCallback) {callbacks.push(callback);} observe() {} disconnect() {}});
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {frames.push(callback); return frames.length;});
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    const layout = vi.fn(), observer = createSubtitleLayoutObserver(layout, () => true);
+    callbacks[0]([], {} as MutationObserver);
+    observer.observe(f.player, f.video); frames[0](0); expect(layout).toHaveBeenCalledOnce();
+    observer.schedule(); observer.destroy(); frames[1](16); callbacks[0]([], {} as MutationObserver); observer.schedule();
+    expect(layout).toHaveBeenCalledOnce(); expect(frames).toHaveLength(2);
+  });
+
+  it('updates sibling control visibility and replacement within one layout frame without a manual subtitle sync', async () => {
+    const f = mobileYoutubeLayoutFixture(); f.root.style.visibility = 'hidden';
+    f.start(); f.setCaption('Mobile sibling control caption.');
+    await vi.advanceTimersByTimeAsync(32);
+    expect(f.bottom()).toBe('12px'); expect(f.layoutSubscriptions(f.scope)).toBe(1);
+    const requestFrame = vi.spyOn(f.window, 'requestAnimationFrame');
+    try {
+      const panel = f.document.getElementById(VIDEO_SUBTITLE_PANEL_ID)!;
+      panel.setAttribute('style', panel.getAttribute('style') + ';max-width:280px');
+      f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!.classList.add('fixture-menu-state');
+      await settle(); expect(requestFrame).not.toHaveBeenCalled();
+      // linkedom 的 CSSStyleDeclaration 不派发 style 记录；setAttribute 保留原生 DOM 记录与实际订阅回调。
+      f.root.setAttribute('style', 'visibility:visible'); f.root.setAttribute('style', 'visibility:visible;opacity:1');
+      await settle(); expect(requestFrame).toHaveBeenCalledTimes(1);
+    } finally {requestFrame.mockRestore();}
+    // 只推进一帧，短于播放器周期同步；不手动触发字幕/媒体/resize 更新。
+    await vi.advanceTimersByTimeAsync(16);
+    expect(f.bottom()).toBe('82px');
+    f.root.setAttribute('style', 'opacity:0'); await vi.advanceTimersByTimeAsync(16); expect(f.bottom()).toBe('12px');
+    f.root.setAttribute('style', 'opacity:1'); await vi.advanceTimersByTimeAsync(16); expect(f.bottom()).toBe('82px');
+    f.root.hidden = true; await vi.advanceTimersByTimeAsync(16); expect(f.bottom()).toBe('12px');
+    f.root.hidden = false; await vi.advanceTimersByTimeAsync(16); expect(f.bottom()).toBe('82px');
+    // class 改变后的 computed visibility 来自宿主 CSS；保留真实 MutationObserver 和布局消费者。
+    const computed = f.window.getComputedStyle;
+    const hiddenByClass = (element: Element) => ({...computed(element), visibility: element.classList.contains('controls-hidden') ? 'hidden' : computed(element).visibility});
+    defineBrowserPort(f.window, 'getComputedStyle', {configurable: true, value: hiddenByClass});
+    vi.stubGlobal('getComputedStyle', hiddenByClass);
+    const ancestor = f.root.querySelector<HTMLElement>('#player-control-overlay')!;
+    ancestor.classList.add('controls-hidden'); await vi.advanceTimersByTimeAsync(16); expect(f.bottom()).toBe('12px');
+    ancestor.classList.remove('controls-hidden'); await vi.advanceTimersByTimeAsync(16); expect(f.bottom()).toBe('82px');
+    f.root.remove(); await vi.advanceTimersByTimeAsync(16); expect(f.bottom()).toBe('12px');
+    f.scope.appendChild(f.root); await vi.advanceTimersByTimeAsync(16); expect(f.bottom()).toBe('82px');
+  });
+
+  it('rebinds the same video to its new scope and releases subscriptions on Off and destroy', async () => {
+    const f = mobileYoutubeLayoutFixture(); const dispose = f.start();
+    f.setCaption('The same mobile video keeps its caption.'); await vi.advanceTimersByTimeAsync(32);
+    expect(f.bottom()).toBe('82px');
+    const nextScope = f.document.createElement('div'); nextScope.id = 'player-container-id'; nextScope.className = 'player-container';
+    f.scope.id = 'old-player-container'; f.scope.after(nextScope); nextScope.appendChild(f.player);
+    await vi.advanceTimersByTimeAsync(32);
+    expect(f.bottom()).toBe('12px'); expect(f.layoutSubscriptions(f.scope)).toBe(0); expect(f.layoutSubscriptions(nextScope)).toBe(1);
+    nextScope.appendChild(f.root); await vi.advanceTimersByTimeAsync(16); expect(f.bottom()).toBe('82px');
+    const secondVideo = f.document.createElement('video'); nextScope.appendChild(secondVideo);
+    await vi.advanceTimersByTimeAsync(32);
+    expect(f.bottom()).toBe('12px'); expect(f.layoutSubscriptions(nextScope)).toBe(0);
+    secondVideo.remove(); f.changeConfig({videoSubtitleVisible: false}); await settle();
+    expect(f.layoutSubscriptions(f.player)).toBe(0);
+    f.changeConfig({videoSubtitleVisible: true}); await vi.advanceTimersByTimeAsync(16);
+    expect(f.bottom()).toBe('82px'); expect(f.layoutSubscriptions(nextScope)).toBe(1);
+    f.changeConfig({videoTranslationEnabled: false}); await settle();
+    expect(f.layoutSubscriptions(nextScope)).toBe(0);
+    const disabledBottom = f.bottom();
+    f.root.setAttribute('style', 'visibility:hidden'); await vi.advanceTimersByTimeAsync(16);
+    expect(f.bottom()).toBe(disabledBottom); expect(f.displayed().active).toBe(false);
+    f.changeConfig({videoTranslationEnabled: true}); await vi.advanceTimersByTimeAsync(16);
+    expect(f.layoutSubscriptions(nextScope)).toBe(1);
+    dispose(); await settle();
+    expect([...f.observerRegistrations].every(registrations => registrations.size === 0)).toBe(true);
+    f.root.setAttribute('style', 'visibility:visible'); await vi.advanceTimersByTimeAsync(32);
+    expect(f.document.getElementById(VIDEO_SUBTITLE_PANEL_ID)).toBeNull();
+  });
+});
+
+function dispatchVideoClick(f: ReturnType<typeof fixture>, target: Element, trusted = true) {
+  const event = new f.window.Event('click', {bubbles: true});
+  Object.defineProperty(event, 'isTrusted', {value: trusted});
+  target.dispatchEvent(event);
+}
+
+function clickMenu(f: ReturnType<typeof fixture>, selector: string) {
+  dispatchVideoClick(f, f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!.querySelector(selector)!);
+}
+
+describe('public mounted player menu entry semantics', () => {
+  it('关闭时延后菜单内容更新，打开时只测量一次菜单高度', async () => {
+    const f = fixture(undefined, 'youtube'); f.start(); await settle();
+    const menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;
+    const entry = f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)!;
+    const query = vi.spyOn(menu, 'querySelector');
+    const contentUpdates = () => query.mock.calls.filter(([selector]) => selector === '[data-service-label]').length;
+    const measureHeight = vi.fn(() => 380);
+    defineBrowserPort(menu, 'scrollHeight', {get: measureHeight});
+    defineBrowserPort(f.player, 'clientWidth', {get: () => 640});
+    defineBrowserPort(f.player, 'clientHeight', {get: () => 360});
+
+    f.changeConfig({uiLanguage: 'en-US', videoSubtitleDisplayMode: 'translation-only'});
+    await settle();
+    const hiddenUpdates = contentUpdates();
+    expect(entry.getAttribute('aria-label')).toContain('Enabled');
+    expect(menu.hidden).toBe(true);
+
+    dispatchVideoClick(f, entry);
+    const openingMeasurements = measureHeight.mock.calls.length;
+    const openingUpdates = contentUpdates() - hiddenUpdates;
+    expect(menu.hidden).toBe(false);
+    expect(menu.querySelector('[data-mode][aria-checked="true"]')?.getAttribute('data-mode')).toBe('translation-only');
+    expect(menu.querySelector('[data-action="toggle-reading-annotation"]')?.getAttribute('aria-label')).toBe('Reading annotations');
+
+    dispatchVideoClick(f, entry);
+    expect(menu.hidden).toBe(true);
+    expect(entry.getAttribute('aria-expanded')).toBe('false');
+    expect({hiddenUpdates, openingUpdates, openingMeasurements, closingUpdates: contentUpdates() - hiddenUpdates - openingUpdates})
+      .toEqual({hiddenUpdates: 0, openingUpdates: 1, openingMeasurements: 1, closingUpdates: 0});
+  });
+
+  it.each(['youtube', 'x'] as const)('双语顺序从 %s 实际菜单保存并立即重排，保留节点与翻译缓存', async platform => {
+    const f = fixture(platform === 'x' ? nativeSource : undefined, platform);
+    if (platform === 'youtube') f.setCaption(nativeSource);
+    f.start(); await vi.advanceTimersByTimeAsync(300);
+    const menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!; menu.hidden = false;
+    const source = f.document.getElementById(VIDEO_NORMALIZED_CAPTION_OVERLAY_ID)!;
+    const translated = f.document.getElementById(VIDEO_TRANSLATION_OVERLAY_ID)!;
+    const panel = f.document.getElementById(VIDEO_SUBTITLE_PANEL_ID)!;
+    const initial = f.displayed(), calls = ports.translate.mock.calls.length;
+    const appearance = {...(ports.config as unknown as Config).videoSubtitleAppearance};
+    expect(initial.source).toBeTruthy(); expect(initial.translated).toBeTruthy();
+    for (const order of ['translation-first', 'original-first', 'translation-first'] as const) {
+      clickMenu(f, `[data-subtitle-order="${order}"]`); await settle();
+      expect(ports.patch).toHaveBeenLastCalledWith({videoSubtitleAppearance: {...appearance, bilingualOrder: order}});
+      expect(menu.querySelector(`[data-subtitle-order="${order}"]`)?.getAttribute('aria-checked')).toBe('true');
+      expect(panel.style.getPropertyValue('--fluent-read-video-subtitle-translation-order')).toBe(order === 'translation-first' ? '0' : '3');
+      expect(f.displayed()).toEqual(initial);
+      expect(f.document.getElementById(VIDEO_NORMALIZED_CAPTION_OVERLAY_ID)).toBe(source);
+      expect(f.document.getElementById(VIDEO_TRANSLATION_OVERLAY_ID)).toBe(translated);
+      expect(ports.translate).toHaveBeenCalledTimes(calls);
+    }
+    // 外部设置更新走同一订阅，单语显示方式和其偏好均保持。
+    f.changeConfig({videoSubtitleDisplayMode: 'original-only', videoSubtitleAppearance: {...appearance, bilingualOrder: 'original-first'}});
+    await settle();
+    expect((ports.config as unknown as Config).videoSubtitleDisplayMode).toBe('original-only');
+    expect(menu.querySelector('[data-subtitle-order="original-first"]')?.getAttribute('aria-checked')).toBe('true');
+    expect([...menu.querySelectorAll<HTMLButtonElement>('[data-subtitle-order]')].every(button => button.disabled)).toBe(true);
+    expect(menu.querySelector<HTMLElement>('[data-subtitle-order-hint]')?.hidden).toBe(false);
+    const savedPatches = ports.patch.mock.calls.length;
+    clickMenu(f, '[data-subtitle-order="translation-first"]'); await settle();
+    expect(ports.patch).toHaveBeenCalledTimes(savedPatches);
+    clickMenu(f, '.fluent-read-video-menu-mode-group [data-mode="bilingual"]'); await settle();
+    expect([...menu.querySelectorAll<HTMLButtonElement>('[data-subtitle-order]')].every(button => !button.disabled)).toBe(true);
+    expect(menu.querySelector<HTMLElement>('[data-subtitle-order-hint]')?.hidden).toBe(true);
+    expect(menu.querySelector('[data-subtitle-order="original-first"]')?.getAttribute('aria-checked')).toBe('true');
+    f.changeConfig({videoSubtitleDisplayMode: 'translation-only', videoSubtitleAppearance: {...appearance, readingAnnotation: true}});
+    await settle();
+    expect(menu.querySelector<HTMLButtonElement>('[data-reading-bilingual]')?.hidden).toBe(false);
+    expect((ports.config as unknown as Config).videoSubtitleDisplayMode).toBe('translation-only');
+    clickMenu(f, '[data-action="show-reading-original"]'); await settle();
+    expect((ports.config as unknown as Config).videoSubtitleDisplayMode).toBe('bilingual');
+    expect((ports.config as unknown as Config).videoSubtitleAppearance.readingAnnotation).toBe(true);
+    expect(menu.querySelector<HTMLButtonElement>('[data-reading-bilingual]')?.hidden).toBe(true);
+  });
+
+  it('fetches an uncaptured YouTube track for export while hidden and reuses that captured track when captions reopen', async () => {
+    const f = fixture(undefined, 'youtube');Object.assign(ports.config, {videoSubtitleVisible: false});
+    const track = {baseUrl: 'https://www.youtube.com/api/timedtext?v=cue-proof&lang=en', languageCode: 'en'};
+    const script = f.document.createElement('script');script.textContent = `var ytInitialPlayerResponse=${JSON.stringify({videoDetails: {videoId: 'cue-proof'}, captions: {playerCaptionsTracklistRenderer: {captionTracks: [track]}}})};`;
+    f.document.body.append(script);const blobs: Blob[] = [];
+    defineBrowserPort(URL, 'createObjectURL', {configurable: true, value: (blob: Blob) => {blobs.push(blob);return 'blob:youtube-export';}});
+    defineBrowserPort(URL, 'revokeObjectURL', {configurable: true, value: vi.fn()});
+    ports.fetch.mockImplementation(async () => new Response(JSON.stringify({events: [{tStartMs: 0, dDurationMs: 6000, segs: [{utf8: 'The original exported sentence.'}]}]})));
+    f.start();await settle();expect(ports.fetch).not.toHaveBeenCalled();
+    const menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;menu.hidden = false;
+    clickMenu(f, '[data-action="download-subtitles"]');await settle();
+    expect(ports.fetch).toHaveBeenCalledOnce();expect(await blobs[0].text()).toContain('The original exported sentence.');
+    f.setCaption('The original exported sentence.');clickMenu(f, '[data-mode="bilingual"]');await vi.advanceTimersByTimeAsync(1000);
+    expect(ports.config.videoSubtitleVisible).toBe(true);expect(ports.fetch).toHaveBeenCalledOnce();
+    expect(f.displayed().source).toBe('The original exported sentence.');
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:youtube-export');
+  });
+
+  it('exports a native X track with a single bilingual timeline and cancels a later export cleanly', async () => {
+    const f = fixture('Current native sentence.');
+    Object.defineProperty(f.native!, 'cues', {configurable: true, value: [
+      {startTime: 0, endTime: 10, text: 'Current native sentence.'}, {startTime: 40, endTime: 45, text: 'A future native sentence.'},
+      {startTime: 44, endTime: 48, text: 'The following native sentence.'},
+    ]});
+    const blobs: Blob[] = [];
+    defineBrowserPort(URL, 'createObjectURL', {configurable: true, value: (blob: Blob) => {blobs.push(blob);return `blob:download-${blobs.length}`;}});
+    defineBrowserPort(URL, 'revokeObjectURL', {configurable: true, value: vi.fn()});
+    f.start();f.emitVideo('loadedmetadata');await vi.advanceTimersByTimeAsync(1000);const menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;menu.hidden = false;
+    clickMenu(f, '[data-action="open-subtitle-tools"]');clickMenu(f, '[data-action="download-subtitles"]');await settle();
+    expect(await blobs[0].text()).toContain('00:00:40,000 --> 00:00:45,000\nA future native sentence.');
+    clickMenu(f, '[data-action="download-bilingual-subtitles"]');await settle();
+    expect(menu.querySelector('[data-export-prompt]')).not.toBeNull();expect(f.callsFor('A future native sentence.')).toBe(0);
+    clickMenu(f, '[data-export-choice="complete"]');await settle();
+    expect(f.callsFor('A future native sentence.')).toBe(1);
+    expect(await blobs[1].text()).toBe([
+      '1\n00:00:00,000 --> 00:00:10,000\nCurrent native sentence.\n测试译文：Current native sentence.\n',
+      '2\n00:00:40,000 --> 00:00:44,000\nA future native sentence.\n测试译文：A future native sentence.\n',
+      '3\n00:00:44,000 --> 00:00:48,000\nThe following native sentence.\n测试译文：The following native sentence.\n',
+    ].join('\n'));
+    clickMenu(f, '[data-action="download-translated-subtitles"]');await settle();
+    clickMenu(f, '[data-export-choice="cancel"]');await settle();
+    expect(blobs).toHaveLength(2);expect(menu.querySelector('[data-download-status]')?.textContent).toContain('取消');
+    await vi.advanceTimersByTimeAsync(1000);expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2);
+  });
+
+  it('prepares the real native fullscreen text track from the runtime translation cache and removes it on Off', async () => {
+    const f = fixture(undefined, 'youtube');f.setCaption('A native fullscreen sentence.');
+    Object.assign(ports.config, {videoPreferHumanSubtitles: false});Object.assign(f.video, {webkitEnterFullscreen: vi.fn()});
+    class CuePort {constructor(readonly startTime: number, readonly endTime: number, public text: string) {}}
+    defineBrowserPort(f.window, 'VTTCue', {configurable: true, value: CuePort});
+    const createElement = f.document.createElement.bind(f.document), created: any[] = [];
+    defineBrowserPort(f.document, 'createElement', {configurable: true, value: (tag: string, options?: ElementCreationOptions) => {
+      const node = createElement(tag, options);
+      if (tag === 'track') {
+        const track = Object.assign(new f.window.EventTarget(), {mode: 'disabled', kind: 'subtitles', cues: [] as CuePort[], addCue(cue: CuePort) {this.cues.push(cue);}, removeCue(cue: CuePort) {this.cues.splice(this.cues.indexOf(cue), 1);}});
+        Object.defineProperty(node, 'track', {value: track});created.push({node, track});f.tracks.push(track as unknown as TextTrack);
+      }
+      return node;
+    }});
+    f.start();f.emitTimedText([{startMs: 0, durationMs: 6000, text: 'A native fullscreen sentence.'}]);await vi.advanceTimersByTimeAsync(1000);
+    expect(created).toHaveLength(1);expect(created[0].track.cues[0].text).toBe('A native fullscreen sentence.\n' + translation('A native fullscreen sentence.'));
+    f.video.dispatchEvent(new f.window.Event('webkitbeginfullscreen'));expect(created[0].track.mode).toBe('hidden');
+    created[0].track.mode = 'showing';f.changeTracks();
+    f.changeConfig({videoSubtitleDisplayMode: 'original-only'});await settle();expect(created[0].track.cues[0].text).toBe('A native fullscreen sentence.');
+    f.changeConfig({videoTranslationEnabled: false});await settle();expect(created[0].node.isConnected).toBe(false);
+  });
+
+  it('opens the actual sentence learning SFC with the current timeline, enables native captions, and closes through its control', async () => {
+    // Vue 开发构建的 devtools 等待属于框架；显式提供端口，便于严格检查 feature 计时器清理。
+    vi.stubGlobal('__VUE_DEVTOOLS_GLOBAL_HOOK__', {emit: vi.fn()});
+    const f = fixture(undefined, 'youtube');Object.assign(ports.config, {from: 'en'});
+    f.setCaption('A complete sentence to learn.');
+    Object.assign(f.video, {pause: vi.fn(), play: vi.fn(async () => undefined)});
+    const native = f.document.querySelector('.ytp-subtitles-button')!;native.setAttribute('aria-pressed', 'false');
+    const nativeClick = vi.fn(() => native.setAttribute('aria-pressed', 'true'));native.addEventListener('click', nativeClick);
+    f.start();f.emitTimedText([{startMs: 0, durationMs: 6000, text: 'A complete sentence to learn.'}]);await settle();
+    const menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;menu.hidden = false;
+    clickMenu(f, '[data-action="open-sentence-learning"]');
+    await vi.dynamicImportSettled();await settle();await vi.advanceTimersByTimeAsync(20);
+    const panel = f.document.getElementById('fluent-read-video-learning-panel');
+    expect(panel).not.toBeNull();expect(menu.hidden).toBe(true);expect(nativeClick).toHaveBeenCalledOnce();
+    expect(panel!.querySelector('[data-learning-original]')?.textContent).toBe('A complete sentence to learn.');
+    expect(ports.translate).toHaveBeenCalledWith('A complete sentence to learn.', expect.any(AbortSignal), 'en');
+    panel!.querySelector('[data-learning-action="close"]')!.dispatchEvent(new f.window.Event('click', {bubbles: true}));await settle();
+    expect(panel!.isConnected).toBe(false);
+    menu.hidden = false;clickMenu(f, '[data-action="open-sentence-learning"]');await vi.dynamicImportSettled();await settle();
+    expect(f.document.getElementById('fluent-read-video-learning-panel')).not.toBeNull();expect(nativeClick).toHaveBeenCalledOnce();
+    f.changeConfig({videoTranslationEnabled: false});await settle();expect(f.document.getElementById('fluent-read-video-learning-panel')).toBeNull();
+  });
+
+  it('routes the public entry to meeting captions and persists the actual platform display control', async () => {
+    const f = fixture();
+    defineBrowserPort(f.window, 'location', {configurable: true, value: new URL('https://meet.google.com/abc-defg-hij')});
+    const stylePrototype = Object.getPrototypeOf(f.player.style), priorities = new WeakMap<object, Map<string, string>>();
+    const set = stylePrototype.setProperty, remove = stylePrototype.removeProperty;
+    defineBrowserPort(stylePrototype, 'getPropertyPriority', {configurable: true, value: function(this: object, key: string) {return priorities.get(this)?.get(key) || '';}});
+    defineBrowserPort(stylePrototype, 'setProperty', {configurable: true, value: function(this: object, key: string, value: string, priority = '') {if (!priorities.has(this)) priorities.set(this, new Map());priorities.get(this)!.set(key, priority);return set.call(this, key, value);}});
+    defineBrowserPort(stylePrototype, 'removeProperty', {configurable: true, value: function(this: object, key: string) {priorities.get(this)?.delete(key);return remove.call(this, key);}});
+    const caption = f.document.createElement('div');caption.setAttribute('data-caption-text', '');caption.textContent = 'A meeting caption to translate.';f.player.append(caption);
+    const dispose = f.start();await vi.advanceTimersByTimeAsync(30);
+    const host = f.document.getElementById('fluent-read-platform-captions')!, root = host.shadowRoot!;
+    expect(root.querySelector('.source')?.textContent).toBe(caption.textContent);
+    expect(root.querySelector('.translation')?.textContent).toBe(translation(caption.textContent!));
+    expect(root.querySelector('.panel')?.getAttribute('aria-label')).toBe('双语字幕');
+    const mode = root.querySelector('select')!;mode.value = 'original-only';mode.dispatchEvent(new f.window.Event('change'));await vi.advanceTimersByTimeAsync(30);
+    expect(ports.patch).toHaveBeenCalledWith({videoSubtitleDisplayMode: 'original-only'});
+    expect(root.querySelector('.translation')!.textContent).toBe('');
+    mode.value = 'off';mode.dispatchEvent(new f.window.Event('change'));await vi.advanceTimersByTimeAsync(30);
+    expect(ports.patch).toHaveBeenLastCalledWith({videoSubtitleVisible: false});expect(host.hidden).toBe(true);
+    dispose();expect(host.isConnected).toBe(false);
+  });
+
+  it.each(['x', 'youtube'] as const)('%s 入口只展开菜单，字幕模式与本机字幕开关保留各自语义', async platform => {
+    Object.assign(ports.config, {uiLanguage: 'zh-CN'});
+    const f = fixture(undefined, platform); const dispose = f.start(); await settle();
+    const button = f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)!;
+    const menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;
+    const selectedMode = () => menu.querySelector<HTMLElement>('[data-mode][aria-checked="true"]')?.dataset.mode;
+    const subtitleSettings = () => ({enabled: ports.config.videoTranslationEnabled,
+      visible: ports.config.videoSubtitleVisible, mode: ports.config.videoSubtitleDisplayMode});
+    const clickEntry = async (trusted = true, entry = button) => {
+      dispatchVideoClick(f, entry, trusted); await settle();
+    };
+    const expectMenuButton = (expanded: boolean, entry = button, currentMenu = menu) => {
+      expect(entry.getAttribute('role')).toBe('button');
+      expect(entry.getAttribute('aria-haspopup')).toBe('menu');
+      expect(entry.getAttribute('aria-controls')).toBe(VIDEO_TRANSLATION_MENU_ID);
+      expect(entry.hasAttribute('aria-pressed')).toBe(false);
+      expect(entry.getAttribute('aria-expanded')).toBe(String(expanded));
+      expect(currentMenu.hidden).toBe(!expanded);
+      expect(entry.title).toBe(entry.getAttribute('aria-label'));
+    };
+    expectMenuButton(false);
+    expect(button.getAttribute('aria-label')).toContain('已开启');
+    expect(button.classList.contains(VIDEO_TRANSLATION_ACTIVE_CLASS)).toBe(true);
+    const initialSettings = subtitleSettings(), initialRequests = ports.translate.mock.calls.length;
+    await clickEntry(false); expectMenuButton(false);
+    await clickEntry(); expectMenuButton(true);
+    expect(selectedMode()).toBe('bilingual');
+    await clickEntry(); expectMenuButton(false);
+    expect(subtitleSettings()).toEqual(initialSettings);
+    expect(ports.patch).not.toHaveBeenCalled();
+    expect(ports.translate).toHaveBeenCalledTimes(initialRequests);
+
+    // 启用时刷新同一入口会清理旧 pressed；语言刷新不改变字幕或菜单状态。
+    button.setAttribute('aria-pressed', 'true');
+    f.changeConfig({uiLanguage: 'en-US'}); await settle();
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).toBe(button);
+    expectMenuButton(false);
+    expect(button.getAttribute('aria-label')).toContain('Enabled');
+    expect(button.classList.contains(VIDEO_TRANSLATION_ACTIVE_CLASS)).toBe(true);
+    expect(subtitleSettings()).toEqual(initialSettings);
+    expect(ports.patch).not.toHaveBeenCalled();
+    expect(ports.translate).toHaveBeenCalledTimes(initialRequests);
+
+    await clickEntry(); expectMenuButton(true);
+    expect(selectedMode()).toBe('bilingual');
+    clickMenu(f, '[data-mode="off"]'); await settle();
+    expect(ports.patch).toHaveBeenCalledOnce();
+    expect(ports.patch).toHaveBeenLastCalledWith({videoSubtitleVisible: false});
+    expect(subtitleSettings()).toEqual({...initialSettings, visible: false});
+    // 菜单关闭字幕保留入口和当前菜单，设置中心的功能开关才会移除节点。
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).toBe(button);
+    expect(f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)).toBe(menu);
+    expectMenuButton(true);
+    expect(selectedMode()).toBe('off');
+    expect(button.classList.contains(VIDEO_TRANSLATION_ACTIVE_CLASS)).toBe(false);
+    expect(button.getAttribute('aria-label')).toContain('Off');
+    clickMenu(f, '[data-mode="off"]'); await settle();
+    expect(ports.patch).toHaveBeenCalledOnce();
+    if (platform === 'youtube') {
+      expect(f.document.querySelector('.ytp-subtitles-button')?.getAttribute('aria-pressed')).toBe('true');
+    }
+    f.changeConfig({uiLanguage: 'zh-CN'}); await settle();
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).toBe(button);
+    expect(f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)).toBe(menu);
+    expect(button.getAttribute('aria-label')).toContain('已关闭');
+    await clickEntry(); expectMenuButton(false);
+    await clickEntry(); expectMenuButton(true);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(ports.translate).toHaveBeenCalledTimes(initialRequests);
+    dispose(); await settle();
+
+    // 关闭字幕后重新挂载仍有入口，并保持关闭状态；从菜单选择双语即可恢复。
+    const disposeRemounted = f.start(); await settle();
+    f.changeConfig({uiLanguage: 'en-US'}); await settle();
+    const replacement = f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)!;
+    const replacementMenu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;
+    expect(replacement).not.toBe(button); expect(replacementMenu).not.toBe(menu);
+    expect(f.document.querySelectorAll(`#${VIDEO_TRANSLATION_BUTTON_ID}`)).toHaveLength(1);
+    expect(f.document.querySelectorAll(`#${VIDEO_TRANSLATION_MENU_ID}`)).toHaveLength(1);
+    expectMenuButton(false, replacement, replacementMenu);
+    expect(replacement.getAttribute('aria-label')).toContain('Off');
+    expect(replacement.classList.contains(VIDEO_TRANSLATION_ACTIVE_CLASS)).toBe(false);
+    expect(subtitleSettings()).toEqual({...initialSettings, visible: false});
+    await clickEntry(true, replacement); expectMenuButton(true, replacement, replacementMenu);
+    expect(replacementMenu.querySelector('[data-mode="off"]')?.getAttribute('aria-checked')).toBe('true');
+    clickMenu(f, '[data-mode="bilingual"]'); await settle();
+    expect(ports.patch).toHaveBeenLastCalledWith({videoSubtitleDisplayMode: 'bilingual', videoSubtitleVisible: true});
+    expect(replacement.getAttribute('aria-label')).toContain('Enabled');
+    expect(replacement.classList.contains(VIDEO_TRANSLATION_ACTIVE_CLASS)).toBe(true);
+    expect(subtitleSettings()).toEqual(initialSettings);
+    const enabledRequests = ports.translate.mock.calls.length;
+    clickMenu(f, '[data-action="close-menu"]'); await settle();
+    expectMenuButton(false, replacement, replacementMenu);
+    expect(ports.patch).toHaveBeenCalledTimes(2);
+    expect(ports.translate).toHaveBeenCalledTimes(enabledRequests);
+    disposeRemounted(); await settle();
+    expect(replacement.isConnected).toBe(false); expect(replacementMenu.isConnected).toBe(false);
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).toBeNull();
+    expect(f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)).toBeNull();
+
+    // 已启用时重新挂载也使用新节点及新监听，不复活旧入口或旧菜单。
+    const disposeEnabledRemount = f.start(); await settle();
+    const freshButton = f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)!;
+    const freshMenu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;
+    expect(freshButton).not.toBe(replacement); expect(freshMenu).not.toBe(replacementMenu);
+    expectMenuButton(false, freshButton, freshMenu);
+    expect(freshButton.getAttribute('aria-label')).toContain('Enabled');
+    const remountRequests = ports.translate.mock.calls.length;
+    await clickEntry(true, freshButton); expectMenuButton(true, freshButton, freshMenu);
+    expect(ports.patch).toHaveBeenCalledTimes(2);
+    expect(ports.translate).toHaveBeenCalledTimes(remountRequests);
+    disposeEnabledRemount(); await settle();
+    expect(freshButton.isConnected).toBe(false); expect(freshMenu.isConnected).toBe(false);
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).toBeNull();
+    expect(f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)).toBeNull();
+  });
+});
+
 describe('public mounted X subtitle track priority and lifecycle', () => {
+  it('reports a model download failure in the actual menu and releases its progress subscription before retry', async () => {
+    ports.send.mockImplementation(async (message: {type: string}) => {
+      if (message.type === 'fluentReadGetVideoAiSubtitleCache') return {success: true, hit: false};
+      if (message.type === 'fluentReadGetLocalVideoModelState') return {success: true, models: []};
+      if (message.type === 'fluentReadPrepareLocalVideoModel') return {success: false, error: '模型镜像暂时不可用'};
+      return {success: true};
+    });
+    const f = fixture();f.start();await settle();const menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;menu.hidden = false;
+    clickMenu(f, '[data-action="toggle-ai-subtitle"]');await settle();clickMenu(f, '[data-action="model-prompt-confirm"]');await settle();
+    const button = menu.querySelector<HTMLButtonElement>('[data-action="toggle-ai-subtitle"]')!;
+    expect(button.disabled).toBe(false);expect(button.dataset.error).toBe('true');expect(button.title).toContain('模型下载失败，请检查网络后重试');
+    expect(ports.stopProgress).toHaveBeenCalledOnce();expect(ports.send.mock.calls.some(([message]) => message.type === 'fluentReadTranscribeLocalVideoAudio')).toBe(false);
+    clickMenu(f, '[data-action="toggle-ai-subtitle"]');await settle();expect(menu.dataset.view).toBe('model-prompt');
+  });
+
+  it('accepts a sidecar for a single anonymous blob player but does not attach a later ambiguous resource', async () => {
+    const f = fixture();f.video.src = 'blob:anonymous-player';f.video.poster = '';
+    f.start();await settle();f.emitCue('single', 'A single-player sidecar sentence.');await settle();
+    expect(f.displayed().source).toBe('A single-player sidecar sentence.');
+    f.player.append(f.document.createElement('video'));
+    f.emitCue('ambiguous', 'An unrelated second-player sentence.');await settle();
+    expect(f.callsFor('An unrelated second-player sentence.')).toBe(0);
+    expect(f.displayed().source).toBe('A single-player sidecar sentence.');
+  });
+
+  it.each(['complete', 'cancel'] as const)('the actual AI menu keeps hidden scan fallback independent of visible playback and cleans it on %s', async outcome => {
+    const text = 'The hidden scan preserved visible playback.';
+    ports.send.mockImplementation(async (message: {type: string}) => {
+      if (message.type === 'fluentReadGetVideoAiSubtitleCache') return {success: true, hit: false};
+      if (message.type === 'fluentReadGetLocalVideoModelState') return {success: true, models: ['tiny']};
+      if (message.type === 'fluentReadTranscribeLocalVideoAudio') return {success: true, text, segments: [{startMs: 0, endMs: 3000, text}]};
+      return {success: true};
+    });
+    const f = fixture();f.video.src = 'blob:hidden-scan';f.video.poster = '';
+    Object.defineProperties(f.video, {duration: {configurable: true, value: 3}, playbackRate: {configurable: true, value: 1.5}, muted: {configurable: true, value: false}, volume: {configurable: true, value: .4}});
+    const mainPlay = vi.fn(async () => {Object.defineProperty(f.video, 'paused', {configurable: true, writable: true, value: false});f.emitVideo('play');}), mainPause = vi.fn(() => {Object.defineProperty(f.video, 'paused', {configurable: true, writable: true, value: true});f.emitVideo('pause');});
+    Object.assign(f.video, {play: mainPlay, pause: mainPause});f.video.currentTime = 1.2;
+    const scans: Array<HTMLVideoElement & {play: ReturnType<typeof vi.fn>; pause: ReturnType<typeof vi.fn>}> = [];
+    const createElement = f.document.createElement.bind(f.document);
+    defineBrowserPort(f.document, 'createElement', {configurable: true, value: (tag: string, options?: ElementCreationOptions) => {
+      const node = createElement(tag, options);
+      if (tag === 'video') {
+        Object.defineProperties(node, {readyState: {configurable: true, value: 4}, duration: {configurable: true, value: 3}, currentTime: {configurable: true, writable: true, value: 0}, ended: {configurable: true, writable: true, value: false}});
+        Object.assign(node, {load: vi.fn(), play: vi.fn(async () => undefined), pause: vi.fn()});
+        scans.push(node as typeof scans[number]);
+      }
+      return node;
+    }});
+    const contexts: ScanAudioContext[] = [];
+    class ScanAudioContext {
+      state = 'running';destination = {};source = {connect: vi.fn(), disconnect: vi.fn()};
+      processor = {connect: vi.fn(), disconnect: vi.fn(), port: {onmessage: null as null | ((event: any) => void), close: vi.fn()}, onprocessorerror: null};
+      audioWorklet = {addModule: vi.fn(async () => undefined)};
+      gain = {gain: {value: 1}, connect: vi.fn(), disconnect: vi.fn()};
+      close = vi.fn(async () => {this.state = 'closed';});resume = vi.fn(async () => undefined);
+      constructor() {contexts.push(this);}
+      createMediaElementSource(video: HTMLVideoElement) {expect(video).toBe(scans[0]);return this.source;}
+      createScriptProcessor() {throw new Error('Deprecated audio capture must not be used');}
+      createGain() {return this.gain;}
+    }
+    vi.stubGlobal('AudioContext', ScanAudioContext);defineBrowserPort(f.window, 'AudioContext', {configurable: true, value: ScanAudioContext});
+    vi.stubGlobal('AudioWorkletNode', class {constructor(context: ScanAudioContext) {return context.processor;}});
+    ports.fetch.mockRejectedValue(new Error('MSE blob cannot be fetched'));
+    f.start();await settle();f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!.hidden = false;
+    clickMenu(f, '[data-action="toggle-ai-subtitle"]');await settle();
+    expect(scans).toHaveLength(1);expect(contexts).toHaveLength(1);expect(scans[0].play).toHaveBeenCalledOnce();
+    expect(scans[0].getAttribute('aria-hidden')).toBe('true');expect(contexts[0].gain.gain.value).toBe(0);
+    expect(mainPlay).not.toHaveBeenCalled();expect(mainPause).not.toHaveBeenCalled();
+    expect(f.video.currentTime).toBe(1.2);expect(f.video.playbackRate).toBe(1.5);expect(f.video.volume).toBe(.4);
+    await mainPlay();mainPause();await mainPlay();await settle();
+    expect(contexts).toHaveLength(1);expect(scans[0].pause).not.toHaveBeenCalled();
+    if (outcome === 'complete') {
+      scans[0].currentTime = 3;
+      contexts[0].processor.port.onmessage!({data: {sampleRate: 16000, pcm: new Float32Array(48000).fill(.1)}});
+      Object.defineProperty(scans[0], 'ended', {configurable: true, value: true});scans[0].dispatchEvent(new f.window.Event('ended'));
+      await vi.advanceTimersByTimeAsync(500);
+      expect(f.displayed()).toMatchObject({source: text, translated: translation(text), kind: 'ai'});
+      expect(ports.send.mock.calls.some(([message]) => message.type === 'fluentReadSetVideoAiSubtitleCache')).toBe(true);
+      f.video.currentTime = 2;f.emitVideo('pause');f.emitVideo('play');await settle();
+      expect(f.displayed().source).toBe(text);expect(contexts).toHaveLength(1);
+    } else {
+      clickMenu(f, '[data-action="toggle-ai-subtitle"]');await settle();
+      expect(ports.send.mock.calls.some(([message]) => message.type === 'fluentReadTranscribeLocalVideoAudio')).toBe(false);
+      expect(ports.send.mock.calls.some(([message]) => message.type === 'fluentReadSetVideoAiSubtitleCache')).toBe(false);
+    }
+    expect(contexts[0].close).toHaveBeenCalledOnce();expect(contexts[0].processor.port.onmessage).toBeNull();expect(contexts[0].processor.port.close).toHaveBeenCalledOnce();
+    expect(scans[0].isConnected).toBe(false);expect(scans[0].pause).toHaveBeenCalledOnce();
+    expect(mainPlay).toHaveBeenCalledTimes(2);expect(mainPause).toHaveBeenCalledOnce();
+    expect(f.video.playbackRate).toBe(1.5);expect(f.video.volume).toBe(.4);
+  });
+
+  it('suspends the caption frame in background and restores the same timeline on visibility/pageshow', async () => {
+    const f = fixture('A visible original caption.');let frameId = 0;
+    const requestFrame = vi.fn(() => ++frameId), cancelFrame = vi.fn();
+    Object.assign(f.video, {requestVideoFrameCallback: requestFrame, cancelVideoFrameCallback: cancelFrame});Object.defineProperty(f.video, 'paused', {configurable: true, writable: true, value: false});
+    defineBrowserPort(f.document, 'visibilityState', {configurable: true, value: 'visible'});
+    const dispose = f.start();await settle();expect(requestFrame).toHaveBeenCalledOnce();
+    const displayed = f.displayed();
+    defineBrowserPort(f.document, 'visibilityState', {configurable: true, value: 'hidden'});
+    f.document.dispatchEvent(new f.window.Event('visibilitychange'));expect(cancelFrame).toHaveBeenCalledWith(1);
+    defineBrowserPort(f.document, 'visibilityState', {configurable: true, value: 'visible'});
+    f.document.dispatchEvent(new f.window.Event('visibilitychange'));f.window.dispatchEvent(new f.window.Event('pageshow'));await vi.advanceTimersByTimeAsync(20);
+    expect(f.displayed()).toEqual(displayed);expect(requestFrame).toHaveBeenCalledTimes(2);
+    expect(f.callsFor('A visible original caption.')).toBe(1);
+    dispose();f.window.dispatchEvent(new f.window.Event('pageshow'));f.document.dispatchEvent(new f.window.Event('visibilitychange'));
+    await settle();expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).toBeNull();expect(requestFrame).toHaveBeenCalledTimes(2);
+  });
+
+  it('X frame clock reads the live track without a second sync when the cue changes', async () => {
+    const first = 'First native sentence.';
+    const second = 'Second native sentence.';
+    const f = fixture(first);
+    const firstCue = (f.native!.cues as unknown as VTTCue[])[0];
+    firstCue.endTime = 5;
+    const secondCue = {startTime: 5, endTime: 10, text: second};
+    (f.native!.cues as unknown as typeof secondCue[]).push(secondCue);
+    const readTracks = vi.fn(() => f.tracks);
+    Object.defineProperty(f.video, 'textTracks', {configurable: true, get: readTracks});
+    Object.defineProperty(f.video, 'paused', {configurable: true, writable: true, value: false});
+    let frame: (() => void) | undefined;
+    Object.assign(f.video, {requestVideoFrameCallback: (next: () => void) => {frame = next; return 1;}, cancelVideoFrameCallback: vi.fn()});
+    f.start(); await settle();
+    expect(f.displayed()).toMatchObject({source: first, translated: translation(first)});
+
+    const container = f.document.getElementById(VIDEO_AI_CAPTION_CONTAINER_ID)!;
+    const readSegments = vi.spyOn(container, 'querySelectorAll');
+    readTracks.mockClear();
+    frame!();
+    const unchangedFrame = {trackReads: readTracks.mock.calls.length, segmentQueries: readSegments.mock.calls.length};
+
+    readTracks.mockClear();
+    f.video.currentTime = 6;
+    (f.native!.activeCues as unknown as typeof secondCue[]).splice(0, 1, secondCue);
+    frame!();
+    const newCueFrame = {trackReads: readTracks.mock.calls.length};
+    readSegments.mockRestore();
+    expect({unchangedFrame, newCueFrame})
+      .toEqual({unchangedFrame: {trackReads: 2, segmentQueries: 0}, newCueFrame: {trackReads: 2}});
+    await settle();
+    expect(f.displayed()).toMatchObject({source: second, translated: translation(second)});
+  });
+  const requestChanges: Array<{label: string; before: Partial<Config>; after: Partial<Config>}> = [
+    {label: '免费线路顺序', before: {videoService: services.freeTranslation, freeTranslationOrder: ['microsoft', 'google']}, after: {freeTranslationOrder: ['google', 'microsoft']}},
+    {label: '免费线路模式', before: {videoService: services.freeTranslation, freeTranslationMode: 'balanced'}, after: {freeTranslationMode: 'sequential'}},
+    {label: 'DeepL API 套餐', before: {videoService: services.deepL, deeplApiPlan: 'free'}, after: {deeplApiPlan: 'pro'}},
+  ];
+  it.each(requestChanges)('$label 改变后，同源字幕清除旧成功缓存并重新翻译，同值回声不重复请求', async ({before, after}) => {
+    Object.assign(ports.config, before);
+    ports.translate.mockResolvedValueOnce('旧配置的译文').mockResolvedValueOnce('新配置的译文');
+    const f = fixture(); f.start(); await settle();
+    const source = 'The same subtitle after a real service setting changes.';
+    f.emitCue('settings', source); await settle();
+    expect(f.displayed()).toMatchObject({source, translated: '旧配置的译文', active: true});
+    f.emitVideo('timeupdate'); await settle();
+    expect(f.callsFor(source)).toBe(1);
+
+    f.changeConfig(after); await settle();
+    expect(f.callsFor(source)).toBe(2);
+    expect(f.displayed()).toMatchObject({source, translated: '新配置的译文', active: true});
+    f.changeConfig(after); await settle();
+    expect(f.callsFor(source)).toBe(2);
+  });
+  it.each(requestChanges)('$label 改变后取消旧同源请求，迟到旧结果不写回新缓存或播放器', async ({before, after}) => {
+    Object.assign(ports.config, before);
+    const old = deferred<string>();
+    let oldSignal!: AbortSignal;
+    ports.translate.mockImplementationOnce((_text: string, signal: AbortSignal) => {oldSignal = signal; return old.promise;})
+      .mockResolvedValueOnce('新配置的有效译文');
+    const f = fixture(); f.start(); await settle();
+    const source = 'An identical subtitle with an obsolete translation in flight.';
+    f.emitCue('late-settings', source); await settle();
+    expect(f.callsFor(source)).toBe(1);
+
+    f.changeConfig(after); await settle();
+    expect(oldSignal.aborted).toBe(true);
+    expect(f.callsFor(source)).toBe(2);
+    expect(f.displayed()).toMatchObject({source, translated: '新配置的有效译文', active: true});
+    old.resolve('旧配置的迟到译文'); await settle();
+    f.emitVideo('timeupdate'); await settle();
+    expect(f.callsFor(source)).toBe(2);
+    expect(f.displayed()).toMatchObject({source, translated: '新配置的有效译文', active: true});
+  });
   it('does not run an empty frame clock on ordinary YouTube; a later progressive cue starts and releases the clock at its boundary', async () => {
     const f = fixture();
     // 本例只验证媒体帧调度；原生字幕由下面的真实消息/媒体事件驱动。
@@ -376,8 +1302,19 @@ describe('public mounted X subtitle track priority and lifecycle', () => {
       return {success: true, hit: false};
     });
     const f = fixture();
+    // 本用例只验证模型准备后进入采集；Linkedom 缺少媒体 API，让扫描副本等待元数据直至卸载取消。
+    const createElement = f.document.createElement;
+    const scanVideos: HTMLElement[] = [];
+    defineBrowserPort(f.document, 'createElement', {configurable: true, value(tag: string, options?: ElementCreationOptions) {
+      const element = Reflect.apply(createElement, f.document, [tag, options]) as HTMLElement;
+      if (tag === 'video') {
+        Object.defineProperties(element, {load: {value: () => undefined}, pause: {value: () => undefined}, readyState: {value: 0}});
+        scanVideos.push(element);
+      }
+      return element;
+    }});
     f.video.src = 'blob:same-media'; f.video.poster = '';
-    f.start(); await settle();
+    const dispose = f.start(); await settle();
     const menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;
     menu.hidden = false;
     clickMenu(f, '[data-action="toggle-ai-subtitle"]'); await settle();
@@ -391,9 +1328,11 @@ describe('public mounted X subtitle track priority and lifecycle', () => {
     else status.resolve({success: true, models: ['tiny']});
     await settle();
     expect(ports.send.mock.calls.filter(([message]) => message.type === 'fluentReadPrepareLocalVideoModel' && message.keepWarm)).toHaveLength(1);
+    expect(scanVideos).toHaveLength(1); expect(scanVideos[0].isConnected).toBe(true);
+    dispose(); await settle(); expect(scanVideos[0].isConnected).toBe(false);
   });
 
-  it.each(['media', 'language', 'off', 'dispose'])('rejects a late downloaded-model status after %s invalidates the request', async change => {
+  it.each(['media', 'language', 'off', 'menu-off', 'dispose'])('rejects a late downloaded-model status after %s invalidates the request', async change => {
     const status = deferred<unknown>();
     ports.send.mockImplementation(async (message: {type: string}) => message.type === 'fluentReadGetLocalVideoModelState'
       ? status.promise : {success: true, hit: false});
@@ -406,12 +1345,13 @@ describe('public mounted X subtitle track priority and lifecycle', () => {
       f.emitVideo('loadedmetadata');
     } else if (change === 'language') f.changeConfig({videoSourceLanguage: 'zh'});
     else if (change === 'off') f.changeConfig({videoTranslationEnabled: false});
+    else if (change === 'menu-off') clickMenu(f, '[data-mode="off"]');
     else dispose();
     await settle(); status.resolve({success: true, models: ['tiny']}); await settle();
     expect(ports.send.mock.calls.some(([message]) => message.type === 'fluentReadPrepareLocalVideoModel')).toBe(false);
   });
 
-  it.each(['media', 'off', 'dispose'])('stops pending download progress immediately after %s invalidates the player', async change => {
+  it.each(['media', 'off', 'menu-off', 'dispose'])('stops pending download progress immediately after %s invalidates the player', async change => {
     const prepared = deferred<unknown>();
     ports.send.mockImplementation(async (message: {type: string; keepWarm?: boolean}) => {
       if (message.type === 'fluentReadGetLocalVideoModelState') return {success: true, models: []};
@@ -429,6 +1369,7 @@ describe('public mounted X subtitle track priority and lifecycle', () => {
       f.video.poster = 'https://pbs.twimg.com/ext_tw_video_thumb/456/pu/img/new.jpg';
       f.emitVideo('loadedmetadata');
     } else if (change === 'off') f.changeConfig({videoTranslationEnabled: false});
+    else if (change === 'menu-off') clickMenu(f, '[data-mode="off"]');
     else dispose();
     await settle(); expect(ports.stopProgress).toHaveBeenCalledOnce();
     prepared.resolve({success: true, models: ['tiny']}); await settle();
@@ -477,7 +1418,11 @@ describe('public mounted X subtitle track priority and lifecycle', () => {
     await vi.advanceTimersByTimeAsync(2450);
     expect(count).toBe(2);
     for (const button of menu.querySelectorAll<HTMLButtonElement>('.fluent-read-video-menu-download')) expect(button.disabled).toBe(true);
-    nextWindow.resolve({success: false, error: 'fixture stops after timer proof'}); await settle();
+    const warning = vi.spyOn(console, 'warn');
+    try {
+      nextWindow.resolve({success: false, error: 'fixture stops after timer proof'}); await settle();
+      expect(warning.mock.calls).toEqual([['[FluentRead] X AI 完整字幕请求失败', new Error('fixture stops after timer proof')]]);
+    } finally {warning.mockRestore();}
   });
 
   it('displays completed AI sentences before the final window and clears an incomplete preview after failure', async () => {
@@ -512,7 +1457,11 @@ describe('public mounted X subtitle track priority and lifecycle', () => {
     expect((menu.querySelector('[data-action="select-ai-model"]') as HTMLButtonElement).disabled).toBe(true);
     clickMenu(f, '[data-action="download-subtitles"]'); await settle();
     expect(menu.querySelector('[data-download-status]')?.textContent).toBe('');
-    nextWindow.resolve({success: false, error: 'fixture later window failed'}); await settle();
+    const warning = vi.spyOn(console, 'warn');
+    try {
+      nextWindow.resolve({success: false, error: 'fixture later window failed'}); await settle();
+      expect(warning.mock.calls).toEqual([['[FluentRead] X AI 完整字幕请求失败', new Error('fixture later window failed')]]);
+    } finally {warning.mockRestore();}
     expect(f.displayed().source || '').toBe('');
     expect(ports.send.mock.calls.some(([message]) => message.type === 'fluentReadSetVideoAiSubtitleCache')).toBe(false);
     expect(menu.querySelector('[data-action="toggle-ai-subtitle"]')?.getAttribute('data-error')).toBe('true');
@@ -669,8 +1618,99 @@ describe('public mounted X subtitle track priority and lifecycle', () => {
 });
 
 
+describe('public mounted YouTube 合法重复与滚动字幕', () => {
+  it.each([
+    {source: 'A timed repeated sentence.', parts: ['A timed repeated sentence.', 'A timed repeated sentence.']},
+    {source: 'No no', parts: ['No', 'no']},
+    {source: 'A repeated cue. A repeated cue.', parts: ['A repeated cue.', 'A repeated cue.']},
+  ])('早到时间轴挂载后回放，按当前cue保留完整内容：$source', async ({source, parts}) => {
+    ports.config.videoPreferHumanSubtitles = false;
+    const f = fixture(undefined, 'youtube'); f.video.currentTime = .5; f.setCaptionSegments(parts);
+    const cues = [{startMs: 0, durationMs: 1000, text: source}, {startMs: 1000, durationMs: 1000, text: source}];
+    f.emitTimedText(cues); // 模拟 MAIN world 已发布，而字幕 runtime 尚未挂载。
+    const replay = vi.fn(() => f.emitTimedText(cues));
+    f.document.addEventListener(YOUTUBE_BRIDGE_REPLAY_EVENT, replay);
+    let dispose: (() => void) | undefined;
+    try {
+      dispose = f.start(); await vi.advanceTimersByTimeAsync(400);
+      expect(replay).toHaveBeenCalledTimes(1);
+      expect(f.displayed()).toMatchObject({source, translated: translation(source)});
+      expect(ports.translate.mock.calls.map(([text]) => text)).toEqual([source]);
+      f.video.currentTime = 1.5; f.emitVideo('seeked'); await settle();
+      expect(f.displayed()).toMatchObject({source, translated: translation(source)});
+      expect(replay).toHaveBeenCalledTimes(1);
+    } finally {dispose?.(); f.document.removeEventListener(YOUTUBE_BRIDGE_REPLAY_EVENT, replay);}
+  });
+
+  it.each([
+    ['Very', 'very', 'Very very'], ['No', 'no', 'No no'], ['Bye', 'bye', 'Bye bye'],
+  ])('合法重复：无时间轴的%s/%s完整显示并送翻', async (first, second, source) => {
+    const f = fixture(undefined, 'youtube'); f.setCaptionSegments([first, second]); f.start();
+    await vi.advanceTimersByTimeAsync(400);
+    expect(f.displayed()).toMatchObject({source, translated: translation(source)});
+    expect(ports.translate.mock.calls.map(([text]) => text)).toEqual([source]);
+    // 相同内容在单片段和逐词片段间重建，不改变原文身份或重复调用服务。
+    f.document.getElementById('ytp-caption-window-container')!.innerHTML = '<span class="ytp-caption-segment"></span>';
+    f.setCaption(source); await vi.advanceTimersByTimeAsync(400);
+    f.setCaptionSegments([first, second]); await vi.advanceTimersByTimeAsync(400);
+    expect(f.displayed()).toMatchObject({source, translated: translation(source)});
+    expect(ports.translate.mock.calls.map(([text]) => text)).toEqual([source]);
+  });
+
+  it('合法重复：没有时间轴依据时保留两个可见同文行', async () => {
+    const sentence = 'A complete repeated sentence.', source = `${sentence} ${sentence}`;
+    const f = fixture(undefined, 'youtube');
+    f.document.getElementById('ytp-caption-window-container')!.innerHTML = `<span class="caption-visual-line"><span class="ytp-caption-segment">${sentence}</span></span><span class="caption-visual-line"><span class="ytp-caption-segment">${sentence}</span></span>`;
+    f.start(); await vi.advanceTimersByTimeAsync(400);
+    expect(f.displayed()).toMatchObject({source, translated: translation(source)});
+    expect(ports.translate.mock.calls.map(([text]) => text)).toEqual([source]);
+  });
+
+  it('当前cue使滚动同文行只显示一次，后续重复时段仍可显示', async () => {
+    ports.config.videoPreferHumanSubtitles = false;
+    const source = 'A timed repeated sentence.';
+    const f = fixture(undefined, 'youtube'); f.video.currentTime = .5;
+    f.document.getElementById('ytp-caption-window-container')!.innerHTML = `<span class="caption-visual-line"><span class="ytp-caption-segment">${source}</span></span><span class="caption-visual-line"><span class="ytp-caption-segment">${source}</span></span>`;
+    f.start(); f.emitTimedText([{startMs: 0, durationMs: 1000, text: source}, {startMs: 1000, durationMs: 1000, text: source}]); await settle();
+    expect(f.displayed()).toMatchObject({source, translated: translation(source)});
+    f.video.currentTime = 1.5; f.emitVideo('timeupdate'); await settle();
+    expect(f.displayed()).toMatchObject({source, translated: translation(source)});
+    expect(ports.translate.mock.calls.map(([text]) => text)).toEqual([source]);
+  });
+
+  it('合法重复：当前cue的No no不误选仍重叠的旧No', async () => {
+    ports.config.videoPreferHumanSubtitles = false;
+    const f = fixture(undefined, 'youtube'); f.video.currentTime = 1.5; f.setCaptionSegments(['No', 'no']); f.start();
+    f.emitTimedText([{startMs: 0, durationMs: 3000, text: 'No'}, {startMs: 1000, durationMs: 1000, text: 'No no'}]); await settle();
+    expect(f.displayed()).toMatchObject({source: 'No no', translated: translation('No no')});
+    expect(f.callsFor('No no')).toBe(1);
+  });
+
+  it('合法重复：紧凑原文模式和重新开启翻译保留完整分片台词', async () => {
+    ports.config.videoSubtitleDisplayMode = 'original-only';
+    const f = fixture(undefined, 'youtube'), bounds = f.player.getBoundingClientRect();
+    defineBrowserPort(f.player, 'getBoundingClientRect', {configurable: true, value: () => ({...bounds, width: 560, right: bounds.left + 560})});
+    f.setCaptionSegments(['No', 'no']); f.start(); await vi.advanceTimersByTimeAsync(400);
+    expect(f.displayed()).toMatchObject({source: 'No no', translated: ''}); expect(ports.translate).not.toHaveBeenCalled();
+    f.changeConfig({videoSubtitleDisplayMode: 'bilingual'}); await vi.advanceTimersByTimeAsync(400);
+    expect(f.displayed()).toMatchObject({source: 'No no', translated: translation('No no')});
+    expect(ports.translate.mock.calls.map(([text]) => text)).toEqual(['No no']);
+  });
+});
+
 // YouTube 由真实 timedtext 桥消息与媒体事件驱动；仅同步调用窗口计数，异步结果仍由原有资格校验处理。
 describe('public mounted YouTube timed cue selection and lifecycle', () => {
+  it('rejects a late progressive translation when the media clock crosses the offset cue before its next event', async () => {
+    Object.assign(ports.config, {videoSubtitleOffsetMs: 500});const pending = deferred<string>();ports.translate.mockReturnValue(pending.promise);
+    const f = fixture(undefined, 'youtube');f.setCaption('A short timed caption.');f.start();
+    f.emitTimedText([{startMs: 0, durationMs: 2500, text: 'A short timed caption.'}]);await settle();
+    expect(ports.translate).toHaveBeenCalledOnce();
+    // 媒体时钟先前进，timeupdate 在稍后的浏览器任务派发；中间到达的旧响应也不能上屏。
+    f.video.currentTime = 5;pending.resolve('迟到的旧字幕译文');await settle();
+    expect(f.displayed().translated || '').not.toContain('迟到的旧字幕译文');
+    f.emitVideo('timeupdate');await settle();expect(f.displayed().translated || '').toBe('');
+  });
+
   it('普通当前句100次媒体更新只整理一次cue，保留译文与provider次数', async () => {
     ports.config.videoPreferHumanSubtitles = false;
     const text = 'The current subtitle sentence.';
@@ -738,6 +1778,169 @@ describe('public mounted YouTube timed cue selection and lifecycle', () => {
 });
 
 
+describe('public mounted video player button follows the video translation switch', () => {
+  it.each(['x', 'youtube'] as const)('%s：菜单关闭字幕后忽略迟到译文，保留入口并可恢复翻译', async platform => {
+    const pending = deferred<string>();
+    ports.translate.mockImplementationOnce(() => pending.promise);
+    const text = 'A sentence waiting for translation.';
+    const f = fixture(platform === 'x' ? text : undefined, platform);
+    f.video.currentTime = .5; f.start();
+    if (platform === 'youtube') {
+      f.emitTimedText([{startMs: 0, durationMs: 3000, text}]); f.setCaption(text);
+    }
+    await settle();
+    expect(ports.translate).toHaveBeenCalled();
+    const menu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;
+    menu.hidden = false; clickMenu(f, '[data-mode="off"]'); await settle();
+    const requests = ports.translate.mock.calls.length;
+    pending.resolve('A late translation that must stay hidden.');
+    f.emitVideo('timeupdate'); await vi.advanceTimersByTimeAsync(1100);
+    expect(f.displayed().translated || '').toBe('');
+    expect(ports.translate).toHaveBeenCalledTimes(requests);
+    expect(f.document.querySelectorAll('#' + VIDEO_TRANSLATION_BUTTON_ID)).toHaveLength(1);
+    expect(menu.querySelector('[data-mode="off"]')?.getAttribute('aria-checked')).toBe('true');
+    clickMenu(f, '[data-mode="bilingual"]'); await settle();
+    expect(ports.config.videoTranslationEnabled).toBe(true);
+    expect(ports.config.videoSubtitleVisible).toBe(true);
+    expect(f.displayed().translated).toBe(translation(text));
+  });
+
+  it.each(['x', 'youtube'] as const)('%s：关闭视频字幕翻译后移除已打开的菜单，重复开启只恢复一份入口', async platform => {
+    const f = fixture(undefined, platform); f.start(); await settle();
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).not.toBeNull();
+    const oldMenu = f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!;
+    oldMenu.hidden = false;
+
+    f.changeConfig({videoTranslationEnabled: false}); await settle();
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).toBeNull();
+    expect(f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)).toBeNull();
+    expect(oldMenu.isConnected).toBe(false);
+    f.emitVideo('loadedmetadata'); await vi.advanceTimersByTimeAsync(1100);
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).toBeNull();
+
+    f.changeConfig({videoTranslationEnabled: true}); await settle();
+    f.changeConfig({videoTranslationEnabled: true}); await settle();
+    expect(f.document.querySelectorAll('#' + VIDEO_TRANSLATION_BUTTON_ID)).toHaveLength(1);
+    expect(f.document.querySelectorAll('#' + VIDEO_TRANSLATION_MENU_ID)).toHaveLength(1);
+    expect(f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)).not.toBe(oldMenu);
+  });
+
+  it.each(['x', 'youtube'] as const)('%s：设置关闭时不挂载入口，字幕已关闭时重复选择关闭保持入口和总开关', async platform => {
+    ports.config.videoTranslationEnabled = false;
+    const f = fixture(undefined, platform); f.start(); await vi.advanceTimersByTimeAsync(1100);
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).toBeNull();
+    expect(f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)).toBeNull();
+    expect(ports.translate).not.toHaveBeenCalled();
+
+    f.changeConfig({videoTranslationEnabled: true, videoSubtitleVisible: false}); await settle();
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).not.toBeNull();
+    f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!.hidden = false;
+    clickMenu(f, '[data-mode="off"]'); await settle();
+    expect(ports.config.videoTranslationEnabled).toBe(true);
+    expect(ports.config.videoSubtitleVisible).toBe(false);
+    expect(ports.patch).not.toHaveBeenCalled();
+    expect(ports.config.on).toBe(true);
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).not.toBeNull();
+    expect(f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)).not.toBeNull();
+    expect(f.document.getElementById('host')?.textContent).toBe('host original');
+  });
+});
+
+describe('public mounted YouTube native caption visibility ownership', () => {
+  const hiddenClass = 'fluent-read-video-native-caption-hidden';
+
+  it('renders the matched full original cue in FluentRead style on desktop without requesting a translation', async () => {
+    Object.assign(ports.config, {videoSubtitleDisplayMode: 'original-only', videoPreferHumanSubtitles: false});
+    const f = fixture(undefined, 'youtube');
+    const visiblePrefix = 'The full original line is ready';
+    const completeCue = `${visiblePrefix} before the YouTube caption window stops scrolling.`;
+    f.setCaptionSegments([visiblePrefix]);
+    const dispose = f.start();
+    f.emitTimedText([{startMs: 0, durationMs: 5000, text: completeCue}]);
+    await vi.advanceTimersByTimeAsync(80);
+
+    expect(f.displayed()).toMatchObject({source: completeCue, translated: ''});
+    expect(f.player.classList.contains(hiddenClass)).toBe(true);
+    expect(f.document.getElementById('ytp-caption-window-container')?.classList.contains('fluent-read-video-display-original-only')).toBe(true);
+    expect(ports.translate).not.toHaveBeenCalled();
+
+    f.changeConfig({videoSubtitleDisplayMode: 'bilingual'});
+    await vi.advanceTimersByTimeAsync(400);
+    expect(f.displayed()).toMatchObject({source: completeCue, translated: translation(completeCue)});
+    expect(ports.translate).toHaveBeenCalledTimes(1);
+
+    f.changeConfig({videoSubtitleDisplayMode: 'original-only'});
+    await vi.advanceTimersByTimeAsync(80);
+    expect(f.displayed()).toMatchObject({source: completeCue, translated: ''});
+    expect(ports.translate).toHaveBeenCalledTimes(1);
+    dispose();
+  });
+
+  it('keeps native captions suppressed across empty, expired and replaced cues, and restores mode/config changes', async () => {
+    ports.config.videoPreferHumanSubtitles = false;
+    const f = fixture(undefined, 'youtube'); f.video.currentTime = .5;
+    const dispose = f.start(); await settle();
+    expect(f.player.classList.contains(hiddenClass)).toBe(true);
+    f.emitTimedText([{startMs: 0, durationMs: 1000, text: 'The current caption.'}]);
+    f.setCaption('The current caption.'); await settle();
+    expect(f.displayed().source).toBe('The current caption.');
+
+    f.video.currentTime = 1.5; f.emitVideo('timeupdate'); await settle();
+    expect(f.displayed().source || '').toBe('');
+    expect(f.player.classList.contains(hiddenClass)).toBe(true);
+    f.setCaption(''); await settle();
+    expect(f.player.classList.contains(hiddenClass)).toBe(true);
+    const previous = f.document.getElementById('ytp-caption-window-container')!;
+    const replacement = f.document.createElement('div'); replacement.id = previous.id;
+    replacement.innerHTML = '<span class="ytp-caption-segment">New native caption.</span>';
+    previous.replaceWith(replacement);
+    // 新容器无需先经过 observer；播放器上的稳定状态已覆盖后续原生节点。
+    expect(f.player.classList.contains(hiddenClass)).toBe(true);
+    expect(replacement.textContent).toBe('New native caption.');
+
+    for (const mode of ['original-only', 'translation-only', 'bilingual'] as const) {
+      f.changeConfig({videoSubtitleDisplayMode: mode}); await settle();
+      expect(f.player.classList.contains(hiddenClass)).toBe(true);
+    }
+    f.changeConfig({videoSubtitleVisible: false}); await settle();
+    expect(f.player.classList.contains(hiddenClass)).toBe(true);
+    f.changeConfig({videoSubtitleDisplayMode: 'translation-only'}); await settle();
+    f.changeConfig({videoTranslationEnabled: false}); await settle();
+    expect(f.player.classList.contains(hiddenClass)).toBe(false);
+    expect(replacement.classList.contains('fluent-read-video-display-translation-only')).toBe(false);
+    expect(replacement.classList.contains('fluent-read-video-display-hidden')).toBe(false);
+    f.changeConfig({videoTranslationEnabled: true, videoSubtitleVisible: true}); await settle();
+    expect(f.player.classList.contains(hiddenClass)).toBe(true);
+    f.changeConfig({on: false}); await settle();
+    expect(f.player.classList.contains(hiddenClass)).toBe(false);
+    f.changeConfig({on: true}); await settle();
+    expect(f.player.classList.contains(hiddenClass)).toBe(true);
+    dispose(); await settle();
+    expect(f.player.classList.contains(hiddenClass)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('moves suppression with the selected player and releases it when leaving the video page', async () => {
+    const f = fixture(undefined, 'youtube'); const dispose = f.start(); await settle();
+    const next = f.document.createElement('div'); next.id = 'movie_player'; next.className = 'html5-video-player';
+    next.innerHTML = '<div class="ytp-caption-window-container"><span class="ytp-caption-segment">Next player.</span></div><div class="ytp-right-controls"></div>';
+    f.player.id = 'old-player'; next.prepend(f.video); f.player.after(next);
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(f.player.classList.contains(hiddenClass)).toBe(false);
+    expect(next.classList.contains(hiddenClass)).toBe(true);
+    f.window.location.href = 'https://www.youtube.com/results?search_query=caption';
+    await vi.advanceTimersByTimeAsync(1100);
+    expect(next.classList.contains(hiddenClass)).toBe(false);
+    dispose(); await settle(); expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('leaves X native caption handling with its existing TextTrack owner', async () => {
+    const f = fixture(nativeSource); f.start(); await settle();
+    expect(f.player.classList.contains(hiddenClass)).toBe(false);
+    expect(f.displayed()).toMatchObject({source: nativeSource, translated: translation(nativeSource)});
+  });
+});
+
 // 人工轨通过实际页面发现与 loader 请求就绪；媒体输入非有限时仍走原 fresh 选择边界。
 describe('public mounted YouTube nonfinite time and human track fallback', () => {
   it('NaN媒体时间保留两次真实选择且不猜测时间轴', async () => {
@@ -760,9 +1963,46 @@ describe('public mounted YouTube nonfinite time and human track fallback', () =>
     expect(f.callsFor(text)).toBe(1);
   });
 
-  it('实际人工目标轨loader命中后进入空档，下一轮仍回退原文cue和缓存译文', async () => {
+  it('原文轨道请求超时后可重试，卸载时取消未结束正文并拒绝迟到提交', async () => {
+    Object.assign(ports.config, {from: 'en', videoPreferHumanSubtitles: false});
+    const f = fixture(undefined, 'youtube');
+    const script = f.document.createElement('script');
+    script.textContent = 'var ytInitialPlayerResponse=' + JSON.stringify({videoDetails: {videoId: 'cue-proof'}, captions: {
+      playerCaptionsTracklistRenderer: {captionTracks: [{baseUrl: 'https://www.youtube.com/api/timedtext?v=cue-proof&lang=en', languageCode: 'en'}]},
+    }}) + ';';
+    f.document.head.appendChild(script);
+    const signals: AbortSignal[] = [];
+    const late: ((response: Response) => void)[] = [];
+    ports.fetch.mockImplementation((_input: string, options: RequestInit) => {
+      signals.push(options.signal as AbortSignal);
+      return new Promise<Response>(resolve => late.push(resolve));
+    });
+    const dispose = f.start(); await settle();
+    expect(signals).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(signals[0].aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(signals).toHaveLength(2);
+    const cancel = vi.fn(() => Promise.reject(new Error('late cancel failure')));
+    const body = new ReadableStream<Uint8Array>({cancel});
+    late[1](new Response(body)); await settle();
+    expect(body.locked).toBe(true);
+    dispose(); await settle();
+    expect(signals[1].aborted).toBe(true);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(body.locked).toBe(false);
+    const cancelOld = vi.fn();
+    late[0](new Response(new ReadableStream({cancel: cancelOld}))); await settle();
+    expect(cancelOld).toHaveBeenCalledOnce();
+    expect(ports.translate).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['普通原文', 'First source sentence.', ['First source sentence.']],
+    ['合法重复原文', 'No no', ['No', 'no']],
+  ] as const)('实际人工目标轨loader命中%s后进入空档，下一轮仍回退原文cue和缓存译文', async (_name, first, parts) => {
     Object.assign(ports.config, {from: 'en', videoPreferHumanSubtitles: true});
-    const first = 'First source sentence.', second = 'Second source sentence.', human = '第一句人工字幕。';
+    const second = 'Second source sentence.', human = '第一句人工字幕。';
     const f = fixture(undefined, 'youtube'); f.video.currentTime = .5;
     const script = f.document.createElement('script');
     script.textContent = 'var ytInitialPlayerResponse=' + JSON.stringify({videoDetails: {videoId: 'cue-proof'}, captions: {
@@ -781,15 +2021,15 @@ describe('public mounted YouTube nonfinite time and human track fallback', () =>
       const language = url.searchParams.get('lang');
       if (language === 'zh-Hans') {
         expect(options.signal).toBeInstanceOf(AbortSignal);
-        return {ok: true, text: async () => json3([{tStartMs: 0, dDurationMs: 1000, segs: [{utf8: human}]}])};
+        return new Response(json3([{tStartMs: 0, dDurationMs: 1000, segs: [{utf8: human}]}]));
       }
-      if (language === 'en') return {ok: true, text: async () => json3([
+      if (language === 'en') return new Response(json3([
         {tStartMs: 0, dDurationMs: 1000, segs: [{utf8: first}]},
         {tStartMs: 1000, dDurationMs: 1000, segs: [{utf8: second}]},
-      ])};
+      ]));
       throw new Error('Unexpected human fixture timedtext language: ' + language);
     });
-    f.setCaption(first); f.start(); await settle();
+    f.setCaptionSegments(parts); f.start(); await settle();
     expect(f.displayed()).toMatchObject({source: first, translated: human});
     expect(f.callsFor(first)).toBe(0);
     const spy = vi.spyOn(subtitleLogic, 'selectYoutubeCaptionCue');
@@ -799,7 +2039,7 @@ describe('public mounted YouTube nonfinite time and human track fallback', () =>
       expect(spy).toHaveBeenCalledTimes(1);
       expect(spy.mock.calls[0][1]).toBe(first);
       spy.mockClear();
-      f.video.currentTime = 1.5; f.setCaption(second); f.emitVideo('timeupdate');
+      f.video.currentTime = 1.5; f.setCaptionSegments([second]); f.emitVideo('timeupdate');
       missSelections = spy.mock.calls.length;
       expect(spy.mock.calls.every(([, source, time]) => source === second && time === 1500)).toBe(true);
       expect(spy.mock.results.every(result => result.value.cue?.text === second && result.value.stale === false)).toBe(true);
@@ -809,5 +2049,102 @@ describe('public mounted YouTube nonfinite time and human track fallback', () =>
     expect(f.callsFor(first)).toBe(0); expect(f.callsFor(second)).toBe(1);
     expect(ports.fetch.mock.calls.map(([input]) => new URL(String(input)).searchParams.get('lang')).sort()).toEqual(['en', 'zh-Hans']);
     expect(missSelections).toBe(1);
+  });
+});
+
+
+it('YouTube 同语言切换命名字幕轨时撤销旧翻译，签名刷新不误触发切轨', async () => {
+  const tasks: Array<{source: string; signal: AbortSignal; resolve: (text: string) => void}> = [];
+  ports.translate.mockImplementation((source: string, signal: AbortSignal) => {
+    const task = deferred<string>(); tasks.push({source, signal, resolve: task.resolve}); return task.promise;
+  });
+  Object.assign(ports.config, {videoPreferHumanSubtitles: false});
+  const f = fixture(undefined, 'youtube'); f.setCaption('Shared caption'); f.start();
+  const cues = [{startMs: 0, durationMs: 6000, text: 'Shared caption'}];
+  const trackA = 'https://www.youtube.com/api/timedtext?v=cue-proof&lang=en&name=Speaker+A&sig=old';
+  f.emitTimedText(cues, trackA); await vi.advanceTimersByTimeAsync(300);
+  const first = tasks.at(-1)!; expect(first.source).toBe('Shared caption'); expect(first.signal.aborted).toBe(false);
+  f.emitTimedText(cues, trackA.replace('sig=old', 'sig=new')); await vi.advanceTimersByTimeAsync(100);
+  expect(first.signal.aborted).toBe(false); expect(tasks.at(-1)).toBe(first);
+  f.emitTimedText(cues, trackA.replace('Speaker+A', 'Speaker+B')); await vi.advanceTimersByTimeAsync(300);
+  expect(first.signal.aborted).toBe(true);
+  const second = tasks.at(-1)!; expect(second).not.toBe(first); expect(second.signal.aborted).toBe(false);
+  first.resolve('Obsolete track translation'); second.resolve('Current track translation'); await vi.advanceTimersByTimeAsync(200);
+  expect(f.displayed().translated).toBe('Current track translation');
+});
+
+it('原文模式收到大量新命名轨时保留当前轨，恢复双语仍使用当前轨', async () => {
+  Object.assign(ports.config, {videoPreferHumanSubtitles: false});
+  const f = fixture(undefined, 'youtube'); f.setCaption('Original active sentence.'); f.start();
+  const active = [{startMs: 0, durationMs: 6000, text: 'Original active sentence.'}];
+  f.emitTimedText(active, 'https://www.youtube.com/api/timedtext?v=cue-proof&lang=en&name=active');
+  await vi.advanceTimersByTimeAsync(300);
+  expect(f.displayed().source).toBe('Original active sentence.');
+  f.changeConfig({videoSubtitleDisplayMode: 'original-only'}); await settle();
+  for (let i = 0; i < 30; i++) {
+    f.emitTimedText([{startMs: 0, durationMs: 6000, text: `Other track ${i}.`}], `https://www.youtube.com/api/timedtext?v=cue-proof&lang=en&name=other-${i}`);
+  }
+  f.changeConfig({videoSubtitleDisplayMode: 'bilingual'}); f.emitVideo('timeupdate'); await vi.advanceTimersByTimeAsync(300);
+  expect(f.displayed()).toMatchObject({source: 'Original active sentence.', translated: translation('Original active sentence.')});
+});
+
+
+describe('standard HTML media through the public subtitle mount', () => {
+  it.each(['html-audio', 'html-video'] as const)('reuses native captions, translation and learning for %s without moving the original media', async platform => {
+    const f = fixture('A standard media sentence.', platform);
+    const originalParent = f.video.parentElement;
+    // Vue 开发版 devtools 端口与既有 YouTube 学习夹具保持一致；仍严格断言业务计时器全部释放。
+    vi.stubGlobal('__VUE_DEVTOOLS_GLOBAL_HOOK__', {emit: vi.fn()});
+    const dispose = f.start();
+    await vi.advanceTimersByTimeAsync(80);
+    expect(f.displayed()).toMatchObject({source: 'A standard media sentence.', translated: translation('A standard media sentence.'), kind: 'native'});
+    expect(f.video.parentElement).toBe(originalParent);
+    expect(f.document.querySelector('.fluent-read-html-media-host')).not.toBeNull();
+    expect(ports.send.mock.calls.some(([message]) => message.type === 'fluentReadTranscribeLocalVideoAudio')).toBe(false);
+    const learningButton = f.document.querySelector<HTMLButtonElement>('[data-action="open-sentence-learning"]')!;
+    expect(learningButton.disabled).toBe(false);
+    f.document.getElementById(VIDEO_TRANSLATION_MENU_ID)!.hidden = false;
+    f.window.dispatchEvent(new f.window.Event('resize')); await vi.advanceTimersByTimeAsync(20);
+    clickMenu(f, '[data-action="open-sentence-learning"]');
+    await vi.dynamicImportSettled(); await settle();
+    expect(f.document.getElementById('fluent-read-video-learning-panel')).not.toBeNull();
+    f.document.querySelector('.fr-video-learning-word')!.dispatchEvent(new f.window.Event('click', {bubbles: true}));
+    await settle();
+    expect(f.document.querySelector('[data-learning-word-popup]')?.textContent).toContain('A');
+    expect(ports.send.mock.calls.some(([message]) => message.type === 'selectionWordLookup' && message.word === 'A')).toBe(true);
+    f.document.querySelector('[data-learning-action="close-word"]')!.dispatchEvent(new f.window.Event('click', {bubbles: true}));
+    await settle(); expect(f.document.querySelector('[data-learning-word-popup]')).toBeNull();
+    const transcript = f.document.querySelector<HTMLDetailsElement>('.fr-video-learning-transcript')!;
+    transcript.open = true; transcript.dispatchEvent(new f.window.Event('toggle'));
+    await settle(); expect(f.document.querySelectorAll('.fr-video-learning-transcript-scroll button').length).toBe(1);
+    f.document.querySelector('[data-learning-action="close"]')!.dispatchEvent(new f.window.Event('click', {bubbles: true}));
+    await settle();
+    f.changeConfig({videoSubtitleDisplayMode: 'original-only'});
+    await vi.advanceTimersByTimeAsync(32);
+    const calls = ports.translate.mock.calls.length;
+    f.emitVideo('timeupdate'); await vi.advanceTimersByTimeAsync(32);
+    expect(ports.translate).toHaveBeenCalledTimes(calls);
+    dispose();
+    expect(f.native!.mode).toBe('showing');
+    expect(f.document.querySelector('.fluent-read-html-media-host')).toBeNull();
+    expect(f.video.parentElement).toBe(originalParent);
+
+  });
+
+  it('keeps pages without media idle, discovers later audio and releases the runtime after removal', async () => {
+    const f = fixture('Dynamic audio caption.', 'html-audio');
+    f.video.remove();
+    const dispose = f.start();
+    expect(ports.watchProgress).not.toHaveBeenCalled();
+    expect(f.document.getElementById(VIDEO_TRANSLATION_BUTTON_ID)).toBeNull();
+    f.player.appendChild(f.video);
+    await vi.advanceTimersByTimeAsync(80);
+    expect(f.displayed().translated).toBe(translation('Dynamic audio caption.'));
+    f.video.remove();
+    await vi.advanceTimersByTimeAsync(80);
+    expect(f.document.querySelector('.fluent-read-html-media-host')).toBeNull();
+    expect(ports.subscribers.size).toBe(1);
+    expect(ports.watchProgress).not.toHaveBeenCalled();
+    dispose();
   });
 });

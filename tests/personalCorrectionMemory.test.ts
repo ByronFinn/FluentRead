@@ -181,6 +181,7 @@ describe('precise reuse and reviewed suggestions', () => {
         expect(lookupPersonalCorrection(state, query('Unrelated')).suggestions).toEqual([]);
         expect(lookupPersonalCorrection(state, query('!!!')).suggestions).toEqual([]);
         expect(lookupPersonalCorrection({...state, entries: [record(1, {source: '???'})]}, query('!!!')).suggestions).toEqual([]);
+        expect(lookupPersonalCorrection({...state, entries: [record(1, {source: '???'})]}, query('Actual words')).suggestions).toEqual([]);
     });
     it('requires explicit project membership and refuses competing confirmed translations', () => {
         const project = {id: uuid(10), label: 'Reading'};
@@ -201,7 +202,9 @@ describe('precise reuse and reviewed suggestions', () => {
             record(3, {source: 'They found the bank beside the quiet river.'}), record(4, {source: 'They found the bank beside the dark river.'}),
             record(5, {source: 'They found the bank beside the green river.'}), record(6, {source: 'They found the bank beside the blue river.'}),
             record(7, {source: 'They found the bank beside the river!'})];
-        const result = lookupPersonalCorrection({...emptyCorrectionState(), revision: 7, entries}, query());
+        // Fill the supported 1,000-record capacity with lower-scoring near matches; query tokens remain shared.
+        for (let id = 8; id <= 1000; id++) entries.push(record(id, {source: `They found the bank beside a distant mountain village number ${id}.`}));
+        const result = lookupPersonalCorrection({...emptyCorrectionState(), revision: 1000, entries}, query());
         expect(result.exact).toBeUndefined(); expect(result.suggestions).toHaveLength(5);
         expect(result.suggestions.map(entry => entry.id)).toEqual([uuid(7), uuid(6), uuid(5), uuid(4), uuid(3)]);
     });
@@ -332,7 +335,7 @@ describe('encrypted personal correction repository', () => {
         const storage = createBackgroundConfigStorage({repository: encrypted, legacy});
         const service = new PersonalCorrectionService(new PersonalCorrectionRepository(storage));
         const saved = await service.save(input());
-        const raw = await encrypted.getRawRecord(PERSONAL_CORRECTION_STORAGE_KEY);
+        const raw = await encrypted.database.records.get(PERSONAL_CORRECTION_STORAGE_KEY);
         expect(JSON.stringify(raw)).not.toContain(input().source); expect(JSON.stringify(raw)).not.toContain(input().translation);
         expect(await encrypted.has('local:config')).toBe(false); expect(await encrypted.has('local:configHistory')).toBe(false);
         const reopened = new PersonalCorrectionService(new PersonalCorrectionRepository(createBackgroundConfigStorage({repository: new EncryptedConfigRepository({database}), legacy})));
@@ -430,6 +433,30 @@ describe('personal correction client and scoped runtime', () => {
         client.subscribe(listener)(); expect(port.onMessage.removeListener).toHaveBeenCalledTimes(2);
         const unavailable = createPersonalCorrectionsClient(() => {throw new Error('not extension');}); unavailable.subscribe(listener)();
     });
+    it('ignores queued invalidations after cleanup even when runtime removal has been revoked', () => {
+        for (const revoked of [false, true]) {
+            const port = runtime(), abort = new AbortController(), listener = vi.fn();
+            const removeAbort = vi.spyOn(abort.signal, 'removeEventListener');
+            const cleanup = createPersonalCorrectionsClient(() => port).subscribe(listener, abort.signal);
+            const receive = port.onMessage.addListener.mock.calls[0][0] as (message: unknown) => void;
+            if (revoked) port.onMessage.removeListener.mockImplementation(() => {throw new Error('Extension context invalidated');});
+            expect(() => cleanup()).not.toThrow(); cleanup();
+            receive({type: PERSONAL_CORRECTIONS_CHANGED});
+            expect(listener).not.toHaveBeenCalled();
+            expect(port.onMessage.removeListener).toHaveBeenCalledOnce();
+            expect(removeAbort).toHaveBeenCalledWith('abort', cleanup);
+        }
+    });
+    it('treats revoked registration as unavailable and releases a subscription canceled while registering', () => {
+        const revoked = runtime(); revoked.onMessage.addListener.mockImplementation(() => {throw new Error('Extension context invalidated');});
+        expect(() => createPersonalCorrectionsClient(() => revoked).subscribe(vi.fn())()).not.toThrow();
+        const port = runtime(), abort = new AbortController(), listener = vi.fn();
+        port.onMessage.addListener.mockImplementation(() => abort.abort());
+        const cleanup = createPersonalCorrectionsClient(() => port).subscribe(listener, abort.signal);
+        const receive = port.onMessage.addListener.mock.calls[0][0] as (message: unknown) => void;
+        receive({type: PERSONAL_CORRECTIONS_CHANGED}); cleanup();
+        expect(listener).not.toHaveBeenCalled(); expect(port.onMessage.removeListener).toHaveBeenCalledOnce();
+    });
     function background() {
         const {service, store} = setup();
         const dependencies = {service, extensionId: 'ext', isExtensionUrl: (url: string) => url.startsWith('chrome-extension://ext/'), privateContext: vi.fn(() => false), enabled: vi.fn(() => true), changed: vi.fn(async () => undefined)};
@@ -519,13 +546,18 @@ describe('personal correction client and scoped runtime', () => {
         expect(await call('list')).toEqual({success: false, error: '个人校订操作未完成，请稍后重试'});
     });
     it('registers one shared handler and broadcasts no user text through tabs and runtime', async () => {
-        const handlers = createPersonalCorrectionRuntimeHandlers<PersonalCorrectionContext>();
+        const sendTabMessage: (tabId: number, message: unknown) => Promise<unknown> = mocked.browser.tabs.sendMessage;
+        const broadcastTabMessage = vi.fn(async (message: unknown) => {
+            await Promise.allSettled([sendTabMessage(1, message)]);
+        });
+        const handlers = createPersonalCorrectionRuntimeHandlers<PersonalCorrectionContext>({broadcastTabMessage});
         expect(handlers).toHaveLength(1);
         mocked.browser.tabs.sendMessage.mockRejectedValueOnce(new Error('tab gone'));
         mocked.browser.runtime.sendMessage.mockRejectedValueOnce(new Error('no listener'));
         const sender = {id: 'ext', url, tab: {id: 1}};
         expect(await handlers[0].handle({type: PERSONAL_CORRECTIONS_MESSAGE, action: 'save', input: input()} as never, {sender})).toMatchObject({success: true});
-        expect(mocked.browser.tabs.sendMessage).toHaveBeenCalledWith(1, {type: PERSONAL_CORRECTIONS_CHANGED});
+        expect(broadcastTabMessage).toHaveBeenCalledWith({type: PERSONAL_CORRECTIONS_CHANGED});
+        await vi.waitFor(() => expect(mocked.browser.tabs.sendMessage).toHaveBeenCalledWith(1, {type: PERSONAL_CORRECTIONS_CHANGED}));
         await vi.waitFor(() => expect(mocked.browser.runtime.sendMessage).toHaveBeenCalledWith({type: PERSONAL_CORRECTIONS_CHANGED}));
         expect(await handlers[0].handle({type: PERSONAL_CORRECTIONS_MESSAGE, action: 'list'} as PersonalCorrectionMessage, {sender: {id: 'ext', url: 'chrome-extension://ext/options.html'}})).toMatchObject({success: true});
         for (const preference of [{on: false, personalCorrectionsEnabled: true}, {on: true, personalCorrectionsEnabled: false}]) {

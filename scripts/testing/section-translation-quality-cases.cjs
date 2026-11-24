@@ -2,7 +2,7 @@
 /**
  * @file scripts/testing/section-translation-quality-cases.cjs
  * 文件职责：为局部翻译生产浏览器脚本提供可独立筛选的性能、动态页面与恢复可靠性专项。
- * 主要内容：用真实 CDP 指针和按键验证静止指针重命中、嵌套滚动、Shadow DOM 原文预览、局部失败重试、取消后的迟到结果、较大区域让帧与再次翻译去重，并检查 light/dark 与 390px 控件几何。
+ * 主要内容：用真实 CDP 指针和按键验证同段连续划过的高亮稳定性与布局开销、静止指针重命中、嵌套滚动、Shadow DOM 原文预览、局部失败重试、取消后的迟到结果、较大区域让帧与再次翻译去重，并检查 light/dark 与 390px 控件几何。
  * 模块边界：只调用测试宿主提供的隔离浏览器和受控 Google transport，不读取用户浏览器配置、不接入在线翻译服务，也不修改产品实现。
  */
 const assert = require('node:assert/strict');
@@ -18,7 +18,27 @@ async function runSectionQualityCases(harness) {
     await patch(values);
     caseConfiguration = {...caseConfiguration, ...values};
   };
-  const sourceIn = text => wait(async () => (await pickerState())?.preview?.includes(text), 5000, `source preview: ${text}`);
+  // 当前选择器直接描边原文，不再复制一段文本到工具栏；用实际原文几何验证命中。
+  const sourceIn = (text, expandedContainer = false) => wait(async () => {
+    const state = await pickerState();
+    if (!state?.visible || /正在|inspecting/i.test(state.action || '')) return false;
+    return page.evaluate(({text, box, expandedContainer}) => {
+      const matches = [];
+      const visit = root => {
+        for (const element of root.querySelectorAll('*')) {
+          if (element.shadowRoot) visit(element.shadowRoot);
+          if (!element.textContent?.includes(text) || [...element.children].some(child => child.textContent?.includes(text))) continue;
+          const rect = element.getBoundingClientRect();
+          if (rect.width > 0 && rect.height > 0) matches.push(rect);
+        }
+      };
+      visit(document);
+      return matches.some(rect => expandedContainer
+        ? rect.left >= box.x - 2 && rect.right <= box.x + box.width + 2 && rect.top >= box.y - 2 && rect.bottom <= box.y + box.height + 2
+        : Math.abs(box.x - (rect.left - 3)) <= 2 && Math.abs(box.y - (rect.top - 3)) <= 2
+          && Math.abs(box.width - (rect.width + 6)) <= 2 && Math.abs(box.height - (rect.height + 6)) <= 2);
+    }, {text, box: state.rect, expandedContainer});
+  }, 5000, `source highlight: ${text}`);
   const restoreAll = () => popup.evaluate(tab => chrome.tabs.sendMessage(tab, {type: 'contextMenuTranslate', action: 'restore'}), tabId);
   const readyForCase = async () => {
     if (await pickerActive()) await page.keyboard.press('Escape');
@@ -48,7 +68,7 @@ async function runSectionQualityCases(harness) {
     await startFromPopupMessage();
     await lock(selector);
     await clickPickerButton('.fr-section-expand');
-    await sourceIn('Quality');
+    await sourceIn('Quality', true);
   };
   const caseDone = name => {
     report.cases.push(name);
@@ -59,6 +79,61 @@ async function runSectionQualityCases(harness) {
   };
   const selected = new Set(harness.selectedCases);
   let name;
+
+  if (selected.has('pointer')) {
+  await readyForCase();
+  name = 'continuous pointer movement keeps one paragraph preview stable and resolves the final neighbor without requests';
+  setCurrentCase(name);
+  await page.emulateMedia({reducedMotion: 'no-preference'});
+  await region('<article id="quality-pointer-region" style="max-width:760px;padding:12px"><p id="pointer-alpha" style="min-height:70px">Quality pointer alpha keeps <span>the same paragraph preview</span> while <strong>the pointer crosses inline text</strong> repeatedly.</p><p id="pointer-beta" style="min-height:70px">Quality pointer beta is the final target after rapid movement across adjacent paragraphs.</p></article>');
+  const beforeRequests = await requestCount();
+  await startFromPopupMessage();
+  await hover('#pointer-alpha');
+  await sourceIn('Quality pointer alpha');
+  const originalGeometry = await page.locator('#pointer-alpha').boundingBox();
+  const session = await page.context().newCDPSession(page);
+  await session.send('Performance.enable');
+  const beforeMetrics = Object.fromEntries((await session.send('Performance.getMetrics')).metrics.map(metric => [metric.name, metric.value]));
+  await picker(`
+    const state={frames:0,hiddenFrames:0,rects:[],mutations:0,active:true};
+    this.__pointerProbe=state;
+    state.observer=new MutationObserver(records=>state.mutations+=records.length);
+    state.observer.observe(this,{subtree:true,childList:true,attributes:true,characterData:true});
+    const sample=()=>{if(!state.active)return;const box=this.querySelector('.fr-section-box'),rect=box.getBoundingClientRect();state.frames++;if(!box.classList.contains('is-visible'))state.hiddenFrames++;state.rects.push({x:rect.x,y:rect.y,width:rect.width,height:rect.height});state.frame=requestAnimationFrame(sample);};
+    state.frame=requestAnimationFrame(sample);return true;
+  `);
+  let pointerProbe;
+  try {
+    const start = await center('#pointer-alpha');
+    for (let index = 0; index < 120; index++) await page.mouse.move(start.x + ((index % 21) - 10) * 10, start.y + index % 3);
+    await page.waitForTimeout(200);
+    pointerProbe = await picker(`const state=this.__pointerProbe;state.active=false;state.observer.disconnect();cancelAnimationFrame(state.frame);return{frames:state.frames,hiddenFrames:state.hiddenFrames,mutations:state.mutations,rects:state.rects};`);
+  } finally {
+    await picker(`const state=this.__pointerProbe;if(state){state.active=false;state.observer.disconnect();cancelAnimationFrame(state.frame);}return true;`);
+  }
+  const afterMetrics = Object.fromEntries((await session.send('Performance.getMetrics')).metrics.map(metric => [metric.name, metric.value]));
+  await session.detach();
+  const spans = Object.fromEntries(['x', 'y', 'width', 'height'].map(key => [key, Math.max(...pointerProbe.rects.map(rect => rect[key])) - Math.min(...pointerProbe.rects.map(rect => rect[key]))]));
+  const metrics = Object.fromEntries(['ScriptDuration', 'TaskDuration', 'LayoutDuration', 'RecalcStyleDuration', 'LayoutCount', 'RecalcStyleCount'].map(key => [key, afterMetrics[key] - beforeMetrics[key]]));
+  report.pointerStability = {trustedMoves: 120, frames: pointerProbe.frames, hiddenFrames: pointerProbe.hiddenFrames,
+    overlayMutations: pointerProbe.mutations, geometrySpansPx: spans, metrics};
+  assert.ok(pointerProbe.frames > 20, 'the probe observed rendered frames throughout real pointer movement');
+  assert.equal(pointerProbe.hiddenFrames, 0, 'same-paragraph preview never disappears between pointer movements');
+  assert.ok(Object.values(spans).every(span => span < 1), `same-paragraph highlight remains stable: ${JSON.stringify(spans)}`);
+  assert.deepEqual(await page.locator('#pointer-alpha').boundingBox(), originalGeometry, 'preview does not change source layout');
+  await sourceIn('Quality pointer alpha');
+  const first = await center('#pointer-alpha'), second = await center('#pointer-beta');
+  for (let index = 0; index < 12; index++) await page.mouse.move(index % 2 ? second.x : first.x, index % 2 ? second.y : first.y);
+  await sourceIn('Quality pointer beta');
+  const finalState = await pickerState(), targetGeometry = await page.locator('#pointer-beta').boundingBox();
+  assert.ok(finalState.visible && finalState.rect.y <= targetGeometry.y && finalState.rect.y + finalState.rect.height >= targetGeometry.y + targetGeometry.height, 'final neighbor is visibly highlighted');
+  assert.equal(await requestCount(), beforeRequests, 'hovering and crossing neighboring regions send no provider requests');
+  await shot('quality-pointer-stable-preview');
+  await page.keyboard.press('Escape');
+  await wait(async () => !(await pickerActive()));
+  assert.equal(await requestCount(), beforeRequests, 'cancel leaves the page untranslated');
+  caseDone(name);
+  }
 
   if (selected.has('performance')) {
   await readyForCase();
@@ -179,9 +254,10 @@ async function runSectionQualityCases(harness) {
   await page.mouse.click(betaPoint.x, betaPoint.y);
   await wait(async () => (await pickerState())?.selection === 'locked');
   await page.locator('#quality-scroll').evaluate(element => {element.scrollTop += 20;});
+  await sourceIn('Quality scroll beta');
   await wait(async () => {
     const source = await page.locator('#scroll-beta').boundingBox(), state = await pickerState();
-    return state.preview.includes('Quality scroll beta') && Math.abs(state.rect.y - (source.y - 3)) <= 2;
+    return Math.abs(state.rect.y - (source.y - 3)) <= 2;
   });
   await page.keyboard.press('Enter');
   await wait(async () => await hasTranslation('#scroll-beta'));
@@ -278,15 +354,16 @@ async function runSectionQualityCases(harness) {
   await startFromPopupMessage();
   await lock('#shadow-alpha');
   await clickPickerButton('.fr-section-expand');
-  await sourceIn('Quality shadow alpha original');
-  assert.ok(!(await pickerState()).preview.includes('【译】'));
+  await sourceIn('Quality shadow alpha original', true);
+  assert.equal(await picker('return this.querySelector(".fr-section-bar-preview")'), null, 'the overlay describes original text in place without a duplicate text preview');
   await page.keyboard.press('Enter');
   await wait(async () => (await shadowCount()).every(count => count === 1));
   await startFromPopupMessage();
   await lock('#shadow-alpha');
   await clickPickerButton('.fr-section-expand');
   await waitLabel(/恢复原文/);
-  assert.ok((await pickerState()).preview.includes('Quality shadow alpha original') && !(await pickerState()).preview.includes('【译】'));
+  await sourceIn('Quality shadow alpha original', true);
+  assert.equal(await page.evaluate(() => document.querySelector('#quality-shadow-host').shadowRoot.querySelector('#shadow-alpha').firstChild.textContent), 'Quality shadow alpha original is visible in a composed reading region.');
   await shot('quality-03-shadow-original-preview');
   await page.keyboard.press('Enter');
   await wait(async () => (await shadowCount()).every(count => count === 0));

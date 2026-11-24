@@ -1,7 +1,7 @@
 /**
  * @file src/core/translation/slotProtocol.ts
  * 文件职责：以稳定且不与任一原文槽碰撞的标记编码纯文本槽，并严格解析服务返回的槽位顺序。
- * 主要内容：确定性来源摘要、跨槽 nonce 避让、按同一命名空间前向扫描标准标记，拒绝重复、缺项、交错及标记外正文；保留非标准字面标记的兼容解析。
+ * 主要内容：确定性来源摘要、跨槽 nonce 避让、按原始包边界重建并验证译文，按同一命名空间前向扫描标准标记，拒绝重复、缺项、交错及标记外正文；保留非标准字面标记的兼容解析。
  * 模块边界：仅处理字符串和协议快照，不读写 DOM、不读取配置、不调用 provider；serialization 直接重导出公开协议。
  */
 export interface SerializedTranslationSlots {
@@ -57,6 +57,13 @@ export function serializeTranslationSlots(
     const ends = sources.map((_, index) => `___FLUENTREAD_${nonce}_${index}_END___`);
     const payload = sources.map((source, index) => `${starts[index]}${source}${ends[index]}`).join('\n');
     return {payload, starts, ends};
+}
+
+/** 译文沿用已验证的原包标记；不能重新猜 nonce，或因译文含活动标记而静默换名。 */
+export function rebuildTranslationSlots(packet: SerializedTranslationSlots, translations: readonly string[]): string | null {
+    if (translations.length !== packet.starts.length || packet.starts.length !== packet.ends.length) return null;
+    const payload = translations.map((text, index) => `${packet.starts[index]}${text}${packet.ends[index]}`).join('\n');
+    return parseTranslationSlots(packet, payload) === null ? null : payload;
 }
 
 function parseGeneratedSlots(starts: string[], ends: string[], translated: string, nonce: string): string[] | null {

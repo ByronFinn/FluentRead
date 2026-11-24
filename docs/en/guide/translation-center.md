@@ -1,33 +1,39 @@
 # Translation Center
 
-Compare how different services translate the same sentence.
+Compare how several services translate the same text, then copy the wording you prefer.
 
 <GuideVisual kind="compare" en />
 
 ## Compare a translation
 
 1. Open **Settings → Tools & learning → Translation Center**.
-2. Enter text, pick the languages, and add providers in **Manage services**.
-3. Choose **Translate**. Compare results in a list or side by side, then copy the result you need.
+2. Enter text, choose its languages, and add services or models in **Manage services**.
+3. Choose **Translate**, or press **⌘ + Enter** on Mac and **Ctrl + Enter** elsewhere.
+4. View results in a list or side by side, then copy the translation you need.
 
-Text and results stay in this page only. Copy what you need before closing or refreshing. The selected services receive your text.
+Your selected services receive the text. Input and results remain in the current settings page only; copy what you need before closing or refreshing it.
 
-<details class="guide-details">
-<summary>Managing results and providers</summary>
+## Sidebar translation
 
-Open **Settings Center → Tools and learning → Translation Center**, enter text, choose languages and click **Translate** (⌘ + Enter on Mac, Ctrl + Enter elsewhere). First use starts with a small selection of no-key services and a configured default; existing choices and order are preserved.
+In Chrome, Edge, and desktop Firefox, use the **sidebar translation** icon at the top of the extension popup. In desktop Firefox, you can also choose FluentRead from the browser's sidebar menu.
 
-**Manage services** supports multiple selections and service/model search. It separates no-key services and saved credentials from services needing configuration; saved credentials do not prove that a connection works. Adding a service never sends a translation request. **Configure** opens its connection and model settings; returning keeps your text and completed results. Comparison choices do not change the default page service, but connection settings are shared with other features.
+In Chrome and Edge, **Current tab only** is the default. The panel hides when you switch tabs. Chrome restores the panel when you switch back. In Edge, you may need to reopen it manually. To share one panel across tabs in the same window, select **Entire window** in **Settings → Interface style → Menu layout → Sidebar scope**, then open the sidebar again from the popup.
 
-Switch between **List** and **Side by side**; narrow screens use one column. Drag cards or focus their handles and use **Alt + ↑ / ↓** to reorder. Languages, order and layout save automatically. Stop all unfinished tasks or a single service without losing completed results; retry only unfinished items when needed.
+In the sidebar, press **Enter** to translate and **Shift + Enter** for a new line. **⌘ + Enter** and **Ctrl + Enter** also work. The button at the top right opens Translation Center in settings. The sidebar and settings page share language and service choices; input and results stay in the current panel and are not saved to settings.
 
-Changing the text, language or model marks previous results, retaining their original language pair. **Copy current results** excludes outdated translations; an individual previous result can still be copied for reference.
+To keep the webpage at its current width, assign **Open translation window** a key combination in the browser's extension shortcuts settings in Chrome, Edge, or desktop Firefox. The shortcut opens the same translation panel in a separate window.
 
-Source text and results are not stored in Translation Center settings and clear when the settings page closes or reloads. Translating sends the text to the selected services, subject to the extension's existing request logging and statistics settings.
+When you select several services, each has its own card with the service name, model when available, and translation or status. You can copy each translation separately.
 
-</details>
+## Manage services and results
+
+**Manage services** lets you search and select several services or models. Saved credentials do not prove a connection works. Use **Configure** to check the connection and model; returning keeps your input and completed results. Adding a service does not translate. The comparison list leaves your default page service unchanged, while connection settings are shared with other features.
+
+Drag cards to reorder them, or focus a handle and press **Alt + ↑ / ↓**. Languages, order, and layout save automatically. Narrow screens use one column.
+
+Stop all unfinished requests or one service without losing completed results, then retry unfinished items when needed. Changing the source text, language, or model marks old results as previous results. **Copy current results** includes successful translations for the current choices; previous results can still be copied individually.
 
 ## Related guides
 
-- [Shortcuts & triggers](/en/guide/custom-hotkey)
 - [Provider connections](/en/config/translation-engines)
+- [Shortcuts and triggers](/en/guide/custom-hotkey)

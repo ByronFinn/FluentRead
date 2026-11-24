@@ -88,7 +88,7 @@ describe('video AI model setup', () => {
     expect(dependencies.startGeneration).not.toHaveBeenCalled();
   });
 
-  it('reset stops the old view immediately, and its late download completion cannot stop a new watcher', async () => {
+  it.each(['success','failure'] as const)('reset keeps the new watcher intact when the old download settles with %s', async outcome => {
     const first = deferred<unknown>(), second = deferred<unknown>();
     const firstStop = vi.fn(), secondStop = vi.fn();
     const listeners: Array<(progress: {loaded: number; total: number} | undefined) => void> = [];
@@ -112,8 +112,10 @@ describe('video AI model setup', () => {
     const b = controller.confirm();
     expect(watchDownload).toHaveBeenCalledTimes(2);
     listeners[1]!({loaded: 10, total: 100});
-    first.resolve({success: true});
+    const errorCalls=vi.mocked(dependencies.setError).mock.calls.length;
+    first.resolve(outcome==='success'?{success:true}:{success:false,error:'old disk failure'});
     await a;
+    expect(dependencies.setError).toHaveBeenCalledTimes(errorCalls);
     expect(firstStop).toHaveBeenCalledOnce();
     expect(secondStop).not.toHaveBeenCalled();
     expect(controller.downloading).toBe(true);
@@ -361,5 +363,43 @@ describe('video AI model setup', () => {
     stale.invalidate();
     await confirming;
     expect(stale.dependencies.startGeneration).not.toHaveBeenCalled();
+  });
+});
+
+describe('native ASR model setup avoids browser downloads', () => {
+  it('starts native generation without browser preparation', async () => {
+    const f = setup({isNative: () => true});
+    await f.controller.request(() => true);
+    expect(f.controller.revision).toBe(1);
+    expect(f.events).toEqual(['error:', 'start']);
+    expect(f.controller.choice).toBeNull();
+    expect(f.controller.checking).toBe(false);
+    expect(f.controller.downloading).toBe(false);
+    expect(f.sendMessage).not.toHaveBeenCalled();
+    expect(f.dependencies.watchDownload).not.toHaveBeenCalled();
+    expect(f.dependencies.persistModel).not.toHaveBeenCalled();
+  });
+  it('routes model switching to settings without generating', async () => {
+    const f = setup({isNative: () => true});
+    await f.controller.request(() => true, true);
+    expect(f.events).toEqual(['error:请在设置中切换识别方式']);
+    expect(f.dependencies.onChange).toHaveBeenCalledOnce();
+    expect(f.controller.revision).toBe(1);
+    expect(f.sendMessage).not.toHaveBeenCalled();
+  });
+  it('rejects hidden and invalidated native requests without transport', async () => {
+    const f = setup({isNative: () => true});
+    await f.controller.request(() => false);
+    f.invalidate();
+    await f.controller.request(() => true);
+    expect(f.controller.revision).toBe(2);
+    expect(f.dependencies.startGeneration).not.toHaveBeenCalled();
+    expect(f.sendMessage).not.toHaveBeenCalled();
+  });
+  it('retains browser setup when native selection explicitly returns false', async () => {
+    const f = setup({isNative: () => false, responses: {fluentReadGetLocalVideoModelState: [{success: true, models: ['tiny']}]}});
+    await f.controller.request(() => true);
+    expect(f.sendMessage).toHaveBeenCalledOnce();
+    expect(f.dependencies.startGeneration).toHaveBeenCalledOnce();
   });
 });

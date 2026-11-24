@@ -1,3 +1,6 @@
+import {translationSnapshot} from './helpers/localInferenceFixtures';
+import {getEventListeners} from 'node:events';
+import type {OffscreenRequestMap} from '@/src/core/messaging/offscreen';
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {createOffscreenMessageListener} from '@/src/app/offscreen/messageRouter';
 import {createLocalTranslationOffscreenAdapter} from '@/src/platform/offscreen/localTranslation';
@@ -32,7 +35,7 @@ beforeEach(() => {
 describe('local translation Offscreen adapter', () => {
   it('forwards detection context without changing the source text', async () => {
     send.mockResolvedValue({success: true, result: '译文'});
-    await createLocalTranslationOffscreenAdapter(client).translate({text: 'Reduce Waste during Filament Change',
+    await createLocalTranslationOffscreenAdapter(client).translate({model: LOCAL_TRANSLATION_MODEL_IDS.m2m100, text: 'Reduce Waste during Filament Change',
       sourceLanguage: 'auto', targetLanguage: 'zh', sourceLanguageDetectionText: 'English paragraph context'});
     expect(send.mock.calls[0][0]).toMatchObject({text: 'Reduce Waste during Filament Change', sourceLanguageDetectionText: 'English paragraph context'});
   });
@@ -68,7 +71,7 @@ describe('local translation Offscreen adapter', () => {
 
   it('validates prepare, status and remove responses', async () => {
     send
-      .mockResolvedValueOnce({success: true, model: LOCAL_TRANSLATION_MODEL_IDS.m2m100})
+      .mockResolvedValueOnce({success: true, ...translationSnapshot()})
       .mockResolvedValueOnce({success: true, models: []})
       .mockResolvedValueOnce({success: true});
     const adapter = createLocalTranslationOffscreenAdapter(client);
@@ -86,6 +89,145 @@ describe('local translation paragraph language detection', () => {
     vi.unstubAllGlobals();
     vi.doUnmock('@/src/features/local-translation/offscreen/downloads');
     vi.resetModules();
+  });
+
+  it.each([true, false])('reports missing model files without redundant retry (flag %s) and reconciles without blocking failure', async retrySingleThread => {
+    vi.resetModules();
+    const reconcile = vi.fn(() => new Promise<void>(() => {}));
+    vi.doMock('@/src/features/local-translation/offscreen/downloads', () => ({
+      createLocalTranslationDownloadManager: () => ({status: async () => ({tasks: [{model: LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, phase: 'ready', updatedAt: 42}]}), reconcileUnavailable: reconcile}),
+    }));
+    const workers: FakeWorker[] = [];
+    class FakeWorker {
+      onmessage?: (event: any) => void;
+      terminate = vi.fn();
+      constructor() {workers.push(this);}
+      postMessage(message: any) {queueMicrotask(() => this.onmessage?.({data: {
+        requestId: message.requestId, success: false, error: 'LOCAL_TRANSLATION_NOT_DOWNLOADED', retrySingleThread,
+      }}));}
+    }
+    vi.stubGlobal('Worker', FakeWorker);
+    vi.stubGlobal('window', {setTimeout, clearTimeout, location: {href: 'https://extension.test/offscreen.html'}});
+    const owner = await import('@/src/features/local-translation/offscreen/translation');
+    try {
+      await expect(owner.translateLocalText({model: LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, text: 'Hello', sourceLanguage: 'en', targetLanguage: 'zh'})).rejects.toThrow('LOCAL_TRANSLATION_NOT_DOWNLOADED');
+      expect(workers).toHaveLength(1);
+      expect(workers[0].terminate).toHaveBeenCalledOnce();
+      expect(reconcile).toHaveBeenCalledWith(LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, 42, 'missing');
+    } finally {owner.disposeLocalTranslationWorker();}
+  });
+
+  it.each(['missing', 'integrity'])('reconciles a real initialized download manager after cache %s', async damage => {
+    vi.resetModules();vi.doUnmock('@/src/features/local-translation/offscreen/downloads');
+    const stores = new Map<string, Map<string, Response>>();
+    vi.stubGlobal('caches', {open: async (name: string) => {
+      if (!stores.has(name)) stores.set(name, new Map());
+      const entries = stores.get(name)!;
+      return {
+        match: async (key: string) => entries.get(key)?.clone(),
+        put: async (key: string, value: Response) => {entries.set(key, value.clone());},
+        delete: async (key: string) => entries.delete(key),
+        keys: async (key: string) => [...entries.keys()].filter(value => value.split('?')[0] === key.split('?')[0]).map(value => new Request(value)),
+      };
+    }});
+    const artifact = await import('@/src/features/local-translation/offscreen/artifactStore');
+    const model = LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, files = artifact.getTranslationArtifacts(model);
+    const store = await caches.open(artifact.LOCAL_MODEL_CACHE);
+    for (const file of files) {
+      await store.put(`${artifact.artifactUrl(file)}?fluent-read-verified=${file.sha256}`, new Response('{}'));
+      for (let index = 0; index < Math.ceil(file.size / artifact.MODEL_CHUNK_SIZE); index++) {
+        const size = Math.min(artifact.MODEL_CHUNK_SIZE, file.size - index * artifact.MODEL_CHUNK_SIZE);
+        await store.put(`${artifact.artifactUrl(file)}?fluent-read-part=${index}`, new Response('', {headers: {'Content-Length': String(size)}}));
+      }
+    }
+    const damaged = files.find(file => file.path === 'config.json')!;
+    const workers: FakeWorker[] = [];
+    class FakeWorker {
+      onmessage?: (event: any) => void;
+      terminate = vi.fn();
+      constructor() {workers.push(this);}
+      postMessage(message: any) {
+        void artifact.matchTranslationArtifact(artifact.artifactUrl(damaged)).then(
+          () => {throw new Error('missing chunk was accepted');},
+          (error: Error) => this.onmessage?.({data: {requestId: message.requestId, success: false, error: error.message, retrySingleThread: true}}),
+        );
+      }
+    }
+    vi.stubGlobal('Worker', FakeWorker);
+    vi.stubGlobal('window', {setTimeout, clearTimeout, location: {href: 'https://extension.test/offscreen.html'}});
+    vi.stubGlobal('navigator', {language: 'en-US'});
+    const owner = await import('@/src/features/local-translation/offscreen/translation');
+    try {
+      expect((await owner.getLocalTranslationModelStatus()).tasks.find(task => task.model === model)?.phase).toBe('ready');
+      if (damage === 'missing') await store.delete(`${artifact.artifactUrl(damaged)}?fluent-read-part=0`);
+      await expect(owner.translateLocalText({model, text: 'Hello', sourceLanguage: 'en', targetLanguage: 'zh'})).rejects.toThrow(
+        damage === 'missing' ? 'LOCAL_TRANSLATION_NOT_DOWNLOADED' : 'LOCAL_TRANSLATION_INTEGRITY',
+      );
+      await vi.waitFor(async () => expect((await owner.getLocalTranslationModelStatus()).tasks.find(task => task.model === model)?.phase)
+        .toBe(damage === 'missing' ? 'paused' : 'error'));
+      expect(workers).toHaveLength(1);expect(workers[0].terminate).toHaveBeenCalledOnce();
+    } finally {owner.disposeLocalTranslationWorker();}
+  });
+
+  it('cancels safely if the signal is aborted while the Worker is being constructed', async () => {
+    vi.resetModules();
+    vi.doMock('@/src/features/local-translation/offscreen/downloads', () => ({
+      createLocalTranslationDownloadManager: () => ({status: async () => ({tasks: [{model: LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, phase: 'ready'}]})}),
+    }));
+    const controller = new AbortController(), workers: FakeWorker[] = [];
+    class FakeWorker {
+      terminate = vi.fn();postMessage = vi.fn();
+      constructor() {workers.push(this);controller.abort();}
+    }
+    vi.stubGlobal('Worker', FakeWorker);
+    vi.stubGlobal('window', {setTimeout, clearTimeout, location: {href: 'https://extension.test/offscreen.html'}});
+    const owner = await import('@/src/features/local-translation/offscreen/translation');
+    try {
+      await expect(owner.translateLocalText({model: LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, text: 'Hello', sourceLanguage: 'en', targetLanguage: 'zh'}, controller.signal)).rejects.toMatchObject({name: 'AbortError'});
+      expect(workers).toHaveLength(1);expect(workers[0].terminate).toHaveBeenCalledOnce();expect(workers[0].postMessage).not.toHaveBeenCalled();
+    } finally {owner.disposeLocalTranslationWorker();}
+  });
+
+  it('does not loop when the single-thread Worker also requests a retry', async () => {
+    vi.resetModules();
+    vi.doMock('@/src/features/local-translation/offscreen/downloads', () => ({
+      createLocalTranslationDownloadManager: () => ({status: async () => ({tasks: [{model: LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, phase: 'ready'}]})}),
+    }));
+    const workers: FakeWorker[] = [];
+    class FakeWorker {
+      onmessage?: (event: any) => void;terminate = vi.fn();
+      constructor() {workers.push(this);}
+      postMessage(message: any) {queueMicrotask(() => this.onmessage?.({data: {requestId: message.requestId, success: false, retrySingleThread: true, error: 'PTHREAD_UNAVAILABLE'}}));}
+    }
+    vi.stubGlobal('Worker', FakeWorker);
+    vi.stubGlobal('window', {setTimeout, clearTimeout, location: {href: 'https://extension.test/offscreen.html'}});
+    const owner = await import('@/src/features/local-translation/offscreen/translation');
+    try {
+      await expect(owner.translateLocalText({model: LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, text: 'Hello', sourceLanguage: 'en', targetLanguage: 'zh'})).rejects.toThrow('PTHREAD_UNAVAILABLE');
+      expect(workers).toHaveLength(2);expect(workers[0].terminate).toHaveBeenCalledOnce();
+    } finally {owner.disposeLocalTranslationWorker();}
+  });
+
+  it('reconciles a missing model even if a single-thread fallback returns a retry-marked failure', async () => {
+    vi.resetModules();
+    const reconcile = vi.fn(async () => undefined);
+    vi.doMock('@/src/features/local-translation/offscreen/downloads', () => ({
+      createLocalTranslationDownloadManager: () => ({status: async () => ({tasks: [{model: LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, phase: 'ready', updatedAt: 42}]}), reconcileUnavailable: reconcile}),
+    }));
+    const workers: FakeWorker[] = [];
+    class FakeWorker {
+      onmessage?: (event: any) => void;terminate = vi.fn();
+      constructor() {workers.push(this);}
+      postMessage(message: any) {queueMicrotask(() => this.onmessage?.({data: {requestId: message.requestId, success: false, retrySingleThread: true,
+        error: message.singleThread ? 'LOCAL_TRANSLATION_NOT_DOWNLOADED' : 'PTHREAD_UNAVAILABLE'}}));}
+    }
+    vi.stubGlobal('Worker', FakeWorker);
+    vi.stubGlobal('window', {setTimeout, clearTimeout, location: {href: 'https://extension.test/offscreen.html'}});
+    const owner = await import('@/src/features/local-translation/offscreen/translation');
+    try {
+      await expect(owner.translateLocalText({model: LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, text: 'Hello', sourceLanguage: 'en', targetLanguage: 'zh'})).rejects.toThrow('LOCAL_TRANSLATION_NOT_DOWNLOADED');
+      expect(workers).toHaveLength(2);expect(reconcile).toHaveBeenCalledWith(LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, 42, 'missing');
+    } finally {owner.disposeLocalTranslationWorker();}
   });
 
   it('ignores an old Worker error after cancellation and preserves the replacement request', async () => {
@@ -226,6 +368,25 @@ describe('local translation idle disposal while waiting for shared capacity', ()
     }};
   }
 
+  it('rejects malformed correlated replies without retrying and keeps a later valid translation available', async () => {
+    const {owner, workers, request} = await warmOwner(8);
+    const workerClass = globalThis.Worker;
+    const originalPost = workerClass.prototype.postMessage;
+    workerClass.prototype.postMessage = function(message) {
+      this.onmessage?.(new MessageEvent('message', {data: {requestId: 'wrong', success: true, result: 'unrelated'}}));
+      this.onmessage?.(new MessageEvent('message', {data: {requestId: message.requestId + 1, success: true, result: 'foreign'}}));
+      this.onmessage?.(new MessageEvent('message', {data: {requestId: message.requestId, success: true, result: [], retrySingleThread: true}}));
+    };
+    try {
+      await expect(owner.translateLocalText(request)).rejects.toThrow('消息格式无效');
+      expect(workers).toHaveLength(1); expect(workers[0].terminate).not.toHaveBeenCalled();
+      workerClass.prototype.postMessage = originalPost;
+      await expect(owner.translateLocalText(request)).resolves.toBe('warm');
+      expect(workers).toHaveLength(1);
+    } finally {workerClass.prototype.postMessage = originalPost; owner.disposeLocalTranslationWorker();}
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('rejects a pre-cancelled translation before taking a queue or worker lease, and leaves later translation available', async () => {
     const {owner, workers, request} = await warmOwner(8);
     const controller = new AbortController(); controller.abort();
@@ -333,6 +494,93 @@ describe('local translation idle disposal while waiting for shared capacity', ()
       await expect(owner.translateLocalText(request)).resolves.toBe('warm');
       expect(workers).toHaveLength(2);
     } finally {owner.disposeLocalTranslationWorker();}
+  });
+
+  it.each([
+    {stop: 'cancel', late: 'resolve', model: 'same'}, {stop: 'cancel', late: 'reject', model: 'same'},
+    {stop: 'cancel', late: 'resolve', model: 'switch'}, {stop: 'cancel', late: 'reject', model: 'switch'},
+    {stop: 'dispose', late: 'resolve', model: 'same'}, {stop: 'dispose', late: 'reject', model: 'same'},
+    {stop: 'dispose', late: 'resolve', model: 'switch'}, {stop: 'dispose', late: 'reject', model: 'switch'},
+  ] as const)('$stop 在 status 挂起时释放串行槽；迟到 $late 不影响 $model 模型新任务', async ({stop, late, model}) => {
+    const ready = {tasks: [LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, LOCAL_TRANSLATION_MODEL_IDS.m2m100]
+      .map(model => ({model, phase: 'ready'}))};
+    let finishStatus!: (value: typeof ready) => void;
+    let rejectStatus!: (reason: unknown) => void;
+    let count = 0;
+    const status = vi.fn(async () => ++count === 2
+      ? new Promise<typeof ready>((resolve, reject) => {finishStatus = resolve;rejectStatus = reject;}) : ready);
+    const {owner, workers, request} = await warmOwner(8, status);
+    const controller = new AbortController();
+    let cancelled = false;
+    try {
+      await owner.translateLocalText(request);
+      const first = owner.translateLocalText({...request, text: 'Stale pending status'}, controller.signal)
+        .then(() => 'unexpected', error => {cancelled = error.name === 'AbortError';return error.name;});
+      for (let i = 0; i < 20 && !finishStatus; i++) await Promise.resolve();
+      expect(finishStatus).toBeTypeOf('function');
+      if (stop === 'cancel') controller.abort(); else owner.disposeLocalTranslationWorker();
+      for (let i = 0; i < 30; i++) await Promise.resolve();
+      expect(cancelled).toBe(true);
+      expect(await first).toBe('AbortError');
+      expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+      const nextModel = model === 'same' ? request.model : LOCAL_TRANSLATION_MODEL_IDS.m2m100;
+      await expect(owner.translateLocalText({...request, model: nextModel, text: 'Fresh task'})).resolves.toBe('warm');
+      expect(status).toHaveBeenCalledTimes(3);
+      expect(workers).toHaveLength(stop === 'dispose' || model === 'switch' ? 2 : 1);
+      if (late === 'resolve') finishStatus(ready); else rejectStatus(new Error('late status failure'));
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(workers.at(-1)!.terminate).not.toHaveBeenCalled();
+      await expect(owner.translateLocalText({...request, model: nextModel})).resolves.toBe('warm');
+      expect(workers).toHaveLength(stop === 'dispose' || model === 'switch' ? 2 : 1);
+    } finally {finishStatus?.(ready);owner.disposeLocalTranslationWorker();}
+  });
+
+  it('status 真正开始前立即取消不会启动存储查询或遗留监听', async () => {
+    const status = vi.fn(async () => ({tasks: [{model: LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, phase: 'ready'}]}));
+    const {owner, workers, request} = await warmOwner(8, status);
+    const controller = new AbortController();
+    try {
+      const pending = owner.translateLocalText(request, controller.signal);
+      controller.abort();
+      await expect(pending).rejects.toMatchObject({name: 'AbortError'});
+      expect(status).not.toHaveBeenCalled();
+      expect(workers).toHaveLength(0);
+      expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+      await expect(owner.translateLocalText(request)).resolves.toBe('warm');
+    } finally {owner.disposeLocalTranslationWorker();}
+  });
+
+  it('排队翻译取消时立即释放等待，其他任务仍保持顺序和已加载 Worker', async () => {
+    const ready = {tasks: [{model: LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, phase: 'ready'}]};
+    let finishStatus!: (value: typeof ready) => void;
+    let checking = false;
+    const status = vi.fn(async () => checking ? new Promise<typeof ready>(resolve => {finishStatus = resolve;}) : ready);
+    const {owner, workers, request} = await warmOwner(8, status);
+    let current: Promise<string> | undefined;
+    let later: Promise<string> | undefined;
+    try {
+      await owner.translateLocalText(request);
+      checking = true;
+      current = owner.translateLocalText({...request, text: 'Waiting for model status'});
+      for (let i = 0; i < 20 && !finishStatus; i++) await Promise.resolve();
+      expect(finishStatus).toBeTypeOf('function');
+      const controller = new AbortController();
+      let cancelled = false;
+      const stopped = owner.translateLocalText({...request, text: 'Cancelled in queue'}, controller.signal)
+        .then(() => 'unexpected', error => {cancelled = error.name === 'AbortError'; return error.name;});
+      later = owner.translateLocalText({...request, text: 'Next request'});
+      controller.abort();
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(cancelled).toBe(true);
+      expect(await stopped).toBe('AbortError');
+      expect(status).toHaveBeenCalledTimes(2);
+      expect(workers[0].terminate).not.toHaveBeenCalled();
+      checking = false; finishStatus(ready);
+      await expect(current).resolves.toBe('warm');
+      await expect(later).resolves.toBe('warm');
+      expect(status).toHaveBeenCalledTimes(3);
+      expect(workers).toHaveLength(1);
+    } finally { checking = false; finishStatus?.(ready); owner.disposeLocalTranslationWorker(); await current?.catch(() => undefined); await later?.catch(() => undefined); }
   });
 
   it('protects a warm translation while checking the model cache and invalidates the entire old queue on disposal', async () => {
@@ -480,14 +728,129 @@ describe('local translation idle disposal while waiting for shared capacity', ()
   });
 });
 
+describe('local translation owner model management and worker failures', () => {
+  afterEach(() => {vi.useRealTimers();vi.unstubAllGlobals();vi.doUnmock('@/src/features/local-translation/offscreen/downloads');vi.resetModules();});
+  async function fixture() {
+    vi.resetModules();vi.useFakeTimers();
+    const ready = translationSnapshot('ready');
+    let hooks!: {onChange: (snapshot: typeof ready) => Promise<void>; beforeRemove: (model: string) => void};
+    const downloads = {status: vi.fn().mockResolvedValue(ready), start: vi.fn().mockResolvedValue(ready), pause: vi.fn().mockResolvedValue(translationSnapshot('paused')),
+      remove: vi.fn(async (model: string) => {hooks.beforeRemove(model);})};
+    vi.doMock('@/src/features/local-translation/offscreen/downloads', () => ({createLocalTranslationDownloadManager: (options: typeof hooks) => {hooks = options;return downloads;}}));
+    const workers: WorkerPort[] = [];
+    class WorkerPort {
+      onmessage?: (event: any) => void;onerror?: (event: any) => void;messages: any[] = [];terminate = vi.fn();
+      postMessage = vi.fn((message: any) => {this.messages.push(message);});
+      constructor(readonly url: string, readonly options: unknown) {workers.push(this);}
+      reply(data: unknown) {this.onmessage?.({data});}
+    }
+    vi.stubGlobal('Worker', WorkerPort);
+    vi.stubGlobal('chrome', {runtime: {getURL: (path: string) => `chrome-extension://owner/${path}`}});
+    vi.stubGlobal('window', {setTimeout, clearTimeout, location: {href: 'chrome-extension://owner/offscreen.html'}});
+    const owner = await import('@/src/features/local-translation/offscreen/translation');
+    const request = {model: LOCAL_TRANSLATION_MODEL_IDS.m2m100, text: 'Original', sourceLanguage: 'en', targetLanguage: 'zh'};
+    const flush = () => vi.advanceTimersByTimeAsync(0);
+    return {owner, hooks, downloads, workers, request, flush, ready};
+  }
+
+  it('forwards download controls, publishes configured progress, and only terminates the model being removed', async () => {
+    const {owner, hooks, downloads, workers, request, flush, ready} = await fixture();
+    try {
+      await expect(hooks.onChange(ready)).resolves.toBeUndefined();
+      const notify = vi.fn().mockResolvedValue(undefined);owner.configureLocalTranslationDownloadNotifications(notify);
+      await hooks.onChange(ready);expect(notify).toHaveBeenCalledWith(ready);
+      await expect(owner.prepareLocalTranslationModel(request.model)).resolves.toEqual(ready);
+      await expect(owner.pauseLocalTranslationModelDownload(request.model)).resolves.toEqual(translationSnapshot('paused'));
+      expect(downloads.start).toHaveBeenCalledWith(request.model);expect(downloads.pause).toHaveBeenCalledWith(request.model);
+      const status = await owner.getLocalTranslationModelStatus();
+      expect(status.models.find(model => model.model === request.model)).toMatchObject({downloaded: true});
+      expect(status.models.find(model => model.model === LOCAL_TRANSLATION_MODEL_IDS.opusZhEn)).toMatchObject({downloaded: false});
+      const pending = owner.translateLocalText(request);
+      const rejection = expect(pending).rejects.toThrow('LOCAL_TRANSLATION_MODEL_REMOVED');await flush();
+      expect(workers[0].url).toBe('chrome-extension://owner/localTranslationWorker.js');expect(workers[0].options).toEqual({type: 'module'});
+      await owner.removeLocalTranslationModel(LOCAL_TRANSLATION_MODEL_IDS.opusZhEn);expect(workers[0].terminate).not.toHaveBeenCalled();
+      await owner.removeLocalTranslationModel(request.model);await rejection;expect(workers[0].terminate).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {owner.disposeLocalTranslationWorker();}
+  });
+
+  it('rejects missing model downloads before creating a worker and skips blank or same-language requests', async () => {
+    const {owner, downloads, workers, request} = await fixture();
+    try {
+      await expect(owner.translateLocalText({...request, text: ''})).resolves.toBe('');
+      await expect(owner.translateLocalText({...request, text: '  '})).resolves.toBe('  ');
+      await expect(owner.translateLocalText({...request, targetLanguage: 'en'})).resolves.toBe('Original');
+      expect(downloads.status).not.toHaveBeenCalled();
+      for (const tasks of [[], [{model: request.model, phase: 'paused'}]]) {
+        downloads.status.mockResolvedValue({version: 2, tasks});
+        await expect(owner.translateLocalText(request)).rejects.toThrow('LOCAL_TRANSLATION_NOT_DOWNLOADED');
+      }
+      expect(workers).toHaveLength(0);
+    } finally {owner.disposeLocalTranslationWorker();}
+  });
+
+  it.each([
+    [{success: true, result: 42}, '消息格式无效'],
+    [{success: false}, '本地翻译 Worker 失败'],
+    [{success: true, result: ''}, '本地翻译未返回有效译文'],
+    [{success: false, error: 'model failed'}, 'model failed'],
+  ] as const)('rejects invalid or failed worker responses %j while allowing later requests', async (response, error) => {
+    const {owner, workers, request, flush} = await fixture();
+    try {
+      const pending = owner.translateLocalText(request);const rejection = expect(pending).rejects.toThrow(error);await flush();
+      const worker = workers[0];worker.reply(null);worker.reply({requestId: 999, success: true, result: 'orphan'});
+      worker.reply({requestId: worker.messages[0].requestId, ...response});await rejection;
+      const retry = owner.translateLocalText(request);await flush();
+      worker.reply({requestId: worker.messages[1].requestId, success: true, result: 'Recovered'});
+      await expect(retry).resolves.toBe('Recovered');expect(workers).toHaveLength(1);
+    } finally {owner.disposeLocalTranslationWorker();}
+  });
+
+  it.each([new Error('structured clone failed'), 'worker unavailable', null])('terminates failed postMessage resources and recovers from %s', async error => {
+    const {owner, workers, request, flush} = await fixture();
+    try {
+      const warm = owner.translateLocalText(request);await flush();workers[0].reply({requestId: workers[0].messages[0].requestId, success: true, result: 'Warm'});await warm;
+      workers[0].postMessage.mockImplementationOnce(() => {throw error;});
+      const signal = new AbortController().signal;
+      await expect(owner.translateLocalText(request, signal)).rejects.toThrow(error instanceof Error ? error.message : error || '无法启动本地翻译 Worker');
+      expect(workers[0].terminate).toHaveBeenCalledOnce();expect(vi.getTimerCount()).toBe(0);
+      const retry = owner.translateLocalText(request);await flush();
+      workers[0].reply({requestId: 1, success: true, result: 'Late old result'});
+      workers[1].reply({requestId: workers[1].messages[0].requestId, success: true, result: 'Recovered'});
+      await expect(retry).resolves.toBe('Recovered');
+    } finally {owner.disposeLocalTranslationWorker();}
+  });
+
+  it('terminates a stalled worker at the absolute deadline and reports runtime errors without a browser message', async () => {
+    const {owner, workers, request, flush} = await fixture();
+    try {
+      const stalled = owner.translateLocalText(request);const timedOut = expect(stalled).rejects.toThrow('超过 120 秒');await flush();
+      await vi.advanceTimersByTimeAsync(120_000);await timedOut;expect(workers[0].terminate).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+      const retry = owner.translateLocalText(request);const crashed = expect(retry).rejects.toThrow('本地翻译 Worker 已停止');await flush();
+      workers[1].onerror?.({});await crashed;expect(workers[1].terminate).toHaveBeenCalledOnce();expect(vi.getTimerCount()).toBe(0);
+    } finally {owner.disposeLocalTranslationWorker();}
+  });
+});
+
 describe('local translation background handlers', () => {
+  it('does not poison later trusted download progress when receipt storage rejects once', async () => {
+    const storage={get:vi.fn(async()=>({})),set:vi.fn(async(_value:unknown)=>undefined)};
+    const offscreen={prepare:vi.fn(),status:vi.fn(),remove:vi.fn(),pause:vi.fn(),translate:vi.fn()};
+    const handlers=createLocalTranslationBackgroundHandlers({offscreen,isTrustedProgress:()=>true,storage});
+    const progress=handlers.find(item=>item.type==='fluentReadLocalTranslationDownloadProgress')!;
+    const snapshot=translationSnapshot('ready');storage.set.mockRejectedValueOnce(new Error('receipt quota exceeded'));
+    await expect(progress.handle({type:progress.type,snapshot} as never,{})).rejects.toThrow('receipt quota exceeded');
+    await expect(progress.handle({type:progress.type,snapshot} as never,{})).resolves.toEqual({success:true});
+    expect(storage.set).toHaveBeenCalledTimes(2);
+  });
   it('acknowledges background jobs without marking them downloaded and only persists trusted completed progress', async () => {
     let stored: Record<string, unknown> = {[LOCAL_TRANSLATION_MODEL_STATE_KEY]: []};
     const offscreen = {
-      prepare: vi.fn(async () => ({success: true, model: LOCAL_TRANSLATION_MODEL_IDS.m2m100})),
+      prepare: vi.fn(async () => ({success: true, ...translationSnapshot()})),
       status: vi.fn(async () => ({models: [{model: LOCAL_TRANSLATION_MODEL_IDS.m2m100, downloaded: true}]})),
       remove: vi.fn(async () => undefined),
-      pause: vi.fn(async () => ({success: true})),
+      pause: vi.fn(async () => ({success: true, ...translationSnapshot('paused')})),
       translate: vi.fn(async () => 'result'),
     };
     const handlers = createLocalTranslationBackgroundHandlers({
@@ -504,7 +867,7 @@ describe('local translation background handlers', () => {
 
     await expect(prepare.handle({type: 'fluentReadPrepareLocalTranslationModel', model: LOCAL_TRANSLATION_MODEL_IDS.m2m100} as any, {})).resolves.toMatchObject({
       success: true,
-      model: LOCAL_TRANSLATION_MODEL_IDS.m2m100,
+      ...translationSnapshot(),
     });
     expect(stored[LOCAL_TRANSLATION_MODEL_STATE_KEY]).toEqual([]);
     await expect(state.handle({type: 'fluentReadGetLocalTranslationModelState'}, {})).resolves.toEqual({success: true, models: [{model: LOCAL_TRANSLATION_MODEL_IDS.m2m100, downloaded: true}]});
@@ -528,9 +891,9 @@ describe('local translation Offscreen message route', () => {
     model: LOCAL_TRANSLATION_MODEL_IDS.opusZhEn, text: 'Hello', sourceLanguage: 'en', targetLanguage: 'zh',
   };
   const localDependencies = () => ({
-    translate: vi.fn(async (): Promise<unknown> => 'translated'),
-    prepare: vi.fn(async () => ({phase: 'queued'})),
-    pause: vi.fn(async () => ({phase: 'paused'})),
+    translate: vi.fn(async (): Promise<string> => 'translated'),
+    prepare: vi.fn(async () => translationSnapshot()),
+    pause: vi.fn(async () => translationSnapshot('paused')),
     status: vi.fn(async () => ({models: []})),
     removeModel: vi.fn(async () => undefined),
   });
@@ -548,8 +911,8 @@ describe('local translation Offscreen message route', () => {
   });
 
   it.each([
-    ['PREPARE', 'prepare', {success: true, phase: 'queued'}],
-    ['PAUSE', 'pause', {success: true, phase: 'paused'}],
+    ['PREPARE', 'prepare', {success: true, ...translationSnapshot()}],
+    ['PAUSE', 'pause', {success: true, ...translationSnapshot('paused')}],
     ['STATUS', 'status', {success: true, models: []}],
     ['REMOVE_MODEL', 'removeModel', {success: true}],
   ] as const)('forwards %s and returns its snapshot', async (operation, method, response) => {
@@ -581,7 +944,7 @@ describe('local translation Offscreen message route', () => {
   it.each(['reject', 'invalid-result'] as const)('reports executor failure: %s', async (mode) => {
     const local = localDependencies();
     if (mode === 'reject') local.translate.mockRejectedValue(new Error('executor failed'));
-    else local.translate.mockResolvedValue(null);
+    else local.translate.mockResolvedValue(null as never);
     await expect(route(local)({})).resolves.toMatchObject({success: false, requestId: 'route-1'});
   });
 
@@ -595,13 +958,13 @@ describe('local translation Offscreen message route', () => {
 
   it('passes a signal to the local executor and supports cancellation', async () => {
     let resolveTranslation!: (value: string) => void;
-    const translate = vi.fn((_message: Record<string, unknown>, _signal: AbortSignal) => new Promise<string>((resolve) => { resolveTranslation = resolve; }));
+    const translate = vi.fn((_message: OffscreenRequestMap['LOCAL_TRANSLATION_TRANSLATE'], _signal: AbortSignal) => new Promise<string>((resolve) => { resolveTranslation = resolve; }));
     const listener = createOffscreenMessageListener({
       ...baseOffscreenDependencies,
       translate: vi.fn(async () => 'chrome'),
       localTranslation: {
         translate,
-        prepare: vi.fn(async () => ({model: LOCAL_TRANSLATION_MODEL_IDS.m2m100})),
+        prepare: vi.fn(async () => translationSnapshot()),
         status: vi.fn(async () => ({models: []})),
         removeModel: vi.fn(async () => undefined),
       },

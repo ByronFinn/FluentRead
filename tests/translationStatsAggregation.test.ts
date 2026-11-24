@@ -85,6 +85,10 @@ describe('翻译统计本地时间与筛选', () => {
 });
 
 describe('翻译统计分桶与分位数', () => {
+    it.each([0, -1])('稀疏直方图的分位数 %s 跳过空桶，得到有限下界估算', percentile => {
+        expect(estimateHistogramPercentile([0, 0, 1], [100, 200], percentile, 300)).toBe(200);
+        expect(estimateHistogramPercentile([0, 2, 0], [100, 200], percentile, 150)).toBe(100);
+    });
     it('分桶上界不含本身，超过全部上界落入最后一个桶', () => {
         expect(histogramIndex(0, TRANSLATION_STATS_DURATION_BOUNDS_MS)).toBe(0);
         expect(histogramIndex(100, TRANSLATION_STATS_DURATION_BOUNDS_MS)).toBe(1);
@@ -272,6 +276,22 @@ describe('免费线路尝试聚合', () => {
 });
 
 describe('翻译统计快照', () => {
+    it.each([null, 0, 123])('已有记录起点 %s 时不扫描被筛除汇总的起点', recordingStartedAt => {
+        let timestampReads = 0;
+        const rows = Array.from({length: 200}, (_, index) => ({...createTranslationStatsRollup(NOW, 'excluded', ''),
+            get bucketStart() {timestampReads++; return NOW - index;}}));
+        const snapshot = buildTranslationStatsSnapshot(rows, {serviceId: 'selected'}, {now: NOW, recordingStartedAt, dimensions: []});
+        expect(snapshot.recordingStartedAt).toBe(recordingStartedAt);
+        expect(snapshot.selected.totals.requestCount).toBe(0);
+        expect(timestampReads).toBe(0);
+    });
+    it('未提供起点时逐项归约大量小时汇总，不展开为无界函数实参', () => {
+        const row = createTranslationStatsRollup(NOW - 1_000, 'excluded', ''), rows = Array<TranslationStatsRollup>(180_000).fill(row);
+        rows[100] = {...row, bucketStart: NOW - 3_000};
+        const snapshot = buildTranslationStatsSnapshot(rows, {serviceId: 'selected'}, {now: NOW, dimensions: []});
+        expect(snapshot.recordingStartedAt).toBe(NOW - 3_000);
+        expect(snapshot.selected.totals.requestCount).toBe(0);
+    });
     const rollups = [
         rollupOf([requestEvent({startedAt: new Date(2026, 8, 16, 9, 5).getTime(), serviceId: 'google'})]),
         rollupOf([requestEvent({startedAt: new Date(2026, 8, 16, 14, 59).getTime(), serviceId: 'openai', model: 'gpt-b'})]),

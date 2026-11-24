@@ -2,12 +2,12 @@ import {parseHTML} from 'linkedom';
 import { describe, expect, it, vi } from 'vitest';
 import {
     canUseBundledDictionaryFallback,
-    calculateReadingPopupLayout,
     calculateSelectionPopupPosition,
     chooseSelectionRect,
+    getSelectionPopupAnchor,
     getSelectionPresentationDelayRemaining,
+    getEditableSelectionRoot,
     isSameLanguage,
-    isChineseEnglishTarget,
     isSelectionExcludedTagName,
     normalizeSelectionText,
     readSelectionText,
@@ -34,9 +34,6 @@ import {detectlang} from '@/src/core/language/detect';
 
 describe('中英划词方向', () => {
     it('只为当前目标语言的可信中英选区选择反向目标', () => {
-        expect(isChineseEnglishTarget('zh-Hant')).toBe(true);
-        expect(isChineseEnglishTarget('en')).toBe(true);
-        expect(isChineseEnglishTarget('ja')).toBe(false);
         expect(selectionReverseTarget('你好，世界！', 'zh-Hans', 'auto')).toBe('en');
         expect(selectionReverseTarget('這是一段繁體中文。', 'zh-Hant', 'auto')).toBe('en');
         expect(selectionReverseTarget('This is an English sentence.', 'en', 'zh-Hant')).toBe('zh-Hant');
@@ -69,6 +66,9 @@ class MockElement {
     readonly isContentEditable: boolean;
     readonly ownerDocument: Document | null;
     parentElement: MockElement | null;
+    parentNode: MockElement | null = null;
+    nextSibling: Node | null = null;
+    childNodes: Node[] = [];
     private readonly attributes: Record<string, string>;
     private readonly closestMatch: boolean;
     private readonly descendants: MockElement[];
@@ -84,6 +84,11 @@ class MockElement {
         this.isContentEditable = options.isContentEditable === true;
         this.parentElement = options.parentElement ?? null;
         this.descendants = options.descendants ?? [];
+        this.childNodes = this.descendants as unknown as Node[];
+        this.descendants.forEach((node, index) => {
+            node.parentNode = this;
+            node.nextSibling = this.descendants[index + 1] as unknown as Node ?? null;
+        });
         this.clientRects = options.clientRects ?? [];
         this.querySelectorAllThrows = options.querySelectorAllThrows === true;
         this.getClientRectsThrows = options.getClientRectsThrows === true;
@@ -116,8 +121,14 @@ class MockElement {
     }
 
     closest(selector: string): MockElement | null {
-        if (selector.startsWith('math,')) return null;
-        return this.closestMatch ? this : null;
+        return this.closestMatch && selector.includes('.notranslate') ? this : null;
+    }
+
+    get firstChild(): Node | null { return this.childNodes[0] ?? null; }
+
+    matches(): boolean {
+        if (this.querySelectorAllThrows) throw new Error('element matching failed');
+        return isSelectionExcludedTagName(this.tagName) || Boolean(this.attributes.role) || this.closestMatch;
     }
 
     querySelectorAll(): MockElement[] {
@@ -132,7 +143,7 @@ class MockElement {
 }
 
 function mockTextNode(parentElement: MockElement | null): Node {
-    return {nodeType: 3, parentElement} as Node;
+    return {nodeType: 3, parentElement, parentNode: parentElement, childNodes: [], firstChild: null, nextSibling: null} as unknown as Node;
 }
 
 interface MockRangeOptions {
@@ -142,10 +153,19 @@ interface MockRangeOptions {
 }
 
 function mockRange(start: Node | null, end: Node | null, options: MockRangeOptions = {}): Range {
+    const commonAncestor = options.commonAncestor ?? new MockElement() as unknown as Node;
+    // 旧用例保留独立的端点祖先语义，同时为实际范围遍历提供有序的标准子节点关系。
+    if (commonAncestor instanceof MockElement && start && end) {
+        const children = [...new Set([start, ...commonAncestor.childNodes, end])];
+        (commonAncestor as MockElement).childNodes = children;
+        children.forEach((node, index) => Object.assign(node, {parentNode: commonAncestor, nextSibling: children[index + 1] ?? null}));
+    }
     return {
         startContainer: start,
         endContainer: end,
-        commonAncestorContainer: options.commonAncestor ?? new MockElement() as unknown as Node,
+        startOffset: 0,
+        endOffset: end?.nodeType === 3 ? end.textContent?.length ?? 0 : end?.childNodes?.length ?? 0,
+        commonAncestorContainer: commonAncestor,
         intersectsNode: (node: Node) => {
             if (options.intersectionFailureNodes?.includes(node)) throw new Error('intersection failed');
             return options.intersectingNodes?.includes(node) === true;
@@ -173,7 +193,7 @@ describe('issue #704 inline code in prose selections', () => {
     }
 
     it('allows prose crossing highlighted code and freezes exact code text without host attributes', () => {
-        const {paragraph, range} = fixture('Run <code class="host" onclick="alert(1)"><span> a  &lt;b&gt; </span></code> now.');
+        const {paragraph, range} = fixture('Run <code class="host" onclick="alert(1)"><span> a  &lt;b&gt; </span></code> <em>now.</em>');
         const before = paragraph.outerHTML;
         expect(shouldIgnoreSelection(range)).toBe(false);
         expect(readSelectionParts(range, 'browser text')).toEqual([
@@ -284,6 +304,381 @@ describe('issue #704 inline code in prose selections', () => {
     });
 });
 
+describe('explicit selections inside editable text', () => {
+    function fixture(html: string) {
+        const {document} = parseHTML('<html><body><main><p></p></main></body></html>');
+        const paragraph = document.querySelector('p')!;
+        paragraph.innerHTML = html;
+        const range = mockRange(paragraph.firstChild, paragraph.lastChild, {
+            commonAncestor: paragraph, intersectingNodes: [...paragraph.querySelectorAll('*')],
+        });
+        return {document, paragraph, range};
+    }
+
+    it('allows a complete range in one local editor only for the normal selection flow', () => {
+        const inside = fixture('<span contenteditable="true">Read this editor text.</span>');
+        expect(shouldIgnoreSelection(inside.range)).toBe(true);
+        expect(shouldIgnoreSelection(inside.range, true)).toBe(false);
+
+        const crossing = fixture('<span contenteditable="true">Editor text.</span> Outside text.');
+        expect(shouldIgnoreSelection(crossing.range, true)).toBe(true);
+    });
+
+    it.each([
+        '<span contenteditable="true" data-fluent-read-ui>Extension text.</span>',
+        '<span contenteditable="true" aria-hidden="true">Hidden text.</span>',
+        '<span contenteditable="true" translate="no">Protected text.</span>',
+        '<textarea>Input text.</textarea>',
+    ])('keeps protected editor content out: %s', html => {
+        expect(shouldIgnoreSelection(fixture(html).range, true)).toBe(true);
+    });
+
+    it('recognizes textbox descendants and retains native controls inside an editor', () => {
+        expect(shouldIgnoreSelection(fixture('<span role="textbox"><i>Editor text.</i></span>').range, true)).toBe(false);
+        const input = fixture('<span contenteditable="true"><button>Protected action</button></span>');
+        input.document.querySelector('button')!.getClientRects = () => [{width: 80, height: 20}] as unknown as DOMRectList;
+        expect(shouldIgnoreSelection(input.range, true)).toBe(true);
+        const crossing = fixture('Before <span role="textbox">Editor text.</span> after.');
+        crossing.document.querySelector('[role="textbox"]')!.getClientRects = () => [{width: 80, height: 20}] as unknown as DOMRectList;
+        expect(shouldIgnoreSelection(crossing.range, true)).toBe(true);
+    });
+
+    it('resolves inherited editability and stops at noneditable and document boundaries', () => {
+        expect(getEditableSelectionRoot(null)).toBeNull();
+        const {document} = fixture('Text');
+        expect(getEditableSelectionRoot(document)).toBeNull();
+        document.body.setAttribute('contenteditable', 'true');
+        expect(getEditableSelectionRoot(document.body)).toBeNull();
+        const parent = document.createElement('section');
+        Object.defineProperty(parent, 'isContentEditable', {value: false});
+        const editor = document.createElement('div');
+        Object.defineProperty(editor, 'isContentEditable', {value: true});
+        parent.append(editor);
+        expect(getEditableSelectionRoot(editor)).toBe(editor);
+        editor.remove();
+        expect(getEditableSelectionRoot(editor)).toBe(editor);
+        editor.setAttribute('contenteditable', 'false');
+        expect(getEditableSelectionRoot(editor)).toBeNull();
+        editor.innerHTML = '<span contenteditable="true">Local editor</span>';
+        expect(getEditableSelectionRoot(editor.firstChild)).toBe(editor.firstChild);
+    });
+
+    it.each(['missing', 'throws'] as const)('checks ancestry when an editor contains method %s', mode => {
+        const value = fixture('<span contenteditable="true"><i>Selected text.</i></span>');
+        Object.defineProperty(value.paragraph.firstChild, 'contains', {value: mode === 'missing' ? undefined
+            : () => {throw new Error('host contains unavailable');}});
+        const text = value.document.querySelector('i')!.firstChild!;
+        expect(shouldIgnoreSelection(mockRange(text, text, {commonAncestor: text}), true)).toBe(false);
+    });
+});
+
+describe('document no-translate shells in explicit selections', () => {
+    function fixture(htmlAttributes = '', bodyAttributes = '', content = '<p id="content">Readable response text.</p>') {
+        const {document} = parseHTML(`<html ${htmlAttributes}><head></head><body ${bodyAttributes}><div id="root">${content}</div></body></html>`);
+        const text = document.querySelector('#content')!.firstChild!;
+        return {document, text, range: mockRange(text, text, {commonAncestor: text})};
+    }
+
+    it.each(['class="notranslate"', 'translate="no"', 'data-notranslate="true"'])('allows html/body shell marker %s', attributes => {
+        for (const surface of ['html', 'body']) {
+            const {document, range} = fixture(surface === 'html' ? attributes : '', surface === 'body' ? attributes : '');
+            const before = document.documentElement.outerHTML;
+            expect(shouldIgnoreSelection(range)).toBe(false);
+            expect(document.documentElement.outerHTML).toBe(before);
+        }
+    });
+
+    it('allows combined DeepSeek root markers, repeated checks and replacement response nodes', () => {
+        const {document, range} = fixture('class="notranslate" translate="no"', 'class="notranslate"');
+        const root = document.querySelector('#root')!;
+        root.classList.add('notranslate');
+        expect(shouldIgnoreSelection(range)).toBe(false);
+        expect(shouldIgnoreSelection(range)).toBe(false);
+        root.innerHTML = '<p id="content">A newly generated response.</p>';
+        const text = root.firstChild!.firstChild!;
+        expect(shouldIgnoreSelection(mockRange(text, text, {commonAncestor: text}))).toBe(false);
+    });
+
+    it.each(['class="notranslate"', 'translate="no"', 'data-notranslate="true"'])('keeps nested local marker %s protected', attributes => {
+        const {range} = fixture('class="notranslate" translate="no"', '', `<section ${attributes}><p id="content">Protected local response.</p></section>`);
+        expect(shouldIgnoreSelection(range)).toBe(true);
+    });
+
+    it.each(['role="button"', 'contenteditable="true"', 'aria-hidden="true"', 'data-fluent-read-ui="true"', 'class="fluent-read-loading"'])('keeps root protection %s alongside no-translate shells', attributes => {
+        for (const surface of ['html', 'body']) {
+            const {document, range} = fixture('translate="no"', 'translate="no"');
+            const target = surface === 'html' ? document.documentElement : document.body;
+            const attribute = parseHTML(`<html><body><div ${attributes}></div></body></html>`).document.querySelector('div')!.attributes[0]!;
+            target.setAttribute(attribute.name, attribute.value);
+            // 直接子级应用外壳不能掩盖根级保护。
+            document.querySelector('#root')!.classList.add('notranslate');
+            expect(shouldIgnoreSelection(range)).toBe(true);
+        }
+    });
+
+    it('allows body range boundaries while still rejecting a visible local protected descendant', () => {
+        const {document} = fixture('class="notranslate" translate="no"', 'translate="no"');
+        const range = mockRange(document.body, document.body, {commonAncestor: document.body});
+        expect(shouldIgnoreSelection(range)).toBe(false);
+        const local = document.createElement('span');
+        local.className = 'notranslate';
+        local.textContent = 'Protected local source.';
+        local.getClientRects = () => [{width: 100, height: 20}] as unknown as DOMRectList;
+        document.querySelector('#root')!.append(local);
+        expect(shouldIgnoreSelection(mockRange(document.body, document.body, {
+            commonAncestor: document.body, intersectingNodes: [local],
+        }))).toBe(true);
+    });
+});
+
+describe('selection range traversal scope and cost', () => {
+    function rangeIn(_document: Document, start: Node, startOffset: number, end: Node, endOffset: number, root?: Node): Range {
+        let common: Node | null = start;
+        while (common && common !== end && !common.contains(end)) common = common.parentNode;
+        return {startContainer: start, startOffset, endContainer: end, endOffset,
+            commonAncestorContainer: root ?? common!, intersectsNode: () => true} as unknown as Range;
+    }
+
+    function changelogFixture(decoration = '<svg aria-hidden="true" width="16" height="16"><path d="M0 0h16v16H0z"/></svg>') {
+        const {document} = parseHTML(`<html><body><main><h2>Latest from our changelog</h2><ul>
+            <li>${decoration}<div><time>Nov 11, 2026</time><a id="first">First changelog entry.</a></div></li>
+            <li>${decoration}<div><time>Nov 10, 2026</time><a id="last">Second changelog entry.</a></div></li>
+        </ul><a id="all">View changelog</a></main></body></html>`);
+        document.querySelectorAll('*').forEach(element => {
+            element.getClientRects = () => [{width: 16, height: 16}] as unknown as DOMRectList;
+        });
+        const first = document.querySelector('#first')!.firstChild!;
+        const last = document.querySelector('#last')!.firstChild!;
+        return {document, first, last};
+    }
+
+    it.each([false, true])('issue #1317 allows cross-entry and whole-block selections past decorative SVGs (editable=%s)', allowEditable => {
+        const {document, first, last} = changelogFixture();
+        const title = document.querySelector('h2')!.firstChild!;
+        const all = document.querySelector('#all')!.firstChild!;
+        const time = document.querySelector('time')!.firstChild!;
+        for (const [start, end] of [[first, first], [title, title], [time, first], [first, last], [title, all]]) {
+            expect(shouldIgnoreSelection(rangeIn(document, start, 0, end, end.textContent!.length), allowEditable)).toBe(false);
+        }
+    });
+
+    it.each([
+        '<svg width="16" height="16"><path d="M0 0h16v16H0z"/></svg>',
+        '<span aria-hidden="true"><svg><path d="M0 0h16v16H0z"/></svg></span>',
+        '<span aria-hidden="true"> \n </span>',
+    ])('issue #1317 allows textless decoration between selected entries: %s', decoration => {
+        const {document, first, last} = changelogFixture(decoration);
+        expect(shouldIgnoreSelection(rangeIn(document, first, 0, last, last.textContent!.length))).toBe(false);
+    });
+
+    it.each([
+        '<button>Protected action</button>',
+        '<span role="button">Protected action</span>',
+        '<span translate="no">Protected text</span>',
+        '<span class="notranslate">Protected text</span>',
+        '<span data-notranslate="true">Protected text</span>',
+        '<span aria-hidden="true">Protected text</span>',
+        '<svg aria-hidden="true"><text>Protected text</text></svg>',
+        '<span data-fluent-read-ui>Extension text</span>',
+        '<span contenteditable="true">Editor text</span>',
+        '<button aria-hidden="true"></button>',
+        '<svg role="button"></svg>',
+        '<span role="textbox" aria-hidden="true"></span>',
+    ])('issue #1317 still rejects protected content after a decorative icon: %s', protectedHtml => {
+        const {document, first, last} = changelogFixture();
+        const entry = document.querySelectorAll('li')[1];
+        entry.insertAdjacentHTML('afterbegin', protectedHtml);
+        entry.firstElementChild!.getClientRects = () => [{width: 30, height: 20}] as unknown as DOMRectList;
+        expect(shouldIgnoreSelection(rangeIn(document, first, 0, last, last.textContent!.length), true)).toBe(true);
+    });
+
+    it('short cross-paragraph selections never query or visit thousands of unselected sibling subtrees', () => {
+        const {document} = parseHTML(`<html><body><main><aside id="before">${'<button>Before</button>'.repeat(5000)}</aside><p id="a">Selected first.</p><p id="b">Selected second.</p><aside id="after">${'<button>After</button>'.repeat(5000)}</aside></main></body></html>`);
+        const main = document.querySelector('main')!;
+        const a = document.querySelector('#a')!.firstChild!;
+        const b = document.querySelector('#b')!.firstChild!;
+        const query = vi.spyOn(main, 'querySelectorAll');
+        const before = vi.spyOn(document.querySelector('#before')!, 'matches');
+        const after = vi.spyOn(document.querySelector('#after')!, 'matches');
+        const matching = vi.spyOn(document.querySelector('#b')!, 'matches');
+        const range = rangeIn(document, a, 0, b, 8);
+        expect(shouldIgnoreSelection(range)).toBe(false);
+        expect(query).not.toHaveBeenCalled();
+        expect(before).not.toHaveBeenCalled();
+        expect(after).not.toHaveBeenCalled();
+        // 结束点位于下一段正文，只需检查这一段元素本身，不随页外按钮数量增长。
+        expect(matching).toHaveBeenCalledTimes(1);
+    });
+
+    it('formulas and code outside a short selected range never trigger an ancestor query or fragment cloning', () => {
+        const {document} = parseHTML('<html><body><main><math><mi>Outside formula</mi></math><p id="a">Selected first.</p><p id="b">Selected second.</p><code>Outside code</code></main></body></html>');
+        const main = document.querySelector('main')!;
+        const a = document.querySelector('#a')!.firstChild!;
+        const b = document.querySelector('#b')!.firstChild!;
+        const range = rangeIn(document, a, 2, b, 8);
+        const clone = vi.fn(() => document.createDocumentFragment());
+        range.cloneContents = clone;
+        const query = vi.spyOn(main, 'querySelector');
+        expect(readSelectionParts(range, 'lected first. Selected')).toEqual([{kind: 'text', text: 'lected first. Selected'}]);
+        expect(query).not.toHaveBeenCalled();
+        expect(clone).not.toHaveBeenCalled();
+    });
+
+    it.each(['start', 'end'])('partial %s endpoints inside code preserve the selected code fragment', edge => {
+        const {document} = parseHTML('<html><body><p>Before <code><span>command</span></code> after.</p></body></html>');
+        const paragraph = document.querySelector('p')!;
+        const codeText = document.querySelector('span')!.firstChild!;
+        const range = edge === 'start' ? rangeIn(document, codeText, 3, paragraph.lastChild!, 3)
+            : rangeIn(document, paragraph.firstChild!, 2, codeText, 4);
+        const fragment = document.createElement('template');
+        fragment.innerHTML = edge === 'start' ? '<code>mand</code> af' : 'fore <code>comm</code>';
+        const clone = vi.fn(() => fragment.content.cloneNode(true) as DocumentFragment);
+        range.cloneContents = clone;
+        const query = vi.spyOn(paragraph, 'querySelector');
+        expect(readSelectionParts(range, 'browser text')).toEqual(edge === 'start'
+            ? [{kind: 'code', text: 'mand'}, {kind: 'text', text: ' af'}]
+            : [{kind: 'text', text: 'fore '}, {kind: 'code', text: 'comm'}]);
+        expect(clone).toHaveBeenCalledOnce();
+        expect(query).not.toHaveBeenCalled();
+    });
+
+    it.each(['start', 'end'])('partial %s endpoints inside formulas retain a single readable representation', edge => {
+        const {document} = parseHTML('<html><body><p>Before <span class="MathJax"><nobr aria-hidden="true">x2</nobr></span> after.</p></body></html>');
+        const paragraph = document.querySelector('p')!;
+        const formulaText = document.querySelector('nobr')!.firstChild!;
+        const range = edge === 'start' ? rangeIn(document, formulaText, 1, paragraph.lastChild!, 6)
+            : rangeIn(document, paragraph.firstChild!, 2, formulaText, 1);
+        const fragment = document.createElement('template');
+        fragment.innerHTML = edge === 'start' ? '<span class="MathJax"><nobr>2</nobr></span> after'
+            : 'fore <span class="MathJax"><nobr>x</nobr></span>';
+        const clone = vi.fn(() => fragment.content.cloneNode(true) as DocumentFragment);
+        range.cloneContents = clone;
+        expect(readSelectionText(range, 'browser text')).toBe(edge === 'start' ? '$2$ after' : 'fore $x$');
+        expect(clone).toHaveBeenCalledOnce();
+    });
+
+    it('element boundaries use a half-open child interval and leave adjacent visible controls untouched', () => {
+        const {document} = parseHTML('<html><body><main><button id="before">Before</button><p>Readable text</p><button id="after">After</button></main></body></html>');
+        const main = document.querySelector('main')!;
+        const before = document.querySelector('#before')!;
+        const after = document.querySelector('#after')!;
+        before.getClientRects = after.getClientRects = () => [{width: 30, height: 20}] as unknown as DOMRectList;
+        const beforeGeometry = vi.spyOn(before, 'getClientRects');
+        const afterGeometry = vi.spyOn(after, 'getClientRects');
+        expect(shouldIgnoreSelection(rangeIn(document, main, 1, main, 2))).toBe(false);
+        expect(beforeGeometry).not.toHaveBeenCalled();
+        expect(afterGeometry).not.toHaveBeenCalled();
+        expect(shouldIgnoreSelection(rangeIn(document, main, 0, main, 2))).toBe(true);
+        expect(shouldIgnoreSelection(rangeIn(document, main, 1, main, 3))).toBe(true);
+    });
+
+    it('accepts a paragraph selection ending at the empty leading edge of an adjacent protected code block', () => {
+        const {document} = parseHTML('<html><body><article><p>Read <code>--version</code> and see the <a>guide</a>.</p>\n<div class="notranslate"><pre><span>Private command</span></pre><button>Copy</button></div></article></body></html>');
+        const start = document.querySelector('p')!.firstChild!;
+        const pre = document.querySelector('pre')!;
+        const command = pre.querySelector('span')!.firstChild!;
+        const protectedBlock = pre.parentElement!;
+        protectedBlock.getClientRects = () => [{width: 100, height: 40}] as unknown as DOMRectList;
+        const geometry = vi.spyOn(protectedBlock, 'getClientRects');
+
+        expect(shouldIgnoreSelection(rangeIn(document, start, 0, pre, 0))).toBe(false);
+        expect(shouldIgnoreSelection(rangeIn(document, start, 0, command, 0))).toBe(false);
+        expect(geometry).not.toHaveBeenCalled();
+        expect(shouldIgnoreSelection(rangeIn(document, start, 0, command, 1))).toBe(true);
+        expect(shouldIgnoreSelection(rangeIn(document, start, 0, protectedBlock, 1))).toBe(true);
+    });
+
+    it('empty element boundary positions move to the next subtree without leaving the common ancestor', () => {
+        const {document} = parseHTML('<html><body><main><p id="a">First</p><section id="end"><span>Second</span></section><button>Outside</button></main></body></html>');
+        const first = document.querySelector('#a')!;
+        const end = document.querySelector('#end')!;
+        const outside = document.querySelector('button')!;
+        outside.getClientRects = () => [{width: 20, height: 20}] as unknown as DOMRectList;
+        const geometry = vi.spyOn(outside, 'getClientRects');
+        expect(shouldIgnoreSelection(rangeIn(document, first, first.childNodes.length, end, end.childNodes.length))).toBe(false);
+        expect(geometry).not.toHaveBeenCalled();
+        expect(shouldIgnoreSelection(rangeIn(document, first, 1, first, 1))).toBe(false);
+    });
+
+    it('an empty nested start skips completed ancestor branches and a zero end offset excludes all end children', () => {
+        const {document} = parseHTML('<html><body><main><section><p><button>Before</button><em id="empty"></em></p></section><p id="end">Selected end <button id="outside">Outside</button></p></main></body></html>');
+        const empty = document.querySelector('#empty')!;
+        const end = document.querySelector('#end')!;
+        const outside = document.querySelector('#outside')!;
+        outside.getClientRects = () => [{width: 20, height: 20}] as unknown as DOMRectList;
+        const geometry = vi.spyOn(outside, 'getClientRects');
+        expect(shouldIgnoreSelection(rangeIn(document, empty, 0, end, 0))).toBe(false);
+        expect(shouldIgnoreSelection(rangeIn(document, empty, 0, end.firstChild!, 8))).toBe(false);
+        expect(geometry).not.toHaveBeenCalled();
+    });
+
+    it('mixed text and element boundaries still reject interior controls and stop at the exact end', () => {
+        const {document} = parseHTML('<html><body><main><p id="a">Start</p><button id="inside">Action</button><p id="b">End</p><button id="outside">Outside</button></main></body></html>');
+        const main = document.querySelector('main')!;
+        const start = document.querySelector('#a')!.firstChild!;
+        const end = document.querySelector('#b')!.firstChild!;
+        const inside = document.querySelector('#inside')!;
+        inside.getClientRects = () => [{width: 20, height: 20}] as unknown as DOMRectList;
+        expect(shouldIgnoreSelection(rangeIn(document, start, 2, main, 3))).toBe(true);
+        expect(shouldIgnoreSelection(rangeIn(document, main, 0, end, 1))).toBe(true);
+        inside.remove();
+        expect(shouldIgnoreSelection(rangeIn(document, start, 2, main, 2))).toBe(false);
+    });
+
+    it('Document and ShadowRoot element boundaries inspect only selected children', () => {
+        const {document} = parseHTML('<html><body><div id="host"></div></body></html>');
+        const root = document.querySelector('#host')!.attachShadow({mode: 'open'});
+        root.innerHTML = '<p>Readable</p><button>Action</button>';
+        root.querySelector('button')!.getClientRects = () => [{width: 20, height: 20}] as unknown as DOMRectList;
+        expect(shouldIgnoreSelection(rangeIn(document, root, 0, root, 1))).toBe(false);
+        expect(shouldIgnoreSelection(rangeIn(document, root, 0, root, 2))).toBe(true);
+        expect(shouldIgnoreSelection(rangeIn(document, document, 0, document, 1))).toBe(false);
+    });
+
+    it('deep plain-text endpoints inspect each ancestor once rather than repeatedly searching editor ancestry', () => {
+        const depth = 300;
+        let parent: MockElement | null = null;
+        const ancestors: MockElement[] = [];
+        for (let index = 0; index < depth; index += 1) {
+            parent = new MockElement({parentElement: parent});
+            ancestors.push(parent);
+        }
+        const checks = ancestors.map(element => vi.spyOn(element, 'hasAttribute'));
+        const text = mockTextNode(parent);
+        expect(shouldIgnoreSelection(mockRange(text, text, {commonAncestor: text}))).toBe(false);
+        expect(checks.reduce((count, check) => count + check.mock.calls.length, 0)).toBe(depth * 2);
+    });
+
+    it.each(['true', 'plaintext-only', '', ' INVALID '])('retains editor protection across nested contenteditable=false: %s', editable => {
+        const {document} = parseHTML(`<html><body><div contenteditable="${editable}"><span contenteditable="false">Readable text</span></div></body></html>`);
+        const text = document.querySelector('span')!.firstChild!;
+        expect(shouldIgnoreSelection(rangeIn(document, text, 0, text, 5))).toBe(true);
+    });
+
+    it('zero-length text boundaries do not visit protected content outside the selected text node', () => {
+        const {document} = parseHTML('<html><body><p>Readable <button>Outside</button></p></body></html>');
+        const text = document.querySelector('p')!.firstChild!;
+        const button = document.querySelector('button')!;
+        const matching = vi.spyOn(button, 'matches');
+        expect(shouldIgnoreSelection(rangeIn(document, text, 1, text, 3))).toBe(false);
+        expect(shouldIgnoreSelection(rangeIn(document, text, 1, text, 1))).toBe(false);
+        expect(matching).not.toHaveBeenCalled();
+    });
+
+    it('semantic noneditable notes and crossed top-level application shells retain their exceptions', () => {
+        const {document} = parseHTML('<html><body><p id="start">Start</p><div class="notranslate"><span contenteditable="false" role="note">Readable note</span></div><p id="end">End</p></body></html>');
+        const start = document.querySelector('#start')!.firstChild!;
+        const end = document.querySelector('#end')!.firstChild!;
+        const note = document.querySelector('span')!;
+        // linkedom 只根据属性存在判断编辑状态；浏览器对 contenteditable=false 返回 false。
+        Object.defineProperty(note, 'isContentEditable', {value: false});
+        const geometry = vi.fn(() => [{width: 30, height: 20}] as unknown as DOMRectList);
+        note.getClientRects = geometry;
+        expect(shouldIgnoreSelection(rangeIn(document, start, 1, end, 2))).toBe(false);
+        expect(geometry).not.toHaveBeenCalled();
+    });
+});
+
 describe('selection translator core geometry', () => {
     const rects = [
         { top: 100, right: 300, bottom: 124, left: 80, width: 220, height: 24 },
@@ -294,6 +689,16 @@ describe('selection translator core geometry', () => {
         expect(chooseSelectionRect(rects, true)).toEqual(rects[1]);
         expect(chooseSelectionRect(rects, false)).toEqual(rects[0]);
         expect(chooseSelectionRect([])).toBeNull();
+    });
+
+    it('keeps every selected line clear while aligning to the directional endpoint', () => {
+        expect(getSelectionPopupAnchor([])).toBeNull();
+        expect(getSelectionPopupAnchor([rects[0]])).toEqual(rects[0]);
+        expect(getSelectionPopupAnchor(rects)).toEqual({...rects[1], top: 100, height: 48});
+        expect(getSelectionPopupAnchor(rects, false)).toEqual({...rects[0], bottom: 148, height: 48});
+        const anchor = getSelectionPopupAnchor(rects)!;
+        const card = calculateSelectionPopupPosition(anchor, {width: 360, height: 80}, {width: 1000, height: 500});
+        expect(card.top + 80 <= anchor.top - 10 || card.top >= anchor.bottom + 10).toBe(true);
     });
 
     it('keeps the popup above the selection when there is room', () => {
@@ -312,41 +717,46 @@ describe('selection translator core geometry', () => {
         });
     });
 
-    it('reserves the reading viewport before a streamed answer grows and keeps its anchor side', () => {
-        const anchor = {top: 720, right: 970, bottom: 744, left: 940, width: 30, height: 24};
-        const layout = calculateReadingPopupLayout(anchor, {width: 1200, height: 900});
-        expect(layout).toEqual({left: 800, top: 190, placement: 'top', width: 388, height: 520});
-        // 初始空回答、长流式回答和追问均使用预留高度；恢复 legacy 翻译时仍按实际内容定位。
-        expect(calculateSelectionPopupPosition(anchor, {width: layout.width, height: layout.height}, {width: 1200, height: 900})).toEqual({left: layout.left, top: layout.top, placement: layout.placement});
-        expect(calculateSelectionPopupPosition(anchor, {width: 388, height: 160}, {width: 1200, height: 900}).top).toBe(550);
+    it('uses a panned visual viewport origin when keyboard or zoom changes the visible region', () => {
+        expect(calculateSelectionPopupPosition({top: 120, bottom: 144, left: 20, right: 100, width: 80, height: 24},
+            {width: 280, height: 160}, {left: 80, top: 100, width: 320, height: 300}))
+            .toEqual({left: 92, top: 154, placement: 'bottom'});
     });
 
-    it('fits the reading viewport after zoom or narrow-window resize without exceeding its padding', () => {
-        const topEdge = {top: 20, right: 372, bottom: 42, left: 342, width: 30, height: 22};
-        expect(calculateReadingPopupLayout(topEdge, {width: 390, height: 300})).toEqual({left: 12, top: 12, placement: 'bottom', width: 366, height: 276});
-        const bottomEdge = {...topEdge, top: 580, bottom: 602};
-        const layout = calculateReadingPopupLayout(bottomEdge, {width: 390, height: 640});
-        expect(layout).toEqual({left: 12, top: 50, placement: 'top', width: 366, height: 520});
-        expect(layout.left + layout.width).toBeLessThanOrEqual(390 - 12);
-        expect(layout.top + layout.height).toBeLessThanOrEqual(640 - 12);
+    it.each([
+        {top: 100, bottom: 125, expected: {top: 135, placement: 'bottom', maxHeight: 123}},
+        {top: 160, bottom: 185, expected: {top: 12, placement: 'top', maxHeight: 138}},
+        {top: 123, bottom: 147, expected: {top: 12, placement: 'top', maxHeight: 101}},
+    ])('bounds a tall card beside the selected line: $top–$bottom', ({top, bottom, expected}) => {
+        expect(calculateSelectionPopupPosition({top, bottom, left: 80, right: 180, width: 100, height: bottom - top},
+            {width: 360, height: 520}, {width: 1000, height: 270})).toEqual({left: 80, ...expected});
     });
 
-    it('uses visible dimensions for a reading card compensated against page zoom', () => {
-        const anchor = {top: 300, right: 340, bottom: 324, left: 300, width: 40, height: 24};
-        const enlargedPage = calculateReadingPopupLayout(anchor, {width: 640, height: 450}, 0.5);
-        expect(enlargedPage).toEqual({left: 300, top: 30, placement: 'top', width: 388, height: 520});
-        expect(enlargedPage.width * 0.5 * 2).toBe(388);
+    it.each([
+        {top: 500, bottom: 524, placement: 'top'},
+        {top: -100, bottom: -76, placement: 'bottom'},
+    ] as const)('bounds a saved anchor outside the visible viewport: $placement', ({top, bottom, placement}) => {
+        expect(calculateSelectionPopupPosition({top, bottom, left: 80, right: 180, width: 100, height: 24},
+            {width: 360, height: 520}, {width: 1000, height: 300}))
+            .toEqual({left: 80, top: 12, placement, maxHeight: 276});
+    });
 
-        const reducedPage = calculateReadingPopupLayout(anchor, {width: 600, height: 400}, 2);
-        expect(reducedPage.width).toBe(288);
-        expect(reducedPage.height).toBe(188);
-        expect(reducedPage.left + reducedPage.width * 2).toBeLessThanOrEqual(600 - 12);
-        expect(reducedPage.top + reducedPage.height * 2).toBeLessThanOrEqual(400 - 12);
-        for (const invalidScale of [0, -1, Infinity, NaN]) {
-            expect(calculateReadingPopupLayout(anchor, {width: 640, height: 450}, invalidScale))
-                .toEqual(calculateReadingPopupLayout(anchor, {width: 640, height: 450}, 1));
+    it('keeps visible lines clear across card heights and viewport sizes', () => {
+        for (const viewportHeight of [170, 270, 500, 900]) {
+            for (let top = 12; top <= viewportHeight - 36; top += 17) {
+                const anchor = {top, bottom: top + 24, left: 80, right: 180, width: 100, height: 24};
+                for (const height of [80, 240, 520]) {
+                    const result = calculateSelectionPopupPosition(anchor, {width: 360, height}, {width: 1000, height: viewportHeight});
+                    const displayedHeight = result.maxHeight ?? height;
+                    expect(result.top).toBeGreaterThanOrEqual(12);
+                    expect(result.top + displayedHeight).toBeLessThanOrEqual(viewportHeight - 12);
+                    expect(result.top + displayedHeight <= anchor.top - 10 || result.top >= anchor.bottom + 10).toBe(true);
+                }
+            }
         }
     });
+
+
 });
 
 describe('selection translator presentation stability', () => {
@@ -495,7 +905,13 @@ describe('selection translator text and speech language normalization', () => {
             [...paragraph.childNodes].forEach(node => fragment.append(node.cloneNode(true)));
             return fragment;
         };
-        const range = {commonAncestorContainer: paragraph, cloneContents: selected} as unknown as Range;
+        const range = {
+            commonAncestorContainer: paragraph,
+            get startContainer() { return paragraph.firstChild; }, startOffset: 0,
+            get endContainer() { return paragraph.lastChild; },
+            get endOffset() { return paragraph.lastChild?.nodeType === 3 ? paragraph.lastChild.textContent!.length : paragraph.lastChild?.childNodes.length ?? 0; },
+            cloneContents: selected,
+        } as unknown as Range;
         expect(readSelectionText(range, 'For each integer iii find the answer.')).toBe('For each integer $i$ find the answer.');
         expect(paragraph.querySelector('.MJX_Assistive_MathML')).not.toBeNull();
         paragraph.innerHTML = 'Evaluate <span class="katex"><span class="katex-mathml"><math><semantics><mi>x</mi><annotation encoding="application/x-tex">x^2</annotation></semantics></math></span><span class="katex-html">x2</span></span> now.';
@@ -648,7 +1064,9 @@ describe('selection translator text and speech language normalization', () => {
         });
         const protectedRange = {
             startContainer: text,
-            endContainer: text,
+            startOffset: 0,
+            endContainer: protectedText,
+            endOffset: protectedText.length,
             commonAncestorContainer: document,
             intersectsNode: (node: Node) => node === shell || node === protectedRegion,
         } as unknown as Range;
@@ -662,7 +1080,9 @@ describe('selection translator text and speech language normalization', () => {
         });
         const controlRange = {
             startContainer: text,
-            endContainer: text,
+            startOffset: 0,
+            endContainer: button.firstChild,
+            endOffset: button.textContent!.length,
             commonAncestorContainer: document,
             intersectsNode: (node: Node) => node === shell || node === button,
         } as unknown as Range;
@@ -840,11 +1260,18 @@ describe('selection translator text and speech language normalization', () => {
         expect(normalizeSpeechLanguage('zh-Hant-CN')).toBe('zh-TW');
         expect(normalizeSpeechLanguage('zh-HK')).toBe('zh-TW');
         expect(normalizeSpeechLanguage('en')).toBe('en-US');
+        expect(normalizeSpeechLanguage('eng')).toBe('en-US');
+        expect(normalizeSpeechLanguage('eng-GB')).toBe('en-GB');
+        expect(normalizeSpeechLanguage('jpn')).toBe('ja-JP');
+        expect(normalizeSpeechLanguage('zho-Hant')).toBe('zh-TW');
+        expect(normalizeSpeechLanguage('zho-Hant-TW')).toBe('zh-TW');
+        expect(normalizeSpeechLanguage('zho-Hans-CN')).toBe('zh-CN');
         const spanish = detectlang('Este programa permite traducir documentos y páginas de internet del español a otros idiomas.');
         expect(normalizeSpeechLanguage(spanish)).toBe('es-ES');
         expect(edgeTtsVoiceCandidatesForLanguage(normalizeSpeechLanguage(spanish))).toContain('es-ES-TristanMultilingualNeural');
         expect(normalizeSpeechLanguage(undefined, 'fr-FR')).toBe('fr-FR');
         expect(normalizeSpeechLanguage('auto', 'zh-CN')).toBe('zh-CN');
+        expect(normalizeSpeechLanguage('und', 'zh-CN')).toBe('zh-CN');
         expect(normalizeSpeechLanguage('en-GB')).toBe('en-GB');
         expect(normalizeSpeechLanguage('invalid value')).toBe('en-US');
     });
@@ -912,15 +1339,17 @@ describe('selection translator text and speech language normalization', () => {
 
     it('continues to the next voice when Edge TTS rejects the first synthesis', async () => {
         const originalFetch = globalThis.fetch;
+        const cancel = vi.fn(async () => {});
         const fetchMock = vi.fn()
             .mockResolvedValueOnce({ ok: true, json: async () => ({ t: 'test-token', r: 'eastus' }) })
-            .mockResolvedValueOnce({ ok: false, status: 503 })
+            .mockResolvedValueOnce({ ok: false, status: 503, body: {cancel} })
             .mockResolvedValueOnce({ ok: true, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer });
         vi.stubGlobal('fetch', fetchMock);
 
         try {
             const result = await synthesizeEdgeTts('hello', 'en-US', ['en-US-JennyNeural', 'en-US-AvaMultilingualNeural']);
             expect(result.voice).toBe('en-US-AvaMultilingualNeural');
+            expect(cancel).toHaveBeenCalledOnce();
             expect(fetchMock).toHaveBeenCalledTimes(3);
             expect(String(fetchMock.mock.calls[1]?.[0])).toContain('.tts.speech.microsoft.com');
             expect(fetchMock.mock.calls[1]?.[1]?.body).toContain('en-US-JennyNeural');

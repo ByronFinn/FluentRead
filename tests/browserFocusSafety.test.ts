@@ -40,10 +40,10 @@ describe('原生焦点事件观察器诊断端口（不启动浏览器）', () =
         const f = monitorFixture({onEvent: (event: {pid: number}) => {if (event.pid === 18812) throw unsafe;}}); await drainMonitor(); f.write(readyRecord); await f.monitor.ready;
         f.write({kind: 'activation', pid: 18812, name: 'Microsoft Edge', time: 1100, monotonicMs: 20});
         f.write({kind: 'activation', pid: 44386, name: 'Google Chrome', time: 1200, monotonicMs: 30});
-        expect(f.monitor.error).toBe(unsafe); expect(f.monitor.events.map((event: {pid: number}) => event.pid)).toEqual([18812, 44386]); await f.monitor.stop();
+        expect(f.monitor.error).toBe(unsafe); expect(f.monitor.events.map((event: {pid: number}) => event.pid)).toEqual([18812, 44386]); await expect(f.monitor.stop()).rejects.toBe(unsafe);
     });
     it.each([{kind: 'ready', pid: 999, time: 1000, monotonicMs: 10}, {kind: 'activation', pid: -1, name: 'bad', time: 1000, monotonicMs: 10}, {kind: 'activation', pid: 7, name: null, time: 1000, monotonicMs: 10}, {kind: 'activation', pid: 7, name: 'bad', time: -1, monotonicMs: 10}, {kind: 'activation', pid: 7, name: 'bad', time: 1000, monotonicMs: -.5}, {kind: 'unknown', pid: 7, time: 1000, monotonicMs: 10}])('未就绪时拒绝不合法原生记录 %j', async record => {
-        const f = monitorFixture(); await drainMonitor(); f.write(record); await expect(f.monitor.ready).rejects.toThrow(); expect(f.monitor.error).toBeTruthy(); await f.monitor.stop();
+        const f = monitorFixture(); await drainMonitor(); f.write(record); await expect(f.monitor.ready).rejects.toThrow(); expect(f.monitor.error).toBeTruthy(); await expect(f.monitor.stop()).rejects.toBe(f.monitor.error);
     });
     it('损坏 JSON、重复 ready 和单调时间倒退均永久失败，异常回调不掩盖首个原因', async () => {
         for (const invalid of ['json', 'duplicate', 'time']) {
@@ -51,7 +51,7 @@ describe('原生焦点事件观察器诊断端口（不启动浏览器）', () =
             if (invalid === 'json') f.child.stdout.emit('data', Buffer.from('broken\n'));
             else if (invalid === 'duplicate') f.write(readyRecord);
             else f.write({kind: 'activation', pid: 7, name: 'browser', time: 1200, monotonicMs: 9});
-            const error = f.monitor.error; expect(error).toBeTruthy(); f.child.stderr.emit('data', Buffer.from('later diagnostic')); expect(f.monitor.error).toBe(error); await f.monitor.stop();
+            const error = f.monitor.error; expect(error).toBeTruthy(); f.child.stderr.emit('data', Buffer.from('later diagnostic')); expect(f.monitor.error).toBe(error); await expect(f.monitor.stop()).rejects.toBe(error);
         }
     });
     it('超长未完成记录、进程错误和意外退出不会把观察链缺失称为焦点安全', async () => {
@@ -59,20 +59,20 @@ describe('原生焦点事件观察器诊断端口（不启动浏览器）', () =
             const f = monitorFixture(); await drainMonitor();
             if (kind === 'buffer') f.child.stdout.emit('data', Buffer.from('x'.repeat(65537)));
             else if (kind === 'error') f.child.emit('error', Error('spawn')); else f.child.emit('close', 0, null);
-            await expect(f.monitor.ready).rejects.toThrow(); expect(f.monitor.error).toBeTruthy(); await f.monitor.stop();
+            await expect(f.monitor.ready).rejects.toThrow(); expect(f.monitor.error).toBeTruthy(); await expect(f.monitor.stop()).rejects.toBe(f.monitor.error);
         }
     });
     it('编译失败或编译期间停止不创建观察进程，清理只涉及编译器自己的临时输出', async () => {
         const failed = {compile: vi.fn(async () => {throw Error('compile failed');}), spawn: vi.fn(), cleanup: vi.fn(async () => {})};
-        const first = createFocusEventMonitor({}, failed); await expect(first.ready).rejects.toThrow('compile failed'); await first.stop(); expect(failed.spawn).not.toHaveBeenCalled(); expect(failed.cleanup).toHaveBeenCalledOnce();
+        const first = createFocusEventMonitor({}, failed); await expect(first.ready).rejects.toThrow('compile failed'); await expect(first.stop()).rejects.toThrow('compile failed'); expect(failed.spawn).not.toHaveBeenCalled(); expect(failed.cleanup).toHaveBeenCalledOnce();
         let finish!: (value: string) => void;
         const ports = {compile: vi.fn(() => new Promise<string>(resolve => {finish = resolve;})), spawn: vi.fn(), cleanup: vi.fn(async () => {})};
-        const second = createFocusEventMonitor({}, ports); await drainMonitor(); const stop = second.stop(); finish('/owned-observer'); await stop; await expect(second.ready).rejects.toThrow('stopped before ready'); expect(ports.spawn).not.toHaveBeenCalled(); expect(ports.cleanup).toHaveBeenCalledOnce();
+        const second = createFocusEventMonitor({}, ports); await drainMonitor(); const stop = second.stop(); finish('/owned-observer'); await expect(stop).rejects.toThrow('stopped before ready'); await expect(second.ready).rejects.toThrow('stopped before ready'); expect(ports.spawn).not.toHaveBeenCalled(); expect(ports.cleanup).toHaveBeenCalledOnce();
     });
     it('ready 超时只终止已 spawn 的观察子进程，不运行应用激活命令', async () => {
         vi.useFakeTimers();
         try {
-            const f = monitorFixture({readinessTimeoutMs: 20}); await drainMonitor(); await vi.advanceTimersByTimeAsync(20); await expect(f.monitor.ready).rejects.toThrow('did not become ready'); await f.monitor.stop(); expect(f.child.stdin.end).toHaveBeenCalledOnce(); expect(f.ports.cleanup).toHaveBeenCalledOnce();
+            const f = monitorFixture({readinessTimeoutMs: 20}); await drainMonitor(); await vi.advanceTimersByTimeAsync(20); await expect(f.monitor.ready).rejects.toThrow('did not become ready'); await expect(f.monitor.stop()).rejects.toThrow('did not become ready'); expect(f.child.stdin.end).toHaveBeenCalledOnce(); expect(f.ports.cleanup).toHaveBeenCalledOnce();
         } finally {vi.useRealTimers();}
     });
     it('优雅停止失败仅对拥有的子进程逐步终止，缺少关闭回执保留输出并报告', async () => {
@@ -83,12 +83,359 @@ describe('原生焦点事件观察器诊断端口（不启动浏览器）', () =
             expect(f.child.kill.mock.calls.map(call => call[0])).toEqual(['SIGTERM', 'SIGKILL']); expect(f.ports.cleanup).not.toHaveBeenCalled();
         } finally {vi.useRealTimers();}
     });
+    it.each([{code: 3, signal: null}, {code: null, signal: 'SIGTERM'}])('停止期间非零退出或外部信号不能被当作成功：%j', async ({code, signal}) => {
+        const f = monitorFixture(); await drainMonitor(); f.write(readyRecord); await f.monitor.ready;
+        f.child.stdin.end.mockImplementation(() => {queueMicrotask(() => f.child.emit('close', code, signal));});
+        await expect(f.monitor.stop()).rejects.toMatchObject({code: 'FOCUS_OBSERVER_EXIT'});
+        expect(f.monitor.error).toMatchObject({code: 'FOCUS_OBSERVER_EXIT'});
+        expect(f.child.kill).not.toHaveBeenCalled(); expect(f.ports.cleanup).toHaveBeenCalledOnce();
+    });
+    it.each([Buffer.from('{"kind":"activation"'), Buffer.from([0xe5, 0x8d])])('关闭时尾部残缺行或 UTF-8 必须失败', async data => {
+        const f = monitorFixture(); await drainMonitor(); f.write(readyRecord); await f.monitor.ready;
+        f.child.stdout.emit('data', data);
+        await expect(f.monitor.stop()).rejects.toMatchObject({code: 'FOCUS_OBSERVER_PROTOCOL'});
+        expect(f.ports.cleanup).toHaveBeenCalledOnce();
+    });
+    it('JSON 字符串内无效 UTF-8 即使被替换后可解析也必须失败', async () => {
+        const f = monitorFixture(); await drainMonitor(); f.write(readyRecord); await f.monitor.ready;
+        f.child.stdout.emit('data', Buffer.concat([
+            Buffer.from('{"kind":"activation","pid":123,"name":"'), Buffer.from([0xe5, 0x8d]),
+            Buffer.from('","time":1100,"monotonicMs":20}\n'),
+        ]));
+        await expect(f.monitor.stop()).rejects.toMatchObject({code: 'FOCUS_OBSERVER_PROTOCOL'});
+        expect(f.monitor.events).toEqual([]);
+    });
+    it('清理失败不覆盖最初监控失败，并在无先前错误时保留清理错误', async () => {
+        for (const priorFailure of [true, false]) {
+            const f = monitorFixture(); await drainMonitor(); f.write(readyRecord); await f.monitor.ready;
+            const cleanupError = new Error('cleanup failed'); f.ports.cleanup.mockRejectedValue(cleanupError);
+            if (priorFailure) f.child.stderr.emit('data', Buffer.from('first failure'));
+            const first = f.monitor.error;
+            await expect(f.monitor.stop()).rejects.toBe(priorFailure ? first : cleanupError);
+            expect(f.monitor.error).toBe(priorFailure ? first : cleanupError);
+        }
+    });
+    it('无法关闭时保留首次监控错误且不清除观察器临时文件', async () => {
+        vi.useFakeTimers();
+        try {
+            const f = monitorFixture(); await drainMonitor(); f.write(readyRecord); await f.monitor.ready;
+            f.child.stderr.emit('data', Buffer.from('first failure')); const first = f.monitor.error;
+            f.child.stdin.end.mockImplementation(() => {}); f.child.kill.mockImplementation(() => true);
+            const stop = f.monitor.stop(), rejected = expect(stop).rejects.toBe(first);
+            await vi.advanceTimersByTimeAsync(3500); await rejected;
+            expect(f.ports.cleanup).not.toHaveBeenCalled();
+        } finally {vi.useRealTimers();}
+    });
+    it.each([true, false])('向自有子进程发信号抛错时保留首错并在未关闭时保留临时文件（已有错误：%s）', async priorFailure => {
+        vi.useFakeTimers();
+        try {
+            const f = monitorFixture(); await drainMonitor(); f.write(readyRecord); await f.monitor.ready;
+            if (priorFailure) f.child.stderr.emit('data', Buffer.from('first failure'));
+            const signalError = new Error('signal failed');
+            const first = f.monitor.error || signalError;
+            f.child.stdin.end.mockImplementation(() => {}); f.child.kill.mockImplementation(() => {throw signalError;});
+            const stop = f.monitor.stop(), rejected = expect(stop).rejects.toBe(first);
+            await vi.advanceTimersByTimeAsync(3500); await rejected;
+            expect(f.monitor.error).toBe(first); expect(f.ports.cleanup).not.toHaveBeenCalled();
+        } finally {vi.useRealTimers();}
+    });
+    it('停止命令发送失败时即使进程随后正常退出也不得报告监控成功', async () => {
+        const f = monitorFixture(); await drainMonitor(); f.write(readyRecord); await f.monitor.ready;
+        const failure = new Error('stdin failed');
+        f.child.stdin.end.mockImplementation(() => {queueMicrotask(() => f.child.emit('close', 0, null)); throw failure;});
+        await expect(f.monitor.stop()).rejects.toBe(failure); expect(f.ports.cleanup).toHaveBeenCalledOnce();
+    });
+    it('未 ready 时 onError 重入 stop 共用同一个 promise 且只清理一次', async () => {
+        let nested: Promise<unknown> | undefined;
+        const f = monitorFixture({onError: () => {nested = f.monitor.stop();}}); await drainMonitor();
+        const stop = f.monitor.stop(); await expect(stop).rejects.toMatchObject({code: 'FOCUS_OBSERVER_STOPPED'});
+        expect(nested).toBe(stop); expect(f.ports.cleanup).toHaveBeenCalledOnce();
+    });
+    it.each(['SIGTERM', 'SIGKILL'])('只有通过自有子进程句柄实际发送的 %s 归为受控强制停止，仍不能证明监控完整', async expected => {
+        vi.useFakeTimers();
+        try {
+            const f = monitorFixture(); await drainMonitor(); f.write(readyRecord); await f.monitor.ready;
+            f.child.stdin.end.mockImplementation(() => {});
+            f.child.kill.mockImplementation(signal => {
+                if (signal === expected) queueMicrotask(() => f.child.emit('close', null, signal));
+                return true;
+            });
+            const stop = f.monitor.stop();
+            const rejected = expect(stop).rejects.toMatchObject({code: 'FOCUS_OBSERVER_FORCED_STOP'});
+            await vi.advanceTimersByTimeAsync(expected === 'SIGTERM' ? 1000 : 2000); await rejected;
+            expect(f.child.kill.mock.calls.map(call => call[0])).toEqual(expected === 'SIGTERM' ? ['SIGTERM'] : ['SIGTERM', 'SIGKILL']);
+            expect(f.ports.cleanup).toHaveBeenCalledOnce();
+        } finally {vi.useRealTimers();}
+    });
+    it('发送信号返回失败时不能将随后同名信号归因于本进程', async () => {
+        vi.useFakeTimers();
+        try {
+            const f = monitorFixture(); await drainMonitor(); f.write(readyRecord); await f.monitor.ready;
+            f.child.stdin.end.mockImplementation(() => {});
+            f.child.kill.mockImplementation(signal => {queueMicrotask(() => f.child.emit('close', null, signal)); return false;});
+            const stop = f.monitor.stop(), rejected = expect(stop).rejects.toMatchObject({code: 'FOCUS_OBSERVER_EXIT'});
+            await vi.advanceTimersByTimeAsync(1000); await rejected;
+        } finally {vi.useRealTimers();}
+    });
+    it('观察进程已退出但输出流尚未关闭时，等待 close 且不向可能复用的 PID 发送信号', async () => {
+        vi.useFakeTimers();
+        try {
+            const f = monitorFixture(); await drainMonitor(); f.write(readyRecord); await f.monitor.ready;
+            f.child.stdin.end.mockImplementation(() => {});
+            const stop = f.monitor.stop();
+            f.child.emit('exit', 0, null);
+            await vi.advanceTimersByTimeAsync(2000);
+            expect(f.child.kill).not.toHaveBeenCalled();
+            f.child.emit('close', 0, null); await stop;
+            expect(f.ports.cleanup).toHaveBeenCalledOnce();
+        } finally {vi.useRealTimers();}
+    });
+    it('退出事件先于 stop、close 晚于 stop 时仍按意外退出失败', async () => {
+        const f = monitorFixture(); await drainMonitor(); f.write(readyRecord); await f.monitor.ready;
+        f.child.emit('exit', 0, null);
+        await expect(f.monitor.stop()).rejects.toMatchObject({code: 'FOCUS_OBSERVER_EXIT'});
+        expect(f.child.kill).not.toHaveBeenCalled();
+    });
     it('Swift 只读取 NSWorkspace 通知，不启动、激活或关闭用户应用；helper 不改变现有启动路径', () => {
         const swift = readFileSync(resolve(PROJECT_ROOT, 'scripts/testing/mac-focus-event-observer.swift'), 'utf8');
         expect(swift).toContain('NSWorkspace.didActivateApplicationNotification'); expect(swift.indexOf('center.addObserver')).toBeLessThan(swift.indexOf('emit(ready)'));
         expect(swift).not.toMatch(/activateIgnoringOtherApps|launchApplication|openApplication|\.terminate\(/u);
         const helper = readFileSync(resolve(PROJECT_ROOT, 'scripts/testing/focus-safe-browser.cjs'), 'utf8'); expect(helper).toContain('startFocusEventMonitor,');
         expect(helper).toContain("Target.createTarget', { url: markerUrl, background: true }");
+    });
+});
+
+type CacheTraceRecord = Record<string, unknown>;
+type CacheTraceSession = {send: (...args: unknown[]) => unknown};
+type CacheTraceBrowser = {newBrowserCDPSession: (...args: unknown[]) => Promise<CacheTraceSession>};
+type CacheTrace = {
+    setCase: (name: string) => void;
+    observeActivation: (event: {pid: number; name: string; time: number; monotonicMs: number}) => void;
+    bindPage: (page: object) => void;
+    pageIdentity: (page: object) => Record<string, unknown>;
+    action: <T>(name: string, invoke: () => T | Promise<T>, page?: object) => Promise<T>;
+    instrumentBrowser: (browser: CacheTraceBrowser) => CacheTraceBrowser;
+};
+const CACHE_RECOVERY_CLI = 'scripts/testing/run-cache-clear-recovery-test.cjs';
+function cacheTraceFixture() {
+    const source = readScript(CACHE_RECOVERY_CLI);
+    const ast = ts.createSourceFile(CACHE_RECOVERY_CLI, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+    const declaration = ast.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'createCacheFocusTrace');
+    if (!declaration) throw Error('Missing actual cache CLI trace factory');
+    const factory = new Script(`${declaration.getText(ast)}; createCacheFocusTrace;`).runInNewContext({performance}) as (ports: {
+        records: CacheTraceRecord[]; errors: CacheTraceRecord[]; readForeground: () => Promise<unknown>;
+        getBrowserPid: () => number; getFocusFailure: () => Error | undefined;
+        onOwnedActivation: (error: Error) => void; onObservationFailure: (error: Error) => void;
+    }) => CacheTrace;
+    const records: CacheTraceRecord[] = [], errors: CacheTraceRecord[] = [];
+    let failure: Error | undefined;
+    const readForeground = vi.fn(async (): Promise<unknown> => ({pid: 1, name: 'Editor', privateValue: 'PRIVATE_FOREGROUND'}));
+    const trace = factory({records, errors, readForeground, getBrowserPid: () => 42, getFocusFailure: () => failure,
+        onOwnedActivation: error => {failure ||= error;}, onObservationFailure: error => {failure ||= error;}});
+    const send = vi.fn(function (this: CacheTraceSession, ...args: unknown[]): unknown {
+        const [method] = args;
+        if (method === 'Target.createTarget') return Promise.resolve({targetId: 'owned-target', secret: 'PRIVATE_RESULT'});
+        if (method === 'Browser.getWindowForTarget') return Promise.resolve({windowId: 7, bounds: {left: 1500, top: 30, width: 1440, height: 1000, windowState: 'normal', secret: 'PRIVATE_BOUNDS'}});
+        if (method === 'Browser.getWindowBounds') return Promise.resolve({bounds: {left: 1500, top: 30, width: 1440, height: 1000}});
+        return Promise.resolve({success: true});
+    });
+    const cdp = {send};
+    const nativeSession = vi.fn(async () => cdp);
+    const browser = {newBrowserCDPSession: nativeSession};
+    trace.instrumentBrowser(browser);
+    return {trace, records, errors, readForeground, send, cdp, browser, nativeSession, failure: () => failure};
+}
+
+// Execute the complete CLI in a VM; ports model only the first normal case and
+// stop at the next newPage boundary. No browser, native app or real I/O is used.
+async function probeCacheRecoveryCli(mode: 'native-reject' | 'activation' | 'unavailable' | 'diagnostics-failure' = 'native-reject') {
+    const filename = resolve(PROJECT_ROOT, CACHE_RECOVERY_CLI), helperPath = '/virtual/cache-focus-helper.cjs';
+    const rawFailure = new Error('original native newPage failure');
+    const runtimeFailure = new Error('original runtime diagnostics failure');
+    const calls: string[] = [], logs: unknown[][] = [], capturedErrors: unknown[] = [];
+    const snapshots: Record<string, unknown>[] = [];
+    let foreground: unknown = {pid: 1, name: 'Editor'}, target = 0;
+    let onEvent!: (event: {pid: number; name: string; time: number; monotonicMs: number}) => void;
+    let finish!: () => void;
+    const complete = new Promise<void>(done => {finish = done;});
+    const monitor = {ready: Promise.resolve(), events: [] as {pid: number; name: string; time: number; monotonicMs: number}[], error: undefined,
+        stop: vi.fn(async () => {calls.push('monitor.stop');})};
+    const nativeSend = vi.fn(function (method: string, params?: Record<string, unknown>) {
+        calls.push(method);
+        if (method === 'Target.createTarget') {
+            target++;
+            if (target === 5) return Promise.reject(rawFailure);
+            return Promise.resolve({targetId: `owned-${target}`, privateValue: 'PRIVATE_CDP_RESULT'});
+        }
+        if (method === 'Browser.getWindowForTarget') return Promise.resolve({windowId: 7, bounds: {left: 1500, top: 30, width: 1440, height: 1000, windowState: 'normal'}});
+        if (method === 'Browser.getWindowBounds') return Promise.resolve({bounds: {left: 1500, top: 30, width: 1440, height: 1000}});
+        if (method === 'Browser.setWindowBounds') expect(params?.bounds).toBeTruthy();
+        return Promise.resolve({success: true});
+    });
+    const browser = {newBrowserCDPSession: async () => ({send: nativeSend})};
+    const chromium = {connectOverCDP: vi.fn(async () => browser)};
+    let cdp!: Awaited<ReturnType<typeof browser.newBrowserCDPSession>>;
+    const makeTarget = async () => {
+        cdp = await browser.newBrowserCDPSession();
+        const result = await cdp.send('Target.createTarget', {url: 'PRIVATE_URL', background: true}) as {targetId: string};
+        await cdp.send('Browser.getWindowForTarget', {targetId: result.targetId});
+        await cdp.send('Browser.getWindowBounds', {windowId: 7});
+        await cdp.send('Browser.setWindowBounds', {windowId: 7, bounds: {left: 1500, top: 30, width: 1440, height: 1000}});
+        return result.targetId;
+    };
+    const probe = {receipts: [{type: 'clearTranslationCache', invalidationPending: false}], requests: [], holds: [], longTimers: []};
+    function pagePort() {
+        const locator = {count: async () => 1, isVisible: async () => true, waitFor: async () => {}, click: async () => {},
+            filter: () => locator, screenshot: async () => {
+                calls.push('screenshot.component');
+                if (mode === 'activation') {
+                    const event = {pid: 42, name: 'Owned browser', time: Date.now(), monotonicMs: 100};
+                    monitor.events.push(event);onEvent(event);
+                }
+                return Buffer.from('image');
+            }, innerText: async () => 'failure DOM', getAttribute: async () => 'status'};
+        return {on: () => {}, addInitScript: async () => {}, goto: async () => {}, locator: () => locator,
+            waitForFunction: async () => {}, evaluate: async () => probe, isClosed: () => false,
+            screenshot: async () => {calls.push('screenshot.page');return Buffer.from('image');}, close: async () => {calls.push('page.close');}};
+    }
+    const worker = {url: () => 'chrome-extension://owned/background.js', evaluate: async () => ({entries: 0, totals: null})};
+    const context = {serviceWorkers: () => [worker]};
+    const session = {context, launchMode: 'macos-background-cdp', focusPolicy: 'launchservices-no-foreground',
+        windowPlacement: {mode: 'background-visible-no-focus', browserFrontmost: false},
+        close: async () => {calls.push('owned.close');await cdp.send('Target.closeTarget', {targetId: 'owned-1'});}};
+    const helper = {
+        startFocusEventMonitor: (options: {onEvent: typeof onEvent}) => {onEvent = options.onEvent;return monitor;},
+        queryMacFrontmostApplication: async () => foreground,
+        launchFocusSafePersistentContext: async (options: {chromium: typeof chromium}) => {
+            expect(options.chromium).toBe(chromium);await chromium.connectOverCDP();await makeTarget();
+            if (mode === 'unavailable') foreground = null;
+            return session;
+        },
+        newPageWithoutForeground: async () => {await makeTarget();return pagePort();},
+        activateExtensionTabWithoutForeground: async () => {},
+    };
+    const diagnostics = {setPhase: () => {}, attachPage: async () => {}, start: async () => {}, setExtensionId: () => {},
+        flush: async () => {if (mode === 'diagnostics-failure') throw runtimeFailure;}, snapshot: () => ({errors: [], warnings: []}),
+        stop: async () => {calls.push('diagnostics.stop');}, assertClean: () => {}};
+    const fakeFs = {mkdirSync: () => {}, mkdtempSync: () => '/tmp/owned-cache-profile', rmSync: () => {calls.push('profile.remove');}, rmdirSync: () => {},
+        readFileSync: (file: string) => file.endsWith('manifest.json') ? JSON.stringify({version: 'fixture', action: {default_popup: 'popup.html'}, options_ui: {page: 'options.html'}}) : Buffer.from('PRIVATE_SOURCE'),
+        readdirSync: () => [{name: 'manifest.json', isDirectory: () => false}],
+        writeFileSync: (file: string, value: string) => {if (file.endsWith('/report.json')) snapshots.push(JSON.parse(value));}};
+    const server = {listening: false, once: () => {}, listen: (_port: number, _host: string, ready: () => void) => {server.listening = true;ready();},
+        address: () => ({port: 49152}), closeAllConnections: () => {}, close: (closed: () => void) => {server.listening = false;closed();}};
+    const cliModule = {exports: {}};
+    const cliRequire = Object.assign((specifier: string): unknown => {
+        if (specifier === 'node:fs') return fakeFs;
+        if (specifier === 'node:os') return {tmpdir: () => '/tmp'};
+        if (specifier === 'node:http') return {createServer: () => server};
+        if (specifier === './owned-browser-close.cjs') return {guardBrowserClose: () => session, getGuardedBrowserPid: async () => 42};
+        if (specifier === '/virtual/diagnostics.cjs') return {createRuntimeDiagnostics: () => diagnostics};
+        if (specifier === '/virtual/packages/playwright') return {chromium};
+        if (specifier === helperPath) return helper;
+        if (['node:path', 'node:crypto', 'node:assert/strict'].includes(specifier)) return require(specifier);
+        throw Error(`Unexpected offline CLI port ${specifier}`);
+    }, {main: cliModule});
+    const cliProcess = {argv: [process.execPath, filename, '--extension-dir', '/virtual/chrome-mv3', '--artifacts-dir', '/virtual/evidence',
+        '--runtime-diagnostics', '/virtual/diagnostics.cjs', '--playwright-root', '/virtual/packages', '--focus-safe-helper', helperPath], exitCode: 0};
+    new Script(readScript(CACHE_RECOVERY_CLI), {filename}).runInNewContext({require: cliRequire, module: cliModule, exports: cliModule.exports,
+        __dirname: dirname(filename), __filename: filename, process: cliProcess, performance, Buffer, URL,
+        console: {error: (...args: unknown[]) => {capturedErrors.push(...args);}, log: (...args: unknown[]) => {logs.push(args);if (args.length === 1 && String(args[0]).startsWith('{')) finish();}}}, {timeout: 1000});
+    await complete;
+    return {report: snapshots.at(-1)!, calls, logs, capturedErrors, rawFailure, runtimeFailure, nativeSend, exitCode: cliProcess.exitCode};
+}
+
+describe('缓存恢复 CLI 焦点时序诊断（完整离线端口，无浏览器）', () => {
+    it('精确白名单保留参数、接收者和原生对象身份，记录 case/target/window/bounds 而不记录消息正文', async () => {
+        const f = cacheTraceFixture();
+        expect(f.trace.instrumentBrowser(f.browser)).toBe(f.browser);
+        const cdp = await f.browser.newBrowserCDPSession();expect(cdp).toBe(f.cdp);
+        f.trace.setCase('case-normal');
+        const params = {url: 'PRIVATE_URL', background: true, config: 'PRIVATE_CONFIG'};
+        const created = await cdp.send('Target.createTarget', params) as {targetId: string};
+        expect(f.send).toHaveBeenCalledWith('Target.createTarget', params);expect(f.send.mock.contexts[0]).toBe(cdp);
+        await cdp.send('Browser.getWindowForTarget', {targetId: created.targetId});
+        await cdp.send('Browser.getWindowBounds', {windowId: 7});
+        await cdp.send('Browser.setWindowBounds', {windowId: 7, bounds: {left: 1600, top: 40, width: 1400, height: 900, privateValue: 'PRIVATE_REQUEST'}});
+        const page = {};f.trace.bindPage(page);const result = {privateMessage: 'PRIVATE_ACTION_RESULT'};
+        expect(await f.trace.action('readProbe', () => result, page)).toBe(result);
+        const untouched = Promise.resolve({body: 'PRIVATE_UNLISTED'});f.send.mockReturnValueOnce(untouched);
+        expect(cdp.send('Runtime.evaluate', {expression: 'PRIVATE_EXPRESSION'})).toBe(untouched);
+        expect(f.trace.pageIdentity(page)).toEqual({targetId: 'owned-target', windowId: 7, bounds: {left: 1500, top: 30, width: 1440, height: 1000}});
+        const completed = f.records.filter(record => record.phase === 'completed');expect(completed).toHaveLength(5);
+        expect(completed.at(-1)).toMatchObject({scope: 'action', name: 'readProbe', case: 'case-normal', targetId: 'owned-target', windowId: 7,
+            browserPid: 42, foreground: {pid: 1, name: 'Editor', sampledAt: {time: expect.any(Number), monotonicMs: expect.any(Number)}}});
+        expect(completed[3]).toMatchObject({request: {windowId: 7, bounds: {left: 1600, top: 40, width: 1400, height: 900}}});
+        expect(JSON.stringify(f.records)).not.toContain('PRIVATE');expect(f.errors).toEqual([]);
+        expect(f.records.map(record => record.sequence)).toEqual(Array.from({length: 10}, (_, index) => index + 1));
+    });
+    it('CDP 原始拒绝保留身份，原生激活关联尚未完成调用并永久阻止后续动作，允许自建 target 清理', async () => {
+        const f = cacheTraceFixture(), cdp = await f.browser.newBrowserCDPSession();await cdp.send('Target.createTarget');
+        const original = new Error('PRIVATE_NATIVE_REJECTION');
+        f.send.mockImplementationOnce(() => {f.trace.observeActivation({pid: 42, name: 'Owned', time: 200, monotonicMs: 100});return Promise.reject(original);});
+        await expect(cdp.send('Browser.setWindowBounds', {windowId: 7, bounds: {left: 5}})).rejects.toBe(original);
+        const failure = f.failure();expect(failure).toBeTruthy();
+        f.trace.observeActivation({pid: 1, name: 'Editor', time: 201, monotonicMs: 101});
+        const invoke = vi.fn();
+        for (const name of ['screenshot.component', 'screenshot.page', 'readProbe', 'page.close', 'newPage']) await expect(f.trace.action(name, invoke)).rejects.toBe(failure);
+        await expect(cdp.send('Target.createTarget', {url: 'PRIVATE_URL'})).rejects.toBe(failure);
+        await expect(cdp.send('Target.closeTarget', {targetId: 'not-owned'})).rejects.toBe(failure);
+        expect(invoke).not.toHaveBeenCalled();expect(f.send).toHaveBeenCalledTimes(2);
+        await expect(cdp.send('Target.closeTarget', {targetId: 'owned-target'})).resolves.toEqual({success: true});
+        expect(f.records.find(record => record.scope === 'native')).toMatchObject({activeOperations: [2], case: 'bootstrap'});
+        expect(f.records.filter(record => record.phase === 'rejected')).toEqual([expect.objectContaining({name: 'Browser.setWindowBounds', errorName: 'Error'})]);
+        expect(JSON.stringify(f.records)).not.toContain('PRIVATE_NATIVE_REJECTION');expect(f.errors).toEqual([]);
+    });
+    it.each(['null', 'reject'])('前置前台采样 %s 永久拦截 mutator，后置失败保留原始成功结果和拒绝', async unavailable => {
+        const f = cacheTraceFixture(), cdp = await f.browser.newBrowserCDPSession();await cdp.send('Target.createTarget');
+        const originalResult = {windowId: 7};f.send.mockReturnValueOnce(Promise.resolve(originalResult));
+        f.readForeground.mockResolvedValueOnce({pid: 1, name: 'Editor'});
+        if (unavailable === 'null') f.readForeground.mockResolvedValueOnce(null);else f.readForeground.mockRejectedValueOnce(new Error('PRIVATE_SAMPLE_ERROR'));
+        expect(await cdp.send('Browser.getWindowForTarget', {targetId: 'owned-target'})).toBe(originalResult);
+        const failure = f.failure();expect(failure?.message).toContain('Foreground trace observation unavailable');
+        await expect(cdp.send('Target.createTarget')).rejects.toBe(failure);
+        await expect(cdp.send('Browser.setWindowBounds', {windowId: 7, bounds: {left: 1}})).rejects.toBe(failure);
+        expect(f.send).toHaveBeenCalledTimes(2);
+        await cdp.send('Target.closeTarget', {targetId: 'owned-target'});expect(f.send).toHaveBeenCalledTimes(3);
+        expect(f.errors).toHaveLength(1);expect(JSON.stringify(f.records)).not.toContain('PRIVATE_SAMPLE_ERROR');
+        const before = cacheTraceFixture(), beforeCdp = await before.browser.newBrowserCDPSession();before.readForeground.mockResolvedValue(null);
+        await expect(beforeCdp.send('Target.createTarget')).rejects.toThrow('Foreground trace observation unavailable');
+        await expect(beforeCdp.send('Browser.setWindowBounds', {windowId: 7})).rejects.toBe(before.failure());expect(before.send).not.toHaveBeenCalled();
+        const rejected = cacheTraceFixture(), rejectedCdp = await rejected.browser.newBrowserCDPSession(), nativeError = new Error('original CDP error');
+        rejected.send.mockRejectedValueOnce(nativeError);rejected.readForeground.mockResolvedValueOnce({pid: 1}).mockResolvedValueOnce(null);
+        await expect(rejectedCdp.send('Target.createTarget')).rejects.toBe(nativeError);expect(rejected.failure()).toBeTruthy();
+    });
+    it('完整 CLI 在导航前安装 trace，保持 case/动作/CDP 顺序和原始失败元数据', async () => {
+        const f = await probeCacheRecoveryCli();expect(f.exitCode).toBe(1);expect(f.capturedErrors[0]).toBe(f.rawFailure);
+        expect(f.report.failure).toBe(f.rawFailure.stack);expect(f.report.ok).toBe(false);
+        expect(f.report.cases).toEqual([expect.objectContaining({name: 'options-normal-clear', passed: true})]);
+        const trace = f.report.focusTrace as CacheTraceRecord[];
+        expect(trace[0]).toMatchObject({scope: 'cdp', name: 'Target.createTarget', phase: 'started', case: 'bootstrap', browserPid: null});
+        expect(trace.filter(record => record.scope === 'action' && record.case === 'options-normal-clear' && record.phase === 'started').map(record => record.name))
+            .toEqual(['newPage', 'readProbe', 'screenshot.component', 'screenshot.page', 'page.close']);
+        expect(trace.find(record => record.scope === 'action' && record.name === 'newPage' && record.case === 'options-normal-clear' && record.phase === 'completed'))
+            .toMatchObject({targetId: 'owned-4', windowId: 7, bounds: {left: 1500, top: 30, width: 1440, height: 1000}});
+        expect(trace.filter(record => record.phase === 'rejected').map(record => record.name)).toEqual(['Target.createTarget', 'newPage']);
+        expect(f.report.focusTraceErrors).toEqual([]);expect(JSON.stringify(trace)).not.toContain('PRIVATE');
+        expect(f.calls).toContain('owned.close');expect(f.report.profileRemoved).toBe(true);
+        expect(f.report.runtimeDiagnostics).toEqual({errors: [], warnings: []});
+    });
+    it('完整 CLI 截图中观察激活后不再截图/读 probe/关页/建页，只保留 owned cleanup 与原始事件', async () => {
+        const f = await probeCacheRecoveryCli('activation');const index = f.calls.indexOf('screenshot.component');
+        expect(f.calls.slice(index + 1)).toEqual(['diagnostics.stop', 'owned.close', 'Target.closeTarget', 'monitor.stop', 'profile.remove']);
+        expect(f.report.cases).toEqual([]);expect(f.report.focusEvents).toMatchObject({browserActivations: [{pid: 42}]});
+        expect(f.report.failure).toContain('Owned test browser became frontmost');expect(f.report.failureCaptureError).toBe(f.report.failure);
+        const trace = f.report.focusTrace as CacheTraceRecord[];
+        expect(trace.find(record => record.scope === 'native')).toMatchObject({case: 'options-normal-clear', activeOperations: [expect.any(Number)]});
+        expect(trace.filter(record => record.phase === 'completed' && record.name === 'Target.closeTarget')).toHaveLength(1);
+        expect(f.report.profileRemoved).toBe(true);
+    });
+    it('完整 CLI 观测不可用在新页前停下，runtime diagnostics 失败独立保留且清理不被 trace 阻断', async () => {
+        const f = await probeCacheRecoveryCli('unavailable');expect(f.calls.filter(call => call === 'Target.createTarget')).toHaveLength(1);
+        expect(f.report.failure).toContain('Foreground trace observation unavailable');expect(f.report.focusTraceErrors).toHaveLength(3);
+        expect(f.report.cleanupErrors).toEqual(expect.arrayContaining([expect.objectContaining({label: 'focus-trace'})]));expect(f.report.profileRemoved).toBe(true);
+        const diagnostic = await probeCacheRecoveryCli('diagnostics-failure');expect(diagnostic.report.failure).toBe(diagnostic.rawFailure.stack);
+        expect(diagnostic.report.cleanupErrors).toEqual([expect.objectContaining({label: 'runtime-diagnostics', error: diagnostic.runtimeFailure.stack})]);
+        expect(diagnostic.calls).toContain('owned.close');expect(diagnostic.calls).toContain('diagnostics.stop');expect(diagnostic.report.profileRemoved).toBe(true);
     });
 });
 
@@ -258,6 +605,7 @@ async function probeFocusSafeCli(
         if (specifier === './testing/owned-browser-close.cjs') return {
             guardBrowserClose: () => {throw new Error('Unexpected browser ownership before launch');},
         };
+        if (specifier === './site-translation/controlled-provider.cjs') return require(resolve(PROJECT_ROOT, 'scripts/site-translation/controlled-provider.cjs'));
         if (specifier === 'playwright') return {
             chromium: {launchPersistentContext: stopAtLaunch('headed')},
             webkit: {launch: stopAtLaunch('webkit')},
@@ -538,8 +886,8 @@ describe('browser regression focus safety', () => {
         expect(missingResponse.end).toHaveBeenCalledWith('Not found');
 
         expect(JSON.parse(buildFixtureMicrosoftResponseBody(['one', '<b>two</b>']))).toEqual([
-            {translations: [{text: '测试译文：one'}]},
-            {translations: [{text: '测试译文：<b>two</b>'}]},
+            {translations: [{text: require(resolve(PROJECT_ROOT, 'scripts/site-translation/controlled-provider.cjs')).encodeControlledTranslation('one', 'microsoft-escaped-text')}]},
+            {translations: [{text: require(resolve(PROJECT_ROOT, 'scripts/site-translation/controlled-provider.cjs')).encodeControlledTranslation('<b>two</b>', 'microsoft-escaped-text')}]},
         ]);
         expect(JSON.parse(buildFixtureMicrosoftResponseBody({text: 'invalid'}))).toEqual([]);
         expect(() => assertNoRuntimeErrors([])).not.toThrow();
@@ -576,8 +924,10 @@ describe('browser regression focus safety', () => {
         expect(selectionHash).toBe('#settings-selection');
         const selectionSection = resolveRequestedSection(selectionHash!);
         expect(resolveNavigationItem(selectionSection).label).toBe('划词翻译');
-        expect(readScript('src/features/settings/ui/SettingsSections.vue'))
-            .toMatch(new RegExp(`id="${selectionSection}"[^>]*>\\s*<SelectionSettings`, 'u'));
+        const selectionMarkup = readScript('src/features/settings/ui/SettingsSections.vue')
+            .match(new RegExp(`<section\\b[^>]*\\bid="${selectionSection}"[^>]*>([\\s\\S]*?)</section>`, 'u'))?.[1];
+        expect(selectionMarkup).toBeDefined();
+        expect(selectionMarkup).toMatch(/<SelectionSettings\b/u);
         expect(selectionSource).not.toContain('/options.html#settings-shortcuts');
         const fullPageSource = readScript('scripts/run-full-page-translation-test.cjs');
         expect(fullPageSource).toContain("matches(':hover') === true");
@@ -604,7 +954,8 @@ describe('browser regression focus safety', () => {
         expect(privacySource).toContain('baseRevision');
         expect(privacySource).toContain('exportCompleteBackupViaOptionsUi');
         expect(privacySource).toContain("name: '导出备份'");
-        expect(privacySource).toContain("name: '不包含并导出'");
+        expect(privacySource).toContain("name: /包含单词上下文/u");
+        expect(privacySource).toContain("getByRole('checkbox').isChecked()");
         expect(privacySource).toContain("waitForEvent('download'");
         expect(privacySource).toContain('includesPrivateVocabularyContext');
         expect(privacySource).toContain(
@@ -644,7 +995,9 @@ describe('browser regression focus safety', () => {
         expect(source).toContain("name: '自动设置快照'");
         expect(source).toContain("name: '导出备份'");
         expect(source).toContain("name: '从备份恢复'");
-        expect(source).toContain("getByText('是否包含单词上下文？'");
+        expect(source).toContain('.fr-backup-export-option input[type="checkbox"]');
+        expect(source).toContain('if (await contextOption.isChecked()) throw');
+        expect(source).toContain('contextOption.setChecked(includePrivateContext)');
         expect(source).toContain("page.waitForEvent('download'");
         expect(source).toContain("page.waitForEvent('filechooser'");
         expect(source).toContain("getByTestId('restore-source-dialog')");
@@ -836,6 +1189,15 @@ describe('browser regression focus safety', () => {
             }
         }
         assertHeadedCliEvidence(path);
+    });
+
+    it('userscript accepts an explicit compact-save scope and keeps selects as a separate unchanged scope', () => {
+        const {parseArgs} = require(resolve(PROJECT_ROOT, 'scripts/run-userscript-smoke-test.cjs'));
+        const args = RUNNER_CLI_CASES[0].requiredArgs;
+        expect(parseArgs([...args, '--suite', 'compact-save'], {}).suite).toBe('compact-save');
+        expect(parseArgs([...args, '--suite', 'selects'], {}).suite).toBe('selects');
+        expect(parseArgs([...args, '--suite', 'compact-save'], {}).background).toBe(true);
+        expect(() => parseArgs([...args, '--suite', 'compact-skip-layout'], {})).toThrow('无法识别测试套件');
     });
 
     it('WebKit userscript 回归只运行无窗口模式，且不需要前台浏览器 helper', async () => {
@@ -2414,7 +2776,8 @@ describe('macOS 前台 native CDP helper 的启动与窗口契约（受控端口
     platform?: string; headless?: boolean; background?: boolean; browserPath?: string;
     pendingOwnership?: boolean; appExists?: boolean; secondaryMissing?: boolean; omitBrowserPath?: boolean;
     openError?: Error; captureError?: Error; placementError?: Error; viewportError?: Error; readbackError?: Error;
-    observedBounds?: Bounds;
+    observedBounds?: Bounds; frontmostPid?: number; frontmostSequence?: Array<number | null>;
+    delayedFrontmostRead?: number; delayedWindowRead?: number;
   };
 
   function controlledNativeHelper(options: FixtureOptions = {}) {
@@ -2472,7 +2835,10 @@ describe('macOS 前台 native CDP helper 的启动与窗口契约（受控端口
       }),
       close: vi.fn(async () => undefined),
     };
-    let requestedBounds: Bounds | undefined;
+    let requestedBounds: Bounds | undefined, windowRead = 0;
+    let releaseWindowRead!: () => void, notifyWindowRead!: () => void;
+    const delayedWindowRead = new Promise<void>(resolve => {releaseWindowRead = resolve;});
+    const delayedWindowEntered = new Promise<void>(resolve => {notifyWindowRead = resolve;});
     const browserSessions: Array<{send: ReturnType<typeof vi.fn>; detach: ReturnType<typeof vi.fn>}> = [];
     const browser = {
       contexts: () => [context], close: vi.fn(async () => {events.push('native-connection-close');}),
@@ -2485,6 +2851,8 @@ describe('macOS 前台 native CDP helper 的启动与窗口契约（受控端口
             requestedBounds = params!.bounds as Bounds; return {};
           }
           if (method === 'Browser.getWindowBounds') {
+            const readIndex = windowRead++;
+            if (readIndex === options.delayedWindowRead) {notifyWindowRead(); await delayedWindowRead;}
             if (options.readbackError) throw options.readbackError;
             return {bounds: options.observedBounds ?? requestedBounds};
           }
@@ -2520,19 +2888,30 @@ describe('macOS 前台 native CDP helper 的启动与窗口契约（受控端口
     const fsPort = {existsSync: vi.fn((path: string) => path === appBundle && options.appExists !== false),
       lstatSync: vi.fn(() => undefined), rmSync: vi.fn(),
       readFileSync: vi.fn((_path: string, _encoding: string) => '39221\n/devtools/browser/controlled')};
+    let frontmostRead = 0;
+    let releaseFocusCheck!: () => void;
+    const delayedFocusCheck = new Promise<void>(resolve => {releaseFocusCheck = resolve;});
     const execFile = vi.fn(async (command: string, args: string[], _options?: unknown) => {
       if (command === '/usr/bin/open') {
         events.push('native-open'); if (options.openError) throw options.openError; return {stdout: ''};
       }
       if (command === '/usr/bin/osascript') {
-        if (args[3].includes('frontmostApplication')) {events.push('frontmost-read'); return {stdout: JSON.stringify({pid: ownedPid, name: 'Microsoft Edge'})};}
+        if (args[3].includes('frontmostApplication')) {
+          events.push('frontmost-read');
+          const readIndex = frontmostRead++;
+          const value = options.frontmostSequence && readIndex < options.frontmostSequence.length
+            ? options.frontmostSequence[readIndex] : options.frontmostPid ?? ownedPid;
+          if (readIndex === options.delayedFrontmostRead) await delayedFocusCheck;
+          return {stdout: JSON.stringify(value === null ? {} : {pid: value, name: 'controlled application'})};
+        }
         if (args[3].includes('NSScreen.screens')) return {stdout: JSON.stringify(layout)};
       }
       throw new Error(`Unexpected native I/O port ${command}`);
     });
     const module = {exports: {}};
     const helperSource = readFileSync(BUNDLED_FOCUS_SAFE_HELPER, 'utf8');
-    new Script(helperSource, {filename: BUNDLED_FOCUS_SAFE_HELPER}).runInNewContext({module,
+    new Script(`${helperSource}\nmodule.exports.__testBackgroundState = context => backgroundContexts.get(context);`,
+      {filename: BUNDLED_FOCUS_SAFE_HELPER}).runInNewContext({module,
       exports: module.exports, process: nativeProcess, console, setTimeout, clearTimeout,
       require: (id: string) => {
         if (id === 'node:fs') return fsPort;
@@ -2547,6 +2926,7 @@ describe('macOS 前台 native CDP helper 的启动与窗口契约（受控端口
       launchFocusSafePersistentContext(options: unknown): Promise<{context: typeof context; launchMode: string;
         focusPolicy: string; windowPlacement: Record<string, unknown>; close: () => Promise<unknown>}>;
       newPageWithoutForeground(browserContext: typeof context): Promise<ReturnType<typeof fixturePage>>;
+      __testBackgroundState(browserContext: typeof context): {focusViolation?: Error};
       activateExtensionTabWithoutForeground(browserContext: typeof context, page: ReturnType<typeof fixturePage>): Promise<void>;
     };
     const launchOptions = {chromium, profileDir,
@@ -2556,7 +2936,7 @@ describe('macOS 前台 native CDP helper 的启动与窗口契约（受控端口
     const launch = () => helper.launchFocusSafePersistentContext(launchOptions);
     return {helper, launch, launchOptions, profileDir, ownedPid, events, chromium, context, browser, pages,
       tabs, worker, pageSessions, browserSessions, execFile, fsPort, guardBrowserClose, guardedClose,
-      getGuardedBrowserPid, resolveOwnership, nativeProcess};
+      getGuardedBrowserPid, resolveOwnership, releaseFocusCheck, releaseWindowRead, delayedWindowEntered, nativeProcess};
   }
 
   async function drainNativeHelper() {for (let index = 0; index < 8; index++) await Promise.resolve();}
@@ -2652,14 +3032,190 @@ describe('macOS 前台 native CDP helper 的启动与窗口契约（受控端口
     expectNoProfileRemoval(f);
   });
 
+  it('后台新页复用已定位的正常窗口，每次仍读回几何和前台应用', async () => {
+    const f = controlledNativeHelper({background: true, frontmostPid: 99001});
+    const session = await f.launch();
+    await f.helper.newPageWithoutForeground(f.context);
+    await f.helper.newPageWithoutForeground(f.context);
+    const calls = f.browserSessions.flatMap(item => item.send.mock.calls);
+    expect(calls.filter(([method]) => method === 'Target.createTarget')).toHaveLength(3);
+    expect(f.browserSessions[0].send).toHaveBeenCalledWith('Target.createTarget', {
+      url: 'about:blank#fluentread-background-controlled-background-marker', background: true});
+    expect(calls.filter(([method]) => method === 'Browser.setWindowBounds')).toHaveLength(1);
+    expect(calls.filter(([method]) => method === 'Browser.getWindowBounds').length).toBeGreaterThanOrEqual(3);
+    expect(f.events.filter(event => event === 'frontmost-read')).toHaveLength(13);
+    expect(session.windowPlacement.browserFrontmost).toBe(false);
+    expect((session.windowPlacement.focusSafety as {samples: Array<{stage: string}>}).samples.map(sample => sample.stage))
+      .toEqual(['before-target', 'after-target', 'after-placement', 'before-return']);
+    await session.close();
+  });
+
   it('原background仍带-g及Target.background并拒绝自有Edge成为前台', async () => {
     const f = controlledNativeHelper({background: true});
     await expect(f.launch()).rejects.toThrow(/成为.*前台/u);
     expect(f.execFile.mock.calls.find(([command]) => command === '/usr/bin/open')?.[1]?.[0]).toBe('-g');
-    expect(f.browserSessions[0].send).toHaveBeenCalledWith('Target.createTarget', {
-      url: 'about:blank#fluentread-background-controlled-background-marker', background: true});
+    expect(f.browserSessions[0].send).not.toHaveBeenCalledWith('Target.createTarget', expect.anything());
     expect(f.context.newPage).not.toHaveBeenCalled(); expect(f.guardedClose).toHaveBeenCalledOnce();
     expectNoProfileRemoval(f);
+  });
+
+  it.each([
+    {stage: 'before-target', sequence: [99001, 72191], creates: false, positions: false},
+    {stage: 'after-target', sequence: [99001, 99001, 72191], creates: true, positions: false},
+    {stage: 'after-placement', sequence: [99001, 99001, 99001, 72191], creates: true, positions: true},
+    {stage: 'before-return', sequence: [99001, 99001, 99001, 99001, 72191], creates: true, positions: true},
+  ])('后台页签在 $stage 检测到隔离浏览器前台时停止并保存该次证据', async ({stage, sequence, creates, positions}) => {
+    const f = controlledNativeHelper({background: true, frontmostSequence: sequence});
+    const error = await f.launch().then(() => null, caught => caught as Error & {code?: string; focusSafety?: {
+      browserPid: number; targetId: string | null; samples: Array<{stage: string; application: {pid: number} | null}>;
+    }});
+    expect(error).toMatchObject({code: 'FOCUS_SAFETY_VIOLATION', focusSafety: {browserPid: f.ownedPid}});
+    expect(error!.focusSafety!.samples.at(-1)).toMatchObject({stage, application: {pid: f.ownedPid}});
+    expect(error!.message).toContain('前台检查记录');
+    expect(error!.focusSafety!.targetId).toBe(creates ? 'controlled-background-target' : null);
+    const calls = f.browserSessions.flatMap(session => session.send.mock.calls.map(([method]) => method));
+    expect(calls.includes('Target.createTarget')).toBe(creates);
+    expect(calls.includes('Browser.getWindowForTarget')).toBe(positions);
+    expect(calls.includes('Target.closeTarget')).toBe(creates);
+    expect(f.context.newPage).not.toHaveBeenCalled(); expect(f.guardedClose).toHaveBeenCalledOnce();
+    for (const session of f.browserSessions) expect(session.detach).toHaveBeenCalledOnce();
+    expectNoProfileRemoval(f);
+  });
+
+  it('无法读取前台应用时保留未知状态并停止，不创建页签', async () => {
+    const f = controlledNativeHelper({background: true, frontmostSequence: [99001, null]});
+    const error = await f.launch().then(() => null, caught => caught as Error & {focusSafety?: {
+      samples: Array<{stage: string; application: unknown}>;
+    }});
+    expect(error!.message).toContain('无法读取 macOS 前台应用');
+    expect(error!.focusSafety!.samples.at(-1)).toMatchObject({stage: 'before-target', application: null});
+    expect(f.browserSessions[0].send).not.toHaveBeenCalledWith('Target.createTarget', expect.anything());
+    expectNoProfileRemoval(f);
+  });
+
+  it('后续建页失败时清除上一页成功的前台快照并保留本次失败阶段', async () => {
+    const f = controlledNativeHelper({background: true,
+      frontmostSequence: [99001, 99001, 99001, 99001, 99001, 99001, 72191]});
+    const session = await f.launch();
+    try {
+      const previous = session.windowPlacement.focusSafety;
+      expect(session.windowPlacement.browserFrontmost).toBe(false);
+      const error = await f.helper.newPageWithoutForeground(f.context).then(() => null, caught => caught as Error & {
+        focusSafety?: {samples: Array<{stage: string; application: {pid: number} | null}>};
+      });
+      expect(error).toBeTruthy();
+      expect(session.windowPlacement.browserFrontmost).toBe(true);
+      expect(session.windowPlacement.frontmostAfter).toMatchObject({pid: f.ownedPid});
+      expect(session.windowPlacement.focusSafety).not.toBe(previous);
+      expect(error!.focusSafety!.samples.map(sample => sample.stage)).toEqual(['before-target', 'after-target']);
+      expect(error!.focusSafety!.samples.at(-1)?.application?.pid).toBe(f.ownedPid);
+      expect(f.browserSessions.at(-1)!.send).toHaveBeenCalledWith('Target.closeTarget', {targetId: 'controlled-background-target'});
+      const sessionsBefore = f.browserSessions.length;
+      await expect(f.helper.newPageWithoutForeground(f.context)).rejects.toBe(error);
+      expect(f.browserSessions).toHaveLength(sessionsBefore);
+    } finally {await session.close();}
+  });
+
+  it('窗口定位错误不得把先前阶段的非前台快照标为建页成功', async () => {
+    const options: FixtureOptions = {background: true, frontmostPid: 99001};
+    const f = controlledNativeHelper(options);
+    const session = await f.launch();
+    try {
+      const original = new Error('window readback failed');
+      options.readbackError = original;
+      const error = await f.helper.newPageWithoutForeground(f.context).then(() => null, caught => caught as Error & {
+        focusSafety?: {outcome: string; samples: Array<{stage: string}>};
+      });
+      expect(error).toBe(original);
+      expect(error!.focusSafety).toMatchObject({outcome: 'incomplete'});
+      expect(error!.focusSafety!.samples.map(sample => sample.stage)).toEqual(['before-target', 'after-target']);
+      expect(session.windowPlacement.browserFrontmost).toBeNull();
+      expect(session.windowPlacement.frontmostAfter).toBeNull();
+      expect(f.browserSessions.at(-1)!.send).toHaveBeenCalledWith('Target.closeTarget', {targetId: 'controlled-background-target'});
+    } finally {await session.close();}
+  });
+
+  it('并发建页中一次检测失败后，较早开始但迟到的安全读数也不能继续建页', async () => {
+    const f = controlledNativeHelper({background: true, delayedFrontmostRead: 6,
+      frontmostSequence: [99001, 99001, 99001, 99001, 99001, 99001, 99001, 72191]});
+    const session = await f.launch();
+    try {
+      const first = f.helper.newPageWithoutForeground(f.context).then(() => null, error => error);
+      const second = f.helper.newPageWithoutForeground(f.context).then(() => null, error => error);
+      const failure = await first;
+      expect(failure).toMatchObject({code: 'FOCUS_SAFETY_VIOLATION'});
+      f.releaseFocusCheck();
+      expect(await second).toBe(failure);
+      const methods = f.browserSessions.flatMap(item => item.send.mock.calls.map(([method]) => method));
+      // 含 launch 时的一次，以及并发两次中唯一在故障前创建的一次。
+      expect(methods.filter(method => method === 'Target.createTarget')).toHaveLength(2);
+      expect(methods.filter(method => method === 'Target.closeTarget')).toHaveLength(1);
+      expect(session.windowPlacement.browserFrontmost).toBe(true);
+    } finally {f.releaseFocusCheck(); await session.close();}
+  });
+
+  it('并发页签已进入窗口定位时，另一页检测前台后不得继续设置窗口', async () => {
+    const options: FixtureOptions = {background: true, delayedWindowRead: 2,
+      frontmostSequence: [99001, 99001, 99001, 99001, 99001, 99001, 99001, 99001, 72191]};
+    const f = controlledNativeHelper(options);
+    const session = await f.launch();
+    try {
+      // 假设此窗口需要重新定位；让第一条建页在定位读回时挂起。
+      options.observedBounds = {left: 0, top: 0, width: 1280, height: 900, windowState: 'normal'};
+      const first = f.helper.newPageWithoutForeground(f.context).then(() => null, error => error);
+      await f.delayedWindowEntered;
+      const failure = await f.helper.newPageWithoutForeground(f.context).then(() => null, error => error);
+      expect(failure).toMatchObject({code: 'FOCUS_SAFETY_VIOLATION'});
+      f.releaseWindowRead();
+      expect(await first).toBe(failure);
+      const methods = f.browserSessions.flatMap(item => item.send.mock.calls.map(([method]) => method));
+      // launch 设置一次；第一条建页在被打断后不得再写窗口。
+      expect(methods.filter(method => method === 'Browser.setWindowBounds')).toHaveLength(1);
+      expect(methods.filter(method => method === 'Target.closeTarget')).toHaveLength(2);
+      expect(session.windowPlacement.browserFrontmost).toBe(true);
+    } finally {f.releaseWindowRead(); await session.close();}
+  });
+
+  it.each(['before-target', 'before-return'])('共享故障在 %s 检查返回后的微任务间隙发生时立即停止', async phase => {
+    const f = controlledNativeHelper({background: true, frontmostPid: 99001});
+    const session = await f.launch();
+    const state = f.helper.__testBackgroundState(f.context);
+    const failure = Object.assign(new Error('concurrent focus violation'), {code: 'FOCUS_SAFETY_VIOLATION'});
+    let last = session.windowPlacement.frontmostAfter, injected = false;
+    Object.defineProperty(session.windowPlacement, 'frontmostAfter', {
+      configurable: true,
+      get: () => last,
+      set: value => {
+        last = value;
+        const evidence = session.windowPlacement.focusSafety as {samples: Array<{stage: string}>};
+        if (!injected && evidence?.samples.at(-1)?.stage === phase) {
+          injected = true;
+          // 模拟另一条建页在检查完成、调用方恢复前锁存前台故障。
+          queueMicrotask(() => {state.focusViolation = failure; session.windowPlacement.browserFrontmost = true;});
+        }
+      },
+    });
+    try {
+      expect(await f.helper.newPageWithoutForeground(f.context).then(() => null, error => error)).toBe(failure);
+      expect(injected).toBe(true);
+      const methods = f.browserSessions.flatMap(item => item.send.mock.calls.map(([method]) => method));
+      expect(methods.filter(method => method === 'Target.createTarget')).toHaveLength(phase === 'before-target' ? 1 : 2);
+      expect(methods.filter(method => method === 'Target.closeTarget')).toHaveLength(phase === 'before-target' ? 0 : 1);
+    } finally {await session.close();}
+  });
+
+  it('浏览器 CDP 会话创建失败时标记本次建页未完成并清除旧快照', async () => {
+    const f = controlledNativeHelper({background: true, frontmostPid: 99001});
+    const session = await f.launch();
+    const failure = new Error('controlled session creation failure');
+    f.browser.newBrowserCDPSession.mockRejectedValueOnce(failure);
+    try {
+      const error = await f.helper.newPageWithoutForeground(f.context).then(() => null, caught => caught);
+      expect(error).toBe(failure);
+      expect(error.focusSafety).toMatchObject({outcome: 'incomplete', targetId: null, samples: []});
+      expect(session.windowPlacement.browserFrontmost).toBeNull();
+      expect(session.windowPlacement.frontmostAfter).toBeNull();
+    } finally {await session.close();}
   });
 
   it.each([
@@ -2690,4 +3246,22 @@ describe('macOS 前台 native CDP helper 的启动与窗口契约（受控端口
       expect(f.execFile).not.toHaveBeenCalled(); expectNoProfileRemoval(f);
     }
   });
+});
+
+
+describe('划词生命周期 CLI 诊断前置', () => {
+    it('需要诊断的专项均在启动资源前拒绝缺失采集器，其余模式保留原有参数校验', () => {
+        const script = resolve(PROJECT_ROOT, 'scripts/run-selection-trigger-test.cjs');
+        for (const mode of ['--lifecycle-only', '--document-shell-only', '--click-selection-only', '--click-selection-stress-only', '--context-menu-only', '--editable-selection-only', '--geometry-only', '--zoom-only']) {
+            const result = spawnSync(process.execPath, [script, mode], {encoding: 'utf8'});
+            expect(result.status).toBe(1);
+            expect(result.stderr).toContain('划词专项需要 --runtime-diagnostics');
+        }
+        for (const mode of ['--direction-only']) {
+            const result = spawnSync(process.execPath, [script, mode], {encoding: 'utf8'});
+            expect(result.status).toBe(1);
+            expect(result.stderr).toContain('必须传入 --playwright-root');
+            expect(result.stderr).not.toContain('划词专项需要 --runtime-diagnostics');
+        }
+    });
 });

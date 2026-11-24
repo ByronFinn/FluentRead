@@ -226,6 +226,170 @@ afterEach(() => {
 });
 
 describe('局部翻译选择模式', () => {
+    it('预览中的正文变化重新盘点，自有操作条的 pointerup 保留原生点击',async()=>{
+        const h=await createHarness();h.picker.startSectionPicker(h.options as never);h.flushFrames();
+        const event=h.emit('pointerup',{composedPath:()=>[h.host(),h.document.body]});expect(event.preventDefault).not.toHaveBeenCalled();expect(event.stopImmediatePropagation).not.toHaveBeenCalled();
+        h.byId('para').append(' New readable text');h.emitMutation(h.byId('para'));vi.advanceTimersByTime(90);h.flushFrames();
+        expect(h.inspect).toHaveBeenCalledWith(h.byId('para'));expect(h.onPick).not.toHaveBeenCalled();h.picker.stopSectionPicker();
+    });
+    it('锁定正文的大批插入与随后的属性变化共用已经排队的开放根扫描',async()=>{
+        const h=await createHarness();h.picker.startSectionPicker(h.options as never);h.flushFrames();h.emit('click',{clientX:50,clientY:70});
+        const added=h.document.createElement('span');added.innerHTML='<span>new text</span>'.repeat(300);h.byId('para').appendChild(added);h.emitMutation(h.byId('para'),[added]);
+        h.emitAttribute(h.byId('para'));h.flushFrames();vi.advanceTimersByTime(90);h.flushFrames();
+        expect(h.host()!.getAttribute('data-selection-state')).toBe('locked');expect(h.inspect).toHaveBeenCalledWith(h.byId('para'));h.picker.stopSectionPicker();
+    });
+    it('扩大大量独立区域时避免逐对读取父级，并可缩回原选区', async () => {
+        const h = await createHarness({initialPoint: {x: 50, y: 2}});
+        const count = 120;
+        const paragraphs: HTMLElement[] = [];
+        const wrappers: HTMLElement[] = [];
+        let parentReads = 0;
+        for (let index = 0; index < count; index++) {
+            const wrapper = h.document.createElement('section');
+            const paragraph = h.document.createElement('p');
+            paragraph.textContent = `Readable paragraph ${index}`;
+            wrapper.getBoundingClientRect = () => rect(20, index * 4, 500, 30) as DOMRect;
+            paragraph.getBoundingClientRect = () => rect(30, index * 4, 400, 20) as DOMRect;
+            wrapper.append(paragraph); h.document.body.append(wrapper);
+            const parent = wrapper.parentElement;
+            Object.defineProperty(wrapper, 'parentElement', {configurable: true, get() { parentReads++; return parent; }});
+            wrappers.push(wrapper); paragraphs.push(paragraph);
+        }
+        h.document.elementFromPoint = (_x, y) => paragraphs[Math.min(count - 1, Math.max(0, Math.floor(y / 4)))]!;
+        h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 2});
+        for (let index = 1; index < count; index++) h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: index * 4 + 2});
+        h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: (count - 1) * 4 + 2});
+        h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.host()!.getAttribute('data-selection-count')).toBe(String(count - 1));
+        parentReads = 0;
+        clickButton(h, 'expand');
+        expect(parentReads).toBeLessThan(25_000);
+        h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenLastCalledWith(wrappers.filter((_wrapper, index) => index !== 1));
+        clickButton(h, 'shrink'); h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenLastCalledWith(paragraphs.filter((_paragraph, index) => index !== 1));
+        h.picker.stopSectionPicker();
+    });
+
+    it.each([511, 512])('扩大选区时保留 %i 层 composed 祖先边界', async distance => {
+        const h = await createHarness({initialPoint: {x: 50, y: 70}});
+        const outer = h.document.createElement('article');
+        outer.getBoundingClientRect = () => rect(10, 30, 700, 300) as DOMRect;
+        h.document.body.append(outer);
+        let inner = outer;
+        for (let depth = 0; depth < distance; depth++) {
+            const next = h.document.createElement('section'); inner.append(next); inner = next;
+        }
+        inner.getBoundingClientRect = () => rect(20, 50, 500, 100) as DOMRect;
+        const first = h.document.createElement('p'); first.textContent = 'First readable paragraph';
+        first.getBoundingClientRect = () => rect(30, 60, 400, 40) as DOMRect; inner.append(first);
+        const second = h.document.createElement('p'); second.textContent = 'Second readable paragraph';
+        second.getBoundingClientRect = () => rect(30, 120, 400, 40) as DOMRect; outer.append(second);
+        h.document.elementFromPoint = (_x, y) => y < 110 ? first : second;
+        h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 70});
+        h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 130});
+        h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 130}); h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenLastCalledWith([first, second]);
+        clickButton(h, 'expand'); h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenLastCalledWith(distance === 511 ? outer : [inner, outer]);
+        h.picker.stopSectionPicker();
+    });
+
+    it('扩大跨开放 ShadowRoot 的多选时只保留已选组合祖先', async () => {
+        const h = await createHarness({initialPoint: {x: 50, y: 70}});
+        const outer = h.document.createElement('article');
+        outer.getBoundingClientRect = () => rect(10, 30, 700, 300) as DOMRect;
+        h.document.body.append(outer);
+        const host = h.document.createElement('div'); outer.append(host);
+        const shadow = host.attachShadow({mode: 'open'});
+        const inner = h.document.createElement('section');
+        inner.getBoundingClientRect = () => rect(20, 50, 500, 100) as DOMRect; shadow.append(inner);
+        const first = h.document.createElement('p'); first.textContent = 'First readable paragraph';
+        first.getBoundingClientRect = () => rect(30, 60, 400, 40) as DOMRect; inner.append(first);
+        const second = h.document.createElement('p'); second.textContent = 'Second readable paragraph';
+        second.getBoundingClientRect = () => rect(30, 120, 400, 40) as DOMRect; outer.append(second);
+        h.document.elementFromPoint = (_x, y) => y < 110 ? host : second;
+        shadow.elementFromPoint = () => first;
+        h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 70});
+        h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 130});
+        h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 130}); h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenLastCalledWith([first, second]);
+        clickButton(h, 'expand'); h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenLastCalledWith(outer);
+        clickButton(h, 'shrink'); h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenLastCalledWith([first, second]);
+        h.picker.stopSectionPicker();
+    });
+    it('真实选择器在指针会话交接时退出未确认选择，旧释放不影响新模式', async () => {
+        const h = await createHarness();
+        // createHarness 重置模块后再加载，必须与真实 picker 使用同一份会话身份。
+        const {claimPointerSelectionSession} = await import('@/src/shared/dom/pointerSelectionSession');
+        const previous = vi.fn(), next = vi.fn(), latest = vi.fn();
+        const releasePrevious = claimPointerSelectionSession(previous);
+        expect(h.picker.startSectionPicker(h.options as never)).toBe(true);
+        h.flushFrames();
+        expect(previous).toHaveBeenCalledOnce();
+        expect(h.picker.isSectionPickerActive()).toBe(true);
+        expect(h.host()).not.toBeNull();
+        const releaseNext = claimPointerSelectionSession(next);
+        expect(h.host()).toBeNull();
+        expect(h.picker.isSectionPickerActive()).toBe(false);
+        expect(h.onPick).not.toHaveBeenCalled();
+        releasePrevious();
+        h.picker.stopSectionPicker();
+        const releaseLatest = claimPointerSelectionSession(latest);
+        expect(next).toHaveBeenCalledOnce();
+        releaseNext();
+        releaseLatest();
+        expect(latest).not.toHaveBeenCalled();
+    });
+
+    it('从段落间隙起划时收窄到实际经过的段落，往返经过外壳不扩大或丢失已选块', async () => {
+        const h = await createHarness({initialPoint: {x: 50, y: 110}});
+        h.document.elementFromPoint = (_x, y) => y >= 60 && y <= 100 ? h.byId('para')
+            : y >= 120 && y <= 160 ? h.byId('second') : h.byId('readme');
+        h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 110});
+        h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 80});
+        h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.inspect).not.toHaveBeenCalled();
+        expect(h.host()!.getAttribute('data-selection-count')).toBe('1');
+        expect(query(h.shadow(), '.fr-section-label-action').textContent).toBe('sectionTranslation.picker.dragging');
+        h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 140});
+        h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 110});
+        h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 110});
+        h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.host()!.getAttribute('data-selection-count')).toBe('2');
+        expect(h.host()!.getAttribute('data-selection-state')).toBe('locked');
+        expect(h.shadow().querySelectorAll('.fr-section-box.is-visible')).toHaveLength(2);
+        expect(h.onPick).not.toHaveBeenCalled();
+        h.emit('keydown', {key: 'Enter'});
+        expect(h.onPick).toHaveBeenCalledWith([h.byId('para'), h.byId('second')]);
+    });
+
+    it('单击间隙仍可锁定文章，段落的方向键扩大和缩小保留原范围语义', async () => {
+        const h = await createHarness({initialPoint: null});
+        h.hit.current = h.byId('readme');
+        h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 110});
+        h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 110});
+        h.emit('click', {clientX: 50, clientY: 110}); h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenLastCalledWith(h.byId('readme'));
+        expect(h.host()!.getAttribute('data-selection-state')).toBe('locked');
+        clickButton(h, 'reselect');
+        h.hit.current = h.byId('para');
+        h.emit('pointermove', {clientX: 50, clientY: 80}); h.flushFrames(); vi.advanceTimersByTime(90);
+        h.emit('keydown', {key: 'ArrowUp'}); h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenLastCalledWith(h.byId('readme'));
+        h.emit('keydown', {key: 'ArrowDown'}); h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenLastCalledWith(h.byId('para'));
+        h.emit('keydown', {key: 'Enter'});
+        expect(h.onPick).toHaveBeenCalledWith(h.byId('para'));
+    });
+
     it('按住左键划过两段逐块高亮并去重，松开只锁定，确认一次交付精确区域', async () => {
         const h = await createHarness();
         h.picker.startSectionPicker(h.options as never); h.flushFrames();
@@ -251,10 +415,153 @@ describe('局部翻译选择模式', () => {
         expect(h.host()!.getAttribute('data-selection-state')).toBe('locked');
         expect(h.onPick).not.toHaveBeenCalled();
         expect(h.inspect).toHaveBeenLastCalledWith([h.byId('para'), h.byId('second')]);
+        expect(query(h.shadow(), '.fr-section-label-meta').textContent).toBe('sectionTranslation.scope.selected:{"count":2}');
+        expect(query(h.shadow(), '.fr-section-bar-instruction').textContent).toBe('sectionTranslation.label.translate:{"count":2}');
+        expect(query(h.shadow(), '.fr-section-bar-heading').classList.contains('is-locked')).toBe(true);
+        expect(h.shadow().querySelector('.fr-section-bar-preview')).toBeNull();
+        expect(h.shadow().querySelector('.fr-section-bar-keys')).toBeNull();
         clickButton(h, 'confirm');
         expect(h.onPick).toHaveBeenCalledOnce();
         expect(h.onPick).toHaveBeenCalledWith([h.byId('para'), h.byId('second')]);
         expect(h.shadow().querySelectorAll('.fr-section-box.is-confirmed')).toHaveLength(2);
+    });
+
+    it('同帧划选复用命中解析，下一帧重新读取布局与父级', async () => {
+        const h = await createHarness(); h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 70});
+        const paragraph = h.byId('second');
+        const display = vi.spyOn(h.document.defaultView!, 'getComputedStyle');
+        const bounds = vi.spyOn(paragraph, 'getBoundingClientRect');
+        const elementAtPoint = vi.fn(() => paragraph);
+        h.document.elementFromPoint = elementAtPoint;
+        h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 838});
+        expect(elementAtPoint).not.toHaveBeenCalled();
+        h.flushFrames();
+        expect(elementAtPoint).toHaveBeenCalledTimes(64);
+        // 解析读取 display 一次；绘制可以另外读取 visibility 与实际矩形。
+        const paragraphDisplayReads = display.mock.calls.filter(([element]) => element === paragraph).length;
+        expect(paragraphDisplayReads).toBeLessThan(6);
+        expect(bounds.mock.calls.length).toBeLessThan(6);
+        // 缓存只属于当前帧；页面下一帧把原命中块改成行内后，必须重新找到父级。
+        const parent = h.document.createElement('section');
+        parent.getBoundingClientRect = () => rect(25, 110, 500, 100) as DOMRect;
+        paragraph.replaceWith(parent); parent.append(paragraph);
+        display.mockImplementation(element => ({display: element === paragraph ? 'inline' : 'block'}) as CSSStyleDeclaration);
+        display.mockClear();
+        h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 70});
+        h.flushFrames();
+        expect(display.mock.calls.filter(([element]) => element === paragraph).length).toBeGreaterThan(0);
+        expect(display.mock.calls.filter(([element]) => element === parent).length).toBeGreaterThan(0);
+        h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 70}); h.flushFrames(); vi.advanceTimersByTime(90);
+        clickButton(h, 'confirm');
+        // 已选中的具体段落不会因后续命中更宽父级而被扩大。
+        expect(h.onPick).toHaveBeenCalledWith([h.byId('para'), paragraph]);
+    });
+
+    it('同次事件保留途经的不同段落、间隙与折返命中', async () => {
+        const h = await createHarness(); h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        const third = h.document.createElement('p'); third.textContent = 'Third paragraph';
+        third.getBoundingClientRect = () => rect(30, 180, 400, 40) as DOMRect;
+        h.byId('readme').append(third);
+        h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 70});
+        h.document.elementFromPoint = (_x, y) => y < 100 ? h.byId('para') : y < 120 ? null
+            : y < 160 ? h.byId('second') : y < 180 ? h.byId('readme') : y < 220 ? third : h.byId('para');
+        h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 300});
+        h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 300}); h.flushFrames(); vi.advanceTimersByTime(90);
+        clickButton(h, 'confirm');
+        expect(h.onPick).toHaveBeenCalledWith([h.byId('para'), h.byId('second'), third]);
+    });
+
+    it('同帧折线路径保留转角途经区域，只合并提交一次且松手前不盘点正文', async () => {
+        const h = await createHarness(); h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        const third = h.document.createElement('p'); third.textContent = 'Third corner paragraph';
+        third.getBoundingClientRect = () => rect(500, 120, 200, 40) as DOMRect;
+        h.byId('readme').append(third);
+        h.document.elementFromPoint = (x, y) => y < 110 ? h.byId('para') : x < 450 ? h.byId('second') : third;
+        h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 70});
+        h.mutationObserver.disconnect.mockClear();
+        h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 140});
+        for (let x = 60; x <= 550; x += 10) h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: x, clientY: 140});
+        h.flushFrames();
+        expect(h.host()!.getAttribute('data-selection-count')).toBe('3');
+        // 开始划选一次，整批新范围一次；不会按五十多个事件反复重建观察。
+        expect(h.mutationObserver.disconnect).toHaveBeenCalledTimes(2);
+        vi.advanceTimersByTime(500);
+        expect(h.inspect).not.toHaveBeenCalled();
+        h.emit('pointerup', {pointerId: 1, clientX: 550, clientY: 140});
+        vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenCalledOnce();
+        expect(h.inspect).toHaveBeenCalledWith([h.byId('para'), h.byId('second'), third]);
+        clickButton(h, 'confirm');
+        expect(h.onPick).toHaveBeenCalledWith([h.byId('para'), h.byId('second'), third]);
+    });
+
+    it('松手在绘制帧之前到达时同步收齐路径，滚动后不把旧坐标落点误加入', async () => {
+        const h = await createHarness(); h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        h.document.elementFromPoint = (_x, y) => y < 110 ? h.byId('para') : h.byId('second');
+        h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 70});
+        h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 140});
+        h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 140});
+        vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenCalledWith([h.byId('para'), h.byId('second')]);
+        h.picker.stopSectionPicker();
+
+        h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        h.inspect.mockClear();
+        h.emit('pointerdown', {pointerId: 2, clientX: 50, clientY: 70});
+        h.emit('pointermove', {pointerId: 2, buttons: 1, clientX: 50, clientY: 140});
+        h.emit('scroll');
+        h.emit('pointerup', {pointerId: 2, clientX: 50, clientY: 140});
+        vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenCalledWith(h.byId('para'));
+        h.picker.stopSectionPicker();
+    });
+
+    it('稳定窗结束前收到新位置但尚未绘制时，旧候选和迟到回调不会闪现', async () => {
+        const h = await createHarness();
+        const timers = vi.spyOn(globalThis, 'setTimeout');
+        h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        h.hit.current = h.byId('second');
+        h.emit('pointermove', {clientX: 50, clientY: 140}); h.flushFrames();
+        const obsolete = timers.mock.calls.find(([, delay]) => delay === 80)![0] as () => void;
+        vi.advanceTimersByTime(79);
+        h.hit.current = h.byId('para');
+        h.emit('pointermove', {clientX: 50, clientY: 70});
+        vi.advanceTimersByTime(1); h.flushFrames();
+        expect(query(h.shadow(), '.fr-section-box').style.transform).toBe('translate(27px, 57px)');
+        h.hit.current = h.byId('second');
+        h.emit('pointermove', {clientX: 50, clientY: 140}); h.flushFrames();
+        obsolete(); h.flushFrames();
+        expect(query(h.shadow(), '.fr-section-box').style.transform).toBe('translate(27px, 57px)');
+        vi.advanceTimersByTime(80); h.flushFrames();
+        expect(query(h.shadow(), '.fr-section-box').style.transform).toBe('translate(27px, 117px)');
+        h.picker.stopSectionPicker();
+    });
+
+    it('无关侧栏滚动保留待绘制路径，路径所在的嵌套滚动区变化才撤销旧坐标', async () => {
+        const h = await createHarness();
+        const side = h.document.createElement('aside');
+        side.getBoundingClientRect = () => rect(800, 0, 200, 700) as DOMRect;
+        h.document.body.append(side);
+        const start = () => {
+            h.hit.current = h.byId('para');
+            h.picker.startSectionPicker(h.options as never); h.flushFrames(); h.inspect.mockClear();
+            h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 70});
+            h.hit.current = h.byId('second');
+            h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 140});
+        };
+        start();
+        h.emit('scroll', {target: side});
+        h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 140});
+        vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenCalledWith([h.byId('para'), h.byId('second')]);
+        h.picker.stopSectionPicker();
+        start();
+        h.emit('scroll', {target: h.byId('readme')});
+        h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 140});
+        vi.advanceTimersByTime(90);
+        expect(h.inspect).toHaveBeenCalledWith(h.byId('para'));
+        h.picker.stopSectionPicker();
     });
 
     it('划选整组支持扩大、缩回原来的两个区域和重新选择', async () => {
@@ -277,14 +584,18 @@ describe('局部翻译选择模式', () => {
 
     it('划选非首段的正文变化刷新摘要，隐藏或移除该段使整组无法确认', async () => {
         for (const invalidation of ['remove', 'hidden']) {
-            const h = await createHarness(); h.picker.startSectionPicker(h.options as never); h.flushFrames();
+            const h = await createHarness();
+            h.inspect.mockImplementation((regions: Element | readonly Element[]) => summary({
+                total: 3, pending: Array.isArray(regions) && regions.some(region => region.textContent === 'Updated paragraph') ? 3 : 2,
+            }));
+            h.picker.startSectionPicker(h.options as never); h.flushFrames();
             h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 70});
             h.hit.current = h.byId('second');
             h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 130});
             h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 130}); h.flushFrames(); vi.advanceTimersByTime(90);
             const second = h.byId('second'); second.textContent = 'Updated paragraph';
             h.emitMutation(second); vi.advanceTimersByTime(90); h.flushFrames();
-            expect(query(h.shadow(), '.fr-section-bar-preview').textContent).toContain('Updated paragraph');
+            expect(query(h.shadow(), '.fr-section-bar-instruction').textContent).toBe('sectionTranslation.label.translate:{"count":3}');
             expect(h.inspect).toHaveBeenLastCalledWith([h.byId('para'), second]);
             h.emitResize(); h.flushFrames();
             if (invalidation === 'remove') { second.remove(); h.hit.current = null; h.emitMutation(h.byId('readme')); }
@@ -303,12 +614,31 @@ describe('局部翻译选择模式', () => {
             h.hit.current = h.byId('second'); h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 130});
             h.emit('pointercancel', {pointerId: 2});
             if (exit === 'Escape') h.emit('keydown', {key: 'Escape'});
-            else h.emit(exit, {pointerId: 1});
+            else h.emit(exit, {pointerId: 1, target: exit === 'blur' ? window : undefined});
             h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 130}); h.flushFrames();
             expect(h.onPick).not.toHaveBeenCalled();
             if (h.host()) expect(h.host()!.getAttribute('data-selection-state')).toBe('preview');
             h.picker.stopSectionPicker();
         }
+    });
+
+    it('捕获到网页元素或旧选择器的失焦时保留划选，松开仍只锁定等待确认', async () => {
+        const h = await createHarness(); h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 70});
+        h.hit.current = h.byId('second');
+        h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 130}); h.flushFrames();
+        const oldHost = h.document.createElement('fluent-read-section-picker');
+        for (const target of [h.byId('para'), oldHost]) h.emit('blur', {target});
+        h.flushFrames(); vi.advanceTimersByTime(320);
+        expect(h.host()!.getAttribute('data-selection-state')).toBe('dragging');
+        expect(h.host()!.getAttribute('data-selection-count')).toBe('2');
+        h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 130});
+        h.emit('click', {clientX: 50, clientY: 130}); h.flushFrames(); vi.advanceTimersByTime(90);
+        expect(h.host()!.getAttribute('data-selection-state')).toBe('locked');
+        expect(h.onPick).not.toHaveBeenCalled();
+        clickButton(h, 'confirm');
+        expect(h.onPick).toHaveBeenCalledOnce();
+        expect(h.onPick).toHaveBeenCalledWith([h.byId('para'), h.byId('second')]);
     });
 
     it('伪造、非左键、非主指针和触屏拖动不启动划选，普通点击与触屏滚动保持原行为', async () => {
@@ -385,7 +715,7 @@ describe('局部翻译选择模式', () => {
             h.hit.current = null; h.emit('scroll'); h.flushFrames();
             expect(h.host()!.getAttribute('data-selection-state')).toBe('preview');
             expect(h.shadow().querySelectorAll('.fr-section-box.is-visible')).toHaveLength(0);
-            h.emit('pointercancel', {pointerId: 1}); h.emit('pointercancel', {isTrusted: false}); h.emit('blur'); h.emit('blur', {isTrusted: false});
+            h.emit('pointercancel', {pointerId: 1}); h.emit('pointercancel', {isTrusted: false}); h.emit('blur', {target: window}); h.emit('blur', {isTrusted: false, target: window});
             h.picker.stopSectionPicker();
         }
     });
@@ -413,7 +743,9 @@ describe('局部翻译选择模式', () => {
         expect(query(shadow, '.fr-section-bar-instruction').getAttribute('role')).toBe('status');
         expect(query(shadow, '.fr-section-bar-instruction').getAttribute('aria-live')).toBe('polite');
         expect(query(shadow, '.fr-section-bar-actions').getAttribute('role')).toBe('toolbar');
-        expect(query(shadow, '.fr-section-bar-preview').textContent).toBe('Hello world');
+        expect(shadow.querySelector('.fr-section-bar-preview')).toBeNull();
+        expect(shadow.querySelector('.fr-section-bar-keys')).toBeNull();
+        expect(query(shadow, '.fr-section-bar').textContent).not.toContain('Hello world');
         expect(query(shadow, '.fr-section-bar-close').getAttribute('aria-label')).toBe('sectionTranslation.picker.close');
 
         vi.advanceTimersByTime(90);
@@ -616,7 +948,7 @@ describe('局部翻译选择模式', () => {
         vi.advanceTimersByTime(1);
         expect(button(harness, 'confirm').disabled).toBe(false);
         expect(harness.inspect).toHaveBeenLastCalledWith(para);
-        expect(query(harness.shadow(), '.fr-section-bar-preview').textContent).toBe('New English source');
+        expect(query(harness.shadow(), '.fr-section-bar-instruction').textContent).toBe('sectionTranslation.label.translate:{"count":2}');
         clickButton(harness, 'confirm');
         expect(harness.onPick).toHaveBeenCalledWith(para);
     });
@@ -777,6 +1109,9 @@ describe('局部翻译选择模式', () => {
     it('锁定正文插入文本和注释只刷新摘要，不为非元素节点扫描影子树', async () => {
         const harness = await createHarness();
         const region = harness.byId('para');
+        harness.inspect.mockImplementation(() => summary({
+            total: 3, pending: region.textContent?.includes('Additional original text') ? 3 : 2,
+        }));
         harness.picker.startSectionPicker(harness.options as never);
         harness.flushFrames();
         harness.emit('click', {clientX: 50, clientY: 70});
@@ -791,7 +1126,8 @@ describe('局部翻译选择模式', () => {
         vi.advanceTimersByTime(90);
         expect(walker).not.toHaveBeenCalled();
         expect(harness.inspect).toHaveBeenCalledOnce();
-        expect(query(harness.shadow(), '.fr-section-bar-preview').textContent).toContain('Additional original text');
+        expect(harness.inspect).toHaveBeenLastCalledWith(region);
+        expect(query(harness.shadow(), '.fr-section-bar-instruction').textContent).toBe('sectionTranslation.label.translate:{"count":3}');
         harness.picker.stopSectionPicker();
     });
 
@@ -1027,7 +1363,11 @@ describe('局部翻译选择模式', () => {
         harness.picker.startSectionPicker(harness.options as never);
         harness.flushFrames();
         for (const name of ['expand', 'shrink', 'reselect', 'confirm']) {
-            expect(button(harness, name).textContent).toBe(`sectionTranslation.picker.${name}`);
+            if (name === 'expand' || name === 'shrink') {
+                expect(button(harness, name).textContent).toBe(name === 'expand' ? '＋' : '−');
+                expect(button(harness, name).getAttribute('aria-label')).toBe(`sectionTranslation.picker.${name}`);
+                expect(button(harness, name).title).toBe(`sectionTranslation.picker.${name}`);
+            } else expect(button(harness, name).textContent).toBe(`sectionTranslation.picker.${name}`);
             expect(button(harness, name).hidden).toBe(false);
             expect(button(harness, name).type).toBe('button');
         }
@@ -1055,7 +1395,8 @@ describe('局部翻译选择模式', () => {
         harness.flushFrames();
         expect(harness.host()!.getAttribute('data-selection-state')).toBe('preview');
         expect(query(harness.shadow(), '.fr-section-box').classList.contains('is-visible')).toBe(false);
-        expect(query(harness.shadow(), '.fr-section-bar-preview').hidden).toBe(true);
+        expect(query(harness.shadow(), '.fr-section-bar-instruction').textContent).toBe('sectionTranslation.picker.preview');
+        expect(query(harness.shadow(), '.fr-section-bar-heading').classList.contains('is-locked')).toBe(false);
         for (const name of ['expand', 'shrink', 'reselect', 'confirm']) expect(button(harness, name).disabled).toBe(true);
         expect(harness.onPick).not.toHaveBeenCalled();
 
@@ -1063,7 +1404,7 @@ describe('局部翻译选择模式', () => {
         harness.emit('pointermove', {clientX: 60, clientY: 130});
         harness.flushFrames();
         expect(query(harness.shadow(), '.fr-section-box').style.transform).toBe('translate(27px, 117px)');
-        expect(query(harness.shadow(), '.fr-section-bar-preview').textContent).toBe('Second paragraph');
+        expect(harness.resizeObserver.observe).toHaveBeenLastCalledWith(harness.byId('second'));
         harness.emit('keydown', {key: 'ArrowDown'});
         expect(query(harness.shadow(), '.fr-section-box').style.width).toBe('406px');
         expect(button(harness, 'confirm').disabled).toBe(true);
@@ -1126,7 +1467,8 @@ describe('局部翻译选择模式', () => {
         expect(harness.inspect).toHaveBeenLastCalledWith(para);
         expect(harness.onPick).not.toHaveBeenCalled();
         expect(button(harness, 'confirm').disabled).toBe(true);
-        expect(query(harness.shadow(), '.fr-section-bar-preview').textContent).toBe('Changed');
+        expect(query(harness.shadow(), '.fr-section-bar-instruction').textContent).toBe(`sectionTranslation.label.${action}`);
+        expect(query(harness.shadow(), '.fr-section-label-action').textContent).toBe(`sectionTranslation.label.${action}`);
         expect(harness.picker.isSectionPickerActive()).toBe(true);
         harness.picker.stopSectionPicker();
     });
@@ -1146,11 +1488,13 @@ describe('局部翻译选择模式', () => {
         para.appendChild(translation);
         harness.emitMutation(para);
         expect(button(harness, 'confirm').disabled).toBe(false);
-        expect(query(harness.shadow(), '.fr-section-bar-preview').textContent).toBe('Hello world');
+        expect(query(harness.shadow(), '.fr-section-bar-instruction').textContent).toBe('sectionTranslation.label.translate:{"count":2}');
         vi.advanceTimersByTime(90);
         expect(button(harness, 'confirm').textContent).toBe('sectionTranslation.picker.restore');
         expect(button(harness, 'confirm').classList.contains('tone-restore')).toBe(true);
         expect(button(harness, 'confirm').disabled).toBe(false);
+        expect(query(harness.shadow(), '.fr-section-bar-instruction').textContent).toBe('sectionTranslation.label.restore:{"count":2}');
+        expect(query(harness.shadow(), '.fr-section-bar').textContent).not.toContain('译文');
         clickButton(harness, 'confirm');
         expect(harness.inspect).toHaveBeenCalledTimes(3);
         expect(harness.onPick).toHaveBeenCalledOnce();
@@ -1182,6 +1526,9 @@ describe('局部翻译选择模式', () => {
     it('观察锁定目标的尺寸和区域外结构变化时重绘，区域内变化重新盘点，退出清理观察器', async () => {
         const harness = await createHarness();
         const para = harness.byId('para');
+        harness.inspect.mockImplementation(() => summary({
+            total: 3, pending: para.textContent?.startsWith('Updated source ') ? 3 : 2,
+        }));
         harness.picker.startSectionPicker(harness.options as never);
         harness.flushFrames();
         expect(harness.mutationObserver.observe).toHaveBeenCalledWith(harness.document.documentElement, expect.objectContaining({childList: true, characterData: true, subtree: true, attributes: true}));
@@ -1216,11 +1563,12 @@ describe('局部翻译选择模式', () => {
         source.textContent = 'Updated source ';
         harness.emitMutation(source);
         expect(button(harness, 'confirm').disabled).toBe(false);
-        expect(query(harness.shadow(), '.fr-section-bar-preview').textContent).toBe('Updated source world');
+        expect(query(harness.shadow(), '.fr-section-bar-instruction').textContent).toBe('sectionTranslation.label.translate:{"count":2}');
         vi.advanceTimersByTime(90);
         expect(harness.inspect).toHaveBeenCalledOnce();
         expect(harness.inspect).toHaveBeenCalledWith(para);
         expect(button(harness, 'confirm').disabled).toBe(false);
+        expect(query(harness.shadow(), '.fr-section-bar-instruction').textContent).toBe('sectionTranslation.label.translate:{"count":3}');
         harness.mutationObserver.disconnect.mockClear();
         harness.resizeObserver.disconnect.mockClear();
         harness.picker.stopSectionPicker();
@@ -1246,9 +1594,10 @@ describe('局部翻译选择模式', () => {
         else harness.emitResize();
         harness.flushFrames();
         expect(query(harness.shadow(), '.fr-section-box').style.transform).toBe('translate(27px, 57px)');
-        expect(query(harness.shadow(), '.fr-section-bar-preview').textContent).toBe('Second paragraph');
+        expect(harness.resizeObserver.observe).toHaveBeenLastCalledWith(harness.byId('second'));
         expect(query(harness.shadow(), '.fr-section-box').classList.contains('is-following')).toBe(false);
         harness.emit('keydown', {key: 'Enter'});
+        expect(harness.inspect).toHaveBeenLastCalledWith(harness.byId('second'));
         expect(harness.onPick).toHaveBeenCalledWith(harness.byId('second'));
     });
 
@@ -1279,7 +1628,11 @@ describe('局部翻译选择模式', () => {
         harness.emitMutation(harness.document.body, [harness.byId('para')]);
         harness.flushFrames();
         expect(query(harness.shadow(), '.fr-section-box').classList.contains('is-visible')).toBe(true);
-        expect(query(harness.shadow(), '.fr-section-bar-preview').textContent).toBe('Hello world');
+        expect(harness.resizeObserver.observe).toHaveBeenLastCalledWith(harness.byId('para'));
+        expect(harness.host()!.getAttribute('data-selection-count')).toBe('1');
+        vi.advanceTimersByTime(90);
+        expect(harness.inspect).toHaveBeenLastCalledWith(harness.byId('para'));
+        expect(query(harness.shadow(), '.fr-section-label-action').textContent).toBe('sectionTranslation.label.translate:{"count":2}');
         harness.picker.stopSectionPicker();
     });
 
@@ -1312,21 +1665,22 @@ describe('局部翻译选择模式', () => {
         harness.picker.stopSectionPicker();
     });
 
-    it('锁定与标签盘点复用原文预览，只有正文变化或确认复核时重新读取', async () => {
+    it('选择器不为辅助摘录扫描正文，仅在延时盘点和确认复核时通过摘要端口读取', async () => {
         const harness = await createHarness();
         const source = harness.byId('para').firstChild!;
         const originalText = source.textContent;
         const reads = vi.fn(() => originalText);
         Object.defineProperty(source, 'textContent', {get: reads});
+        harness.inspect.mockImplementation(() => summary({action: source.textContent ? 'translate' : 'empty'}));
         harness.picker.startSectionPicker(harness.options as never);
         harness.flushFrames();
-        expect(reads).toHaveBeenCalledOnce();
+        expect(reads).not.toHaveBeenCalled();
         harness.emit('click', {clientX: 50, clientY: 70});
         vi.advanceTimersByTime(90);
         harness.flushFrames();
         expect(reads).toHaveBeenCalledOnce();
         harness.emitMutation(source);
-        expect(reads).toHaveBeenCalledTimes(2);
+        expect(reads).toHaveBeenCalledOnce();
         vi.advanceTimersByTime(90);
         expect(reads).toHaveBeenCalledTimes(2);
         clickButton(harness, 'confirm');
@@ -1417,13 +1771,15 @@ describe('局部翻译选择模式', () => {
         expect(harness.host()!.getAttribute('data-selection-state')).toBe('preview');
         expect(button(harness, 'confirm').disabled).toBe(true);
         expect(harness.resizeObserver.observe).toHaveBeenLastCalledWith(replacement);
-        expect(query(harness.shadow(), '.fr-section-bar-preview').textContent).toBe('Replacement source');
+        expect(harness.host()!.getAttribute('data-selection-count')).toBe('1');
+        expect(query(harness.shadow(), '.fr-section-bar-instruction').textContent).toBe('sectionTranslation.picker.preview');
         expect(button(harness, 'reselect').disabled).toBe(true);
         harness.emit('click', {clientX: 50, clientY: 70});
         harness.emit('keydown', {key: 'Enter'});
         expect(harness.onPick).toHaveBeenCalledOnce();
         expect(harness.onPick).toHaveBeenCalledWith(replacement);
         expect(harness.onPick).not.toHaveBeenCalledWith(old);
+        expect(harness.inspect).toHaveBeenLastCalledWith(replacement);
     });
 
     it('持续每 50ms 更新 DOM 不会使 90ms 盘点饥饿，保留摘要且确认仍同步复核', async () => {
@@ -1486,7 +1842,8 @@ describe('局部翻译选择模式', () => {
         expect(query(harness.shadow(), '.fr-section-box').style.width).toBe('306px');
         expect(query(harness.shadow(), '.fr-section-box').style.height).toBe('86px');
         expect(button(harness, 'confirm').disabled).toBe(false);
-        expect(query(harness.shadow(), '.fr-section-bar-preview').textContent).toBe('New English source inside shadow DOM');
+        expect(harness.inspect).toHaveBeenLastCalledWith(inner);
+        expect(query(harness.shadow(), '.fr-section-bar-instruction').textContent).toBe('sectionTranslation.label.translate:{"count":2}');
         harness.mutationObserver.disconnect.mockClear();
         harness.resizeObserver.disconnect.mockClear();
         clickButton(harness, 'reselect');
@@ -1603,9 +1960,12 @@ describe('局部翻译选择模式', () => {
         harness.hit.current = harness.byId('second');
         harness.emit('click', {clientX: 60, clientY: 130});
         expect(harness.host()!.getAttribute('data-selection-state')).toBe('locked');
-        expect(query(harness.shadow(), '.fr-section-bar-preview').textContent).toBe('Second paragraph');
+        expect(harness.host()!.getAttribute('data-selection-count')).toBe('1');
+        expect(harness.resizeObserver.observe).toHaveBeenLastCalledWith(harness.byId('second'));
+        expect(query(harness.shadow(), '.fr-section-bar-instruction').textContent).toBe('sectionTranslation.label.inspecting');
         expect(harness.onPick).not.toHaveBeenCalled();
         harness.emit('keydown', {key: 'Enter'});
+        expect(harness.inspect).toHaveBeenLastCalledWith(harness.byId('second'));
         expect(harness.onPick).toHaveBeenCalledWith(harness.byId('second'));
         // 高亮框尚未绘制时直接移除界面，不播放收束动画。
         expect(harness.host()).toBeNull();
@@ -1887,5 +2247,256 @@ describe('局部翻译选择模式', () => {
         harness.flushFrames();
         expect(query(harness.shadow(), '.fr-section-label').style.transform).toBe('translate(30px, 291px)');
         harness.picker.stopSectionPicker();
+    });
+});
+
+describe('局部区域记忆交互', () => {
+    const setupRemember = async (onRemember: ReturnType<typeof vi.fn>, rememberScopes = {site: 'example.com', path: 'example.com/articles/'}) => {
+        const h = await createHarness();
+        h.picker.startSectionPicker({...h.options, rememberScopes, onRemember} as never);
+        h.flushFrames();
+        expect(query(h.shadow(), '.fr-section-remember').hidden).toBe(true);
+        h.emit('click', {clientX: 50, clientY: 70}); h.flushFrames(); vi.advanceTimersByTime(90);
+        const checkbox = query(h.shadow(), '.fr-section-remember-checkbox') as HTMLInputElement;
+        const change = () => {
+            const event = new (h.document.defaultView as unknown as {Event: typeof Event}).Event('change');
+            Object.defineProperty(event, 'isTrusted', {value: true});
+            checkbox.dispatchEvent(event);
+        };
+        expect(query(h.shadow(), '.fr-section-remember').hidden).toBe(false);
+        expect(checkbox.checked).not.toBe(true);
+        checkbox.checked = true; change();
+        return h;
+    };
+    const settle = async () => { for (let index = 0; index < 8; index += 1) await Promise.resolve(); };
+
+    it('必要选择保留可访问名称，完整范围经描述关联并在切换网站时更新', async () => {
+        const h = await setupRemember(vi.fn());
+        const scope = query(h.shadow(), '.fr-section-remember-scope') as HTMLSelectElement;
+        const mode = query(h.shadow(), '.fr-section-remember-mode') as HTMLSelectElement;
+        expect(scope.parentElement!.hidden).toBe(false);
+        expect(scope.getAttribute('aria-label')).toBe('sectionTranslation.rules.scope');
+        expect(mode.getAttribute('aria-label')).toBe('sectionTranslation.rules.nextVisit');
+        expect(scope.parentElement!.children).toHaveLength(1);
+        expect(mode.parentElement!.children).toHaveLength(1);
+        const address = query(h.shadow(), `#${scope.getAttribute('aria-describedby')}`);
+        expect(address.className).toBe('fr-section-remember-address');
+        expect(address.hidden).toBe(false);
+        expect(address.textContent).toBe('example.com/articles/');
+        expect(scope.title).toBe('example.com/articles/');
+        Object.defineProperty(scope, 'value', {configurable: true, value: 'site'});
+        const change = new (h.document.defaultView as unknown as {Event: typeof Event}).Event('change');
+        Object.defineProperty(change, 'isTrusted', {value: true});
+        scope.dispatchEvent(change);
+        expect(address.textContent).toBe('example.com');
+        expect(scope.title).toBe('example.com');
+        expect(query(h.shadow(), '.fr-section-bar-instruction').textContent).toBe('sectionTranslation.label.translate:{"count":2}');
+        h.picker.stopSectionPicker();
+    });
+
+    it('根路径等于网站时只显示下次动作，确认仍保存精确的网站范围', async () => {
+        const onRemember = vi.fn().mockResolvedValue(true);
+        const h = await setupRemember(onRemember, {site: 'example.com', path: 'example.com'});
+        const scope = query(h.shadow(), '.fr-section-remember-scope') as HTMLSelectElement;
+        const mode = query(h.shadow(), '.fr-section-remember-mode') as HTMLSelectElement;
+        expect(scope.parentElement!.hidden).toBe(true);
+        expect(mode.parentElement!.hidden).toBe(false);
+        const fields = query(h.shadow(), '.fr-section-remember-fields');
+        expect([...fields.children].filter(field => !(field as HTMLElement).hidden)).toEqual([mode.parentElement]);
+        expect(scope.title).toBe('example.com');
+        expect(query(h.shadow(), `#${scope.getAttribute('aria-describedby')}`).textContent).toBe('example.com');
+        clickButton(h, 'confirm'); await settle();
+        expect(onRemember).toHaveBeenCalledWith(h.byId('para'), {site: 'example.com', mode: 'remind'});
+        expect(h.onPick).toHaveBeenCalledOnce();
+    });
+
+    it('显式记住默认当前路径并提醒，等待保存后才退出翻译，重复确认不重复保存', async () => {
+        let finish!: (value: boolean) => void;
+        const onRemember = vi.fn(() => new Promise<boolean>(resolve => {finish = resolve;}));
+        const h = await setupRemember(onRemember);
+        expect(button(h, 'confirm').textContent).toBe('sectionTranslation.rules.confirm');
+        clickButton(h, 'confirm'); clickButton(h, 'confirm'); h.emit('keydown', {key: 'Enter'});
+        await settle();
+        expect(onRemember).toHaveBeenCalledOnce();
+        expect(onRemember).toHaveBeenCalledWith(h.byId('para'), {site: 'example.com/articles/', mode: 'remind'});
+        expect(h.onPick).not.toHaveBeenCalled(); expect(button(h, 'confirm').disabled).toBe(true);
+        finish(true); await settle();
+        expect(h.onPick).toHaveBeenCalledOnce(); expect(h.picker.isSectionPickerActive()).toBe(false);
+    });
+
+    it('网站自动模式保存失败保留选区与选项，允许重试', async () => {
+        const onRemember = vi.fn().mockResolvedValueOnce(false).mockRejectedValueOnce(new Error('write failed')).mockResolvedValueOnce(true);
+        const h = await setupRemember(onRemember);
+        const scope = query(h.shadow(), '.fr-section-remember-scope') as HTMLSelectElement;
+        const mode = query(h.shadow(), '.fr-section-remember-mode') as HTMLSelectElement;
+        Object.defineProperty(scope, 'value', {configurable: true, value: 'site'});
+        Object.defineProperty(mode, 'value', {configurable: true, value: 'auto'});
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            clickButton(h, 'confirm'); await settle();
+            expect(h.picker.isSectionPickerActive()).toBe(true); expect(h.onPick).not.toHaveBeenCalled();
+            expect(query(h.shadow(), '.fr-section-remember-status').textContent).toBe('sectionTranslation.rules.saveFailed');
+            expect(button(h, 'confirm').disabled).toBe(false);
+        }
+        clickButton(h, 'confirm'); await settle();
+        expect(onRemember).toHaveBeenCalledTimes(3); expect(onRemember).toHaveBeenLastCalledWith(h.byId('para'), {site: 'example.com', mode: 'auto'});
+        expect(h.onPick).toHaveBeenCalledOnce();
+    });
+
+    it('退出或选区移除后忽略迟到保存结果，保存前立即退出不发送请求', async () => {
+        for (const action of ['exit', 'remove', 'immediate-exit']) {
+            let finish!: (value: boolean) => void;
+            const onRemember = vi.fn(() => new Promise<boolean>(resolve => {finish = resolve;}));
+            const h = await setupRemember(onRemember);
+            clickButton(h, 'confirm');
+            if (action === 'immediate-exit') h.emit('keydown', {key: 'Escape'});
+            await settle();
+            if (action === 'immediate-exit') expect(onRemember).not.toHaveBeenCalled();
+            else {
+                if (action === 'exit') h.emit('keydown', {key: 'Escape'});
+                else {h.byId('para').remove(); h.emitMutation(h.byId('readme')); h.flushFrames();}
+                finish(true); await settle();
+            }
+            expect(h.onPick).not.toHaveBeenCalled(); h.picker.stopSectionPicker();
+        }
+    });
+
+    it('记忆原生控件保留方向键、Enter 和空格，恢复模式隐藏记忆入口', async () => {
+        const h = await setupRemember(vi.fn());
+        for (const selector of ['.fr-section-remember-checkbox', '.fr-section-remember-scope', '.fr-section-remember-mode']) {
+            Object.defineProperty(h.shadow(), 'activeElement', {configurable: true, get: () => query(h.shadow(), selector)});
+            for (const key of ['ArrowUp', 'ArrowDown', 'Enter', ' ']) {
+                const event = h.emit('keydown', {key, composedPath: () => [h.host(), h.document.body]});
+                expect(event.preventDefault).not.toHaveBeenCalled();
+            }
+        }
+        h.inspect.mockReturnValue(summary({action: 'restore', active: 2, pending: 0}));
+        h.emitMutation(h.byId('para')); vi.advanceTimersByTime(90); h.flushFrames();
+        expect(query(h.shadow(), '.fr-section-remember').hidden).toBe(true);
+        h.picker.stopSectionPicker();
+    });
+    it('保存期间方向键和已排队的控件变化不修改确认中的区域或清除保存状态', async () => {
+        let finish!: (value: boolean) => void;
+        const onRemember = vi.fn(() => new Promise<boolean>(resolve => {finish = resolve;}));
+        const h = await setupRemember(onRemember);
+        clickButton(h, 'confirm'); await settle();
+        for (const key of ['ArrowUp', 'ArrowDown']) {
+            const event = h.emit('keydown', {key, repeat: true});
+            expect(event.preventDefault).toHaveBeenCalledOnce();
+        }
+        for (const trusted of [false, true]) {
+            for (const selector of ['.fr-section-remember-checkbox', '.fr-section-remember-scope', '.fr-section-remember-mode']) {
+                const event = new (h.document.defaultView as unknown as {Event: typeof Event}).Event('change');
+                Object.defineProperty(event, 'isTrusted', {value: trusted});
+                query(h.shadow(), selector).dispatchEvent(event);
+            }
+        }
+        expect(query(h.shadow(), '.fr-section-remember-status').textContent).toBe('sectionTranslation.rules.saving');
+        expect(button(h, 'confirm').disabled).toBe(true);
+        expect(onRemember).toHaveBeenCalledOnce();
+        finish(true); await settle();
+        expect(h.onPick).toHaveBeenCalledOnce(); expect(h.onPick).toHaveBeenCalledWith(h.byId('para'));
+    });
+
+    it.each(['退出', '节点移除'] as const)('保存拒绝迟到时不对已失效选择继续报错或翻译：%s', async action => {
+        let fail!: (error: Error) => void;
+        const onRemember = vi.fn(() => new Promise<boolean>((_resolve, reject) => {fail = reject;}));
+        const h = await setupRemember(onRemember);
+        clickButton(h, 'confirm'); await settle();
+        if (action === '退出') h.emit('keydown', {key: 'Escape'});
+        else { h.byId('para').remove(); h.emitMutation(h.byId('readme')); h.flushFrames(); }
+        fail(new Error('Late storage rejection')); await settle();
+        expect(h.onPick).not.toHaveBeenCalled();
+        expect(query(h.shadow(), '.fr-section-remember-status').textContent).not.toBe('sectionTranslation.rules.saveFailed');
+        h.picker.stopSectionPicker();
+    });
+
+});
+
+describe('局部高亮绘制的布局读写边界', () => {
+    function watchStyles(element: HTMLElement, name: string, actions: string[]): void {
+        const style = element.style;
+        Object.defineProperty(element, 'style', {configurable: true, value: new Proxy(style, {
+            set(target, property, value) {
+                if (['transform', 'width', 'height'].includes(String(property))) actions.push(`write:${name}:${String(property)}`);
+                return Reflect.set(target, property, value);
+            },
+        })});
+    }
+
+    it('静止区域的重复绘制不改写边框或标签的位置尺寸，真实布局变化仍立即更新', async () => {
+        const h = await createHarness();
+        h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        vi.advanceTimersByTime(90); h.flushFrames();
+        const actions: string[] = [];
+        const box = query(h.shadow(), '.fr-section-box');
+        const label = query(h.shadow(), '.fr-section-label');
+        watchStyles(box, 'box', actions); watchStyles(label, 'label', actions);
+        for (let index = 0; index < 60; index++) { h.emit('scroll'); h.flushFrames(); }
+        expect(actions).toEqual([]);
+        h.byId('para').getBoundingClientRect = () => rect(50, 80, 450, 60) as DOMRect;
+        h.emit('scroll'); h.flushFrames();
+        expect(box.style.transform).toBe('translate(47px, 77px)');
+        expect(box.style.width).toBe('456px');
+        expect(box.style.height).toBe('66px');
+        expect(actions).toEqual(['write:box:transform', 'write:box:width', 'write:box:height', 'write:label:transform']);
+        h.picker.stopSectionPicker();
+    });
+
+    it('多选重绘先读取全部选区和标签几何，再写任一高亮框，每个选区每帧只测量一次', async () => {
+        const h = await createHarness();
+        h.document.elementFromPoint = (_x, y) => y < 110 ? h.byId('para') : h.byId('second');
+        h.picker.startSectionPicker(h.options as never); h.flushFrames();
+        h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 70});
+        h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 130});
+        h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 130});
+        h.flushFrames(); vi.advanceTimersByTime(90); h.flushFrames();
+        expect(h.shadow().querySelectorAll('.fr-section-box.is-visible')).toHaveLength(2);
+        const actions: string[] = [];
+        for (const id of ['para', 'second']) h.byId(id).getBoundingClientRect = () => {
+            actions.push(`read:${id}`);
+            return rect(40, id === 'para' ? 80 : 160, 440, 50) as DOMRect;
+        };
+        const label = query(h.shadow(), '.fr-section-label');
+        Object.defineProperty(label, 'offsetWidth', {configurable: true, get: () => {actions.push('read:label-width'); return 160;}});
+        Object.defineProperty(label, 'offsetHeight', {configurable: true, get: () => {actions.push('read:label-height'); return 24;}});
+        Array.from(h.shadow().querySelectorAll<HTMLElement>('.fr-section-box')).forEach((box, index) => watchStyles(box, `box-${index}`, actions));
+        watchStyles(label, 'label', actions);
+        h.emit('scroll'); h.flushFrames();
+        expect(actions.filter(action => action === 'read:para')).toHaveLength(1);
+        expect(actions.filter(action => action === 'read:second')).toHaveLength(1);
+        const firstWrite = actions.findIndex(action => action.startsWith('write:'));
+        expect(firstWrite).toBeGreaterThan(0);
+        expect(actions.slice(firstWrite).every(action => action.startsWith('write:'))).toBe(true);
+        expect(label.style.transform).toBe('translate(40px, 47px)');
+        h.picker.stopSectionPicker();
+    });
+});
+
+describe('划选路径与独立滚动容器的几何边界', () => {
+    it.each([
+        {name: '路径左侧的滚动容器', bounds: [-200, 0, 100, 700], affected: false},
+        {name: '路径下方的滚动容器', bounds: [0, 700, 100, 100], affected: false},
+        {name: '路径上方的滚动容器', bounds: [0, -200, 100, 100], affected: false},
+        {name: '端点之外但穿过划线路径的滚动容器', bounds: [0, 100, 100, 20], affected: true},
+    ])('$name 只在路径相交时丢弃滚动前待绘制采样', async ({bounds, affected}) => {
+        const h = await createHarness();
+        const scroller = h.document.createElement('div');
+        scroller.getBoundingClientRect = () => rect(...bounds as [number, number, number, number]) as DOMRect;
+        h.document.body.append(scroller);
+        h.document.elementFromPoint = (_x, y) => y < 110 ? h.byId('para') : h.byId('second');
+        h.picker.startSectionPicker(h.options as never); h.flushFrames(); h.inspect.mockClear();
+        h.emit('pointerdown', {pointerId: 1, clientX: 50, clientY: 70});
+        h.emit('pointermove', {pointerId: 1, buttons: 1, clientX: 50, clientY: 140});
+        // 没有刷新绘制帧：滚动必须判断完整线段，不能只判断两个端点或 DOM 祖先。
+        h.emit('scroll', {target: scroller});
+        h.emit('pointerup', {pointerId: 1, clientX: 50, clientY: 140});
+        vi.advanceTimersByTime(90); h.flushFrames();
+        const expected = affected ? h.byId('para') : [h.byId('para'), h.byId('second')];
+        expect(h.inspect).toHaveBeenLastCalledWith(expected);
+        expect(h.host()!.getAttribute('data-selection-state')).toBe('locked');
+        expect(h.host()!.getAttribute('data-selection-count')).toBe(affected ? '1' : '2');
+        h.emit('keydown', {key: 'Enter'});
+        expect(h.onPick).toHaveBeenCalledOnce();
+        expect(h.onPick).toHaveBeenCalledWith(expected);
     });
 });

@@ -1,7 +1,7 @@
 /**
  * @file src/services/translation/requestSnapshot.ts
  *
- * 文件职责：冻结翻译消息的可编辑字段与数组，并附加只读 provider 配置快照，复制并深度冻结服务合批偏好及组合成员配置，归一化 AI 超时设置，消除异步缓存读取期间全局配置变化造成的请求身份错配。
+ * 文件职责：冻结翻译消息的可编辑字段与数组，并附加只读 provider 配置快照，复制并深度冻结服务合批偏好及组合成员配置，归一化 AI 超时设置，消除异步缓存读取期间全局配置变化造成的请求身份错配；以后台私有 symbol 标识同图文字批次，普通 runtime JSON 不能开启邻文协议。
  * 主要内容：在入口一次读取消息字段并复制原文/图片文本/术语数组，保留内部 symbol 描述符，通过不可序列化的内部标记允许图片文字原样返回成功；配置读取沿用已附着的可信对象，未附着时才同步执行备用快照工厂，请求边界可以显式提供备用快照工厂，provider 内核只消费必需的受信快照；构造配置快照并操作 types.ts 唯一持有的剩余预算、内部取消、线路观察与可信术语及隐私来源契约，携带后台调度租约让实际网络及响应读取结束前持续占用并发槽，冻结术语规则并从完整文本槽协议恢复纯匹配原文及供文档逐槽结构校验复用的协议快照；以线性首尾边界扫描确定命名空间和最终外层槽数，保留来源中的字面标记和自定义命名空间，重复、交错与缺项仍由同一严格解析器拒绝；userscript 编译时裁剪扩展文档页专属的自动字面值扫描。
  * 模块边界：本文件位于翻译 application service 层，负责用例编排和端口契约；文本槽恢复复用 core/translation/slotProtocol.ts 纯协议，不初始化 DOM 候选或网站规则；不挂载页面 UI，且不应把某家供应商的网络细节扩散到 feature，具体 HTTP 协议由 providers/platform 实现。
  */
@@ -31,6 +31,8 @@ export type {TrustedTranslationGlossaryContext} from './types';
 import {normalizeFreeTranslationOrder, normalizeFreeTranslationMode} from '@/src/core/config/freeTranslation';
 import {normalizeApiKeyRecoveryMs} from '@/src/core/config/scheduling';
 import {normalizeAiRequestTimeoutMs} from '@/src/core/config/aiRequestTimeout';
+import {normalizePrivacyPolicy, normalizePrivacyTerms} from '@/src/core/privacy/policy';
+import {normalizeDisabledTranslationServices} from '@/src/core/config/serviceAvailability';
 import type {CustomOpenAIProvider} from '@/src/core/config/customOpenAI';
 import type {CompositeTranslationProvider} from '@/src/core/config/compositeTranslation';
 import {normalizeDeepLApiPlan} from '@/src/core/config/deepl';
@@ -48,7 +50,8 @@ export function createTranslationRequestSnapshot<T extends object>(message: T): 
         const descriptor = descriptors[key];
         const value = 'value' in descriptor ? descriptor.value : Reflect.get(message, key);
         descriptors[key] = {
-            value: (key === 'origin' || key === 'glossaryIds' || key === 'texts') && Array.isArray(value) ? [...value] : value,
+            value: (key === 'origin' || key === 'glossaryIds' || key === 'texts'
+                || (import.meta.env.BROWSER !== 'userscript' && key === 'imageLabelSlots')) && Array.isArray(value) ? [...value] : value,
             enumerable: descriptor.enumerable,
             configurable: descriptor.configurable,
             writable: descriptor.writable ?? false,
@@ -58,6 +61,29 @@ export function createTranslationRequestSnapshot<T extends object>(message: T): 
 }
 
 const TRANSLATION_ACCEPT_UNCHANGED_RESULT = Symbol('fluentread.translation-accept-unchanged-result');
+const TRANSLATION_IMAGE_TEXT_BATCH = Symbol('fluentread.image-text-batch');
+type ImageTextBatchMark = {[TRANSLATION_IMAGE_TEXT_BATCH]?: true | {readonly originCount: number; readonly labelSlots: readonly number[]}};
+
+/** 同图文字批次保留位置和邻文；标记只在后台流转，不能由 runtime JSON 自报。 */
+export function markImageTextBatch<T extends {origin: string | string[]}>(message: T, labelSlots?: readonly number[]): T {
+    return Object.assign(message, {
+        [TRANSLATION_IMAGE_TEXT_BATCH]: labelSlots?.length && Array.isArray(message.origin)
+            ? {originCount: message.origin.length, labelSlots: Object.freeze([...labelSlots])}
+            : true,
+    });
+}
+
+export function isImageTextBatch(message: {origin: string | string[]}): boolean {
+    return import.meta.env.BROWSER !== 'userscript' && Array.isArray(message.origin)
+        && (message as ImageTextBatchMark)[TRANSLATION_IMAGE_TEXT_BATCH] !== undefined;
+}
+
+/** 裁剪数组后不能沿用原始槽位。相同长度的逐槽术语保护保留位置。 */
+export function getImageLabelSlots(message: {origin: string | string[]}): readonly number[] | undefined {
+    const mark = (message as ImageTextBatchMark)[TRANSLATION_IMAGE_TEXT_BATCH];
+    return mark && mark !== true && Array.isArray(message.origin) && mark.originCount === message.origin.length
+        ? mark.labelSlots : undefined;
+}
 
 /** 图片文字允许有效原样结果；内部标记随后台对象展开保留，不进入 runtime 或网络 JSON。 */
 export function allowUnchangedTranslationResult<T extends object>(message: T): T {
@@ -129,12 +155,18 @@ function slotNamespaceFromBoundaries(origin: string, finalOrdinalOffset: number)
     const prefix = origin.match(/^___FLUENTREAD_[a-z0-9_-]+/iu);
     if (!prefix) return undefined;
     const markerPrefix = '___FLUENTREAD_';
-    const borders = new Uint32Array(finalOrdinalOffset);
+    // 只有位于合法前缀内的边界可能成为 namespace；过长的匹配沿前缀表回退。
+    const maxBoundary = Math.min(prefix[0].length, finalOrdinalOffset);
+    const borders = new Uint32Array(maxBoundary);
     let matched = 0;
-    for (let index = 1; index < finalOrdinalOffset; index += 1) {
+    for (let index = 1; index < maxBoundary; index += 1) {
         while (matched > 0 && origin[index] !== origin[matched]) matched = borders[matched - 1]!;
         if (origin[index] === origin[matched]) matched += 1;
         borders[index] = matched;
+    }
+    for (let index = maxBoundary; index < finalOrdinalOffset; index += 1) {
+        while (matched > 0 && (matched === maxBoundary || origin[index] !== origin[matched])) matched = borders[matched - 1]!;
+        if (origin[index] === origin[matched]) matched += 1;
     }
     // 选择最长合法 namespace，先排除 BEGIN/END 自身重叠的伪边界；来源可与
     // 标记共享下划线，但不能把该重叠扩为 namespace。随后仍通过完整严格 parser。
@@ -201,15 +233,22 @@ export function attachTranslationRequestScheduler<T extends object>(
     scheduler: TranslationRequestScheduler,
     identity?: TranslationRequestIdentity,
     lease?: TranslationRequestLease,
+    deadlineAt?: number,
 ): T & TranslationProviderRequestContext {
     return Object.assign(message, {
-        [TRANSLATION_REQUEST_SCHEDULER]: Object.freeze({scheduler, identity: identity ? Object.freeze({...identity}) : undefined, lease}),
+        [TRANSLATION_REQUEST_SCHEDULER]: Object.freeze({scheduler, identity: identity ? Object.freeze({...identity}) : undefined, lease, deadlineAt}),
     });
 }
 
 export function getTranslationRequestScheduler(message: unknown): TranslationProviderRequestContext[typeof TRANSLATION_REQUEST_SCHEDULER] {
     if (!message || typeof message !== 'object') return undefined;
     return (message as TranslationProviderRequestContext)[TRANSLATION_REQUEST_SCHEDULER];
+}
+
+/** 非 SDK 的 HTTP 适配器已经占用外层请求租约，直接反馈真实响应。 */
+export function observeTranslationHttpResponse(message: unknown, response: Pick<Response, 'status' | 'headers'>): void {
+    const context = getTranslationRequestScheduler(message);
+    context?.scheduler.observeResponse(context.identity, response, context.lease);
 }
 
 /** 为后台内部调用附加不可序列化的取消所有权；runtime payload 无法构造 symbol key。 */
@@ -388,6 +427,10 @@ export function createTranslationProviderConfigSnapshot(
     };
     return Object.freeze({
         ...providerSource,
+        privacyProtection: Object.freeze({...normalizePrivacyPolicy(source.privacyProtection),
+            categories: Object.freeze(normalizePrivacyPolicy(source.privacyProtection).categories)}),
+        privacyProtectionSecretTerms: Object.freeze(normalizePrivacyTerms(source.privacyProtectionSecretTerms)),
+        disabledTranslationServices: Object.freeze(normalizeDisabledTranslationServices(source.disabledTranslationServices)),
         aiRequestTimeoutMs: normalizeAiRequestTimeoutMs(source.aiRequestTimeoutMs),
         freeTranslationOrder: Object.freeze(normalizeFreeTranslationOrder(source.freeTranslationOrder)),
         freeTranslationMode: normalizeFreeTranslationMode(source.freeTranslationMode),

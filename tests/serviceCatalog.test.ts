@@ -7,13 +7,14 @@ import {
   searchServiceOptions,
   splitServiceChoices,
 } from '@/src/ui/view-model/serviceCatalog'
-import { customModelString, defaultModels, models, services, servicesType } from '@/src/core/config/catalog'
+import { customModelString, defaultModels, models, options as catalogOptions, services, servicesType } from '@/src/core/config/catalog'
 import { Config, normalizeConfig } from '@/src/core/config/model'
+import {filterEnabledTranslationServices, isTranslationServiceDisabled, markDisabledTranslationServices, normalizeDisabledTranslationServices} from '@/src/core/config/serviceAvailability'
 
 const options = [
   { value: 'machine', label: '机器翻译', disabled: true },
   { value: 'microsoft', label: '微软翻译' },
-  { value: 'chromeTranslator', label: 'Chrome内置AI翻译⭐' },
+  { value: 'chromeTranslator', label: '浏览器内置翻译⭐' },
   { value: 'ai', label: 'AI翻译', disabled: true },
   { value: 'deepseek', label: 'DeepSeek️', catalogKind: 'provider' },
   { value: 'openai', label: 'OpenAI', catalogKind: 'provider' },
@@ -22,7 +23,7 @@ const options = [
 
 describe('service catalog helpers', () => {
   it('points combinations to the guide without using any member endpoint', () => {
-    expect(getServiceWebsite('composite:daily', {endpoint: 'https://user:secret@example.test/private?key=fixture'})).toEqual({url: 'https://fluent.thinkstu.com/config/translation-engines', kind: 'documentation'})
+    expect(getServiceWebsite('composite:daily', {endpoint: 'https://user:secret@example.test/private?key=fixture'})).toEqual({url: 'https://read.thinkstu.com/config/translation-engines', kind: 'documentation'})
   })
   it('provides a public website or guide for every built-in service', () => {
     for (const service of Object.values(services)) {
@@ -36,6 +37,10 @@ describe('service catalog helpers', () => {
       url: 'https://console.cloud.tencent.com/hunyuan', kind: 'website',
     })
     expect(getServiceWebsite(services.chromeTranslator)?.kind).toBe('documentation')
+    expect(getServiceWebsite(services.chromeTranslator, {browser: 'edge'})?.url)
+      .toBe('https://learn.microsoft.com/microsoft-edge/web-platform/translator-api')
+    expect(getServiceWebsite(services.chromeTranslator, {browser: 'firefox'})?.url)
+      .toBe('https://support.mozilla.org/kb/website-translation')
     expect(getServiceWebsite(services.freeTranslation)?.kind).toBe('documentation')
     expect(getServiceWebsite(services.myMemory)).toEqual({url: 'https://mymemory.translated.net/doc/spec.php', kind: 'documentation'})
   })
@@ -69,7 +74,7 @@ describe('service catalog helpers', () => {
         expect(link.kind).toBe('documentation')
         expect(link.url).toBe(service === services.newapi
           ? 'https://docs.newapi.pro/'
-          : 'https://fluent.thinkstu.com/config/translation-engines')
+          : 'https://read.thinkstu.com/config/translation-engines')
       }
     }
   })
@@ -87,7 +92,7 @@ describe('service catalog helpers', () => {
         label: '机器翻译',
         items: [
           { value: 'microsoft', label: '微软翻译' },
-          { value: 'chromeTranslator', label: 'Chrome内置AI翻译' },
+          { value: 'chromeTranslator', label: '浏览器内置翻译' },
         ],
       },
       {
@@ -114,7 +119,7 @@ describe('service catalog helpers', () => {
           itemKind: '机器翻译',
           items: [
             { value: 'microsoft', label: '微软翻译' },
-            { value: 'chromeTranslator', label: 'Chrome内置AI翻译' },
+            { value: 'chromeTranslator', label: '浏览器内置翻译' },
           ],
         }],
       },
@@ -294,5 +299,42 @@ describe('service catalog helpers', () => {
     )
     expect(pending.common.map((item) => item.value)).toEqual(['freeTranslation', 'openai', 'microsoft', 'google', 'bilibili'])
     expect(pending.more.map((item) => item.value)).toEqual(['deepL', 'deepseek'])
+  })
+})
+
+describe('service availability helpers', () => {
+  it('retains disabled services inside their original directory groups so they can be re-enabled', () => {
+    const marked = markDisabledTranslationServices(options, ['microsoft', 'openai'])
+    const groups = buildServiceGroups(marked)
+    expect(groups.map(group => group.id)).toEqual(['machine', 'ai'])
+    expect(groups[0].items.find(item => item.value === 'microsoft')).toMatchObject({disabled: true})
+    expect(groups[1].items.find(item => item.value === 'openai')).toMatchObject({disabled: true})
+    expect(buildServiceSections(marked).flatMap(section => section.groups.flatMap(group => group.items)).map(item => item.value))
+      .toContain('openai')
+    const actualGroups = buildServiceGroups(markDisabledTranslationServices(catalogOptions.services, ['microsoft', 'tencent', 'openai']))
+    expect(actualGroups.map(group => group.id)).toEqual(['machine', 'cloud', 'ai'])
+    expect(actualGroups[1].items.find(item => item.value === 'tencent')).toMatchObject({disabled: true})
+  })
+  it('preserves inherent disabled flags, treats absent lists as enabled and never mutates the catalog', () => {
+    const catalog = [{value: 'fixed', disabled: true}, {value: 'active'}]
+    expect(markDisabledTranslationServices(catalog, [])).toEqual(catalog)
+    expect(markDisabledTranslationServices(catalog, ['fixed'])).toEqual(catalog)
+    expect(filterEnabledTranslationServices(catalog, undefined)).toEqual([{value: 'active'}])
+    expect(isTranslationServiceDisabled(['other'], 'active')).toBe(false)
+    expect(catalog).toEqual([{value: 'fixed', disabled: true}, {value: 'active'}])
+  })
+  it('normalizes closed IDs without duplicates, whitespace, invalid values, or unbounded entries', () => {
+    expect(normalizeDisabledTranslationServices(['openai', ' openai ', 'deeplx', '', null, 12, 'x'.repeat(129)]))
+      .toEqual(['openai', 'deeplx'])
+    expect(normalizeDisabledTranslationServices(undefined)).toEqual([])
+  })
+
+  it('keeps closed choices visible but disabled, and filters disabled services from active lists', () => {
+    const catalog = [{value: 'google', label: 'Google'}, {value: 'openai', label: 'OpenAI'}]
+    const marked = markDisabledTranslationServices(catalog, ['openai'])
+    expect(marked).toEqual([{value: 'google', label: 'Google'}, {value: 'openai', label: 'OpenAI', disabled: true}])
+    expect(filterEnabledTranslationServices(marked, ['openai'])).toEqual([{value: 'google', label: 'Google'}])
+    expect(isTranslationServiceDisabled(['openai'], 'openai')).toBe(true)
+    expect(isTranslationServiceDisabled(undefined, 'openai')).toBe(false)
   })
 })

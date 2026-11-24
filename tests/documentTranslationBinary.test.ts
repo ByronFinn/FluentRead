@@ -8,7 +8,6 @@ import {describe, expect, it, vi} from 'vitest';
 import {
     getDocumentAcceptAttribute,
     getDocumentMaxBytes,
-    getDocumentFormat,
     getDocumentMimeType,
     parseDocument,
 } from '@/src/features/document-translation/core/document';
@@ -20,7 +19,7 @@ import {
 } from '@/src/features/document-translation/services/binary';
 import {pdfPagesNeedingOcr} from '@/src/features/document-translation/services/pdfOcr';
 
-const exampleRoot = new URL('../examples/document-translation/', import.meta.url);
+const exampleRoot = new URL('./fixtures/document-translation/', import.meta.url);
 const onePixelPng = Uint8Array.from(Buffer.from(
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlY4AAAAASUVORK5CYII=',
     'base64',
@@ -28,6 +27,7 @@ const onePixelPng = Uint8Array.from(Buffer.from(
 const testRasterizer: PdfPageRasterizer = async () => onePixelPng;
 const onePixelJpeg = Uint8Array.from(Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAIBAQEBAQIBAQECAgICAgQDAgICAgUEBAMEBgUGBgYFBgYGBwkIBgcJBwYGCAsICQoKCgoKBggLDAsKDAkKCgr/2wBDAQICAgICAgUDAwUKBwYHCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgr/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AL+AA//Z', 'base64'));
 
+// 首次真实 PDF 导入包含 pdf.js/worker 冷加载；单 worker 覆盖率 CI 保留有界预算，进度与取消契约仍完整执行。
 it('reports PDF import page progress, yields to input, and supports page-boundary cancellation', async () => {
     const pdf = await PDFDocument.create();
     for (let index = 0; index < 10; index += 1) pdf.addPage().drawText(`Page ${index + 1} text`);
@@ -47,7 +47,7 @@ it('reports PDF import page progress, yields to input, and supports page-boundar
         if (page === 3) controller.abort(new Error('Import canceled'));
     }})).rejects.toThrow('Import canceled');
     expect(completed).toEqual([0, 1, 2, 3]);
-});
+}, 15_000);
 
 function loadBytes(fileName: string): Uint8Array {
     return Uint8Array.from(readFileSync(new URL(fileName, exampleRoot)));
@@ -212,8 +212,8 @@ describe('binary document translation formats', () => {
         expect(result.getPageCount()).toBe(mode === 'bilingual' ? 6 : 4);
         expect(received.map(page => page.pageNumber)).toEqual([1, 2]);
         const expected = parsed.binary!.kind === 'pdf' ? parsed.binary!.pages.flatMap(page => page.blocks)
-            .filter(block => block.segmentIndex >= 0)
-            .map(block => block.kind === 'metadata' || block.kind === 'footer' ? parsed.segments[block.segmentIndex].source : translations[block.segmentIndex]).join('') : '';
+            .filter(block => block.segmentIndex >= 0 || block.kind === 'metadata' || block.kind === 'footer')
+            .map(block => block.kind === 'metadata' || block.kind === 'footer' ? parsed.segments[block.segmentIndex]?.source ?? block.source ?? '' : translations[block.segmentIndex]).join('') : '';
         expect(received.map(page => page.text).join('')).toBe(expected);
         expect(result.getPages().filter(page => page.getWidth() === 612).every(page => page.getHeight() === 792)).toBe(true);
     });
@@ -342,10 +342,7 @@ describe('binary document translation formats', () => {
         }
     });
 
-    it('识别 PDF、ePub、DOCX 并提供正确 MIME 与上传 accept', () => {
-        expect(getDocumentFormat('paper.PDF')).toBe('pdf');
-        expect(getDocumentFormat('book.epub')).toBe('epub');
-        expect(getDocumentFormat('brief.docx')).toBe('docx');
+    it('二进制文件格式提供正确 MIME、上传 accept 和大小限制', () => {
         expect(getDocumentMimeType('pdf')).toBe('application/pdf');
         expect(getDocumentMimeType('epub')).toBe('application/epub+zip');
         expect(getDocumentMimeType('docx')).toContain('wordprocessingml.document');
@@ -419,6 +416,99 @@ describe('binary document translation formats', () => {
         expect(linkedChapter).toContain('href="chapter-1.xhtml"');
         expect(linkedChapter.match(/<title>/gu)).toHaveLength(1);
         expect(linkedChapter).not.toContain('<title>译文：');
+        const navigation = await zip.file('OEBPS/nav.xhtml')!.async('string');
+        expect(navigation).toContain('<a href="chapter-1.xhtml">Fluent reading / 译文：Fluent reading for local books</a>');
+        expect(navigation).toContain('<a href="chapter-2.xhtml">Regression / 译文：Regression coverage</a>');
+    });
+
+    it.each([false, true])('synchronizes EPUB navigation and NCX without changing targets (nav on spine: %s)', async navOnSpine => {
+        const zip = new JSZip();
+        const navPath = 'Book/Navigation/nav.xhtml', ncxPath = 'Book/Navigation/book.ncx';
+        const chapterPath = 'Book/Text/Chapter 1.xhtml';
+        const firstLink = '../Text/Chapter%201.xhtml#start';
+        const secondLink = '../Text/Chapter%201.xhtml#%E7%AC%AC%E4%BA%8C';
+        const pageLink = '../Text/Chapter%201.xhtml';
+        const bodyLink = '../Text/Chapter%201.xhtml#p';
+        const pendingLink = '../Text/Chapter%201.xhtml#untranslated';
+        const invalidLink = '../Text/Chapter%201.xhtml#%FF';
+        const externalLink = 'https://example.invalid/Text/Chapter%201.xhtml#start';
+        const otherNavigation = `<nav ops:type="page-list"><ol><li><a href="${firstLink}">7</a></li></ol></nav>`;
+        const sourceNav = `<?xml version="1.0"?>\n<html xmlns="http://www.w3.org/1999/xhtml" xmlns:ops="http://www.idpf.org/2007/ops"><head><title>Contents</title></head><body>
+<nav ops:type="toc"><h1>Contents</h1><ol><li><a href="${firstLink}"><em>Chapter One</em></a>
+<ol><li><a href="${secondLink}">Details</a></li><li><a href="${pageLink}">Start</a></li><li><a href="${bodyLink}">Text</a></li>
+<li><a href="${pendingLink}">Pending</a></li><li><a href="${invalidLink}">Unknown anchor</a></li><li><a href="${externalLink}">External</a></li></ol>
+</li></ol></nav>${otherNavigation}</body></html>`;
+        const sourceNcx = `<?xml version="1.0"?>\n<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><docTitle><text>Book Name</text></docTitle><navMap>
+<navPoint id="n1" playOrder="1"><navLabel><text>Chapter One</text></navLabel><content src="${firstLink}"/>
+<navPoint id="n2" playOrder="2"><navLabel><text>Details</text></navLabel><content src="${secondLink}"/></navPoint>
+<navPoint id="n3" playOrder="3"><navLabel><text>Pending</text></navLabel><content src="${pendingLink}"/></navPoint></navPoint>
+</navMap><pageList><pageTarget id="page"><navLabel><text>7</text></navLabel><content src="${firstLink}"/></pageTarget></pageList></ncx>`;
+        zip.file('mimetype', 'application/epub+zip', {compression: 'STORE'});
+        zip.file('META-INF/container.xml', '<container><rootfiles><rootfile full-path="Book/content.opf"/></rootfiles></container>');
+        zip.file('Book/content.opf', `<package><manifest>
+<item id="c1" href="Text/Chapter%201.xhtml" media-type="application/xhtml+xml"/>
+<item id="navigation" href="Navigation/nav.xhtml" media-type="application/xhtml+xml" properties="scripted nav"/>
+<item id="ncx" href="Navigation/book.ncx" media-type="application/x-dtbncx+xml"/>
+</manifest><spine toc="ncx">${navOnSpine ? '<itemref idref="navigation"/>' : ''}<itemref idref="c1"/></spine></package>`);
+        zip.file(navPath, sourceNav);
+        zip.file(ncxPath, sourceNcx);
+        zip.file(chapterPath, `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Book</title></head><body>
+<section id="start"><h1 id="heading">The <em>first</em> chapter</h1>
+<p id="p">Body excerpt.</p>
+<h2 id="第二">Tools &amp; terms<br/>A worked example</h2><h2 id="untranslated">Waiting</h2>
+</section></body></html>`);
+
+        const parsed = await parseBinaryDocument('navigation.epub', await zip.generateAsync({type: 'uint8array'}));
+        const selected = new Map([
+            ['The <g1>first</g1> chapter', '第<g1>一</g1>章'],
+            ['Tools & terms', '工具 & 术语'],
+            ['A worked example', '示例 <A>'],
+            ['Body excerpt.', '正文摘录。'],
+            ['Chapter One', '单独翻译的目录标签'],
+            ['Waiting', '  '],
+        ]);
+        const translations = parsed.segments.map(segment => selected.get(segment.source) ?? '');
+        for (const mode of ['bilingual', 'translated'] as const) {
+            const {data} = await createDocumentDownload(parsed, translations, mode);
+            const output = await JSZip.loadAsync(data as Uint8Array);
+            const nav = await output.file(navPath)!.async('string');
+            const ncx = await output.file(ncxPath)!.async('string');
+            for (const source of [nav, ncx]) expect(() => new SaxesParser({xmlns: true}).write(source).close()).not.toThrow();
+            const bilingual = mode === 'bilingual';
+            expect(nav).toContain(`<a href="${firstLink}">${bilingual ? '<em>Chapter One</em> / ' : ''}第一章</a>`);
+            expect(nav).toContain(`<a href="${secondLink}">${bilingual ? 'Details / ' : ''}工具 &amp; 术语 示例 &lt;A&gt;</a>`);
+            expect(nav).toContain(`<a href="${pageLink}">${bilingual ? 'Start / ' : ''}第一章</a>`);
+            expect(nav).not.toContain('单独翻译的目录标签');
+            expect(nav).toContain(otherNavigation);
+            for (const [href, label] of [[bodyLink, 'Text'], [pendingLink, 'Pending'], [invalidLink, 'Unknown anchor'], [externalLink, 'External']]) {
+                expect(nav).toContain(`<a href="${href}">${label}</a>`);
+            }
+            expect(ncx).toContain(`<text>${bilingual ? 'Chapter One / ' : ''}第一章</text></navLabel><content src="${firstLink}"/>`);
+            expect(ncx).toContain(`<text>${bilingual ? 'Details / ' : ''}工具 &amp; 术语 示例 &lt;A&gt;</text></navLabel><content src="${secondLink}"/>`);
+            expect(ncx).toContain('<text>Pending</text>');
+            expect(ncx).toContain('<docTitle><text>Book Name</text></docTitle>');
+            expect(ncx).toContain(`<pageTarget id="page"><navLabel><text>7</text></navLabel><content src="${firstLink}"/>`);
+            expect(await output.file('Book/content.opf')!.async('string')).toBe(await zip.file('Book/content.opf')!.async('string'));
+        }
+    });
+
+    it('exports EPUB 2 with an NCX translation and an XHTML 1.1-compatible marker', async () => {
+        const zip = new JSZip();
+        zip.file('mimetype', 'application/epub+zip', {compression: 'STORE'});
+        zip.file('META-INF/container.xml', '<container><rootfile full-path="book.opf"/></container>');
+        zip.file('book.opf', `<package version="2.0"><manifest>
+<item id="body" href="body.xhtml" media-type="application/xhtml+xml"/>
+<item id="ncx" href="book.ncx" media-type="application/x-dtbncx+xml"/>
+</manifest><spine toc="ncx"><itemref idref="body"/></spine></package>`);
+        zip.file('body.xhtml', '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Book</title></head><body><h1 id="first">Chapter One</h1></body></html>');
+        zip.file('book.ncx', '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap><navPoint><navLabel><text>Chapter One</text></navLabel><content src="body.xhtml#first"/></navPoint></navMap></ncx>');
+        const book = await parseBinaryDocument('legacy.epub', await zip.generateAsync({type: 'uint8array'}));
+        const {data} = await createDocumentDownload(book, ['第一章'], 'bilingual');
+        const output = await JSZip.loadAsync(data as Uint8Array);
+        const body = await output.file('body.xhtml')!.async('string');
+        expect(body).toContain('<h1 id="first">Chapter One<br/><span class="fluentread-document-translation">第一章</span></h1>');
+        expect(body).not.toContain('data-fluent-read-document-translation');
+        expect(await output.file('book.ncx')!.async('string')).toContain('<text>Chapter One / 第一章</text>');
     });
 
     it('exports strict XHTML line breaks without rewriting namespaces, styles, resources or literal script text', async () => {
@@ -575,6 +665,47 @@ describe('binary document translation formats', () => {
         expect(documentXml).not.toContain('Again');
     });
 
+    it('round-trips DOCX hyperlink labels, styles and run order in both download modes', async () => {
+        const run = (text: string, props = '') => `<w:r>${props}<w:t xml:space="preserve">${text}</w:t></w:r>`;
+        const bold = '<w:rPr><w:b/></w:rPr>';
+        const italic = '<w:rPr><w:i/></w:rPr>';
+        const hyperlink = '<w:hyperlink r:id="rId19">';
+        const paragraph = `<w:p w:rsidR="00000001"><w:pPr><w:jc w:val="center"/></w:pPr>${run('Read the ')}` +
+            `${hyperlink}${run('setup ', italic)}${run('guide')}</w:hyperlink>${run(' and keep the ')}${run('impor', bold)}${run('tant', bold)}${run(' step.')}</w:p>`;
+        const field = `<w:p><w:fldSimple w:instr=" DATE ">${run('Today')}</w:fldSimple></w:p>`;
+        const zip = new JSZip();
+        zip.file('[Content_Types].xml', '<Types/>');
+        zip.file('word/document.xml', `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:tbl><w:tr><w:tc>${paragraph}</w:tc></w:tr></w:tbl>${field}</w:body></w:document>`, {createFolders: false});
+        const relations = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId19" Target="https://example.com/setup" TargetMode="External" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink"/></Relationships>';
+        zip.file('word/_rels/document.xml.rels', relations, {createFolders: false});
+        const parsed = await parseBinaryDocument('styled.docx', await zip.generateAsync({type: 'uint8array'}));
+        expect(parsed.segments.map(segment => segment.source)).toEqual(['Read the <g1><g2>setup </g2>guide</g1> and keep the <g3>important</g3> step.', 'Today']);
+        const corrected = ['先完成<g3>关键</g3>步骤，再读<g1><g2>安装</g2>指南</g1>。', '今天'];
+        for (const mode of ['bilingual', 'translated'] as const) {
+            const {data} = await createDocumentDownload(parsed, corrected, mode);
+            const saved = await JSZip.loadAsync(data as Uint8Array);
+            expect(Object.keys(saved.files).sort()).toEqual(Object.keys(zip.files).sort());
+            const xml = await saved.file('word/document.xml')!.async('string');
+            expect(() => new SaxesParser({xmlns: true}).write(xml).close()).not.toThrow();
+            expect(xml).toContain(run('关键', bold));
+            expect(xml).toContain(`${hyperlink}${run('安装', italic)}${run('指南')}</w:hyperlink>`);
+            expect(xml.indexOf(run('关键', bold))).toBeLessThan(xml.indexOf(`${hyperlink}${run('安装', italic)}`));
+            expect(xml.indexOf(run('指南'))).toBeLessThan(xml.indexOf('</w:tc>'));
+            expect(xml.match(/w:rsidR="00000001"/gu)).toHaveLength(1);
+            expect(xml).toContain('<w:jc w:val="center"/>');
+            expect(xml).toContain(field);
+            expect(xml).toContain('今天');
+            expect(xml.includes(paragraph)).toBe(mode === 'bilingual');
+            expect(xml).not.toMatch(/&lt;\/?g\d/u);
+            expect(await saved.file('word/_rels/document.xml.rels')!.async('string')).toBe(relations);
+        }
+        const legacy = await createDocumentDownload(parsed, ['人工校订的完整译句。', ''], 'translated');
+        const fallback = await (await JSZip.loadAsync(legacy.data as Uint8Array)).file('word/document.xml')!.async('string');
+        expect(fallback).toContain(paragraph);
+        expect(fallback).toContain('人工校订的完整译句。');
+        expect(fallback).toContain(field);
+    });
+
     it('PDF 双语导出将每张原页和保留版式的译页并排放在同一页', async () => {
         const parsed = await parseBinaryDocument('sample.pdf', loadBytes('sample.pdf'));
         const translations = parsed.segments.map((segment) => `Translated: ${segment.source}`);
@@ -602,6 +733,18 @@ describe('binary document translation formats', () => {
         expect(parsed.segments.length).toBeGreaterThan(0);
     });
 
+    it('保留从 UTF-8 或 UTF-16 文件导入的表格 BOM，并下载成 UTF-8 的 CSV 回读', async () => {
+        const text = '\ufeffName,Details\r\n1,"Hello, world"';
+        const utf8 = new TextEncoder().encode(text);
+        const utf16 = Uint8Array.from([...text].flatMap(character => [character.charCodeAt(0) & 255, character.charCodeAt(0) >> 8]));
+        for (const input of [utf8, utf16]) {
+            const parsed = await parseDocumentFile(new File([Uint8Array.from(input)], 'table.csv'));
+            const download = await createDocumentDownload(parsed, ['', '', '你好，世界'], 'translated');
+            expect(download.mimeType).toBe('text/csv;charset=utf-8');
+            expect(download.data).toBe('\ufeffName,Details\r\n1,"你好，世界"');
+        }
+    });
+
     it('拒绝扩展名伪装或损坏的二进制文件', async () => {
         await expect(parseBinaryDocument('broken.pdf', new TextEncoder().encode('not a pdf'))).rejects.toThrow('PDF 文件签名无效');
         await expect(parseBinaryDocument('broken.epub', new TextEncoder().encode('not a zip'))).rejects.toThrow('ePub 解析失败');
@@ -622,14 +765,92 @@ describe('binary document translation formats', () => {
         expect(pdfPagesNeedingOcr(parsed)).toEqual([1]);
     });
 
+    it('扫描判定使用图像并集覆盖，容许独立页码但保留原生正文与小图页面', async () => {
+        const pdf = await PDFDocument.create();
+        const picture = await pdf.embedPng(onePixelPng);
+        const imagePage = () => {
+            const page = pdf.addPage([320, 480]);
+            page.drawImage(picture, {x: 0, y: 0, width: 320, height: 480});
+            return page;
+        };
+        imagePage().drawText('12', {x: 150, y: 16, size: 10});
+        const tiled = pdf.addPage([320, 480]);
+        for (let index = 0; index < 3; index += 1) tiled.drawImage(picture, {x: 0, y: index * 160, width: 320, height: 160});
+        imagePage().drawText('Native body text must remain available.', {x: 20, y: 240, size: 12});
+        const logo = pdf.addPage([320, 480]);
+        logo.drawImage(picture, {x: 20, y: 16, width: 60, height: 60});
+        logo.drawText('12', {x: 150, y: 16, size: 10});
+        // 两个重叠图像的面积相加超过半页，实际并集只有 40%，不能据此触发 OCR。
+        const overlap = pdf.addPage([320, 480]);
+        for (let index = 0; index < 2; index += 1) overlap.drawImage(picture, {x: index * 32, y: 0, width: 96, height: 480});
+        const nonFooter = imagePage();
+        nonFooter.drawText('12', {x: 150, y: 240, size: 10});
+
+        const parsed = await parseBinaryDocument('scanned-coverage.pdf', await pdf.save());
+        expect(parsed.binary?.kind === 'pdf' && parsed.binary.pages.map(page => !!page.scanned)).toEqual([true, true, false, false, false, false]);
+        expect(pdfPagesNeedingOcr(parsed)).toEqual([0, 1]);
+        expect(parsed.segments.some(segment => segment.source.includes('Native body text'))).toBe(true);
+    });
+
+    it('扫描正文外的短页眉页脚仍触发 OCR，同时保留图表题注、公式及原生正文', async () => {
+        const pdf = await PDFDocument.create();
+        const picture = await pdf.embedPng(onePixelPng);
+        // 使用 Federal Register 混合 PDF 第 3、6 页的实测图像与文字坐标，不依赖远程文件可用性。
+        const appendix = pdf.addPage([612, 792]);
+        appendix.drawImage(picture, {x: 108, y: 90.81807709, width: 465.06488037, height: 601.58392334});
+        appendix.drawText('APPENDIX', {x: 108, y: 708.79699993, size: 12});
+        const lastPage = () => {
+            const page = pdf.addPage([612, 792]);
+            page.drawImage(picture, {x: 108, y: 116.91583252, width: 465.81503296, height: 603.08416748});
+            return page;
+        };
+        lastPage().drawText('[FR Doc. 2026-21447 Filed: 10/19/2026 8:45 am; Publication Date: 10/20/2026]', {x: 108, y: 92.88100052, size: 11});
+        const both = lastPage();
+        both.drawText('ANNEX', {x: 108, y: 735, size: 12});
+        both.drawText('Published: 2026-10-20', {x: 108, y: 92.88100052, size: 11});
+        lastPage().drawText('Figure 1: Federal systems', {x: 108, y: 92.88100052, size: 11});
+        lastPage().drawText('Native prose still explains the contents.', {x: 108, y: 92.88100052 + 65, size: 11});
+        lastPage().drawText('F(x) = QK', {x: 108, y: 735, size: 12});
+        lastPage().drawText('A detailed native explanation should remain available. '.repeat(4), {x: 40, y: 92.88100052, size: 4});
+        const threeLines = lastPage();
+        for (const [index, text] of ['Native first line', 'Native second line', 'Native third line'].entries()) {
+            threeLines.drawText(text, {x: 108, y: 750 - index * 14, size: 11});
+        }
+        const overlapping = pdf.addPage([612, 792]);
+        overlapping.drawImage(picture, {x: 0, y: 0, width: 612, height: 792});
+        overlapping.drawText('Native text over an image', {x: 108, y: 735, size: 12});
+
+        const bytes = await pdf.save(), before = bytes.slice();
+        const parsed = await parseBinaryDocument('mixed-scanned-attachment.pdf', bytes);
+        expect(bytes).toEqual(before);
+        expect(parsed.binary?.kind === 'pdf' && parsed.binary.pages.map(page => !!page.scanned)).toEqual([true, true, true, false, false, false, false, false, false]);
+        expect(pdfPagesNeedingOcr(parsed)).toEqual([0, 1, 2]);
+        expect(parsed.segments.some(segment => segment.source === 'Figure 1: Federal systems')).toBe(true);
+        expect(parsed.segments.some(segment => segment.source.includes('Native prose'))).toBe(true);
+        expect(parsed.binary?.kind === 'pdf' && parsed.binary.pages[5].blocks.some(block => block.kind === 'formula' && block.preserveSource)).toBe(true);
+    });
+
+    // 可选实件复验使用本地文件；确定性回归由上面的实测坐标夹具覆盖，不要求网络或下载原文件。
+    it.runIf(Boolean(process.env.FLUENTREAD_FEDERAL_REGISTER_PDF))('识别实际公报的四页扫描附件，保留前两页文字层和源文件', async () => {
+        const bytes = new Uint8Array(readFileSync(process.env.FLUENTREAD_FEDERAL_REGISTER_PDF!)), before = bytes.slice();
+        const parsed = await parseBinaryDocument('2026-21447.pdf', bytes);
+        expect(bytes).toEqual(before);
+        expect(parsed.binary?.kind === 'pdf' && parsed.binary.pages.map(page => !!page.scanned)).toEqual([false, false, true, true, true, true]);
+        expect(pdfPagesNeedingOcr(parsed)).toEqual([2, 3, 4, 5]);
+        expect(parsed.segments.some(segment => segment.source.startsWith('SUMMARY:'))).toBe(true);
+    });
+
     it('拒绝解压后单项过大的 ePub/DOCX 压缩包', async () => {
         const zip = new JSZip();
-        zip.file('oversized.txt', 'x'.repeat(24 * 1024 * 1024 + 1));
-        const bytes = await zip.generateAsync({type: 'uint8array', compression: 'DEFLATE'});
+        // 保留真实的 24 MiB + 1 字节内容；字节输入与低压缩级别减少单 worker 覆盖率 CI 的夹具构造成本。
+        zip.file('oversized.txt', new Uint8Array(24 * 1024 * 1024 + 1).fill(0x78));
+        const bytes = await zip.generateAsync({type: 'uint8array', compression: 'DEFLATE', compressionOptions: {level: 1}});
+        expect(bytes.byteLength).toBeLessThan(getDocumentMaxBytes('oversized.epub'));
+        expect(bytes.byteLength).toBeLessThan(getDocumentMaxBytes('oversized.docx'));
 
         await expect(parseBinaryDocument('oversized.epub', bytes)).rejects.toThrow('单个内容项过大');
         await expect(parseBinaryDocument('oversized.docx', bytes)).rejects.toThrow('单个内容项过大');
-    });
+    }, 15_000);
 });
 
 it('全页译文相同的双语 PDF 保留左右对照尺寸并跳过光栅重绘', async () => {

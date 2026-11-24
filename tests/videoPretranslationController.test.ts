@@ -8,6 +8,35 @@ const video = (tracks: TextTrack[]) => {
 };
 afterEach(() => vi.useRealTimers());
 describe('VideoPretranslationController', () => {
+  it('高频 cue 更新只通知与预取，不重新读取或重绑轨道监听；增删只调整对应轨道', () => {
+    const tracks = Array.from({length: 32}, () => track());
+    const current = video(tracks);
+    const prime = vi.fn(), changed = vi.fn();
+    const additions = tracks.map(item => vi.spyOn(item, 'addEventListener'));
+    const removals = tracks.map(item => vi.spyOn(item, 'removeEventListener'));
+    const controller = new VideoPretranslationController(prime, changed);
+    controller.observe(current);
+    const list = current.textTracks;
+    const readTracks = vi.fn(() => list);
+    Object.defineProperty(current, 'textTracks', {get: readTracks});
+    additions.forEach(spy => spy.mockClear());
+    for (let index = 0; index < 120; index++) tracks[0].dispatchEvent(new Event('cuechange'));
+    expect(prime).toHaveBeenCalledTimes(120); expect(changed).toHaveBeenCalledTimes(120);
+    expect(readTracks).not.toHaveBeenCalled();
+    expect(additions.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    expect(removals.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    const next = track('subtitles'), addNext = vi.spyOn(next, 'addEventListener');
+    tracks.push(next); current.textTracks.dispatchEvent(new Event('addtrack'));
+    expect(addNext).toHaveBeenCalledOnce();
+    expect(additions.every(spy => spy.mock.calls.length === 0)).toBe(true);
+    const removed = tracks.shift()!; current.textTracks.dispatchEvent(new Event('removetrack'));
+    expect(removals[0]).toHaveBeenCalledOnce();
+    expect(removals.slice(1).every(spy => spy.mock.calls.length === 0)).toBe(true);
+    removed.dispatchEvent(new Event('cuechange'));
+    expect(changed).toHaveBeenCalledTimes(122);
+    controller.destroy();
+  });
+
   it('合并普通更新，立即预取取消等待，并在清理和卸载后停止计时器', () => {
     vi.useFakeTimers();
     const prime = vi.fn();

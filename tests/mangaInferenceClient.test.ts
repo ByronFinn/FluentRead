@@ -6,6 +6,7 @@
  */
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import type {MangaInferenceMessage, MangaInferenceResponse} from '@/src/features/image-translation/services/mangaInferenceClient';
+import type {ImageTextSegmentationSource} from '@/src/features/image-translation/services/imageTextSegmentation';
 
 type ClientModule = typeof import('@/src/features/image-translation/services/mangaInferenceClient');
 type Client = ReturnType<ClientModule['createMangaInferenceClient']>;
@@ -13,7 +14,7 @@ type Client = ReturnType<ClientModule['createMangaInferenceClient']>;
 class ControlledWorker {
     onmessage: ((event: MessageEvent<MangaInferenceResponse>) => void) | null = null;
     onerror: ((event: ErrorEvent) => void) | null = null;
-    postMessage = vi.fn<(message: MangaInferenceMessage) => void>();
+    postMessage = vi.fn<(message: MangaInferenceMessage,transfer?:Transferable[]) => void>();
     terminate = vi.fn();
     get latest(): MangaInferenceMessage { return this.postMessage.mock.calls.at(-1)![0]; }
     emit(response: Partial<MangaInferenceResponse> = {success: true}) {
@@ -58,6 +59,106 @@ afterEach(() => {
     vi.doUnmock('onnxruntime-web/webgpu');
     vi.doUnmock('@/src/features/image-translation/services/mangaOcr');
     vi.doUnmock('@/src/features/image-translation/services/mangaInpainting');
+});
+
+describe('图片 CPU/WASM 偏好和诊断', () => {
+    it('已到期但迟到的暖机清理回调不能关闭新任务持有的 Worker', async () => {
+        const timer = vi.spyOn(globalThis, 'setTimeout');
+        const {client, workers} = harness(), abort = new AbortController();
+        const canceled = observe(client.prepare('ocr', abort.signal)); await flush(); abort.abort();
+        await canceled; workers[0].emit(); await flush();
+        const idle = timer.mock.calls.find(([, delay]) => delay === 180_000)![0] as () => void;
+        const active = client.request({type: 'recognize'}); await flush(); idle();
+        expect(workers[0].terminate).not.toHaveBeenCalled(); workers[0].emit(); await active;
+    });
+    it('切换后可选分割保持逻辑就绪并重新获得空闲释放期限', async () => {
+        const h = harness(); await prepareText(h);
+        h.client.setBackend('cpu');
+        const recognize = h.client.request({type: 'recognize'}); await flush();
+        expect(h.workers[1].latest.cpu).toBe(true); h.workers[1].emit(); await recognize;
+        const segment = h.client.segmentText(inputText); await flush();
+        h.workers[1].emit({success: true, result: outputText()}); await segment;
+        await vi.advanceTimersByTimeAsync(180_000);
+        expect(h.workers[1].latest.type).toBe('dispose-seg'); h.workers[1].emit(); await flush();
+        expect(h.workers[1].terminate).toHaveBeenCalledOnce();
+    });
+    it('取消 CPU 准备立即发布取消状态，迟到初始化不恢复页面状态', async () => {
+        const {client, workers} = harness(), abort = new AbortController(); client.setBackend('cpu');
+        const pending = observe(client.prepare('ocr', abort.signal)); await flush(); abort.abort();
+        await expect(pending).resolves.toMatchObject({status: 'rejected', reason: {name: 'AbortError'}});
+        workers[0].emit({stage: 'initializing'}); expect(client.getDiagnostics().stage).toBe('canceled');
+        workers[0].emit(); await flush(); expect(client.getDiagnostics().stage).toBe('canceled');
+    });
+    it.each(['prepare-ocr', 'prepare-inpaint', 'prepare-seg', 'recognize', 'inpaint'] as const)('%s 首条消息即 CPU，初始化和推理从首次采用 120 秒预算，失败不再重试', async type => {
+        const {client, workers} = harness();
+        client.setBackend('cpu');
+        const pending = observe(client.request({type}));
+        await flush();
+        expect(workers[0].latest.cpu).toBe(true);
+        expect(client.getDiagnostics()).toMatchObject({preference: 'cpu', cpuFallback: false});
+        await vi.advanceTimersByTimeAsync(60_001);
+        expect(workers).toHaveLength(1);
+        for (const stage of ['initializing', 'recognizing'] as const) {
+            workers[0].emit({stage});
+            expect(client.getDiagnostics().stage).toBe(stage);
+            await vi.advanceTimersByTimeAsync(119_999);
+            expect(workers[0].terminate).not.toHaveBeenCalled();
+        }
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(pending).resolves.toMatchObject({status: 'rejected', reason: {message: expect.stringContaining('超时')}});
+        expect(workers).toHaveLength(1);
+        expect(client.getDiagnostics()).toMatchObject({stage: 'error', executionProviders: []});
+    });
+
+    it('切换只在串行请求边界重建，CPU 与自动可往返且旧响应不能覆盖新诊断', async () => {
+        const {client, workers} = harness();
+        expect(client.getDiagnostics()).toEqual({preference: 'auto', cpuFallback: false, stage: 'idle', executionProviders: []});
+        const first = client.prepare('ocr'); await flush();
+        const stale = workers[0].onmessage!;
+        workers[0].emit({executionProviders: ['webgpu', 'wasm']});
+        expect(client.getDiagnostics().executionProviders).toEqual(['webgpu', 'wasm']);
+        const snapshot = client.getDiagnostics(); snapshot.executionProviders.length = 0;
+        expect(client.getDiagnostics().executionProviders).toHaveLength(2);
+        client.setBackend('cpu');
+        const next = client.request({type: 'recognize', image: 'next'});
+        await flush(); expect(workers[0].terminate).not.toHaveBeenCalled();
+        workers[0].emit(); await first; await flush();
+        expect(workers[0].terminate).toHaveBeenCalledOnce();
+        expect(workers[1].latest.cpu).toBe(true);
+        stale({data: {requestId: 1, executionProviders: ['webgpu'], stage: 'initializing'}} as MessageEvent<MangaInferenceResponse>);
+        workers[1].emit({stage: 'recognizing', executionProviders: ['wasm']});
+        expect(client.getDiagnostics()).toMatchObject({stage: 'recognizing', executionProviders: ['wasm']});
+        workers[1].emit({success: true, result: {results: []}}); await next;
+        expect(client.getDiagnostics().stage).toBe('completed');
+        client.setBackend('auto');
+        const back = client.prepare('inpaint'); await flush();
+        expect(workers[2].latest.cpu).toBe(false); workers[2].emit(); await back;
+        client.dispose(); expect(client.getDiagnostics().stage).toBe('idle');
+    });
+
+    it('CPU 偏好跨释放和重新创建保留，自动回退可诊断，旧请求阶段不泄漏', async () => {
+        const {client, workers} = harness();
+        const first = client.request({type: 'recognize'}); await flush();
+        workers[0].fail('GPU failure'); await flush();
+        expect(client.getDiagnostics().cpuFallback).toBe(true);
+        workers[1].emit({executionProviders: ['wasm']}); workers[1].emit(); await first;
+        client.setBackend('cpu'); client.dispose();
+        const prepare = client.prepare('ocr'); await flush(); workers[2].emit(); await prepare;
+        const release = client.release('ocr'); await flush(); workers[2].emit(); await release;
+        const again = client.prepare('ocr'); await flush();
+        expect(workers[3].latest.cpu).toBe(true); workers[3].emit(); await again;
+        expect(client.getDiagnostics().cpuFallback).toBe(false);
+    });
+
+    it('切换偏好前已取消的排队请求不终止当前端口，也不创建新 Worker', async () => {
+        const {client, workers} = harness();
+        const first = client.prepare('ocr'); await flush();
+        client.setBackend('cpu');
+        const abort = new AbortController(), queued = observe(client.request({type: 'recognize'}, abort.signal));
+        abort.abort(); workers[0].emit(); await first;
+        await expect(queued).resolves.toMatchObject({status: 'rejected', reason: {name: 'AbortError'}});
+        await flush(); expect(workers).toHaveLength(1); expect(workers[0].terminate).not.toHaveBeenCalled();
+    });
 });
 
 describe('漫画独立 Worker 客户端', () => {
@@ -743,4 +844,162 @@ describe('漫画推理阶段超时契约', () => {
         expect(workers).toHaveLength(1);
         expect(vi.getTimerCount()).toBe(0);
     });
+});
+
+async function prepareText(h:ReturnType<typeof harness>,ready=true){
+    const pending=h.client.prepareTextSegmentation();await flush();h.workers.at(-1)!.emit({success:true,result:ready});await pending;
+}
+const inputText=():ImageTextSegmentationSource=>({width:4,height:4,pixels:new Uint8ClampedArray(4*4*4)});
+const outputText=()=>new Uint8Array(1024*1024);
+
+describe('可选离线 CTD 客户端',()=>{
+    it('必须先prepare可用性，缺模型明确false且工厂零调用',async()=>{
+        const h=harness(),factory=vi.fn(inputText);
+        await expect(h.client.segmentText(factory)).rejects.toBeInstanceOf(module.MangaSegmentationProtocolError);
+        expect(h.createWorker).not.toHaveBeenCalled();expect(factory).not.toHaveBeenCalled();
+        const ready=h.client.prepareTextSegmentation();await flush();expect(h.workers[0].latest.type).toBe('prepare-seg');h.workers[0].emit({success:true,result:false});
+        await expect(ready).resolves.toBe(false);await expect(h.client.segmentText(factory)).rejects.toThrow('尚未准备');
+        expect(factory).not.toHaveBeenCalled();h.client.dispose();expect(vi.getTimerCount()).toBe(0);
+    });
+    it('RGBA消息真实克隆快照而不detach原图，CPU一次重试重新核对归属并获得独立快照',async()=>{
+        const workers:ControlledWorker[]=[],snapshots:ImageTextSegmentationSource[]=[];
+        const client=module.createMangaInferenceClient(()=>{
+            const worker=new ControlledWorker();workers.push(worker);
+            worker.postMessage.mockImplementation((message,transfer)=>{
+                expect(transfer).toBeUndefined();
+                const copy=structuredClone(message);
+                if(copy.source)snapshots.push(copy.source);
+            });return worker as unknown as Worker;
+        });clients.push(client);
+        let pending=client.prepareTextSegmentation();await flush();workers[0].emit({success:true,result:true});await pending;
+        const source=inputText();source.pixels[0]=64;const original=source.pixels.slice(),factory=vi.fn(()=>source);
+        const result=client.segmentText(factory);await flush();
+        expect(source.pixels).toEqual(original);expect(snapshots[0].pixels[0]).toBe(64);
+        expect(snapshots[0].pixels.buffer).not.toBe(source.pixels.buffer);
+        snapshots[0].pixels[0]=128;expect(source.pixels[0]).toBe(64);
+        workers[0].emit({success:false,error:'GPU native failure',errorKind:'execution'});await flush();
+        expect(workers).toHaveLength(2);expect(workers[1].latest.cpu).toBe(true);expect(factory).toHaveBeenCalledTimes(2);
+        expect(source.pixels).toEqual(original);expect(snapshots[1].pixels).toEqual(original);
+        expect(snapshots[1].pixels.buffer).not.toBe(snapshots[0].pixels.buffer);
+        workers[1].emit({success:true,result:outputText()});await expect(result).resolves.toHaveLength(1024*1024);
+        const release=client.release('seg');await flush();expect(workers[1].latest.type).toBe('dispose-seg');workers[1].emit();await release;
+        expect(workers[1].terminate).toHaveBeenCalledOnce();expect(vi.getTimerCount()).toBe(0);
+    });
+    it.each(['prepare','segment'] as const)('%s协议失败不当GPU问题重建或再次分配',async stage=>{
+        const h=harness(),factory=vi.fn(inputText);
+        if(stage==='segment')await prepareText(h);
+        const result=observe<boolean|Uint8Array>(stage==='prepare'?h.client.prepareTextSegmentation():h.client.segmentText(factory));await flush();
+        h.workers[0].emit({success:false,error:'invalid model SHA',errorKind:'protocol'});
+        await expect(result).resolves.toMatchObject({status:'rejected',reason:{name:'MangaSegmentationProtocolError',message:'invalid model SHA'}});
+        expect(h.workers).toHaveLength(1);expect(h.workers[0].terminate).toHaveBeenCalledOnce();expect(factory).toHaveBeenCalledTimes(stage==='prepare'?0:1);
+    });
+    it('原图工厂异常保持原对象且不重试，不终止已有OCR/seg会话',async()=>{
+        const h=harness();await prepareText(h);const failure=new Error('source owner vanished'),factory=vi.fn(()=>{throw failure;});
+        await expect(h.client.segmentText(factory)).rejects.toBe(failure);expect(factory).toHaveBeenCalledOnce();
+        expect(h.createWorker).toHaveBeenCalledOnce();expect(h.workers[0].postMessage).toHaveBeenCalledOnce();expect(h.workers[0].terminate).not.toHaveBeenCalled();
+    });
+    it.each(['short','offset','shared','nan','negative','over','wrong','hidden','type','fraction','area','absent'] as const)('%s原图早拒，不发Worker或CPU重试',async fault=>{
+        const h=harness();await prepareText(h);let source:ImageTextSegmentationSource=inputText();
+        if(fault==='short')source.pixels=new Uint8ClampedArray(1);
+        if(fault==='offset')source.pixels=new Uint8ClampedArray(new ArrayBuffer(65),1);
+        if(fault==='shared')source.pixels=new Uint8ClampedArray(new SharedArrayBuffer(64));
+        if(fault==='nan')source.width=NaN;if(fault==='negative')source.height=-1;if(fault==='over')source.width=8193;
+        if(fault==='wrong')source={} as ImageTextSegmentationSource;
+        if(fault==='hidden')source.pixels=new Uint8ClampedArray(new ArrayBuffer(65),0,64);
+        if(fault==='type')source.pixels=new Uint8Array(64) as unknown as Uint8ClampedArray;
+        if(fault==='fraction')source.height=4.5;if(fault==='area'){source.width=8192;source.height=8192;}
+        if(fault==='absent')source=undefined as unknown as ImageTextSegmentationSource;
+        await expect(h.client.segmentText(()=>source)).rejects.toBeInstanceOf(module.MangaSegmentationProtocolError);
+        expect(h.workers[0].postMessage).toHaveBeenCalledOnce();expect(h.createWorker).toHaveBeenCalledOnce();
+    });
+    it.each(['prepare','short','offset','shared','wrong'] as const)('%s响应不满足owned固定协议时硬终止且不重试',async fault=>{
+        const h=harness();if(fault!=='prepare')await prepareText(h);
+        const result=observe<boolean|Uint8Array>(fault==='prepare'?h.client.prepareTextSegmentation():h.client.segmentText(inputText));await flush();
+        const value=fault==='prepare'?undefined:fault==='short'?new Uint8Array(1):fault==='offset'?new Uint8Array(new ArrayBuffer(1024*1024+1),1):fault==='shared'?new Uint8Array(new SharedArrayBuffer(1024*1024)):new Float32Array(1024*1024);
+        h.workers[0].emit({success:true,result:value});await expect(result).resolves.toMatchObject({status:'rejected',reason:{name:'MangaSegmentationProtocolError'}});
+        expect(h.workers).toHaveLength(1);expect(h.workers[0].terminate).toHaveBeenCalledOnce();
+    });
+    it('排队取消/全局dispose不调用输入工厂，推理取消最多1.5秒收尾',async()=>{
+        const h=harness();await prepareText(h);const busy=h.client.request({type:'recognize',image:'other'});await flush();
+        const abort=new AbortController(),factory=vi.fn(inputText),queued=observe(h.client.segmentText(factory,abort.signal));abort.abort();
+        await expect(queued).resolves.toMatchObject({status:'rejected',reason:{name:'AbortError'}});h.workers[0].emit({success:true,result:{results:[]}});await busy;await flush();expect(factory).not.toHaveBeenCalled();
+        const started=new AbortController(),running=observe(h.client.segmentText(factory,started.signal));await flush();started.abort();
+        await expect(running).resolves.toMatchObject({status:'rejected',reason:{name:'AbortError'}});await vi.advanceTimersByTimeAsync(1500);expect(h.workers[0].terminate).toHaveBeenCalledOnce();
+        await expect(h.client.segmentText(factory)).rejects.toThrow('尚未准备');
+    });
+    it('已取消prepare迟到成功也保留独立空闲清理，不受OCR持有端口影响',async()=>{
+        const h=harness(),ocr=h.client.prepare('ocr');await flush();h.workers[0].emit();await ocr;
+        const abort=new AbortController(),pending=observe(h.client.prepareTextSegmentation(abort.signal));await flush();abort.abort();
+        await expect(pending).resolves.toMatchObject({status:'rejected',reason:{name:'AbortError'}});h.workers[0].emit({success:true,result:true});await flush();
+        await vi.advanceTimersByTimeAsync(180000);expect(h.workers[0].latest.type).toBe('dispose-seg');h.workers[0].emit();await flush();
+        expect(h.workers[0].terminate).not.toHaveBeenCalled();const next=h.client.request({type:'recognize'});await flush();h.workers[0].emit({success:true,result:{results:[]}});await next;
+    });
+    it('seg独立空闲释放，不关闭OCR；没有其他端口则终止整个Worker',async()=>{
+        const h=harness();await prepareText(h);await vi.advanceTimersByTimeAsync(179999);expect(h.workers[0].latest.type).toBe('prepare-seg');
+        await vi.advanceTimersByTimeAsync(1);expect(h.workers[0].latest.type).toBe('dispose-seg');h.workers[0].emit();await flush();expect(h.workers[0].terminate).toHaveBeenCalledOnce();
+    });
+    it('已排队idle回调不会释放新seg调用，独立epoch失效后新prepare保持同owner',async()=>{
+        const h=harness();await prepareText(h);await vi.advanceTimersByTimeAsync(170000);
+        const busy=h.client.request({type:'recognize'});await flush();h.workers[0].emit({stage:'preparing'});await vi.advanceTimersByTimeAsync(10000);
+        const renewed=h.client.prepareTextSegmentation();h.workers[0].emit({success:true,result:{results:[]}});await busy;await flush();
+        expect(h.workers[0].postMessage.mock.calls.map(([message])=>message.type)).toEqual(['prepare-seg','recognize','prepare-seg']);h.workers[0].emit({success:true,result:true});await renewed;
+    });
+    it('idle释放失败保留诊断并终止旧owner，不触发CPU恢复',async()=>{
+        const warn=vi.spyOn(console,'warn').mockImplementation(()=>{}),h=harness();await prepareText(h);
+        await vi.advanceTimersByTimeAsync(180000);h.workers[0].emit({success:false,error:'release failed',errorKind:'execution'});await flush();
+        expect(warn).toHaveBeenCalledWith('图片分割空闲释放失败',expect.objectContaining({message:'release failed'}));expect(h.workers).toHaveLength(1);expect(h.workers[0].terminate).toHaveBeenCalledOnce();
+    });
+});
+
+it('seg准备回复后同tick取消或销毁，不给旧owner登记端口',async()=>{
+    const h=harness(),abort=new AbortController(),pending=observe(h.client.prepareTextSegmentation(abort.signal));
+    await flush();h.workers[0].emit({success:true,result:true});abort.abort();
+    await expect(pending).resolves.toMatchObject({status:'rejected',reason:{name:'AbortError'}});
+    const next=observe(h.client.prepareTextSegmentation());await flush();h.workers[0].emit({success:true,result:true});h.client.dispose();
+    await expect(next).resolves.toMatchObject({status:'rejected',reason:{name:'AbortError'}});expect(vi.getTimerCount()).toBe(0);
+});
+it('CPU重试前取消不再调用分割输入工厂，空协议错误保留明确首因',async()=>{
+    const h=harness(),abort=new AbortController();await prepareText(h);const factory=vi.fn(inputText);
+    const pending=observe(h.client.segmentText(factory,abort.signal,()=>abort.abort()));await flush();
+    h.workers[0].emit({success:false,errorKind:'execution',error:'GPU failure'});
+    await expect(pending).resolves.toMatchObject({status:'rejected',reason:{name:'AbortError'}});await flush();expect(factory).toHaveBeenCalledOnce();expect(h.workers).toHaveLength(1);
+    const bad=observe(h.client.prepareTextSegmentation());await flush();h.workers.at(-1)!.emit({success:false,errorKind:'protocol'});
+    await expect(bad).resolves.toMatchObject({status:'rejected',reason:{message:'图片分割协议错误'}});
+});
+
+it('已完成seg准备在下一条排队消息同步取消时，不发布旧页ready',async()=>{
+    const h=harness(),abort=new AbortController(),pending=observe(h.client.prepareTextSegmentation(abort.signal));await flush();
+    h.workers[0].postMessage.mockImplementationOnce(()=>{abort.abort();h.workers[0].emit({success:true,result:{results:[]}});});
+    const queued=h.client.request({type:'recognize',image:'next'});h.workers[0].emit({success:true,result:true});
+    await expect(pending).resolves.toMatchObject({status:'rejected',reason:{name:'AbortError'}});await queued;
+});
+
+it.each(['prepare','segment'] as const)('全局删除释放后旧%s等待者不能创建新Worker或分配tensor',async stage=>{
+    const h=harness();if(stage==='segment')await prepareText(h);
+    const {withMangaModelRemoval}=await import('@/src/features/image-translation/services/mangaOcrAssets');
+    let done!:()=>void;const removal=withMangaModelRemoval(()=>new Promise<void>(resolve=>{done=resolve;}));
+    const factory=vi.fn(inputText),pending=observe<boolean|Uint8Array>(stage==='prepare'?h.client.prepareTextSegmentation():h.client.segmentText(factory));
+    await Promise.resolve();h.client.dispose();done();await removal;
+    await expect(pending).resolves.toMatchObject({status:'rejected',reason:{name:'AbortError'}});expect(factory).not.toHaveBeenCalled();
+    expect(h.createWorker).toHaveBeenCalledTimes(stage==='prepare'?0:1);
+});
+
+it.each(['pre-aborted','queued-cancel'] as const)('已有分割端口再次prepare %s后仍独立空闲释放，OCR继续可用',async mode=>{
+    const h=harness(),ocr=h.client.prepare('ocr');await flush();h.workers[0].emit();await ocr;
+    await prepareText(h);
+    let busy:Promise<unknown>|undefined;
+    if(mode==='queued-cancel'){busy=h.client.request({type:'recognize',image:'active-ocr'});await flush();}
+    const abort=new AbortController();if(mode==='pre-aborted')abort.abort();
+    const pending=observe(h.client.prepareTextSegmentation(abort.signal));
+    if(mode==='queued-cancel')abort.abort();
+    await expect(pending).resolves.toMatchObject({status:'rejected',reason:{name:'AbortError'}});
+    if(busy){h.workers[0].emit({success:true,result:{results:[]}});await busy;await flush();}
+    // 已取消的准备根本没有到达 Worker；原有效 CTD 会话仍需重新获得空闲期限。
+    expect(h.workers[0].postMessage.mock.calls.filter(([message])=>message.type==='prepare-seg')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(179999);
+    expect(h.workers[0].postMessage.mock.calls.some(([message])=>message.type==='dispose-seg')).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);expect(h.workers[0].latest.type).toBe('dispose-seg');
+    h.workers[0].emit();await flush();expect(h.workers[0].terminate).not.toHaveBeenCalled();
+    const next=h.client.request({type:'recognize',image:'next-ocr'});await flush();h.workers[0].emit({success:true,result:{results:[]}});await next;
+    expect(h.createWorker).toHaveBeenCalledOnce();expect(h.workers[0].terminate).not.toHaveBeenCalled();
 });

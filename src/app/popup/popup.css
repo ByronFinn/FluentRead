@@ -1,8 +1,12 @@
 /**
  * @file src/app/popup/popup.css
- * 文件职责：定义宽度随皮肤和界面语言、高度由内容撑开且最高 560px 的浏览器 Popup 视觉系统与交互状态，包括亮暗主题、服务选择、功能卡、设置抽屉、通知和响应式细节。
- * 主要内容：以白色窄版画布、浅灰控件和品牌色强调翻译、局部及站点控制；两个操作以 42px 高度紧凑同排，主按钮弹性伸展并用短标题合并快捷键，辅助按钮以上方图标和下方文字收拢；网站规则不再绘制外层框，独立按钮沿用指示点展示保存状态并尊重减少动画偏好；保留版本与赞赏码的原位放大、服务及模型摘要、两列入口、完整开源胶囊与开关优先的快捷抽屉和必要的内部滚动。
+ * 文件职责：定义桌面宽度随皮肤和界面语言、独立扩展标签页与 Firefox Android 固定容器限制画布不超过视口，高度由内容撑开且最高 560px 的浏览器 Popup 视觉系统与交互状态，包括亮暗主题、服务选择、功能卡、设置抽屉、通知和响应式细节；Safari 触摸独立 Popup 的快捷入口以两列换行布局适配宿主。
+ * 主要内容：包括翻译卡片右下角紧凑显示模式与全局译文字体入口同行的工具布局，保持网站规则和卡片高度，两个按钮共用紧凑提示，字体图标两态保持相同尺寸；字体保存失败时以居中的短提示和独立重试按钮呈现，长文案可自然换行；品牌官网入口保留稳定点击区域，内部图标在悬停和键盘聚焦时缓慢单次摇摆并遵循动画偏好，停留后显示可用 Escape 关闭的官网提示；Safari 触摸独立 Popup 的快捷入口使用 flex 换行，卡片宽度与皮肤局部间距共享变量，奇数末项保留半宽；整页遮罩持续拦截背景，内部抽屉跟随可见视口并保留内部滚动，服务搜索在触屏使用 16px 字号避免自动缩放，名称使用 14px、辅助文字使用 12px，正常高度说明自然换行，窄列表按自身宽度改为单列以避免名称孤字折行，极矮视口保留省略并收紧项内留白；触摸设备的主画布、快捷和服务抽屉采用 46px 命中预算，为原生 sheet 缩放留余量，网站规则文字使用 12px 并自然换行，开关保留紧凑胶囊视觉，桌面沿用原有布局；以白色窄版画布、浅灰控件和品牌色强调翻译、局部及站点控制；两个操作以 42px 高度紧凑同排，主按钮弹性伸展并用短标题合并快捷键，辅助按钮以上方图标和下方文字收拢；网站规则不再绘制外层框，独立按钮沿用指示点展示保存状态并尊重减少动画偏好；保留版本与赞赏码的原位放大、服务及模型摘要、两列入口、完整开源胶囊与开关优先的快捷抽屉和必要的内部滚动。
  * 模块边界：样式只对应 PopupApp 的 DOM 和受控第三方组件，不决定配置值、能力可用性或消息行为；跨页面 token 在 src/ui/styles，Options/文档页各自维护页面样式。
+ * 极矮视口：服务选择的返回、搜索、清除与关闭复用原节点并排，隐藏装饰留白而不缩小操作区，输入状态与整页遮罩保持；触屏语言选择使用独立 portal 标记，46px 控件与 16px 输入避免继续沿用桌面紧凑尺寸，列表随可见高度收缩并给关闭入口让位。
+ * 品牌触屏：coarse 指针或已确认的 Firefox Android Popup 为官网链接提供居中的 46px 命中区，内部图标保持 32px，桌面链接仍随 32px 图标紧凑排布，不使用外扩重叠区域。
+ * 快捷层级：悬停和划词标题与开关共用一行并保留独立关闭按钮，说明只承载实际作用范围；圈选快捷键集中在示意中，服务摘要不保留数量徽标的空间。
+ * 顶部入口：赞赏与侧边栏使用紧凑图标及悬停提示，侧边栏不再占用翻译卡片的独立行，触屏仍保留命中面积。
  */
 @import "../../ui/styles/feedback.css";
 /* Popup 页面样式跟随 app 页面边界，避免 WXT 入口目录继续承载实现。 */
@@ -50,6 +54,7 @@ button { color: inherit; }
 button:focus-visible, select:focus-visible { outline: 3px solid rgba(239, 71, 118, .22); outline-offset: 2px; }
 
 .popup-shell {
+  --popup-secondary-action-width: 46px;
   position: relative;
   padding: 10px 16px 4px;
   background:
@@ -64,6 +69,10 @@ button:focus-visible, select:focus-visible { outline: 3px solid rgba(239, 71, 11
 /* 工具栏 popup 的 viewport 也由页面撑开；用 100dvh 限高会把首次打开锁在启动占位的矮高度。 */
 .popup-shell { max-height: 560px; overflow-y: auto; scrollbar-width: thin; }
 .popup-content { position: relative; z-index: 1; }
+.sidebar-translation-entry { display: inline-grid; place-items: center; flex: none; width: 34px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 11px; color: var(--muted); background: var(--surface); cursor: pointer; }
+.sidebar-translation-entry svg { width: 18px; height: 18px; }
+.sidebar-translation-entry:hover:not(:disabled) { color: var(--brand-strong); border-color: rgba(239, 71, 118, .35); background: var(--brand-soft); }
+.sidebar-translation-entry:disabled { opacity: .5; cursor: not-allowed; }
 .popup-shell.language-onboarding-shell { overflow-x: hidden; }
 /* 首启引导直接铺满弹窗；各界面风格都会给 .popup-shell 设置留白，这里统一清除，避免弹窗里再套一层边框。 */
 .popup-shell.language-onboarding-shell { padding: 0 !important; }
@@ -78,8 +87,26 @@ button:focus-visible, select:focus-visible { outline: 3px solid rgba(239, 71, 11
 .popup-header { margin-bottom: 8px; }
 .brand { gap: 9px; }
 .header-actions { gap: 6px; }
+.brand-icon-link { display: inline-flex; flex: none; border-radius: 7px; }
+.brand-icon-link:focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
 /* Logo 的圆角由图片透明轮廓提供；缩放或切换皮肤时不再额外裁剪四角。 */
-.brand img { width: 32px; height: 32px; border-radius: 0; box-shadow: 0 8px 18px rgba(239, 71, 118, .2); }
+.brand img { display: block; width: 32px; height: 32px; border-radius: 0; box-shadow: 0 8px 18px rgba(239, 71, 118, .2); }
+/* 只摇摆内部图像，点击区域和焦点框保持稳定；移开再进入可重播。 */
+.brand-icon-link[data-animated="true"]:is(:hover, :focus-visible) > img { animation: popup-brand-wiggle 1s ease-in-out; transform-origin: 50% 65%; }
+.popup-brand-tooltip.el-popper { max-width: min(240px, calc(100vw - 24px)); padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); box-shadow: 0 4px 14px rgba(23, 32, 51, .12); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.popup-brand-tooltip .brand-tooltip-copy { display: flex; flex-direction: column; gap: 2px; }
+.popup-brand-tooltip small { color: var(--muted); font-size: 10px; }
+@keyframes popup-brand-wiggle {
+  0%, 100% { transform: none; }
+  18% { transform: translateY(-2px) rotate(-12deg) scale(1.06); }
+  36% { transform: translateY(-2px) rotate(10deg) scale(1.06); }
+  54% { transform: translateY(-1px) rotate(-7deg) scale(1.03); }
+  72% { transform: rotate(4deg); }
+  86% { transform: rotate(-2deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-icon-link[data-animated="true"]:is(:hover, :focus-visible) > img { animation: none; }
+}
 .brand div { display: flex; flex-direction: column; }
 .brand strong { font-size: 15px; line-height: 1.25; font-weight: 760; }
 .brand small { margin-top: 2px; color: var(--muted); font-size: 10px; }
@@ -98,7 +125,7 @@ button:focus-visible, select:focus-visible { outline: 3px solid rgba(239, 71, 11
 .settings-button:hover { border-color: rgba(239, 71, 118, .35); color: var(--brand-strong); background: var(--brand-soft); }
 .settings-button svg { width: 17px; height: 17px; flex: none; }
 .donation-button {
-  display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 68px; height: 34px; padding: 0 10px;
+  display: inline-flex; flex: none; align-items: center; justify-content: center; width: 34px; min-width: 34px; height: 34px; padding: 0;
   border: 1px solid rgba(215, 166, 47, .28); border-radius: 11px; color: #a16b12; background: #fff9e9; font-size: 11px; font-weight: 700; cursor: pointer;
   transition: border-color 160ms ease, color 160ms ease, background 160ms ease, transform 160ms ease;
 }
@@ -205,9 +232,6 @@ h2 { margin-bottom: 0; font-size: 15px; line-height: 1.35; letter-spacing: -.01e
 .service-more-meta b { color: var(--muted); font-size: 15px; line-height: .7; font-weight: 500; transform: translateY(-1px); transition: transform 160ms ease; }
 .service-more-meta b.open { transform: translateY(1px) rotate(180deg); }
 
-.translate-action { display: flex; align-items: stretch; gap: 6px; margin-top: 8px; }
-.translate-action > .translate-button { flex: 1 1 0; flex-wrap: nowrap; }
-.translate-action > .section-translate-button { flex-direction: column; gap: 2px; min-height: 42px; padding: 4px 5px; }
 .translate-button {
   display: flex; flex: 1 1 auto; align-items: center; justify-content: center; gap: 6px; min-width: 0; min-height: 42px; height: auto; padding: 6px 10px;
   overflow: hidden; border: 0; border-radius: 10px; color: #fff; background: linear-gradient(135deg, #f35482, #e93267);
@@ -324,6 +348,7 @@ footer button {
 .feature-card > span:nth-child(2) { display: flex; flex-direction: column; min-width: 0; max-width: 100%; }
 .feature-card strong { font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
 .feature-card small { margin-top: 2px; overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.document-feature-card small { overflow:visible; white-space:normal; overflow-wrap:anywhere; text-overflow:clip; line-height:1.4; }
 .image-translation-preview > div > strong { font-size: 11px; }
 .video-info-banner { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-soft); }
 .video-info-banner > span:last-child { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
@@ -403,6 +428,20 @@ footer > button { justify-self: end; }
 }
 
 .popup-drawer-modal { background: rgba(17, 20, 29, .48) !important; backdrop-filter: blur(2px); }
+/* 遮罩始终覆盖整页并拦截背景点击；只有内部抽屉跟随可见区域，根 popup 保持固有尺寸。 */
+.popup-drawer-modal[data-fluent-read-popup-viewport] {
+  position: fixed !important; inset: 0 !important;
+  width: 100% !important; height: 100% !important;
+}
+.popup-drawer-modal[data-fluent-read-popup-viewport] .popup-drawer {
+  left: var(--fluent-read-drawer-left) !important;
+  right: calc(100% - var(--fluent-read-drawer-left) - var(--fluent-read-drawer-width)) !important;
+  bottom: max(0px, calc(100% - var(--fluent-read-drawer-top) - var(--fluent-read-drawer-height))) !important;
+  width: min(var(--fluent-read-drawer-width), var(--interface-popup-width, 320px)) !important;
+  min-height: 0 !important; max-height: calc(var(--fluent-read-drawer-height) - 8px);
+  /* 只保留进出场位移；键盘改变视口后立即应用尺寸，焦点恢复才能读取实际可用高度。 */
+  transition-property: transform;
+}
 .popup-drawer {
   width: min(100vw, var(--interface-popup-width, 320px)) !important; min-height: 260px !important; max-height: 88vh;
   margin: 0 auto !important; padding: 8px 20px 18px; overflow: hidden;
@@ -420,8 +459,34 @@ footer > button { justify-self: end; }
 }
 .drawer-content { margin-top: 16px; }
 .provider-drawer-content { margin-top: 0; }
-/* 服务概览滚动时为滚动条留出独立槽位，避免覆盖右侧关闭按钮。 */
-.popup-services-drawer .el-drawer__body { padding-right: 8px; scrollbar-gutter: stable; scrollbar-width: thin; }
+/* overlay 滚动条不会为 stable gutter 扣除布局宽度；显式留出空间，避免其命中层挡住关闭按钮右缘。 */
+.popup-services-drawer .el-drawer__body { padding-right: 16px; scrollbar-gutter: stable; scrollbar-width: thin; }
+/* 横屏键盘可能只留下 58px：收回外间距，48px 操作行随同一滚动区让位，保留 46px 命中区。 */
+.popup-drawer-modal[data-fluent-read-popup-viewport][data-fluent-read-popup-short] .popup-services-drawer { max-height: var(--fluent-read-drawer-height); padding-top: 4px; padding-bottom: 4px; }
+.popup-drawer-modal[data-fluent-read-popup-short] .popup-services-drawer .drawer-handle { display: none; }
+.popup-drawer-modal[data-fluent-read-popup-short] .popup-service-picker {
+  --fluent-read-service-control-height: 46px;
+  --fluent-read-service-control-row: 48px;
+}
+.popup-drawer-modal[data-fluent-read-popup-short] .service-picker-heading {
+  position: relative; box-sizing: border-box; height: var(--fluent-read-service-control-row); min-height: var(--fluent-read-service-control-row);
+  padding-block: 0; justify-content: space-between;
+}
+.popup-drawer-modal[data-fluent-read-popup-short] .service-picker-heading > :is(strong, small) {
+  position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
+/* 回收同一条 48px 操作行；两盒仍独立存在，避免 Firefox 原生无障碍树漏掉 display:contents 子控件。 */
+.popup-drawer-modal[data-fluent-read-popup-short] .service-picker-search {
+  position: relative; z-index: 2; box-sizing: border-box; width: auto;
+  height: var(--fluent-read-service-control-row); min-height: var(--fluent-read-service-control-row);
+  margin: calc(-1 * var(--fluent-read-service-control-row)) calc(var(--fluent-read-service-control-height) + 8px) 0;
+}
+.popup-drawer-modal[data-fluent-read-popup-short] .service-picker-search > svg { display: none; }
+.popup-drawer-modal[data-fluent-read-popup-short] .popup-service-picker :is(.service-picker-back, .service-picker-close, .service-picker-search button) { min-width: 46px; min-height: 46px; }
+.popup-drawer-modal[data-fluent-read-popup-short] .service-picker-search input { min-height: 46px; font-size: 16px; }
+.popup-drawer-modal[data-fluent-read-popup-short] .service-choice-copy > :is(strong, small) {
+  min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
 .selection-mode-tabs {
   display: flex; gap: 4px; margin-bottom: 16px; padding: 4px; border-radius: 16px; background: var(--surface-soft);
 }
@@ -479,7 +544,6 @@ footer > button { justify-self: end; }
 .setting-row > span, .select-row > span { display: flex; flex: 1; min-width: 0; flex-direction: column; }
 .setting-row strong, .select-row strong { font-size: 12px; }
 .setting-row small, .select-row small { margin-top: 3px; color: var(--muted); font-size: 9.5px; line-height: 1.4; }
-.setting-row small.independent-profile-note { color: var(--brand-strong); font-weight: 650; }
 .choice-block { margin-top: 16px; }
 .quick-profile-preview { display: grid; gap: 7px; margin-top: 16px; }
 .quick-profile-preview > label { margin-left: 3px; color: var(--muted); font-size: 10px; font-weight: 650; }
@@ -543,8 +607,8 @@ footer > button { justify-self: end; }
 .language-pair .fluentread-select .el-select__selected-item { font-size: 11px; font-weight: 650; }
 .select-row > .fluentread-select { width: 180px; flex: 0 1 58%; }
 
-/* 高频操作保持直达：版本、赞赏与设置同排，不隐藏按钮标签。 */
-.popup-header .donation-button { min-width: 58px; padding: 0 8px; }
+/* 高频操作保持直达：赞赏是紧凑图标，设置保留文字。 */
+:root[data-interface-skin] .popup-header .donation-button { width: 34px; min-width: 34px; height: 34px; padding: 0; }
 .popup-header .header-actions { gap: 7px; }
 .popup-header .settings-button { min-width: 32px; padding: 0 7px; }
 .hero-card { box-shadow: none; }
@@ -569,7 +633,7 @@ footer > button { justify-self: end; }
 .hover-keycap:hover { background: #363b46; }
 .hover-translation-preview.preview-disabled { opacity: .65; }
 .popup-quick-drawer .setting-row { gap: 12px; min-height: 56px; margin-top: 10px; padding: 10px 12px; border-radius: 12px; }
-.popup-quick-drawer .quick-enable-row { margin-top: 0; }
+.popup-quick-drawer .drawer-content > :first-child { margin-top: 0; }
 .popup-quick-drawer .quick-profile-preview { gap: 6px; margin-top: 12px; }
 .popup-quick-drawer .quick-profile-preview-row { min-height: 34px; padding: 6px 8px; border-radius: 9px; }
 .popup-quick-drawer .choice-block { margin-top: 12px; }
@@ -596,7 +660,7 @@ footer > button { justify-self: end; }
 .hero-card { border-radius: 14px; padding: 10px 12px; }
 .features { margin-top: 10px; }
 .features-eyebrow { font-size: 11px; font-weight: 500; letter-spacing: 0; }
-.feature-grid { gap: 8px; }
+.feature-grid { --fluentread-popup-feature-gap: 8px; gap: var(--fluentread-popup-feature-gap); }
 .feature-card { min-height: 50px; padding: 7px 8px; grid-template-columns: 26px minmax(0, 1fr) 6px; gap: 8px; border-radius: 10px; }
 .feature-icon { width: 26px; height: 28px; }
 .feature-card strong { font-size: 11.5px; font-weight: 600; }
@@ -615,8 +679,6 @@ footer button { font-weight: 500; color: var(--muted); }
 .image-method-copy { min-width: 0; display: grid; gap: 7px; }
 .image-method-copy strong { font-size: 13px; font-weight: 600; }
 .image-method-copy small { color: var(--muted); font-size: 11px; line-height: 1.5; }
-.image-method-shortcut { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; }
-.image-method-shortcut kbd { border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; background: var(--surface); color: var(--ink); font: 10px/1.5 inherit; }
 .image-method .switch { pointer-events: none; }
 
 /* 默认服务与配置模型直接可读；具体功能与 AI 偏好在抽屉中展开，不为隐藏内容预留高度。 */
@@ -631,58 +693,61 @@ footer button { font-weight: 500; color: var(--muted); }
 .provider-summary-icons { display: flex; flex: none; align-items: center; padding-left: 6px; }
 .provider-avatar { display: grid; place-items: center; width: 29px; height: 29px; margin-left: -6px; border: 2px solid var(--surface); border-radius: 50%; background: var(--surface-soft); }
 .provider-avatar :is(.service-icon) { width: 23px; height: 23px; border-radius: 50%; }
-.provider-overflow { font-size: 10px; color: var(--muted); }
 .provider-summary-chevron { margin-left: 7px; font-size: 19px; color: var(--muted); }
-.drawer-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.drawer-heading { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; }
+.drawer-heading-copy { flex: 1; min-width: 0; }
+.drawer-title-row { display: flex; align-items: center; gap: 12px; }
+.drawer-title-row h2 { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.drawer-title-row .switch { flex: none; }
 .language-pair { grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr); gap: 6px; }
 /* 不显示域名后，两个规则按钮占用整行；覆盖简洁皮肤原先为域名预留的宽度。 */
 :root .popup-shell[data-interface-skin] .site-rule-actions { max-width: 100%; }
 
-/* 拉丁字母与西里尔字母语言保留自然词间换行和操作空间；中文、日文与韩文沿用窄版。 */
-:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) {
+/* 其他皮肤的拉丁及西里尔文案可换行和拓宽，默认皮肤各语言共用 320px 槽位。 */
+:root[data-interface-skin]:not([data-interface-skin="default"]):is(:lang(en), :lang(fr), :lang(ru), :lang(es)) {
   --fluentread-localized-popup-width: max(var(--interface-popup-width, 320px), 380px);
   width: var(--fluentread-localized-popup-width);
 }
-:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell .popup-header {
+:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell:not(.default-skin) .popup-header {
   flex-wrap: wrap;
   gap: 8px 12px;
 }
-:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell .brand strong { white-space: nowrap; }
-:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell .header-actions { margin-inline-start: auto; }
-:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell .header-actions > button {
+:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell:not(.default-skin) { --popup-secondary-action-width: 64px; }
+:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell:not(.default-skin) .brand strong { white-space: nowrap; }
+:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell:not(.default-skin) .header-actions { margin-inline-start: auto; }
+:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell:not(.default-skin) .header-actions > button {
   height: auto;
   min-height: 34px;
 }
-:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell .header-actions > button > span {
+:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell:not(.default-skin) .header-actions > button > span {
   overflow: visible;
   white-space: normal;
   text-overflow: clip;
   line-height: 1.4;
 }
-:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell .translate-button {
+:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell:not(.default-skin) .translate-button {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
 }
-:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell[data-interface-skin] .translate-button .translate-label {
+:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell:not(.default-skin)[data-interface-skin] .translate-button .translate-label {
   overflow: visible;
   text-overflow: clip;
   white-space: normal;
   overflow-wrap: break-word;
 }
-:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell .translate-hotkey { max-width: none; }
-:root:not(:lang(zh)) .popup-shell .feature-card small {
+:root:not(:lang(zh)) .popup-shell:not(.default-skin) .feature-card small {
   overflow: visible;
   white-space: normal;
   text-overflow: clip;
   line-height: 1.4;
 }
-:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell footer {
+:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell:not(.default-skin) footer {
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
 }
-:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell .popup-translation-count { white-space: nowrap; }
+:root:is(:lang(en), :lang(fr), :lang(ru), :lang(es)) .popup-shell:not(.default-skin) .popup-translation-count { white-space: nowrap; }
 
-:root:not(:lang(zh)) .popup-shell[data-interface-skin] .translate-button .translate-label {
+:root:not(:lang(zh)) .popup-shell:not(.default-skin)[data-interface-skin] .translate-button .translate-label {
   overflow: visible; white-space: normal; overflow-wrap: anywhere; text-overflow: clip; line-height: 1.4;
 }
 :root:not(:lang(zh)) .popup-shell[data-interface-skin] .translate-button { height: auto; min-height: 40px; padding-block: 7px; }
@@ -691,25 +756,328 @@ footer button { font-weight: 500; color: var(--muted); }
 :root:not(:lang(zh)) .popup-shell .opensource-link > span:not(.external-mark) { min-width: 0; overflow-wrap: anywhere; }
 .opensource-link svg, .opensource-link .external-mark { flex: none; }
 
-/* 页内 iframe 已有视口尺寸，只在这个模式使用视口约束；工具栏仍保留固有宽度契约。 */
+/* 公开 API 确认的独立标签页已有视口；原生、Android 与嵌入宿主继续使用各自的宽高契约。 */
+:root[data-fluentread-tab-popup]:not([data-fluentread-embedded-popup], [data-fluentread-android-popup], [data-fluentread-safari-touch-popup]),
+:root[data-fluentread-tab-popup]:not([data-fluentread-embedded-popup], [data-fluentread-android-popup], [data-fluentread-safari-touch-popup]) :is(body, #app) {
+  width: min(100vw, var(--fluentread-localized-popup-width, var(--interface-popup-width, 320px)));
+}
+:root[data-fluentread-tab-popup]:not([data-fluentread-embedded-popup], [data-fluentread-android-popup], [data-fluentread-safari-touch-popup]) .popup-shell { max-height: min(560px, 100dvh); }
+
+/* 页内 iframe 已有视口尺寸，工具栏仍保留固有宽度契约。 */
 :root[data-fluentread-embedded-popup] { width: min(100vw, var(--fluentread-localized-popup-width, var(--interface-popup-width, 320px))); min-height: 0 !important; }
 :root[data-fluentread-embedded-popup] body,
 :root[data-fluentread-embedded-popup] #app { width: min(100vw, var(--fluentread-localized-popup-width, var(--interface-popup-width, 320px))); }
 :root[data-fluentread-embedded-popup] .popup-shell { max-height: min(560px, 100dvh); }
 
+/* 仅公开平台 API 确认的 Firefox Android 使用固定视口宽度；桌面工具栏继续保留固有尺寸。 */
+:root[data-fluentread-android-popup],
+:root[data-fluentread-android-popup] body,
+:root[data-fluentread-android-popup] #app {
+  width: min(100vw, var(--fluentread-localized-popup-width, var(--interface-popup-width, 320px)));
+}
+/* Android 已由浏览器给出固定页面高度，只保留画布内部滚动，避免外层再截住页脚。 */
+:root[data-fluentread-android-popup] .popup-shell { max-height: min(560px, 100dvh); }
+
+/* Safari 触摸工具栏的宿主已给定视口；页内 iframe 继续保留自己的宽度契约。 */
+:root[data-fluentread-safari-touch-popup]:not([data-fluentread-embedded-popup]),
+:root[data-fluentread-safari-touch-popup]:not([data-fluentread-embedded-popup]) body,
+:root[data-fluentread-safari-touch-popup]:not([data-fluentread-embedded-popup]) #app { width: 100%; }
+/* 原生 sheet 可以比桌面内容上限更矮；让语言列表承担滚动，确认按钮保留在可见卡片内。 */
+:root[data-fluentread-safari-touch-popup]:not([data-fluentread-embedded-popup]) .popup-shell {
+  max-height: min(560px, 100dvh);
+  --fluentread-onboarding-height: min(560px, 100dvh);
+  --fluentread-onboarding-layout: flex;
+  --fluentread-onboarding-list-min: 46px;
+  --fluentread-onboarding-list-overflow: auto;
+}
+/* 为覆盖式滚动条留出空隙；焦点轮廓收进按钮，避免被列表边缘裁切。 */
+:root[data-fluentread-safari-touch-popup]:not([data-fluentread-embedded-popup]) .onboarding-language-options { padding-inline-end: 20px; }
+:root[data-fluentread-safari-touch-popup]:not([data-fluentread-embedded-popup]) .onboarding-language-option:focus-visible { outline-offset: -4px; }
+/* 极矮视口容不下标题、列表和确认时，整卡滚动保留全部内容的可达性。 */
+@media (max-height: 280px) {
+  :root[data-fluentread-safari-touch-popup]:not([data-fluentread-embedded-popup]) .popup-shell {
+    --fluentread-onboarding-layout: block;
+    --fluentread-onboarding-list-overflow: visible;
+  }
+}
+/* 只替换 Safari 触摸独立 Popup 的外层排列；各皮肤的间距与卡片内部网格仍由原规则决定。 */
+:root[data-fluentread-safari-touch-popup]:not([data-fluentread-embedded-popup]) .feature-grid {
+  display: flex;
+  flex-wrap: wrap;
+}
+:root[data-fluentread-safari-touch-popup]:not([data-fluentread-embedded-popup]) .feature-grid > .feature-card {
+  flex: 0 0 calc((100% - var(--fluentread-popup-feature-gap)) / 2);
+}
+:root[data-fluentread-safari-touch-popup]:not([data-fluentread-embedded-popup]) .popup-drawer-modal[data-fluent-read-popup-viewport] .popup-drawer {
+  width: var(--fluent-read-drawer-width) !important;
+}
+
 /* 同排操作保持紧凑高度；短标题合并快捷键，完整用途和长组合由按钮提示呈现。 */
-:root .popup-shell[data-interface-skin] .translate-action { display: flex; flex-wrap: nowrap; align-items: stretch; gap: 6px; }
+:root .popup-shell[data-interface-skin] .translate-action { --diagnostic-space: 36px; --diagnostic-color: #fff; position: relative; display: flex; flex-wrap: nowrap; align-items: stretch; gap: 6px; margin-top: 8px; }
+:root[data-interface-skin="minimal"] .popup-shell[data-interface-skin] .translate-action { --diagnostic-color: var(--ink); }
+:root[data-interface-skin-kind="palette"] .popup-shell[data-interface-skin] .translate-action { --diagnostic-color: var(--skin-action-text, #fff); }
+:root[data-interface-skin-kind="palette"] .popup-shell[data-interface-skin] .translate-action.is-translated { --diagnostic-color: var(--brand-strong); }
+:root.dark[data-interface-skin="contrast"] .popup-shell[data-interface-skin] .translate-action { --diagnostic-color: #000; }
 :root .popup-shell[data-interface-skin] .translate-action > .translate-button {
-  display: flex; flex: 1 1 0; flex-wrap: nowrap; align-items: center; min-width: 0; min-height: 42px; height: auto; padding: 6px 10px; overflow: visible;
+  display: flex; flex: 1 1 0; flex-wrap: nowrap; align-items: center; min-width: 0; min-height: 42px; height: auto; padding: 6px var(--diagnostic-space); overflow: visible;
 }
 :root .popup-shell[data-interface-skin] .translate-action .translate-label {
   flex: 0 1 auto; min-width: 0; overflow: visible; text-overflow: clip; white-space: nowrap; line-height: 1.25;
 }
 :root .popup-shell[data-interface-skin] .translate-action .spinner { flex: none; }
 :root .popup-shell[data-interface-skin] .translate-action > .section-translate-button {
-  display: inline-flex; flex: 0 0 auto; flex-direction: column; justify-content: center; gap: 2px; min-width: 46px; height: auto; min-height: 42px; padding: 4px 5px;
+  display: inline-flex; flex: 0 0 auto; flex-direction: column; justify-content: center; gap: 2px; width: var(--popup-secondary-action-width); min-width: var(--popup-secondary-action-width); height: auto; min-height: 42px; padding: 4px 5px;
 }
+/* 入口叠在主按钮的预留区域，不参与网站规则或按钮的布局；详情沿整行右缘展开。 */
+:root .popup-shell[data-interface-skin] .translate-action > .fluentread-diagnostic {
+  position: absolute; inset: 0; z-index: 5; width: auto; height: auto; margin: 0; pointer-events: none;
+}
+:root .popup-shell[data-interface-skin] .translate-action > .fluentread-diagnostic :is(.diagnostic-trigger, .diagnostic-details) { pointer-events: auto; }
+:root .popup-shell[data-interface-skin] .translate-action > .fluentread-diagnostic .diagnostic-trigger {
+  position: absolute; top: 50%; right: 6px; transform: translateY(-50%); border-radius: 50%; color: var(--diagnostic-color); background: transparent;
+}
+:root .popup-shell[data-interface-skin] .translate-action.has-section-translation > .fluentread-diagnostic .diagnostic-trigger { right: calc(var(--popup-secondary-action-width) + 12px); }
+:root .popup-shell[data-interface-skin] .translate-action > .fluentread-diagnostic .diagnostic-trigger:hover { color: var(--diagnostic-color); background: color-mix(in srgb, var(--diagnostic-color) 14%, transparent); }
+:root .popup-shell[data-interface-skin] .translate-action > .fluentread-diagnostic .diagnostic-trigger:focus-visible { outline-color: var(--diagnostic-color); }
 /* 仅移除网站规则模块的外框，排序容器、独立按钮与各皮肤的按钮状态均保留。 */
 :root .popup-shell[data-interface-skin] .site-rule-row[data-popup-module="siteRule"] {
   min-height: 0; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none;
 }
+
+.translation-meta { display: flex; align-items: center; gap: 6px; margin-top: 8px; min-width: 0; }
+:root .popup-shell[data-interface-skin] .translation-meta > .site-rule-row[data-popup-module="siteRule"] { flex: 1; min-width: 0; margin-top: 0; }
+/* 显示模式常驻局部按钮下方；网站规则可换行，右侧工具独立对齐，不增加默认中文弹窗高度。 */
+.translation-tools { position: relative; display: flex; flex: none; align-items: center; gap: 6px; margin-inline-start: auto; }
+.display-mode-slot { display: grid; place-items: center; flex: 0 0 var(--popup-secondary-action-width); width: var(--popup-secondary-action-width); }
+.display-mode-slot.with-page-font { display: flex; justify-content: center; gap: 6px; flex-basis: max(54px, var(--popup-secondary-action-width)); width: max(54px, var(--popup-secondary-action-width)); }
+.display-mode-button { display: grid; place-items: center; box-sizing: border-box; width: 24px; height: 24px; padding: 2px; border: 1px solid transparent; border-radius: 6px; color: var(--brand-strong); background: var(--surface-soft); cursor: pointer; }
+.page-font-entry { flex: none; }
+.page-font-entry.is-browser-default { border-color: var(--brand); background: var(--brand-soft); }
+.page-font-error { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 3px 8px; margin-top: 8px; padding: 5px 8px; border-radius: 8px; color: var(--fr-danger); background: var(--fr-danger-soft); font-size: 12px; line-height: 1.4; text-align: center; }
+.page-font-error-copy { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 0; }
+.page-font-error-copy svg { width: 14px; height: 14px; flex: none; }
+.page-font-error-copy span { min-width: 0; overflow-wrap: anywhere; }
+.page-font-retry { flex: none; min-height: 24px; padding: 2px 8px; border: 1px solid currentColor; border-radius: 6px; color: inherit; background: transparent; font-weight: 700; cursor: pointer; }
+.page-font-retry:hover { background: var(--surface); }
+.page-font-retry:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.translation-tool-tooltip.el-popper { max-width: min(240px, calc(100vw - 24px)); padding: 6px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: 0 3px 10px rgba(23, 32, 51, .1); overflow-wrap: anywhere; }
+.translation-tool-tooltip-copy { display: flex; flex-direction: column; gap: 2px; color: var(--ink); font-size: 11px; line-height: 1.5; }
+.translation-tool-tooltip-copy small { color: var(--muted); font-size: 10px; }
+.popup-label-tooltip-copy { white-space: pre-line; }
+.display-mode-button svg { display: block; width: 18px; height: 18px; flex: none; }
+.display-mode-button:hover:not(:disabled) { border-color: var(--brand); background: var(--brand-soft); }
+.display-mode-button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.display-mode-button:disabled { color: var(--muted); opacity: .55; cursor: default; }
+
+.popup-startup-recovery { padding: 20px; color: var(--ink); font-size: 12px; line-height: 1.6; }
+.popup-startup-recovery p { color: var(--muted); }
+.popup-startup-recovery button { padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink); cursor: pointer; }
+.safari-free-pool-note { margin: 8px 0; color: var(--muted, #64748b); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+
+/* 默认卡片沿用原有颜色、圆角和间距，文字在控件的固定槽位内省略。 */
+.default-skin .popup-header { gap: 8px; }
+.default-skin .brand, .default-skin .brand-copy { flex: 1; min-width: 0; }
+.default-skin .brand small { line-height: 13px; }
+.default-skin .header-actions { flex: none; }
+.default-skin .settings-button { width: 68px; padding-inline: 5px; }
+.default-skin .language-pair label > span { line-height: 14px; }
+
+.default-skin .provider-strip { position: relative; display: flow-root; }
+.default-skin .provider-summary { height: 43px; }
+.default-skin .provider-summary-copy {
+  display: grid; grid-template-columns: min(52px, 42%) minmax(0, 1fr); align-items: baseline; gap: 1px 5px; line-height: 15px;
+}
+.default-skin .provider-summary-heading { display: contents; }
+.default-skin .provider-summary-heading > small { font-size: 11px; }
+.default-skin .provider-summary-model { display: block; grid-column: 2; font-size: 10px; line-height: 12px; }
+.default-skin .needs-credentials .provider-summary-icons { visibility: hidden; }
+.default-skin .credential-warning {
+  position: absolute; inset: 8px 0 0 auto; display: grid; width: 46px; margin: 0; padding: 0; border: 0; background: transparent;
+}
+.default-skin .credential-warning > span {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+}
+.default-skin .credential-warning button { min-width: 0; padding: 0 3px; color: var(--fr-warning); text-decoration: none; }
+.default-skin .credential-warning button > span { display: block; padding: 3px 2px; border-radius: 6px; background: var(--fr-warning-soft); }
+
+.default-skin .site-rule-actions { display: grid; grid-template-columns: minmax(0, 10fr) minmax(0, 11fr); }
+.default-skin .site-rule-button { min-width: 0; justify-content: space-between; text-align: start; }
+.default-skin .site-rule-button.enabled > i:not(.site-rule-saving) {
+  background: #24b47e; box-shadow: 0 0 0 4px rgba(36, 180, 126, .12);
+}
+.default-skin :is(.translate-button, .section-translate-button, .donation-button):hover:not(:disabled) { transform: none; }
+.default-skin footer { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.default-skin footer > :is(span, button) { line-height: 14px; }
+.default-skin footer > button { width: 100%; text-align: end; }
+.default-skin .opensource-link { min-width: 0; padding-inline: 3px; }
+.default-skin .opensource-link > :is(svg, .external-mark) { flex: none; }
+
+:root .popup-shell.default-skin :is(
+  .brand-copy > *, .settings-button > span, .language-pair label > span, .provider-summary-heading > *,
+  .provider-summary-model, .credential-warning button > span, .translate-action .translate-label,
+  .section-translate-button > span, .site-rule-button > span, .feature-copy > *,
+  .popup-translation-count, .opensource-link > span:not(.external-mark), footer > button
+) { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
+
+/* any-pointer 同时覆盖触屏与连接鼠标的 iPad；46px 为原生 sheet 缩放留余量，并非任意缩放下 44px 的保证。 */
+@media (any-pointer: coarse) {
+  :root .popup-shell[data-interface-skin] .translate-action { --diagnostic-space: 50px; }
+  :root .popup-shell[data-interface-skin] .translate-action > .fluentread-diagnostic .diagnostic-trigger { right: 0; }
+  :root .popup-shell[data-interface-skin] .translate-action.has-section-translation > .fluentread-diagnostic .diagnostic-trigger { right: calc(var(--popup-secondary-action-width) + 6px); }
+  :root .popup-shell .brand-icon-link { min-width: 46px; min-height: 46px; align-items: center; justify-content: center; }
+  :root .popup-shell .donation-close { width: 46px; height: 46px; }
+  :root .popup-shell .donation-card h2 { padding-right: 44px; }
+  :root .popup-shell[data-interface-skin] .translate-action > .translate-button,
+  :root .popup-shell[data-interface-skin] .translate-action > .section-translate-button {
+    min-height: 46px;
+    height: auto;
+  }
+  :root .popup-shell[data-interface-skin] :is(.header-actions > button, .site-rule-button, footer > button, .opensource-link, .provider-summary),
+  :root .popup-drawer.popup-quick-drawer button,
+  :root .popup-drawer.popup-services-drawer button {
+    min-width: 46px;
+    min-height: 46px;
+    height: auto;
+  }
+  :root .popup-shell[data-interface-skin] .site-rule-button { font-size: 12px; line-height: 1.4; white-space: normal; text-align: start; }
+  :root .popup-shell[data-interface-skin] .site-rule-button > span { min-width: 0; overflow-wrap: anywhere; }
+  :root .popup-services-drawer .service-picker-search input { min-height: 46px; font-size: 16px; }
+  :root .popup-drawer.popup-services-drawer .popup-service-picker { container: fluentread-popup-services / inline-size; }
+  /* 触屏阅读字号独立于紧凑双列；正常高度的说明自然换行，极矮视口保留原省略与可滚动项高。 */
+  :root .popup-drawer.popup-services-drawer .popup-service-picker .service-choice-copy strong,
+  :root .popup-drawer.popup-services-drawer .popup-service-picker .service-choice-grid.compact .service-choice-copy strong { font-size: 14px; line-height: 1.4; }
+  :root .popup-drawer.popup-services-drawer .popup-service-picker :is(.service-choice-group-label, .service-choice-copy small, .service-picker-heading > small, .service-picker-more small, .service-picker-warning, .service-picker-empty) { font-size: 12px; line-height: 1.5; }
+  :root .popup-drawer-modal:not([data-fluent-read-popup-short]) .popup-drawer.popup-services-drawer .popup-service-picker .service-choice-copy small,
+  :root .popup-drawer-modal:not([data-fluent-read-popup-short]) .popup-drawer.popup-services-drawer .popup-service-picker .service-choice-grid.compact .service-choice-copy small { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+  :root .popup-drawer.popup-services-drawer .popup-service-picker .service-picker-heading > strong { font-size: 16px; line-height: 1.4; }
+  :root .popup-drawer.popup-services-drawer .popup-service-picker .service-picker-more { font-size: 14px; line-height: 1.4; }
+  /* 58px 可见口扣除外边距后约 50px：缩减项内留白，让两行文字仍落在 46px 触摸区内。 */
+  :root .popup-drawer-modal[data-fluent-read-popup-short] .popup-services-drawer .service-choice { padding-block: 2px; }
+  /* 点击框独立于 40×24 胶囊，不把开关轨道拉高成方块；仅作用真实 button，不改变图片入口的装饰 span。 */
+  :root[data-interface-skin] .popup-drawer.popup-quick-drawer button.switch.compact {
+    width: 46px;
+    height: 46px;
+    padding: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  :root[data-interface-skin] .popup-drawer.popup-quick-drawer button.switch.compact::before {
+    content: "";
+    position: absolute;
+    width: 40px;
+    height: 24px;
+    left: 3px;
+    top: 11px;
+    border-radius: 999px;
+    background: #cfd3dc;
+    transition: background 180ms ease;
+    pointer-events: none;
+  }
+  :root[data-interface-skin] .popup-drawer.popup-quick-drawer button.switch.compact[aria-checked="true"]::before { background: var(--brand); }
+  :root[data-interface-skin] .popup-drawer.popup-quick-drawer button.switch.compact i { position: absolute; left: 6px; top: 14px; }
+
+  /* 新单屏引导与自助诊断在 Popup 内沿用相同触摸预算，桌面仍保留紧凑状态入口。 */
+  :root .popup-shell .language-onboarding :is(.onboarding-language-option, .onboarding-confirm),
+  :root .popup-shell .fluentread-diagnostic button,
+  :root .popup-shell .page-font-retry,
+  :root .popup-startup-recovery button { min-width: 46px; min-height: 46px; height: auto; }
+  :root .popup-shell .fluentread-diagnostic { flex-basis: 46px; width: 46px; height: 46px; }
+  :root .popup-shell .fluentread-diagnostic .diagnostic-close { flex-basis: 46px; }
+  :root .popup-shell .display-mode-button { width: 46px; height: 46px; flex-shrink: 0; }
+  :root .popup-shell .display-mode-slot.with-page-font { flex-basis: max(98px, var(--popup-secondary-action-width)); width: max(98px, var(--popup-secondary-action-width)); }
+}
+
+/* Firefox Android 的固定扩展容器可能报告 fine pointer；已确认的 Android 容器仍使用与 coarse 相同的触摸命中预算。 */
+:root[data-fluentread-android-popup] .popup-shell .brand-icon-link { min-width: 46px; min-height: 46px; align-items: center; justify-content: center; }
+:root[data-fluentread-android-popup] .popup-shell .donation-close { width: 46px; height: 46px; }
+:root[data-fluentread-android-popup] .popup-shell[data-interface-skin] .translate-action { --diagnostic-space: 50px; }
+:root[data-fluentread-android-popup] .popup-shell[data-interface-skin] .translate-action > .fluentread-diagnostic .diagnostic-trigger { right: 0; }
+:root[data-fluentread-android-popup] .popup-shell[data-interface-skin] .translate-action.has-section-translation > .fluentread-diagnostic .diagnostic-trigger { right: calc(var(--popup-secondary-action-width) + 6px); }
+:root[data-fluentread-android-popup] .popup-shell .donation-card h2 { padding-right: 44px; }
+:root[data-fluentread-android-popup] .popup-shell[data-interface-skin] .translate-action > .translate-button,
+:root[data-fluentread-android-popup] .popup-shell[data-interface-skin] .translate-action > .section-translate-button {
+  min-height: 46px;
+  height: auto;
+}
+:root[data-fluentread-android-popup] .popup-shell[data-interface-skin] :is(.header-actions > button, .site-rule-button, footer > button, .opensource-link, .provider-summary),
+:root[data-fluentread-android-popup] .popup-drawer.popup-quick-drawer button,
+:root[data-fluentread-android-popup] .popup-drawer.popup-services-drawer button {
+  min-width: 46px;
+  min-height: 46px;
+  height: auto;
+}
+:root[data-fluentread-android-popup] .popup-shell[data-interface-skin] .site-rule-button { font-size: 12px; line-height: 1.4; white-space: normal; text-align: start; }
+:root[data-fluentread-android-popup] .popup-shell[data-interface-skin] .site-rule-button > span { min-width: 0; overflow-wrap: anywhere; }
+:root[data-fluentread-android-popup] .popup-services-drawer .service-picker-search input { min-height: 46px; font-size: 16px; }
+:root[data-fluentread-android-popup] .popup-drawer.popup-services-drawer .popup-service-picker { container: fluentread-popup-services / inline-size; }
+/* 已确认的 Android 容器沿用触屏阅读字号；极矮视口继续使用原有省略规则。 */
+:root[data-fluentread-android-popup] .popup-drawer.popup-services-drawer .popup-service-picker .service-choice-copy strong,
+:root[data-fluentread-android-popup] .popup-drawer.popup-services-drawer .popup-service-picker .service-choice-grid.compact .service-choice-copy strong { font-size: 14px; line-height: 1.4; }
+:root[data-fluentread-android-popup] .popup-drawer.popup-services-drawer .popup-service-picker :is(.service-choice-group-label, .service-choice-copy small, .service-picker-heading > small, .service-picker-more small, .service-picker-warning, .service-picker-empty) { font-size: 12px; line-height: 1.5; }
+:root[data-fluentread-android-popup] .popup-drawer-modal:not([data-fluent-read-popup-short]) .popup-drawer.popup-services-drawer .popup-service-picker .service-choice-copy small,
+:root[data-fluentread-android-popup] .popup-drawer-modal:not([data-fluent-read-popup-short]) .popup-drawer.popup-services-drawer .popup-service-picker .service-choice-grid.compact .service-choice-copy small { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
+:root[data-fluentread-android-popup] .popup-drawer.popup-services-drawer .popup-service-picker .service-picker-heading > strong { font-size: 16px; line-height: 1.4; }
+:root[data-fluentread-android-popup] .popup-drawer.popup-services-drawer .popup-service-picker .service-picker-more { font-size: 14px; line-height: 1.4; }
+:root[data-fluentread-android-popup] .popup-drawer-modal[data-fluent-read-popup-short] .popup-services-drawer .service-choice { padding-block: 2px; }
+/* 根据列表自身宽度换列，不把浏览器视口等同于原生 Popup 宿主宽度；极矮口继续使用紧凑双列。 */
+@container fluentread-popup-services (max-width: 300px) {
+  :root .popup-drawer-modal:not([data-fluent-read-popup-short]) .popup-services-drawer .service-choice-grid.compact { grid-template-columns: minmax(0, 1fr); }
+}
+/* 点击框独立于 40×24 胶囊，不把开关轨道拉高成方块；仅作用真实 button，不改变图片入口的装饰 span。 */
+:root[data-fluentread-android-popup][data-interface-skin] .popup-drawer.popup-quick-drawer button.switch.compact {
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+:root[data-fluentread-android-popup][data-interface-skin] .popup-drawer.popup-quick-drawer button.switch.compact::before {
+  content: "";
+  position: absolute;
+  width: 40px;
+  height: 24px;
+  left: 3px;
+  top: 11px;
+  border-radius: 999px;
+  background: #cfd3dc;
+  transition: background 180ms ease;
+  pointer-events: none;
+}
+:root[data-fluentread-android-popup][data-interface-skin] .popup-drawer.popup-quick-drawer button.switch.compact[aria-checked="true"]::before { background: var(--brand); }
+:root[data-fluentread-android-popup][data-interface-skin] .popup-drawer.popup-quick-drawer button.switch.compact i { position: absolute; left: 6px; top: 14px; }
+
+/* 新单屏引导与自助诊断在 Popup 内沿用相同触摸预算，桌面仍保留紧凑状态入口。 */
+:root[data-fluentread-android-popup] .popup-shell .language-onboarding :is(.onboarding-language-option, .onboarding-confirm),
+:root[data-fluentread-android-popup] .popup-shell .fluentread-diagnostic button,
+:root[data-fluentread-android-popup] .popup-startup-recovery button { min-width: 46px; min-height: 46px; height: auto; }
+:root[data-fluentread-android-popup] .popup-shell .fluentread-diagnostic { flex-basis: 46px; width: 46px; height: 46px; }
+:root[data-fluentread-android-popup] .popup-shell .fluentread-diagnostic .diagnostic-close { flex-basis: 46px; }
+
+/* 语言列表 teleport 到 body；专属类只约束 Popup，不改变 Options 和其他 UiSelect。 */
+@media (any-pointer: coarse) {
+  :root .popup-shell[data-interface-skin] .language-pair .popup-language-select .el-select__wrapper { min-width: 46px; min-height: 46px; }
+  :root .popup-shell .popup-language-select :is(.el-select__input, .el-select__selected-item) { font-size: 16px; }
+  :root .fluentread-popup-language-popper .el-select-dropdown__item { min-height: 46px; font-size: 16px; }
+}
+:root[data-fluentread-android-popup] .popup-shell[data-interface-skin] .language-pair .popup-language-select .el-select__wrapper { min-width: 46px; min-height: 46px; }
+:root[data-fluentread-android-popup] .popup-shell .popup-language-select :is(.el-select__input, .el-select__selected-item) { font-size: 16px; }
+:root[data-fluentread-android-popup] .fluentread-popup-language-popper .el-select-dropdown__item { min-height: 46px; font-size: 16px; }
+/* 变量只在触屏菜单打开时存在；极矮视口优先保留关闭，选项仍由自己的 scrollbar 滚动。 */
+.fluentread-popup-language-popper[style*="--fluentread-popup-language-height"] .el-select-dropdown {
+  display: flex; flex-direction: column; max-height: max(0px, calc(var(--fluentread-popup-language-height) - 10px)); overflow: hidden;
+}
+.fluentread-popup-language-popper[style*="--fluentread-popup-language-height"] .el-select-dropdown > .el-scrollbar {
+  flex: 1 1 auto; min-height: 0;
+}
+.fluentread-popup-language-popper[style*="--fluentread-popup-language-height"] .el-select-dropdown__wrap {
+  max-height: max(0px, min(320px, calc(var(--fluentread-popup-language-height) - 58px))); overscroll-behavior: contain;
+}
+.fluentread-popup-language-popper[style*="--fluentread-popup-language-height"] .el-select-dropdown__empty { flex: 1 1 auto; min-height: 0; padding: 0 8px; overflow: auto; }
+.fluentread-popup-language-popper .el-select-dropdown__footer { flex: 0 0 auto; padding: 0; border-top: 0; }
+.fluentread-popup-language-popper .popup-language-close {
+  display: block; width: 100%; min-width: 46px; min-height: 46px; padding: 6px 12px; border: 0; border-radius: 9px;
+  background: var(--surface-soft); color: var(--ink); font-size: 16px; cursor: pointer;
+}
+:root[data-fluentread-android-popup] .popup-shell .display-mode-button { width: 46px; height: 46px; flex-shrink: 0; }
+:root[data-fluentread-android-popup] .popup-shell .page-font-retry { min-width: 46px; min-height: 46px; }
+:root[data-fluentread-android-popup] .popup-shell .display-mode-slot.with-page-font { flex-basis: max(98px, var(--popup-secondary-action-width)); width: max(98px, var(--popup-secondary-action-width)); }

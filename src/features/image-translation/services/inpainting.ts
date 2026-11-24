@@ -1,17 +1,85 @@
 /**
  * @file src/features/image-translation/services/inpainting.ts
  * 文件职责：依据有效 OCR 文本框在像素缓冲区中修复原文字，保留修复区域以外的图像内容。
- * 主要内容：按源行框及有界边缘修补，保留行间图案；相接簇用链表连接成员后一次展开，避免重复复制和参数展开；仅为局部范围分配去重蒙版和分层队列，按预乘透明度扩散；默认保留输入，也可显式复用调用方独占的像素缓冲。
- * 模块边界：本模块是无 DOM、无网络的轻量像素算法，不进行 OCR 或译文绘制，也不宣称能够重建复杂纹理；输入和输出保持原图尺寸，无法取得已知边界时保留原像素。
+ * 主要内容：按源行框及有界边缘修补，提供与实际蒙版一致的碰撞判断，保留行间图案；相接簇用链表连接成员后一次展开，避免重复复制和参数展开；已确认低 alpha 行段既不可写也不可作为扩散背景，隔离无种子的原字岛时显式拒绝；纯色边界省去队列，独立不透明矩形在完整边界符合平滑渐变时重建渐变，避免扩散造成条纹；共享渐变规划只在完整外周匹配且内部不含透明像素时冻结颜色，失败不写入，供漫画按原清字框复用；默认保留输入，也可显式复用调用方独占的像素缓冲。
+ * 模块边界：本模块是无 DOM、无网络的轻量像素算法，不进行 OCR 或译文绘制，也不宣称能够重建复杂纹理；输入和输出保持原图尺寸，无保护参数时保持原有无边界行为；保护路径失败由调用方在发布前撤回。
+ * 细线背景：在原纯色与渐变规则之后，按单次修补共享的预付面积预算验证细线背景；只在完整不透明蒙版内采用源线条与横截面计划，保留已确认背景，少量跨度外像素仍走原扩散；透明保护路径保持原样。
+ * 旋转短标签：独立物理字框可先验证书脊的逐列底色和真实墨迹，原清字蒙版与保护规则继续生效。
+ * 斜向背景：独立窄横排框中的不透明背景经原图四边确认方向后沿斜边修补，整图共享独立工作预算。
+ * 普通扩散：窄横排框外沿的突变色只在相邻三层底色一致、且突变未向框内连续延伸时用作替换采样候选。仅改变扩散读取的颜色，不写外沿，避免被识别框切到的描边在框内扩散成色带。
  */
 import type {OcrLine} from '@/src/shared/image/types';
 import type {ImageTextRegion} from '../paragraphs';
+import {ImageAlphaProtectionUnavailableError,type MangaAlphaProtection} from './mangaAlphaProtection';
+import {IMAGE_RULED_REPAIR_LIMITS,planImageRuledTextRepair} from './ruledTextRepair';
+import {planImageFlatTextRepair} from './flatTextRepair';
+import {IMAGE_DIRECTIONAL_REPAIR_BUDGET,repairDirectionalImageBackground} from './directionalTextRepair';
 
 interface MaskRectangle {
     left: number;
     top: number;
     right: number;
     bottom: number;
+    rotatedSource?: OcrLine['bbox'];
+}
+
+interface BoundarySampleBudget {
+    readonly rectangles: MaskRectangle[];
+    pixels: number;
+    comparisons: number;
+}
+
+interface BoundarySampleRows {
+    top?: Uint8ClampedArray;
+    bottom?: Uint8ClampedArray;
+}
+
+function rgbDistance(pixels: Uint8ClampedArray, a: number, b: number): number {
+    return Math.abs(pixels[a] - pixels[b]) + Math.abs(pixels[a + 1] - pixels[b + 1])
+        + Math.abs(pixels[a + 2] - pixels[b + 2]);
+}
+
+/** 外沿单点颜色不足以作证。只在同一侧有多处薄突变，且外侧颜色能互证时冻结采样行。 */
+function sampleBoundaryRow(pixels: Uint8ClampedArray, start: number, width: number, step: number): Uint8ClampedArray | undefined {
+    let samples: Uint8ClampedArray | undefined;
+    let count = 0;
+    for (let x = 0; x < width; x++) {
+        const first = start + x * 4;
+        const a = first + step, b = a + step, c = b + step;
+        if (rgbDistance(pixels, a, b) > 36 || rgbDistance(pixels, b, c) > 36 || rgbDistance(pixels, a, c) > 36
+            || rgbDistance(pixels, first, a) < 108 || rgbDistance(pixels, first, b) < 108 || rgbDistance(pixels, first, c) < 108
+            || (rgbDistance(pixels, first, first - step) < 72 && rgbDistance(pixels, first, first - step * 2) < 72)) continue;
+        // 两侧角点照读原图，便于扩散循环沿用局部横坐标。
+        samples ??= pixels.slice(start - 4, start + (width + 1) * 4);
+        for (let channel = 0; channel < 3; channel++) {
+            const p = pixels[a + channel], q = pixels[b + channel], r = pixels[c + channel];
+            samples[(x + 1) * 4 + channel] = p + q + r - Math.min(p, q, r) - Math.max(p, q, r);
+        }
+        count++;
+    }
+    return count >= 4 ? samples : undefined;
+}
+
+function planBoundarySampleRows(pixels: Uint8ClampedArray, imageWidth: number, imageHeight: number, box: MaskRectangle,
+    budget: BoundarySampleBudget): BoundarySampleRows | undefined {
+    const width = box.right - box.left, height = box.bottom - box.top;
+    if (width < 32 || width > 512 || height < 8 || height > 64 || width < height * 2 || width * height > 16_384) return;
+    const left = box.left - 4, top = box.top - 4, right = box.right + 4, bottom = box.bottom + 4;
+    const area = (right - left) * (bottom - top);
+    if (left < 0 || top < 0 || right > imageWidth || bottom > imageHeight || area > budget.pixels) return;
+    // 原位修补允许其他框已改变；所有外侧取样必须避开任何其他待擦除框。
+    for (const other of budget.rectangles) {
+        if (--budget.comparisons < 0) return;
+        if (other !== box && other.left < right && other.right > left && other.top < bottom && other.bottom > top) return;
+    }
+    budget.pixels -= area;
+    for (let y = top; y < bottom; y++) for (let x = left; x < right; x++) {
+        if (pixels[(y * imageWidth + x) * 4 + 3] !== 255) return;
+    }
+    const step = imageWidth * 4;
+    const upper = sampleBoundaryRow(pixels, ((box.top - 1) * imageWidth + box.left) * 4, width, -step);
+    const lower = sampleBoundaryRow(pixels, (box.bottom * imageWidth + box.left) * 4, width, step);
+    return upper || lower ? {top: upper, bottom: lower} : undefined;
 }
 
 function union(a: MaskRectangle, b: MaskRectangle): MaskRectangle {
@@ -64,6 +132,21 @@ function getMaskRectangle(line: OcrLine, width: number, height: number): MaskRec
     };
 }
 
+/** 仅导出普通图原有修补几何，供低 alpha 保护使用；不套用漫画字号描边余量。 */
+export function imageMaskBoxes(line: ImageTextRegion, width: number, height: number): OcrLine['bbox'][] {
+    return (line.sourceBoxes ?? [line.bbox]).flatMap(bbox => {
+        const rectangle = getMaskRectangle({text: line.text, bbox}, width, height);
+        return rectangle ? [{x0:rectangle.left,y0:rectangle.top,x1:rectangle.right,y1:rectangle.bottom}] : [];
+    });
+}
+
+/** 使用与实际修补相同的逐行扩边判断是否会碰到需要保留的原文。 */
+export function imageMaskBoxIntersects(box: OcrLine['bbox'], width: number, height: number, target: OcrLine['bbox']): boolean {
+    const rectangle = getMaskRectangle({text: '', bbox: box}, width, height);
+    return !!rectangle && rectangle.left < target.x1 && target.x0 < rectangle.right
+        && rectangle.top < target.y1 && target.y0 < rectangle.bottom;
+}
+
 /** 使用八邻域边界扩散修复文字区域；默认不修改输入，inPlace 仅适用于调用方独占的缓冲。 */
 export function inpaintTextRegions(
     source: Uint8ClampedArray,
@@ -71,28 +154,44 @@ export function inpaintTextRegions(
     height: number,
     lines: ImageTextRegion[],
     inPlace = false,
+    protection?: MangaAlphaProtection,
 ): Uint8ClampedArray {
     const result = inPlace ? source : new Uint8ClampedArray(source);
     if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height)
         || width <= 0 || height <= 0 || source.length < width * height * 4 || lines.length === 0) return result;
 
-    const rectangles = lines.flatMap(line => (line.sourceBoxes ?? [line.bbox])
-        .map(bbox => getMaskRectangle({text: line.text, bbox}, width, height)))
+    const rectangles = lines.flatMap(line => {
+        const sources=line.sourceBoxes??[line.bbox];
+        return sources.map(bbox=>{
+            const rectangle=getMaskRectangle({text:line.text,bbox},width,height);
+            if(rectangle&&line.quarterTurn&&sources.length===1)rectangle.rotatedSource=bbox;
+            return rectangle;
+        });
+    })
         .filter((rectangle): rectangle is MaskRectangle => rectangle !== undefined);
     if (rectangles.length === 0) return result;
 
-    for (const group of clusters(rectangles)) repairCluster(result, width, height, group);
+    const ruleBudget={remaining:IMAGE_RULED_REPAIR_LIMITS.pagePixels};
+    const directionBudget={remaining:IMAGE_DIRECTIONAL_REPAIR_BUDGET};
+    const boundaryBudget: BoundarySampleBudget = {rectangles, pixels:262_144, comparisons:65_536};
+    for (const group of clusters(rectangles)) repairCluster(result, width, height, group, protection,ruleBudget,directionBudget,boundaryBudget);
     return result;
 }
 
-function repairCluster(result: Uint8ClampedArray, imageWidth: number, imageHeight: number, rectangles: MaskRectangle[]): void {
+function repairCluster(result: Uint8ClampedArray, imageWidth: number, imageHeight: number, rectangles: MaskRectangle[],
+    protection: MangaAlphaProtection|undefined,ruleBudget:{remaining:number},directionBudget:{remaining:number},boundaryBudget:BoundarySampleBudget): void {
     const bounds = rectangles.reduce(union);
+    if(!protection&&rectangles.length===1&&bounds.rotatedSource){
+        const source=bounds.rotatedSource,mask={x0:bounds.left,y0:bounds.top,x1:bounds.right,y1:bounds.bottom};
+        const repair=planImageFlatTextRepair(result,imageWidth,imageHeight,{mask,source,fontSize:source.x1-source.x0,rotatedLabel:true},ruleBudget);
+        if(repair){repair(result);return;}
+    }
     // 一像素已知边界保留原八邻域；触图边时不引入不存在的外围像素。
     const left = Math.max(0, bounds.left - 1), top = Math.max(0, bounds.top - 1);
     const width = Math.min(imageWidth, bounds.right + 1) - left;
     const height = Math.min(imageHeight, bounds.bottom + 1) - top;
 
-    // 0 = 已知背景，1 = 待修复，2 = 已进入队列但本层尚未完成。
+    // 0 = 已知背景，1 = 待修复，2 = 已进入队列但本层尚未完成，3 = 不可写且不可采样的保护点。
     const mask = new Uint8Array(width * height);
     let maskedCount = 0;
     for (const rectangle of rectangles) {
@@ -104,6 +203,71 @@ function repairCluster(result: Uint8ClampedArray, imageWidth: number, imageHeigh
                     maskedCount += 1;
                 }
             }
+        }
+    }
+
+    let dividesMask = false;
+    if (protection) {
+        const {runs,rowStarts} = protection;
+        // 每行二分跳过左侧行段；仅访问局部蒙版及其一像素采样上下文相交的保护段。
+        for (let y = top; y < top + height; y += 1) {
+            let low = rowStarts[y], high = rowStarts[y + 1];
+            const end = high;
+            while (low < high) {
+                const middle = (low + high) >>> 1;
+                if (runs[middle * 3 + 2] <= left) low = middle + 1;
+                else high = middle;
+            }
+            for (let run = low; run < end && runs[run * 3 + 1] < left + width; run += 1) {
+                const start = Math.max(left,runs[run * 3 + 1]), stop = Math.min(left + width,runs[run * 3 + 2]);
+                for (let x = start; x < stop; x += 1) {
+                    const index = (y - top) * width + x - left;
+                    if (mask[index] === 1) {maskedCount -= 1;dividesMask = true;}
+                    mask[index] = 3;
+                }
+            }
+        }
+        if (maskedCount === 0) return;
+    }
+
+    // 仅接受完整的实际扩散边界；触图边或全透明边界继续原路，避免补造像素或改变隐藏 RGB 规范化。
+    // 内部保护可能封死原字岛；此时先由队列证明可达，再使用已确认纯色，不能跨环填充。
+    const uniform = bounds.left > 0 && bounds.top > 0 && bounds.right < imageWidth && bounds.bottom < imageHeight
+        ? uniformKnownBoundary(result, imageWidth, mask, left, top, width, rectangles) : undefined;
+    if (uniform !== undefined && !dividesMask) {
+        // 只扫描去重后的局部蒙版一次；不扩张、不填行间孔洞，也不为纯色簇分配逐像素队列。
+        for (let index = 0; index < mask.length; index += 1) {
+            if (mask[index] !== 1) continue;
+            const offset = ((Math.floor(index / width) + top) * imageWidth + index % width + left) * 4;
+            for (let channel = 0; channel < 4; channel += 1) result[offset + channel] = uniform[channel];
+        }
+        return;
+    }
+
+    // 只使用真实四边，且逐像素验证；边缘被裁切、透明孔、相接多框和纹理继续原来的扩散路径。
+    const hasFullBorder = rectangles.length === 1 && bounds.left > 0 && bounds.top > 0
+        && bounds.right < imageWidth && bounds.bottom < imageHeight;
+    if (!protection && hasFullBorder) {
+        const repair = planImageGradientRepair(result, imageWidth, left, top, width, height);
+        if (repair) {repair(result); return;}
+    }
+
+    let boundaryRows: BoundarySampleRows | undefined;
+    if(!protection){
+        const ruled=planImageRuledTextRepair(result,imageWidth,imageHeight,{left,top,width,height,mask},ruleBudget);
+        if(ruled){
+            for(let index=0;index<mask.length;index++){
+                if(mask[index]!==1||!ruled.kind[index])continue;
+                if(ruled.kind[index]===2){
+                    const offset=((Math.floor(index/width)+top)*imageWidth+index%width+left)*4;
+                    for(let channel=0;channel<3;channel++)result[offset+channel]=ruled.colors[index*3+channel];
+                }
+                mask[index]=0;maskedCount--;
+            }
+            if(maskedCount===0)return;
+        } else if (hasFullBorder && !bounds.rotatedSource) {
+            if (repairDirectionalImageBackground(result,imageWidth,left,top,width,height,directionBudget)) return;
+            boundaryRows = planBoundarySampleRows(result,imageWidth,imageHeight,bounds,boundaryBudget);
         }
     }
 
@@ -131,6 +295,27 @@ function repairCluster(result: Uint8ClampedArray, imageWidth: number, imageHeigh
         }
     }
 
+    if (uniform !== undefined) {
+        // 透明纯色页只做连通性检查，不重复逐像素RGBA加权；未确认全部可达前不擦写。
+        for (let head = 0; head < tail; head += 1) {
+            const index = queue[head], x = index % width, y = Math.floor(index / width);
+            for (let ny = Math.max(0,y-1); ny <= Math.min(height-1,y+1); ny += 1) {
+                for (let nx = Math.max(0,x-1); nx <= Math.min(width-1,x+1); nx += 1) {
+                    const neighbour = ny * width + nx;
+                    if (mask[neighbour] !== 1) continue;
+                    mask[neighbour] = 2;
+                    queue[tail++] = neighbour;
+                }
+            }
+        }
+        if (tail !== maskedCount) throw new ImageAlphaProtectionUnavailableError('透明保护区隔离了无法修补的原文字，已保留原图');
+        for (let position = 0; position < tail; position += 1) {
+            const index = queue[position], offset = ((Math.floor(index / width)+top)*imageWidth+index%width+left)*4;
+            for (let channel = 0; channel < 4; channel += 1) result[offset+channel] = uniform[channel];
+        }
+        return;
+    }
+
     let head = 0;
     while (head < tail) {
         const layerEnd = tail;
@@ -144,15 +329,20 @@ function repairCluster(result: Uint8ClampedArray, imageWidth: number, imageHeigh
             let alpha = 0;
             let weightTotal = 0;
             for (let ny = Math.max(0, y - 1); ny <= Math.min(height - 1, y + 1); ny += 1) {
+                const row = boundaryRows && (ny === 0 ? boundaryRows.top : ny === height - 1 ? boundaryRows.bottom : undefined);
+                const colors = row ?? result;
+                const rowOffset = ((ny + top) * imageWidth + left) * 4;
+                const colorStart = row ? 0 : rowOffset;
                 for (let nx = Math.max(0, x - 1); nx <= Math.min(width - 1, x + 1); nx += 1) {
                     const neighbour = ny * width + nx;
                     if (mask[neighbour] !== 0) continue;
-                    const offset = ((ny + top) * imageWidth + nx + left) * 4;
+                    const offset = rowOffset + nx * 4;
                     const weight = nx === x || ny === y ? 2 : 1;
                     const alphaWeight = result[offset + 3] * weight;
-                    red += result[offset] * alphaWeight;
-                    green += result[offset + 1] * alphaWeight;
-                    blue += result[offset + 2] * alphaWeight;
+                    const colorOffset = colorStart + nx * 4;
+                    red += colors[colorOffset] * alphaWeight;
+                    green += colors[colorOffset + 1] * alphaWeight;
+                    blue += colors[colorOffset + 2] * alphaWeight;
                     alpha += alphaWeight;
                     weightTotal += weight;
                 }
@@ -181,4 +371,73 @@ function repairCluster(result: Uint8ClampedArray, imageWidth: number, imageHeigh
             }
         }
     }
+    if (protection && tail !== maskedCount) throw new ImageAlphaProtectionUnavailableError('透明保护区隔离了无法修补的原文字，已保留原图');
+}
+
+/** 完整外周验证双线性背景后冻结颜色；只返回内部蒙版的写入计划，验证失败不修改像素。 */
+export function planImageGradientRepair(pixels: Uint8ClampedArray, imageWidth: number,
+    left: number, top: number, width: number, height: number, requireGradient = false): ((target: Uint8ClampedArray) => void) | undefined {
+    if (![imageWidth,left,top,width,height].every(Number.isSafeInteger) || imageWidth <= 0 || left < 0 || top < 0
+        || width < 3 || height < 3 || left + width > imageWidth || top + height > pixels.length / (imageWidth * 4)) return;
+    const offset = (x: number, y: number) => ((top + y) * imageWidth + left + x) * 4;
+    const corners = [offset(0, 0), offset(width - 1, 0), offset(0, height - 1), offset(width - 1, height - 1)];
+    if (corners.some(index => pixels[index + 3] !== 255)) return;
+    const colors = corners.map(index => [pixels[index], pixels[index + 1], pixels[index + 2]]);
+    // 漫画已判为复杂的区域不能只凭一圈同色边界重新降为纯色；这里只补充有实际变化的渐变。
+    if (requireGradient && colors.every(color => color.every((value, channel) => value === colors[0][channel]))) return;
+    const value = (x: number, y: number, channel: number) => {
+        const u = x / (width - 1), v = y / (height - 1);
+        return (colors[0][channel] * (1 - u) + colors[1][channel] * u) * (1 - v)
+            + (colors[2][channel] * (1 - u) + colors[3][channel] * u) * v;
+    };
+    const matches = (x: number, y: number) => {
+        const index = offset(x, y);
+        if (pixels[index + 3] !== 255) return false;
+        for (let channel = 0; channel < 3; channel++) {
+            if (Math.abs(pixels[index + channel] - value(x, y, channel)) > 1) return false;
+        }
+        return true;
+    };
+    for (let x = 0; x < width; x++) if (!matches(x, 0) || !matches(x, height - 1)) return;
+    for (let y = 1; y < height - 1; y++) if (!matches(0, y) || !matches(width - 1, y)) return;
+    for (let y = 1; y < height - 1; y++) for (let x = 1; x < width - 1; x++) {
+        if (pixels[offset(x, y) + 3] !== 255) return;
+    }
+    const length = pixels.length;
+    return target => {
+        if (target.length !== length) throw new RangeError('背景修补缓冲尺寸不一致');
+        for (let y = 1; y < height - 1; y++) for (let x = 1; x < width - 1; x++) {
+            const index = offset(x, y);
+            for (let channel = 0; channel < 3; channel++) target[index + channel] = Math.round(value(x, y, channel));
+            target[index + 3] = 255;
+        }
+    };
+}
+
+/** 并集的八邻域边界等于成员矩形一像素外周扣除并集；跳过重叠周、保留内孔，仅按周长检查相同 RGBA。 */
+function uniformKnownBoundary(result: Uint8ClampedArray, imageWidth: number, mask: Uint8Array,
+    left: number, top: number, width: number, rectangles: MaskRectangle[]): [number, number, number, number] | undefined {
+    let color: [number, number, number, number] | undefined;
+    const matches = (x: number, y: number) => {
+        if (mask[(y - top) * width + x - left] !== 0) return true;
+        const offset = (y * imageWidth + x) * 4;
+        if (color === undefined) {
+            if (result[offset + 3] === 0) return false;
+            color = [result[offset], result[offset + 1], result[offset + 2], result[offset + 3]];
+        } else {
+            for (let channel = 0; channel < 4; channel += 1) {
+                if (result[offset + channel] !== color[channel]) return false;
+            }
+        }
+        return true;
+    };
+    for (const rectangle of rectangles) {
+        for (let x = rectangle.left - 1; x <= rectangle.right; x += 1) {
+            if (!matches(x, rectangle.top - 1) || !matches(x, rectangle.bottom)) return;
+        }
+        for (let y = rectangle.top; y < rectangle.bottom; y += 1) {
+            if (!matches(rectangle.left - 1, y) || !matches(rectangle.right, y)) return;
+        }
+    }
+    return color;
 }

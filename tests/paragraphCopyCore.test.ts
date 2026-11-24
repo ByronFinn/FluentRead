@@ -13,6 +13,10 @@ function domFrom(html: string) {
 }
 
 describe('段落复制取词', () => {
+    it('空代码块与空双语工件不制造译文形态或额外正文', () => {
+        const document = domFrom('<div id="target"><pre>\n  \n</pre><p>Plain text<span class="fluent-read-bilingual-content" data-fr-translation-owned="true"> \n </span></p></div>');
+        expect(readParagraphTexts(document.getElementById('target')!)).toEqual({original: 'Plain text', translation: '', display: 'original'});
+    });
     it('极深的行内 DOM 仍完整复制文字，不耗尽调用栈', () => {
         const document = domFrom('<p id="target"></p>');
         const root = document.getElementById('target')!;
@@ -81,6 +85,14 @@ const a = 1;
         const texts = readParagraphTexts(document.getElementById('target')!);
 
         expect(texts.original).toBe('标题\n第一段\nconst a = 1;\n  const b = 2;\n甲\n乙');
+    });
+
+    it.each(['', '<p> 说明 </p>'])('代码块在段落开头或说明之后保留首行缩进及连续空行：%s', prefix => {
+        const code = '    first line\n\n\n    fourth line';
+        const document = domFrom(`<div id="target">${prefix}<pre>${code}</pre><p> 结束 </p></div>`);
+        const root = document.getElementById('target')!;
+        expect(readParagraphTexts(root).original).toBe(`${prefix ? '说明\n' : ''}${code}\n结束`);
+        expect(readParagraphTexts(root.querySelector('pre')!).original).toBe(code);
     });
 
     it('不重复采集嵌套在译文内部的插件节点，并忽略脚本与样式', () => {

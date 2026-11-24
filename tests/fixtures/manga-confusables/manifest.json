@@ -1,0 +1,752 @@
+{
+  "version": 1,
+  "generator": "scripts/testing/generate-manga-confusable-fixtures.py",
+  "repositoryCommit": "a97e2d21afbeacee644c301d4827e0b52be08042",
+  "designSha256": "7af332554f08681a25768616c192d912bbaf25582f7a48270f834c695facd0fa",
+  "pillowVersion": "12.3.0",
+  "fonts": [
+    {
+      "key": "cjk",
+      "sha256": "cf8cf2c882e1e344ac2e6207fe172657a30dc2c6e1ee65a9e29a7b582c4d4154"
+    },
+    {
+      "key": "mono",
+      "sha256": "c886ca3172d8ce9189976992d145ec090500a4ff516ecb9d4df56b1a78336247"
+    }
+  ],
+  "notes": [
+    "Evidence-only diagnostic sidecar; not included in the frozen 32-scene main corpus.",
+    "Source text, glyph fonts, size, blur, positions and background fixed before any OCR.",
+    "Keep correctly recognized, incorrectly recognized and ineligible high-confidence/long outputs alike.",
+    "Never read expectedSource or anchor strings to choose candidates or replace OCR results."
+  ],
+  "fixtures": [
+    {
+      "name": "ja-clear-management-tags",
+      "file": "ja-clear-management-tags.png",
+      "mime": "image/png",
+      "width": 1600,
+      "height": 1000,
+      "sourceLanguage": "ja",
+      "scene": "Evidence-only generic low-confidence-path control; all outcomes retained, no OCR-driven selection",
+      "regions": [
+        {
+          "id": "line-1",
+          "text": "管理メモ NOTE OT",
+          "anchor": "管理メモ NOTE OT",
+          "translation": "受控译文用于独立诊断。",
+          "bbox": {
+            "x0": 158,
+            "y0": 246,
+            "x1": 558,
+            "y1": 290
+          },
+          "vertical": false,
+          "rotationDegrees": 0,
+          "blurRadius": 0.25,
+          "blackPrefixLength": 0
+        },
+        {
+          "id": "line-2",
+          "text": "予備の箱 CODE OO",
+          "anchor": "予備の箱 CODE OO",
+          "translation": "受控译文用于独立诊断。",
+          "bbox": {
+            "x0": 159,
+            "y0": 576,
+            "x1": 567,
+            "y1": 620
+          },
+          "vertical": false,
+          "rotationDegrees": 0,
+          "blurRadius": 0.25,
+          "blackPrefixLength": 0
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 1400,
+          "y": 850,
+          "rgb": [
+            97,
+            134,
+            142
+          ]
+        },
+        {
+          "x": 40,
+          "y": 40,
+          "rgb": [
+            238,
+            237,
+            226
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "forbiddenRegions": [
+        {
+          "id": "unlettered-geometry-control",
+          "bbox": {
+            "x0": 1280,
+            "y0": 770,
+            "x1": 1510,
+            "y1": 950
+          }
+        }
+      ],
+      "textLanguage": "ja",
+      "design": {
+        "fontSize": 44,
+        "blurRadius": 0.25,
+        "background": "white-balloons",
+        "latinFontSize": null
+      },
+      "expectedSource": [
+        "管理メモ NOTE OT",
+        "予備の箱 CODE OO"
+      ],
+      "expectedAnchors": [
+        "管理メモ NOTE OT",
+        "予備の箱 CODE OO"
+      ],
+      "anchorOccurrences": {
+        "管理メモ NOTE OT": 1,
+        "予備の箱 CODE OO": 1
+      },
+      "preOcrGeometryEstimates": [
+        {
+          "regionId": "line-1",
+          "inkAspect": 9.090909090909092,
+          "roughStepsAt48PxHeight": 55,
+          "scope": "Pre-OCR ink geometry only; actual detector crop, resize, steps and eligibility must be reported from the observer."
+        },
+        {
+          "regionId": "line-2",
+          "inkAspect": 9.272727272727273,
+          "roughStepsAt48PxHeight": 56,
+          "scope": "Pre-OCR ink geometry only; actual detector crop, resize, steps and eligibility must be reported from the observer."
+        }
+      ],
+      "sha256": "70cc0b324bce298622ba3fe844a2a97a4ab2c045d6ca7d93da314923e47c67a9",
+      "bytes": 36076,
+      "provenance": {
+        "original": true,
+        "designFrozenBeforeAnyOcr": true,
+        "designSha256": "7af332554f08681a25768616c192d912bbaf25582f7a48270f834c695facd0fa",
+        "filterByOcrResult": false,
+        "main32Unmodified": true
+      }
+    },
+    {
+      "name": "ja-soft-instruction-tags",
+      "file": "ja-soft-instruction-tags.png",
+      "mime": "image/png",
+      "width": 1600,
+      "height": 1000,
+      "sourceLanguage": "ja",
+      "scene": "Evidence-only generic low-confidence-path control; all outcomes retained, no OCR-driven selection",
+      "regions": [
+        {
+          "id": "line-1",
+          "text": "次の作業 NOTE OT",
+          "anchor": "次の作業 NOTE OT",
+          "translation": "受控译文用于独立诊断。",
+          "bbox": {
+            "x0": 156,
+            "y0": 246,
+            "x1": 485,
+            "y1": 284
+          },
+          "vertical": false,
+          "rotationDegrees": 0,
+          "blurRadius": 0.65,
+          "blackPrefixLength": 0
+        },
+        {
+          "id": "line-2",
+          "text": "確認して CHECK IT",
+          "anchor": "確認して CHECK IT",
+          "translation": "受控译文用于独立诊断。",
+          "bbox": {
+            "x0": 156,
+            "y0": 576,
+            "x1": 495,
+            "y1": 614
+          },
+          "vertical": false,
+          "rotationDegrees": 0,
+          "blurRadius": 0.65,
+          "blackPrefixLength": 0
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 1400,
+          "y": 850,
+          "rgb": [
+            97,
+            134,
+            142
+          ]
+        },
+        {
+          "x": 40,
+          "y": 40,
+          "rgb": [
+            221,
+            225,
+            224
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "forbiddenRegions": [
+        {
+          "id": "unlettered-geometry-control",
+          "bbox": {
+            "x0": 1280,
+            "y0": 770,
+            "x1": 1510,
+            "y1": 950
+          }
+        }
+      ],
+      "textLanguage": "ja",
+      "design": {
+        "fontSize": 36,
+        "blurRadius": 0.65,
+        "background": "ruled-memo",
+        "latinFontSize": null
+      },
+      "expectedSource": [
+        "次の作業 NOTE OT",
+        "確認して CHECK IT"
+      ],
+      "expectedAnchors": [
+        "次の作業 NOTE OT",
+        "確認して CHECK IT"
+      ],
+      "anchorOccurrences": {
+        "次の作業 NOTE OT": 1,
+        "確認して CHECK IT": 1
+      },
+      "preOcrGeometryEstimates": [
+        {
+          "regionId": "line-1",
+          "inkAspect": 8.657894736842104,
+          "roughStepsAt48PxHeight": 52,
+          "scope": "Pre-OCR ink geometry only; actual detector crop, resize, steps and eligibility must be reported from the observer."
+        },
+        {
+          "regionId": "line-2",
+          "inkAspect": 8.921052631578947,
+          "roughStepsAt48PxHeight": 54,
+          "scope": "Pre-OCR ink geometry only; actual detector crop, resize, steps and eligibility must be reported from the observer."
+        }
+      ],
+      "sha256": "d7a7464108cb2db716fc10baa84a1b8b57b977290f06a3fc9462f3afadec58f5",
+      "bytes": 34164,
+      "provenance": {
+        "original": true,
+        "designFrozenBeforeAnyOcr": true,
+        "designSha256": "7af332554f08681a25768616c192d912bbaf25582f7a48270f834c695facd0fa",
+        "filterByOcrResult": false,
+        "main32Unmodified": true
+      }
+    },
+    {
+      "name": "ja-soft-inventory-tags",
+      "file": "ja-soft-inventory-tags.png",
+      "mime": "image/png",
+      "width": 1600,
+      "height": 1000,
+      "sourceLanguage": "ja",
+      "scene": "Evidence-only generic low-confidence-path control; all outcomes retained, no OCR-driven selection",
+      "regions": [
+        {
+          "id": "line-1",
+          "text": "在庫記録 NOTE OT",
+          "anchor": "在庫記録 NOTE OT",
+          "translation": "受控译文用于独立诊断。",
+          "bbox": {
+            "x0": 156,
+            "y0": 245,
+            "x1": 520,
+            "y1": 288
+          },
+          "vertical": false,
+          "rotationDegrees": 0,
+          "blurRadius": 0.85,
+          "blackPrefixLength": 0
+        },
+        {
+          "id": "line-2",
+          "text": "照合記号 O0 I1 Z2 S5 T7 B8",
+          "anchor": "照合記号 O0 I1 Z2 S5 T7 B8",
+          "translation": "受控译文用于独立诊断。",
+          "bbox": {
+            "x0": 157,
+            "y0": 575,
+            "x1": 709,
+            "y1": 617
+          },
+          "vertical": false,
+          "rotationDegrees": 0,
+          "blurRadius": 0.85,
+          "blackPrefixLength": 0
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 1400,
+          "y": 850,
+          "rgb": [
+            97,
+            134,
+            142
+          ]
+        },
+        {
+          "x": 40,
+          "y": 40,
+          "rgb": [
+            221,
+            225,
+            224
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "forbiddenRegions": [
+        {
+          "id": "unlettered-geometry-control",
+          "bbox": {
+            "x0": 1280,
+            "y0": 770,
+            "x1": 1510,
+            "y1": 950
+          }
+        }
+      ],
+      "textLanguage": "ja",
+      "design": {
+        "fontSize": 40,
+        "blurRadius": 0.85,
+        "background": "gray-labels",
+        "latinFontSize": null
+      },
+      "expectedSource": [
+        "在庫記録 NOTE OT",
+        "照合記号 O0 I1 Z2 S5 T7 B8"
+      ],
+      "expectedAnchors": [
+        "在庫記録 NOTE OT",
+        "照合記号 O0 I1 Z2 S5 T7 B8"
+      ],
+      "anchorOccurrences": {
+        "在庫記録 NOTE OT": 1,
+        "照合記号 O0 I1 Z2 S5 T7 B8": 1
+      },
+      "preOcrGeometryEstimates": [
+        {
+          "regionId": "line-1",
+          "inkAspect": 8.465116279069768,
+          "roughStepsAt48PxHeight": 51,
+          "scope": "Pre-OCR ink geometry only; actual detector crop, resize, steps and eligibility must be reported from the observer."
+        },
+        {
+          "regionId": "line-2",
+          "inkAspect": 13.142857142857142,
+          "roughStepsAt48PxHeight": 79,
+          "scope": "Pre-OCR ink geometry only; actual detector crop, resize, steps and eligibility must be reported from the observer."
+        }
+      ],
+      "sha256": "f0555ffa1b30bfbbaf9c7014bba8e3f5e6b7d8e410cb5b65a45a9967a2c9cc02",
+      "bytes": 48305,
+      "provenance": {
+        "original": true,
+        "designFrozenBeforeAnyOcr": true,
+        "designSha256": "7af332554f08681a25768616c192d912bbaf25582f7a48270f834c695facd0fa",
+        "filterByOcrResult": false,
+        "main32Unmodified": true
+      }
+    },
+    {
+      "name": "ja-split-font-reference-tags",
+      "file": "ja-split-font-reference-tags.png",
+      "mime": "image/png",
+      "width": 1600,
+      "height": 1000,
+      "sourceLanguage": "ja",
+      "scene": "Evidence-only generic low-confidence-path control; all outcomes retained, no OCR-driven selection",
+      "regions": [
+        {
+          "id": "line-1",
+          "text": "記録カード NOTE OT 保管済み",
+          "anchor": "記録カード NOTE OT 保管済み",
+          "translation": "受控译文用于独立诊断。",
+          "bbox": {
+            "x0": 161,
+            "y0": 251,
+            "x1": 722,
+            "y1": 293
+          },
+          "vertical": false,
+          "fontRuns": [
+            {
+              "fontKey": "cjk",
+              "text": "記録カード ",
+              "size": 40
+            },
+            {
+              "fontKey": "mono",
+              "text": "NOTE OT",
+              "size": 42
+            },
+            {
+              "fontKey": "cjk",
+              "text": " 保管済み",
+              "size": 40
+            }
+          ],
+          "blurRadius": 0.55
+        },
+        {
+          "id": "line-2",
+          "text": "照合番号 0O 1I 2Z 5S 7T 8B",
+          "anchor": "照合番号 0O 1I 2Z 5S 7T 8B",
+          "translation": "受控译文用于独立诊断。",
+          "bbox": {
+            "x0": 161,
+            "y0": 581,
+            "x1": 759,
+            "y1": 623
+          },
+          "vertical": false,
+          "fontRuns": [
+            {
+              "fontKey": "cjk",
+              "text": "照合番号 ",
+              "size": 40
+            },
+            {
+              "fontKey": "mono",
+              "text": "0O 1I 2Z 5S 7T 8B",
+              "size": 42
+            }
+          ],
+          "blurRadius": 0.55
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 1400,
+          "y": 850,
+          "rgb": [
+            97,
+            134,
+            142
+          ]
+        },
+        {
+          "x": 40,
+          "y": 40,
+          "rgb": [
+            238,
+            237,
+            226
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "forbiddenRegions": [
+        {
+          "id": "unlettered-geometry-control",
+          "bbox": {
+            "x0": 1280,
+            "y0": 770,
+            "x1": 1510,
+            "y1": 950
+          }
+        }
+      ],
+      "textLanguage": "ja",
+      "design": {
+        "fontSize": 40,
+        "blurRadius": 0.55,
+        "background": "white-balloons",
+        "latinFontSize": 42
+      },
+      "expectedSource": [
+        "記録カード NOTE OT 保管済み",
+        "照合番号 0O 1I 2Z 5S 7T 8B"
+      ],
+      "expectedAnchors": [
+        "記録カード NOTE OT 保管済み",
+        "照合番号 0O 1I 2Z 5S 7T 8B"
+      ],
+      "anchorOccurrences": {
+        "記録カード NOTE OT 保管済み": 1,
+        "照合番号 0O 1I 2Z 5S 7T 8B": 1
+      },
+      "preOcrGeometryEstimates": [
+        {
+          "regionId": "line-1",
+          "inkAspect": 13.357142857142858,
+          "roughStepsAt48PxHeight": 81,
+          "scope": "Pre-OCR ink geometry only; actual detector crop, resize, steps and eligibility must be reported from the observer."
+        },
+        {
+          "regionId": "line-2",
+          "inkAspect": 14.238095238095237,
+          "roughStepsAt48PxHeight": 86,
+          "scope": "Pre-OCR ink geometry only; actual detector crop, resize, steps and eligibility must be reported from the observer."
+        }
+      ],
+      "sha256": "c095c36dad28b818c1bbd036dc0b43423d3848348b4a44dd7a5b36478dbde112",
+      "bytes": 54032,
+      "provenance": {
+        "original": true,
+        "designFrozenBeforeAnyOcr": true,
+        "designSha256": "7af332554f08681a25768616c192d912bbaf25582f7a48270f834c695facd0fa",
+        "filterByOcrResult": false,
+        "main32Unmodified": true
+      }
+    },
+    {
+      "name": "ja-small-long-preservation-tags",
+      "file": "ja-small-long-preservation-tags.png",
+      "mime": "image/png",
+      "width": 1600,
+      "height": 1000,
+      "sourceLanguage": "ja",
+      "scene": "Evidence-only generic low-confidence-path control; all outcomes retained, no OCR-driven selection",
+      "regions": [
+        {
+          "id": "line-1",
+          "text": "確認メモ NOTE OT 番号は変更しない",
+          "anchor": "確認メモ NOTE OT 番号は変更しない",
+          "translation": "受控译文用于独立诊断。",
+          "bbox": {
+            "x0": 155,
+            "y0": 245,
+            "x1": 679,
+            "y1": 279
+          },
+          "vertical": false,
+          "rotationDegrees": 0,
+          "blurRadius": 0.9,
+          "blackPrefixLength": 0
+        },
+        {
+          "id": "line-2",
+          "text": "予備のラベル CODE OO CHECK IT",
+          "anchor": "予備のラベル CODE OO CHECK IT",
+          "translation": "受控译文用于独立诊断。",
+          "bbox": {
+            "x0": 156,
+            "y0": 575,
+            "x1": 657,
+            "y1": 609
+          },
+          "vertical": false,
+          "rotationDegrees": 0,
+          "blurRadius": 0.9,
+          "blackPrefixLength": 0
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 1400,
+          "y": 850,
+          "rgb": [
+            97,
+            134,
+            142
+          ]
+        },
+        {
+          "x": 40,
+          "y": 40,
+          "rgb": [
+            221,
+            225,
+            224
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "forbiddenRegions": [
+        {
+          "id": "unlettered-geometry-control",
+          "bbox": {
+            "x0": 1280,
+            "y0": 770,
+            "x1": 1510,
+            "y1": 950
+          }
+        }
+      ],
+      "textLanguage": "ja",
+      "design": {
+        "fontSize": 30,
+        "blurRadius": 0.9,
+        "background": "ruled-memo",
+        "latinFontSize": null
+      },
+      "expectedSource": [
+        "確認メモ NOTE OT 番号は変更しない",
+        "予備のラベル CODE OO CHECK IT"
+      ],
+      "expectedAnchors": [
+        "確認メモ NOTE OT 番号は変更しない",
+        "予備のラベル CODE OO CHECK IT"
+      ],
+      "anchorOccurrences": {
+        "確認メモ NOTE OT 番号は変更しない": 1,
+        "予備のラベル CODE OO CHECK IT": 1
+      },
+      "preOcrGeometryEstimates": [
+        {
+          "regionId": "line-1",
+          "inkAspect": 15.411764705882353,
+          "roughStepsAt48PxHeight": 93,
+          "scope": "Pre-OCR ink geometry only; actual detector crop, resize, steps and eligibility must be reported from the observer."
+        },
+        {
+          "regionId": "line-2",
+          "inkAspect": 14.735294117647058,
+          "roughStepsAt48PxHeight": 89,
+          "scope": "Pre-OCR ink geometry only; actual detector crop, resize, steps and eligibility must be reported from the observer."
+        }
+      ],
+      "sha256": "7314c410e93a17eb2e0165c086d6819a4a3cda1ab085f856d43b6d5389313b4f",
+      "bytes": 46911,
+      "provenance": {
+        "original": true,
+        "designFrozenBeforeAnyOcr": true,
+        "designSha256": "7af332554f08681a25768616c192d912bbaf25582f7a48270f834c695facd0fa",
+        "filterByOcrResult": false,
+        "main32Unmodified": true
+      }
+    },
+    {
+      "name": "ja-paired-true-ot-digit07",
+      "file": "ja-paired-true-ot-digit07.png",
+      "mime": "image/png",
+      "width": 1600,
+      "height": 1000,
+      "sourceLanguage": "ja",
+      "scene": "Evidence-only generic low-confidence-path control; all outcomes retained, no OCR-driven selection",
+      "regions": [
+        {
+          "id": "line-1",
+          "text": "読書メモ NOTE OT",
+          "anchor": "読書メモ NOTE OT",
+          "translation": "受控译文用于独立诊断。",
+          "bbox": {
+            "x0": 156,
+            "y0": 245,
+            "x1": 559,
+            "y1": 291
+          },
+          "vertical": false,
+          "rotationDegrees": 0,
+          "blurRadius": 0.8,
+          "blackPrefixLength": 0
+        },
+        {
+          "id": "line-2",
+          "text": "読書メモ NOTE 07",
+          "anchor": "読書メモ NOTE 07",
+          "translation": "受控译文用于独立诊断。",
+          "bbox": {
+            "x0": 156,
+            "y0": 575,
+            "x1": 551,
+            "y1": 621
+          },
+          "vertical": false,
+          "rotationDegrees": 0,
+          "blurRadius": 0.8,
+          "blackPrefixLength": 0
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 1400,
+          "y": 850,
+          "rgb": [
+            97,
+            134,
+            142
+          ]
+        },
+        {
+          "x": 40,
+          "y": 40,
+          "rgb": [
+            221,
+            225,
+            224
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "forbiddenRegions": [
+        {
+          "id": "unlettered-geometry-control",
+          "bbox": {
+            "x0": 1280,
+            "y0": 770,
+            "x1": 1510,
+            "y1": 950
+          }
+        }
+      ],
+      "textLanguage": "ja",
+      "design": {
+        "fontSize": 44,
+        "blurRadius": 0.8,
+        "background": "gray-labels",
+        "latinFontSize": null
+      },
+      "expectedSource": [
+        "読書メモ NOTE OT",
+        "読書メモ NOTE 07"
+      ],
+      "expectedAnchors": [
+        "読書メモ NOTE OT",
+        "読書メモ NOTE 07"
+      ],
+      "anchorOccurrences": {
+        "読書メモ NOTE OT": 1,
+        "読書メモ NOTE 07": 1
+      },
+      "preOcrGeometryEstimates": [
+        {
+          "regionId": "line-1",
+          "inkAspect": 8.76086956521739,
+          "roughStepsAt48PxHeight": 53,
+          "scope": "Pre-OCR ink geometry only; actual detector crop, resize, steps and eligibility must be reported from the observer."
+        },
+        {
+          "regionId": "line-2",
+          "inkAspect": 8.58695652173913,
+          "roughStepsAt48PxHeight": 52,
+          "scope": "Pre-OCR ink geometry only; actual detector crop, resize, steps and eligibility must be reported from the observer."
+        }
+      ],
+      "sha256": "f1701ef73ada72fe0159484773d7e3cd24b5af0af241f5ec6ff9b4bfec5fa3dc",
+      "bytes": 40345,
+      "provenance": {
+        "original": true,
+        "designFrozenBeforeAnyOcr": true,
+        "designSha256": "7af332554f08681a25768616c192d912bbaf25582f7a48270f834c695facd0fa",
+        "filterByOcrResult": false,
+        "main32Unmodified": true
+      }
+    }
+  ]
+}

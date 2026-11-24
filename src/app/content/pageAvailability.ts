@@ -4,22 +4,7 @@
  * 主要内容：幂等启停 MAIN-world bridge 和页面 feature，合并同步与在途协调请求，限制失效挂载重试次数，维护视频字幕路由挂载；按排除普通锚点的页面身份记录自动翻译意图，使新 SPA 页面可重新启动、手动恢复后的同页保持原文，并让自动翻译不受非必要 UI 的异步挂载阻塞。
  * 模块边界：本模块通过 composition root 注入当前路由、可用性、挂载器和全文状态，不读取全局配置、不操作具体功能 DOM；具体 feature 保留自己的清理实现。
  */
-import {shouldAutoTranslatePage} from '@/src/features/site-rules/domain';
 import {getPageTranslationMaterialIdentity} from '@/src/services/translation/context/policy';
-
-interface ContentAutoTranslationConfig {
-    on: boolean;
-    autoTranslate: boolean;
-    alwaysTranslateDomains: string[];
-    disabledExtensionDomains: string[];
-}
-
-export function shouldAutomaticallyTranslatePage(
-    href: string,
-    config: ContentAutoTranslationConfig,
-): boolean {
-    return shouldAutoTranslatePage(href, config);
-}
 
 /** 自动翻译与篇章上下文共用页面材料身份，避免普通阅读锚点使其失效边界不同。 */
 export const getAutoTranslationPageIdentity = getPageTranslationMaterialIdentity;
@@ -44,6 +29,22 @@ export interface ContentPageAvailabilityRuntime {
     refreshAutoTranslation(): void;
     syncVideoSubtitlePage(): void;
     disposeVideoSubtitlePage(): void;
+}
+
+/** 以最新页面配置重试功能挂载；跨 await 后复核当前 owner，不复活失效页面。 */
+export async function reconcileCurrentContentPage(
+    reconcile: () => Promise<void>,
+    getRegistry: () => {reconcileEnabled(): Promise<readonly {status: string}[]>} | null,
+    isAvailable: () => boolean,
+    isEnabled: () => boolean,
+): Promise<boolean> {
+    await reconcile();
+    if (!isAvailable()) return false;
+    if (!isEnabled()) return true;
+    const owner = getRegistry();
+    if (!owner) return false;
+    const results = await owner.reconcileEnabled();
+    return isAvailable() && isEnabled() && getRegistry() === owner && results.every(result => result.status !== 'failed');
 }
 
 /** 创建一个 document 私有的可用性协调器，避免配置订阅和路由事件各自维护半套状态。 */

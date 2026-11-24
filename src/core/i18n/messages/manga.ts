@@ -1,10 +1,81 @@
 /**
  * @file src/core/i18n/messages/manga.ts
+ * 包含共享 CPU/WASM 后端设置及会话运行信息的七语界面文案。
  * 文件职责：提供漫画入口、首次资源说明和图片共享识别设置的产品文案，避免新增界面在非中文语言下显示中文。
- * 主要内容：英文完整回退目录与各语言核心操作文案；当前资源用途与准备状态优先展示，备用识别、语言包及下载管理采用简短入口。
+ * 主要内容：英文完整回退目录与各语言核心操作文案，包含未绘制译文的快照筛选及全文复制；当前资源用途与准备状态优先展示，备用识别、可选文字分割的离线导入、语言包及下载管理采用简短入口。
  * 模块边界：静态界面词典，不翻译漫画内容、不读取配置、不调用服务。
  */
+const locales = ['en-US', 'ja-JP', 'ko-KR', 'fr-FR', 'ru-RU', 'es-ES'] as const;
+const rows: Array<readonly [string, string, string, string, string, string, string]> = [
+  ['识别阿拉伯语图片文字','Recognize Arabic text in images','画像内のアラビア語を認識','이미지 속 아랍어 텍스트 인식','Reconnaître le texte arabe dans les images','Распознавание арабского текста на изображениях','Reconocer texto árabe en imágenes'],
+  ['识别希伯来语图片文字','Recognize Hebrew text in images','画像内のヘブライ語を認識','이미지 속 히브리어 텍스트 인식','Reconnaître le texte hébreu dans les images','Распознавание текста на иврите на изображениях','Reconocer texto hebreo en imágenes'],
+  ['需要准备阿拉伯语和英语识别资源，约 4.6 MB。复杂画面另需约 197 MB 的文字清除资源，已下载资源可重复使用。','Prepare Arabic and English recognition resources, about 4.6 MB. Complex artwork needs about 197 MB more to remove the original text. Downloaded resources are reused.','アラビア語と英語の認識リソース約4.6 MBを準備します。複雑な背景の文字除去にはさらに約197 MBが必要です。ダウンロード済みのリソースは再利用できます。','아랍어와 영어 인식 리소스 약 4.6 MB를 준비합니다. 복잡한 배경의 원문 제거에는 약 197 MB가 추가로 필요합니다. 다운로드한 리소스는 다시 사용합니다.','Préparez les ressources de reconnaissance de l’arabe et de l’anglais, environ 4,6 Mo. Les fonds complexes nécessitent environ 197 Mo supplémentaires pour effacer le texte original. Les ressources déjà téléchargées sont réutilisées.','Нужны ресурсы распознавания арабского и английского, около 4,6 МБ. Для удаления текста со сложного фона дополнительно требуется около 197 МБ. Загруженные ресурсы используются повторно.','Prepara los recursos de reconocimiento de árabe e inglés, unos 4,6 MB. Los fondos complejos necesitan unos 197 MB adicionales para borrar el texto original. Los recursos descargados se reutilizan.'],
+  ['需要准备希伯来语和英语识别资源，约 3.5 MB。复杂画面另需约 197 MB 的文字清除资源，已下载资源可重复使用。','Prepare Hebrew and English recognition resources, about 3.5 MB. Complex artwork needs about 197 MB more to remove the original text. Downloaded resources are reused.','ヘブライ語と英語の認識リソース約3.5 MBを準備します。複雑な背景の文字除去にはさらに約197 MBが必要です。ダウンロード済みのリソースは再利用できます。','히브리어와 영어 인식 리소스 약 3.5 MB를 준비합니다. 복잡한 배경의 원문 제거에는 약 197 MB가 추가로 필요합니다. 다운로드한 리소스는 다시 사용합니다.','Préparez les ressources de reconnaissance de l’hébreu et de l’anglais, environ 3,5 Mo. Les fonds complexes nécessitent environ 197 Mo supplémentaires pour effacer le texte original. Les ressources déjà téléchargées sont réutilisées.','Нужны ресурсы распознавания иврита и английского, около 3,5 МБ. Для удаления текста со сложного фона дополнительно требуется около 197 МБ. Загруженные ресурсы используются повторно.','Prepara los recursos de reconocimiento de hebreo e inglés, unos 3,5 MB. Los fondos complejos necesitan unos 197 MB adicionales para borrar el texto original. Los recursos descargados se reutilizan.'],
+  ['本地处理后端','Local processing backend','ローカル処理バックエンド','로컬 처리 백엔드','Moteur de traitement local','Локальный вычислительный бэкенд','Motor de procesamiento local'],
+  ['图片与漫画共用。浏览器卡顿时可选 CPU（WASM），下次处理生效。','Shared by images and manga. If the browser stalls, choose CPU (WASM) for subsequent processing.','画像と漫画で共通です。ブラウザーが停止する場合は CPU（WASM）を選択してください。次の処理から適用されます。','이미지와 만화가 함께 사용합니다. 브라우저가 멈추면 CPU(WASM)를 선택하세요. 다음 처리부터 적용됩니다.','Commun aux images et aux mangas. Si le navigateur se bloque, choisissez CPU (WASM) pour les traitements suivants.','Общий для изображений и манги. Если браузер зависает, выберите CPU (WASM) для последующей обработки.','Compartido por imágenes y manga. Si el navegador se bloquea, elige CPU (WASM) para los siguientes procesos.'],
+  ['CPU（WASM）','CPU (WASM)','CPU (WASM)','CPU(WASM)','CPU (WASM)','CPU (WASM)','CPU (WASM)'],
+  ['运行信息','Runtime details','実行情報','실행 정보','Informations d’exécution','Сведения о выполнении','Información de ejecución'],
+  ['当前处理阶段','Current processing stage','現在の処理段階','현재 처리 단계','Étape de traitement actuelle','Текущий этап обработки','Etapa de procesamiento actual'],
+  ['最近会话后端','Latest session providers','直近のセッションのバックエンド','최근 세션 백엔드','Moteurs de la dernière session','Бэкенды последнего сеанса','Motores de la última sesión'],
+  ['已自动回退 CPU（WASM）','Automatically fell back to CPU (WASM)','CPU（WASM）に自動切り替えしました','CPU(WASM)로 자동 전환되었습니다','Basculement automatique vers CPU (WASM)','Автоматический переход на CPU (WASM)','Se cambió automáticamente a CPU (WASM)'],
+  ['正在处理图片','Processing image','画像を処理中','이미지 처리 중','Traitement de l’image','Обработка изображения','Procesando imagen'],
+  ['精确文字分割（可选）','Precise text segmentation (optional)','精密な文字分割（任意）','정밀 텍스트 분할(선택 사항)','Segmentation précise du texte (facultative)','Точное выделение текста (необязательно)','Segmentación precisa del texto (opcional)'],
+  ['约 90 MB · 仅离线导入','About 90 MB · Offline import only','約 90 MB · オフライン取り込みのみ','약 90 MB · 오프라인 가져오기만 가능','Environ 90 Mo · Importation hors ligne uniquement','Около 90 МБ · Только импорт из файла','Unos 90 MB · Solo importación sin conexión'],
+  ['未导入','Not imported','未取り込み','가져오지 않음','Non importé','Не импортировано','Sin importar'],
+  ['图片分割模型状态读取超时','Text segmentation status check timed out','文字分割モデルの状態確認がタイムアウトしました','텍스트 분할 모델 상태 확인 시간이 초과되었습니다','Le délai de vérification du modèle de segmentation est dépassé','Время проверки модели выделения текста истекло','Se agotó el tiempo de comprobación del modelo de segmentación'],
+  ['图片分割模型状态读取失败','Could not check text segmentation status','文字分割モデルの状態を確認できませんでした','텍스트 분할 모델 상태를 확인하지 못했습니다','Impossible de vérifier le modèle de segmentation du texte','Не удалось проверить модель выделения текста','No se pudo comprobar el modelo de segmentación de texto'],
+  ['图片分割模型状态无效','Invalid text segmentation status','文字分割モデルの状態が無効です','텍스트 분할 모델 상태가 올바르지 않습니다','État du modèle de segmentation du texte invalide','Некорректное состояние модели выделения текста','Estado del modelo de segmentación de texto no válido'],
+  ['为保留原文，此译文未绘制到图片','This translation was not drawn to preserve the original text','原文を残すため、この翻訳は画像に描画されていません','원문을 보존하기 위해 이 번역을 이미지에 표시하지 않았습니다','Cette traduction ne figure pas sur l’image afin de préserver le texte original','Этот перевод не нанесён, чтобы сохранить оригинальный текст','Esta traducción no se dibujó para conservar el texto original'],
+  ['部分译文未绘制，请查看图片文字','Some translations were not drawn; view image text','一部の翻訳は描画されていません。画像の文字を確認してください','일부 번역이 표시되지 않았습니다. 이미지 텍스트를 확인하세요','Certaines traductions ne figurent pas sur l’image ; consultez son texte','Некоторые переводы не нанесены; откройте текст изображения','Algunas traducciones no se dibujaron; consulta el texto de la imagen'],
+  ['查看图片文字','View image text','画像の文字を見る','이미지 텍스트 보기','Voir le texte de l’image','Посмотреть текст изображения','Ver texto de la imagen'],
+  ['当前布局无法覆盖，请查看译文','This layout cannot display an overlay; view the translation','現在のレイアウトでは重ねて表示できません。翻訳をご確認ください','현재 레이아웃에는 번역을 겹쳐 표시할 수 없습니다. 번역문을 확인하세요','La traduction ne peut pas être superposée à cette mise en page ; consultez le texte traduit','В этом макете нельзя наложить перевод; откройте текст перевода','No se puede superponer la traducción en este diseño; consulta el texto traducido'],
+  ['数字识别可能有误，请对照原图','Number recognition may be inaccurate; check the original image','数字の認識に誤りがある可能性があります。元画像を確認してください','숫자 인식이 정확하지 않을 수 있습니다. 원본 이미지를 확인하세요','La reconnaissance des nombres peut être inexacte ; vérifiez l’image originale','Числа могли быть распознаны неверно; сверьтесь с исходным изображением','El reconocimiento de números puede ser impreciso; comprueba la imagen original'],
+  ['为保护数字，此译文未绘制到图片','To protect numbers, this translation was not drawn on the image','数字を保護するため、この翻訳は画像に描画されていません','숫자를 보호하기 위해 이 번역을 이미지에 표시하지 않았습니다','Pour protéger les nombres, cette traduction ne figure pas sur l’image','Чтобы сохранить числа, этот перевод не нанесён на изображение','Para proteger los números, esta traducción no se dibujó en la imagen'],
+  ['部分译文未绘制，请查看漫画文字','Some translations were not drawn; view manga text','一部の翻訳は描画されていません。漫画の文字を確認してください','일부 번역이 표시되지 않았습니다. 만화 텍스트를 확인하세요','Certaines traductions ne figurent pas sur l’image ; consultez le texte du manga','Некоторые переводы не нанесены; откройте текст манги','Algunas traducciones no se dibujaron; consulta el texto del manga'],
+  ['已识别文字，原图未改动','Text recognized; original image unchanged','文字を認識しました。元画像は変更されていません','텍스트를 인식했으며 원본 이미지는 변경되지 않았습니다','Texte reconnu ; image originale inchangée','Текст распознан; исходное изображение не изменено','Texto reconocido; imagen original sin cambios'],
+  ['未绘制','Not drawn','未描画','표시 안 됨','Non affiché','Не нанесено','Sin dibujar'],
+  ['已识别','Scanned','認識済み','인식됨','Analysé','Распознано','Leído'],
+  ['漫画文字','Manga text','漫画の文字','만화 텍스트','Texte du manga','Текст манги','Texto del manga'],
+  ['查看漫画文字','View manga text','漫画の文字を見る','만화 텍스트 보기','Voir le texte du manga','Посмотреть текст манги','Ver texto del manga'],
+  ['关闭漫画文字','Close manga text','漫画の文字を閉じる','만화 텍스트 닫기','Fermer le texte du manga','Закрыть текст манги','Cerrar texto del manga'],
+  ['关闭文字面板','Close text panel','文字パネルを閉じる','텍스트 패널 닫기','Fermer le panneau de texte','Закрыть панель текста','Cerrar panel de texto'],
+  ['选择当前可见的页面或片段','Choose a visible page or segment','表示中のページまたは部分を選択','현재 보이는 페이지 또는 구간 선택','Choisissez une page ou une partie visible','Выберите видимую страницу или фрагмент','Elige una página o sección visible'],
+  ['重新查看可见页面','Check visible pages again','表示中のページを再確認','보이는 페이지 다시 확인','Revoir les pages visibles','Проверить видимые страницы снова','Volver a ver las páginas visibles'],
+  ['选择其他页面','Choose another page','別のページを選択','다른 페이지 선택','Choisir une autre page','Выбрать другую страницу','Elegir otra página'],
+  ['原文对照','Compare original','原文を比較','원문 비교','Comparer l’original','Сравнить с оригиналом','Comparar con el original'],
+  ['未绘制译文','Undrawn translations','未描画の翻訳','표시되지 않은 번역','Traductions non affichées','Ненанесённые переводы','Traducciones sin dibujar'],
+  ['查看全文','View all text','全文を表示','전체 텍스트 보기','Voir tout le texte','Посмотреть весь текст','Ver todo el texto'],
+  ['复制全文','Copy all text','全文をコピー','전체 텍스트 복사','Copier tout le texte','Копировать весь текст','Copiar todo el texto'],
+  ['文字部分','Text section','テキストの部分','텍스트 구간','Partie du texte','Часть текста','Parte del texto'],
+  ['上一部分','Previous section','前の部分','이전 구간','Partie précédente','Предыдущая часть','Parte anterior'],
+  ['下一部分','Next section','次の部分','다음 구간','Partie suivante','Следующая часть','Parte siguiente'],
+  ['复制当前部分','Copy this section','この部分をコピー','현재 구간 복사','Copier cette partie','Копировать эту часть','Copiar esta parte'],
+  ['复制全部','Copy all','すべてコピー','전체 복사','Tout copier','Копировать всё','Copiar todo'],
+  ['图片','Image','画像','이미지','Image','Изображение','Imagen'],
+  ['画布','Canvas','キャンバス','캔버스','Canevas','Холст','Lienzo'],
+  ['背景图片','Background image','背景画像','배경 이미지','Image d’arrière-plan','Фоновое изображение','Imagen de fondo'],
+  ['长图片段','Long-image segment','長い画像の部分','긴 이미지 구간','Partie d’une image longue','Фрагмент длинного изображения','Sección de imagen larga'],
+  ['像素位置','Pixel position','ピクセル位置','픽셀 위치','Position en pixels','Позиция в пикселях','Posición en píxeles'],
+  ['此片段可能包含相邻片段的文字','This segment may include text from adjacent segments','この部分には隣接する部分の文字が含まれる場合があります','이 구간에 인접 구간의 텍스트가 포함될 수 있습니다','Cette partie peut contenir du texte des parties adjacentes','Фрагмент может содержать текст соседних фрагментов','Esta sección puede incluir texto de secciones adyacentes'],
+  ['画布文字来自最近完成的翻译快照，画面变化可能尚未同步','Canvas text is from the latest completed translation snapshot; later changes may not be reflected','キャンバスの文字は直近の翻訳結果です。画面の変更が反映されていない場合があります','캔버스 텍스트는 최근 완료된 번역 스냅샷이며 이후 화면 변경이 반영되지 않을 수 있습니다','Le texte du canevas provient du dernier instantané traduit ; les changements ultérieurs peuvent ne pas apparaître','Текст холста взят из последнего завершённого перевода; последующие изменения могут не отображаться','El texto del lienzo procede de la última traducción completada; puede no reflejar cambios posteriores'],
+  ['正在读取已有文字','Reading available text','保存済みの文字を読み込み中','기존 텍스트 읽는 중','Lecture du texte disponible','Чтение имеющегося текста','Leyendo el texto disponible'],
+  ['当前页面正在处理','This page is being processed','このページを処理中','현재 페이지 처리 중','Cette page est en cours de traitement','Страница обрабатывается','Esta página se está procesando'],
+  ['未检测到文字','No text detected','文字が検出されませんでした','텍스트를 찾지 못했습니다','Aucun texte détecté','Текст не обнаружен','No se detectó texto'],
+  ['无法读取当前结果','Could not read this result','この結果を読み取れません','현재 결과를 읽을 수 없습니다','Impossible de lire ce résultat','Не удалось прочитать результат','No se pudo leer este resultado'],
+  ['当前结果不可用','This result is unavailable','この結果は利用できません','현재 결과를 사용할 수 없습니다','Ce résultat est indisponible','Результат недоступен','Este resultado no está disponible'],
+  ['页面已变化，请重新选择','The page changed. Select it again.','ページが変わりました。選び直してください','페이지가 변경되었습니다. 다시 선택하세요','La page a changé. Sélectionnez-la à nouveau.','Страница изменилась. Выберите её снова.','La página cambió. Vuelve a seleccionarla.'],
+  ['读取已取消','Reading cancelled','読み込みをキャンセルしました','읽기 취소됨','Lecture annulée','Чтение отменено','Lectura cancelada'],
+  ['内容过大，暂时无法完整显示','Content is too large to display in full','内容が大きすぎるため全体を表示できません','내용이 너무 커서 전체를 표시할 수 없습니다','Contenu trop volumineux pour être affiché en entier','Содержимое слишком велико для полного отображения','El contenido es demasiado grande para mostrarlo completo'],
+  ['当前没有可查看的页面','No pages are available to view','表示できるページはありません','볼 수 있는 페이지가 없습니다','Aucune page disponible','Нет доступных страниц','No hay páginas disponibles'],
+  ['已复制','Copied','コピーしました','복사됨','Copié','Скопировано','Copiado'],
+  ['复制失败，请选中文字后手动复制','Copy failed. Select the text to copy it manually.','コピーできませんでした。文字を選んで手動でコピーしてください','복사하지 못했습니다. 텍스트를 선택하여 수동으로 복사하세요','Échec de la copie. Sélectionnez le texte pour le copier manuellement.','Не удалось скопировать. Выделите текст и скопируйте вручную.','No se pudo copiar. Selecciona el texto para copiarlo manualmente.'],
+  ['本地 OCR · 请核对名称和数字','Local OCR · Check names and numbers','ローカル OCR · 名前と数字を確認','로컬 OCR · 이름과 숫자를 확인하세요','OCR local · Vérifiez les noms et les nombres','Локальное OCR · Проверьте имена и числа','OCR local · Comprueba nombres y números'],
+];
+export const mangaReadingLegacyMessages = Object.fromEntries(locales.map((locale, index) => [locale,
+  Object.fromEntries(rows.map(row => [row[0], row[index + 1]]))])) as Record<(typeof locales)[number], Record<string,string>>;
 const english = {
+  ...mangaReadingLegacyMessages['en-US'],
+  "等待上一项任务结束…": "Waiting for the previous task…",
   "识别资源": "Recognition resources",
   "标准识别": "Standard recognition",
   "轻量识别": "Lightweight recognition",
@@ -134,6 +205,8 @@ const english = {
 export const mangaLegacyMessages = {
   "en-US": english,
   "ja-JP": {...english, ...{
+  ...mangaReadingLegacyMessages['ja-JP'],
+  "等待上一项任务结束…": "前の処理が終わるのを待っています…",
   "识别资源": "認識リソース",
   "标准识别": "標準認識",
   "轻量识别": "軽量認識",
@@ -230,6 +303,8 @@ export const mangaLegacyMessages = {
   "支持的网站": "対応サイト"
 }},
   "ko-KR": {...english, ...{
+  ...mangaReadingLegacyMessages['ko-KR'],
+  "等待上一项任务结束…": "이전 작업이 끝나기를 기다리는 중…",
   "识别资源": "인식 리소스",
   "标准识别": "표준 인식",
   "轻量识别": "경량 인식",
@@ -326,6 +401,8 @@ export const mangaLegacyMessages = {
   "支持的网站": "지원 사이트"
 }},
   "fr-FR": {...english, ...{
+  ...mangaReadingLegacyMessages['fr-FR'],
+  "等待上一项任务结束…": "En attente de la fin de la tâche précédente…",
   "识别资源": "Ressources de reconnaissance",
   "标准识别": "Reconnaissance standard",
   "轻量识别": "Reconnaissance légère",
@@ -422,6 +499,8 @@ export const mangaLegacyMessages = {
   "支持的网站": "Sites pris en charge"
 }},
   "ru-RU": {...english, ...{
+  ...mangaReadingLegacyMessages['ru-RU'],
+  "等待上一项任务结束…": "Ожидание завершения предыдущей задачи…",
   "识别资源": "Ресурсы распознавания",
   "标准识别": "Стандартное распознавание",
   "轻量识别": "Облегчённое распознавание",
@@ -518,6 +597,8 @@ export const mangaLegacyMessages = {
   "支持的网站": "Поддерживаемые сайты"
 }},
   "es-ES": {...english, ...{
+  ...mangaReadingLegacyMessages['es-ES'],
+  "等待上一项任务结束…": "Esperando a que termine la tarea anterior…",
   "识别资源": "Recursos de reconocimiento",
   "标准识别": "Reconocimiento estándar",
   "轻量识别": "Reconocimiento ligero",

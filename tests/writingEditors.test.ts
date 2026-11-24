@@ -226,6 +226,17 @@ describe('Writing editor native action ownership', () => {
 });
 
 describe('Writing context belongs to the selected conversation', () => {
+    it('stops reading long source fragments once the context budget is filled without cloning the page subtree', () => {
+        const doc = page(`<main><div class="js-comment-body">${'O'.repeat(15000)}<span class="beyond-budget">${'x'.repeat(15000)}</span></div></main>`);
+        const source = doc.querySelector('.js-comment-body')!;
+        const clone = vi.spyOn(source, 'cloneNode');
+        const style = vi.fn((_element: Element) => ({display: 'block', visibility: 'visible'}));
+        doc.defaultView!.getComputedStyle = style as never;
+        expect(collectReplyContext(doc, 'github')).toBe('原帖：' + 'O'.repeat(11997));
+        expect(clone).not.toHaveBeenCalled();
+        expect(style.mock.calls.map(([element]) => element)).not.toContain(doc.querySelector('.beyond-budget'));
+    });
+
     it('keeps issue 421 about duplicate translations separate from the repository linked in its image-only body', () => {
         const doc = page(`<main><div data-testid="issue-header"><h1><bdi data-testid="issue-title">同一段话出现了两次翻译</bdi></h1></div>
           <div data-testid="issue-metadata-fixed"><span data-testid="header-state"><svg><title>icon</title></svg>Open</span></div>
@@ -277,7 +288,7 @@ describe('Writing context belongs to the selected conversation', () => {
 
     it('excludes stylesheet-hidden title and body fragments while supporting DOM documents without computed styles', () => {
         const doc = page(`<main><bdi data-testid="issue-title" class="css-hidden">Invisible title</bdi><bdi class="js-issue-title">Visible title<span class="css-hidden">Private title fragment</span></bdi>
-          <div class="js-comment-body">Visible body<span class="css-none">Display-none detail</span><span class="css-collapse">Collapsed detail</span></div>
+          <div class="js-comment-body">Visible<!-- private comment metadata --> body<span class="css-none">Display-none detail</span><span class="css-collapse">Collapsed detail</span></div>
           <div class="js-comment-body css-hidden">Invisible reply</div></main>`);
         doc.defaultView!.getComputedStyle = ((element: Element) => ({display: element.classList.contains('css-none') ? 'none' : 'block', visibility: element.classList.contains('css-hidden') ? 'hidden' : element.classList.contains('css-collapse') ? 'collapse' : 'visible'})) as never;
         expect(collectReplyContext(doc, 'github')).toBe('帖子标题：Visible title\n\n原帖：Visible body');

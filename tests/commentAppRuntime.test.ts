@@ -20,7 +20,7 @@ vi.mock('@/src/features/comment-assistant/background', async () => {
 vi.mock('@/src/features/comment-assistant/streamPort', () => ({attachCommentStreamPort: mocks.attachPort}));
 vi.mock('@/src/services/comment/runtime', () => ({createCommentRuntime: mocks.createRuntime}));
 vi.mock('@/src/services/harness/modelGateway', () => ({createHarnessLanguageModel: vi.fn()}));
-vi.mock('@/src/platform/storage/modelUsageRepository', () => ({modelUsageRepository: mocks.usageRepo}));
+vi.mock('@/src/platform/storage/modelUsageRepository', () => ({getModelUsageRepository: () => mocks.usageRepo}));
 vi.mock('@/src/core/site-rules/domain', () => ({isExtensionDisabledOnSite: (url: string) => url.includes('blocked')}));
 
 import browser from 'webextension-polyfill';

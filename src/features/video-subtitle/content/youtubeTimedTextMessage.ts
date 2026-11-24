@@ -36,7 +36,7 @@ export interface ValidatedYoutubeTimedTextMessage {
 
 function isYoutubeVideoUrl(url: URL): boolean {
     return YOUTUBE_HOST_PATTERN.test(url.hostname)
-        && (url.pathname === '/watch' || url.pathname.startsWith('/shorts/'));
+        && (url.pathname === '/watch' || url.pathname.startsWith('/shorts/') || /^\/embed\/[\w-]{11}\/?$/u.test(url.pathname));
 }
 
 /**
@@ -52,7 +52,7 @@ export function validateYoutubeTimedTextMessage(
         if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
         const payload = data as Record<string, unknown>;
         if (payload.source !== 'fluent-read' || payload.type !== YOUTUBE_TIMED_TEXT_MESSAGE) return null;
-        if (typeof payload.url !== 'string' || typeof payload.responseText !== 'string') return null;
+        if (typeof payload.url !== 'string' || payload.url.length > 32_768 || typeof payload.responseText !== 'string') return null;
         if (!payload.responseText || payload.responseText.length > limits.maxPayloadChars) return null;
 
         const pageUrl = new URL(pageHref);

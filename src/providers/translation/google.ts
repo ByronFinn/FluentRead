@@ -1,13 +1,13 @@
 /**
  * @file src/providers/translation/google.ts
  *
- * 文件职责：适配无需用户密钥的 Google 浏览器批量接口与网页 RPC，在统一截止时间内合批、换线和冷却失败入口。
+ * 文件职责：适配无需用户密钥的 Google 浏览器批量接口与网页 RPC，在统一截止时间内合批、换线和冷却失败入口；可信同图批次优先使用有界 HTML 邻文，拒绝槽位或句末边界异常后回退，且不混入其他图片或网页请求。
  * 主要内容：编码 translateHtml、translate_a/t 与带编号的 batchexecute 批次，严格校验结果数量与槽位，保护纯文本、换行及取消所有权；按冻结偏好选择 120 毫秒合并同语言请求或直接逐条传输，满批提前发送，通过共享 HTTP 队列暂停全部限流入口并按 Retry-After 单独探测恢复；为每个实际入批 owner 登记真实传输租约，取消或超时立即返回但并发槽保留到网络及正文结算；按近期可靠性、延迟和在途负载动态排序，定期探索备用入口，保留非限流入口故障的独立冷却。为免费池提供不跨 owner 合批的数组传输入口。公开符号包括 parseGoogleBatchResponse、translateGoogleOwnerTexts、translateGoogleTexts、translateGoogleText、default:google。
- * 模块边界：本文件位于 provider 适配层，只把统一翻译请求转换为外部或浏览器服务协议；不管理页面 DOM、UI 生命周期或配置持久化，缓存、去重和超时总预算由 translation broker 统一协调。
+ * 模块边界：本文件位于 provider 适配层，只把统一翻译请求转换为外部或浏览器服务协议；不管理页面 DOM、UI 生命周期或配置持久化，缓存、去重和超时总预算由 translation broker 统一协调。图片协议仅进入支持图片翻译的扩展构建，userscript 沿用普通网页传输。
  */
 
 import {normalizeChineseLanguageCode} from '@/src/core/language/chinese';
-import {getTranslationProviderLanguages} from '@/src/services/translation/requestSnapshot';
+import {getImageLabelSlots, getTranslationProviderLanguages, isImageTextBatch} from '@/src/services/translation/requestSnapshot';
 import {createHttpStatusError} from '@/src/platform/http/errors';
 import {
     getDynamicFreeProviderWeight,
@@ -16,6 +16,7 @@ import {
 } from '@/src/services/translation/freeRoutingPolicy';
 import {
     abortErrorFromSignal,
+    cancelUnreadResponseBody,
     createRuntimeAbortContext,
     runtimeFetch,
 } from '@/src/platform/http/runtime';
@@ -26,6 +27,8 @@ import {isNativeTranslationBatchEnabled} from '@/src/core/config/nativeBatch';
 import {createGoogleRequestGate, googleRequestDeadlineError} from './googleRequestGate';
 import {isNativeBatchResponseError, NativeBatchResponseError} from '@/src/core/translation/nativeBatch';
 import {hasTranslationContent} from '@/src/core/translation/result';
+import {inspectGoogleErrorBody, isGoogleHtmlResponse} from './googleErrorBody';
+import {createGoogleImageContext, parseGoogleImageContext} from './googleImageContext';
 
 const GOOGLE_TRANSLATE_RPC_ID = 'MkEWBc';
 const GOOGLE_TRANSLATE_BATCH_URLS = [
@@ -109,7 +112,8 @@ function createGoogleBatchRequest(texts: readonly string[], fromLang: string, to
 
 function googleLanguage(code: string): string {
     const normalized = normalizeChineseLanguageCode(code);
-    return ({'zh-Hans': 'zh-CN', 'zh-Hant': 'zh-TW', nb: 'no', fil: 'tl'} as Record<string, string>)[normalized] ?? normalized;
+    const aliases: Record<string, string> = {'zh-Hans': 'zh-CN', 'zh-Hant': 'zh-TW', nb: 'no', fil: 'tl'};
+    return Object.hasOwn(aliases, normalized) ? aliases[normalized]! : normalized;
 }
 
 function escapeGoogleText(text: string): string {
@@ -206,17 +210,13 @@ export function parseGoogleBatchResponse(responseBody: string): string {
     throw new Error('返回格式异常');
 }
 
-function isHtmlResponse(responseBody: string): boolean {
-    return /<!doctype html|<html[\s>]/i.test(responseBody);
-}
-
 function getErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
 }
 
 function createGoogleParseError(error: unknown, responseBody: string): Error {
     const message = getErrorMessage(error);
-    return isHtmlResponse(responseBody) ? new Error(`${message}（${GOOGLE_CAPTCHA_HINT}）`)
+    return isGoogleHtmlResponse(responseBody) ? new Error(`${message}（${GOOGLE_CAPTCHA_HINT}）`)
         : new NativeBatchResponseError(message);
 }
 
@@ -225,6 +225,7 @@ async function fetchGoogleResponse(
     init: RequestInit,
     deadlineAt: number,
     callerSignal: AbortSignal,
+    attemptTimeoutMs = GOOGLE_TRANSLATE_ATTEMPT_TIMEOUT_MS,
 ): Promise<{responseBody: string}> {
     let lease = await googleRequestGate.acquire(callerSignal, deadlineAt);
     // 其他在途响应可能在交付许可后的微任务中返回 429；真实 fetch 前再核对暂停版本。
@@ -242,7 +243,7 @@ async function fetchGoogleResponse(
         lease.finish(false, false);
         throw googleRequestDeadlineError();
     }
-    const timeoutMs = Math.min(GOOGLE_TRANSLATE_ATTEMPT_TIMEOUT_MS, remainingTime);
+    const timeoutMs = Math.min(attemptTimeoutMs, remainingTime);
     const abortContext = createRuntimeAbortContext(timeoutMs, callerSignal);
     let success = false;
 
@@ -260,12 +261,20 @@ async function fetchGoogleResponse(
 
         // 在读取响应体之前冻结整个 Google 队列；慢速错误响应也不能让别的入口继续突发请求。
         const statusError = !response.ok ? createHttpStatusError(response) : undefined;
-        if (response.status === 429) googleRequestGate.pause(statusError!);
+        if (response.status === 429) {
+            googleRequestGate.pause(statusError!);
+            // 限流状态及冷却都已由响应头确定，正文没有可用译文；不可等待无限错误流。
+            cancelUnreadResponseBody(response);
+            statusError!.message = `${statusError!.message}（${GOOGLE_CAPTCHA_HINT}）`;
+            throw statusError;
+        }
         // 自定义 transport 可能忽略 abort 后仍返回响应；即便调用方已结束，真实正文
         // 也要结算后才归还传输许可。迟到结果在读取后继续检查取消，不能标记探测成功。
-        let responseBody: string;
+        let responseBody = '';
+        let errorMarkers: Awaited<ReturnType<typeof inspectGoogleErrorBody>> | undefined;
         try {
-            responseBody = await response.text();
+            if (response.ok) responseBody = await response.text();
+            else errorMarkers = await inspectGoogleErrorBody(response);
         } catch {
             if (callerSignal?.aborted) throw abortErrorFromSignal(callerSignal);
             if (abortContext.didTimeout()) {
@@ -276,10 +285,10 @@ async function fetchGoogleResponse(
         if (callerSignal.aborted) throw abortErrorFromSignal(callerSignal);
         if (abortContext.didTimeout()) throw new Error(`请求超时（${timeoutMs / 1000} 秒）`);
         if (!response.ok) {
-            if (response.status === 400 && /"xsrf"/u.test(responseBody)) {
+            if (response.status === 400 && errorMarkers?.xsrf) {
                 Object.assign(statusError!, {googleXsrfRejected: true});
             }
-            if (response.status === 429 || isHtmlResponse(responseBody)) {
+            if (errorMarkers?.html) {
                 // CAPTCHA 提示只扩展安全文案，保留标准 HTTP 状态供外层判断冷却。
                 statusError!.message = `${statusError!.message}（${GOOGLE_CAPTCHA_HINT}）`;
             }
@@ -330,20 +339,34 @@ async function translateGoogleBatch(
     }
 }
 
+type ImageContextInput = boolean | readonly number[];
+
 async function translateGoogleHtml(
-    texts: readonly string[], fromLang: string, toLang: string, deadlineAt: number, signal: AbortSignal,
+    texts: readonly string[], fromLang: string, toLang: string, deadlineAt: number, signal: AbortSignal, imageContext: ImageContextInput,
 ): Promise<string[]> {
+    const imagePlan = import.meta.env.BROWSER !== 'userscript' && imageContext
+        ? createGoogleImageContext(texts, escapeGoogleText, imageContext === true ? undefined : imageContext)
+        : undefined;
+    const documents = imagePlan?.documents ?? texts.map(text => `<pre>${escapeGoogleText(text)}</pre>`);
+    // 在 try 外选择解析器，避免异常保护的保守打包分析为 userscript 保留不可达的图片协议。
+    const parseImageResponse = import.meta.env.BROWSER !== 'userscript' && imageContext ? parseGoogleImageContext : undefined;
     const {responseBody} = await fetchGoogleResponse(GOOGLE_TRANSLATE_HTML_URL, {
         method: 'POST',
         headers: {'Content-Type': 'application/json+protobuf', 'X-Goog-API-Key': GOOGLE_BROWSER_PUBLIC_KEY},
         // pre 保留换行、缩进和空行；原文始终作为转义后的纯文本，不执行任意 HTML。
-        body: JSON.stringify([[texts.map(text => `<pre>${escapeGoogleText(text)}</pre>`), fromLang, toLang], 'wt_lib']),
-    }, deadlineAt, signal);
+        body: JSON.stringify([[documents, fromLang, toLang], 'wt_lib']),
+    }, deadlineAt, signal, import.meta.env.BROWSER !== 'userscript' && imageContext ? 4_000 : GOOGLE_TRANSLATE_ATTEMPT_TIMEOUT_MS);
     try {
-        const translations = requireGoogleTexts(getArrayItem(JSON.parse(responseBody), 0), texts.length);
+        const translations = requireGoogleTexts(getArrayItem(JSON.parse(responseBody), 0), documents.length);
+        if (parseImageResponse) return parseImageResponse(translations, texts, decodeGoogleText, imagePlan?.labelSlots);
         return requireGoogleTexts(translations.map(text => decodeGoogleText(text.replace(/^<pre(?:\s[^>]*)?>([\s\S]*)<\/pre>$/i, '$1'))), texts.length);
     } catch (error) {
-        throw createGoogleParseError(new Error('返回格式或译文数量异常'), responseBody);
+        const failure = createGoogleParseError(new Error('返回格式或译文数量异常'), responseBody);
+        // 语境改变语气或槽位时先沿用同一引擎逐项翻译，避免直接换接口又损失普通译文质量。
+        if (import.meta.env.BROWSER !== 'userscript' && imageContext && isNativeBatchResponseError(failure)) {
+            return translateGoogleHtml(texts, fromLang, toLang, deadlineAt, signal, false);
+        }
+        throw failure;
     }
 }
 
@@ -369,10 +392,10 @@ async function translateGoogleList(
 }
 
 async function executeGoogleTexts(texts: readonly string[], fromLang: string, toLang: string, signal: AbortSignal,
-    deadline = Date.now() + GOOGLE_TRANSLATE_TOTAL_TIMEOUT_MS): Promise<string[]> {
+    deadline = Date.now() + GOOGLE_TRANSLATE_TOTAL_TIMEOUT_MS, imageContext: ImageContextInput = false): Promise<string[]> {
     const providers: GoogleProvider[] = [
         {name: '浏览器批量接口', endpoint: GOOGLE_TRANSLATE_HTML_URL, baseWeight: 1.2,
-            translate: timeout => translateGoogleHtml(texts, fromLang, toLang, timeout, signal)},
+            translate: timeout => translateGoogleHtml(texts, fromLang, toLang, timeout, signal, imageContext)},
         {name: '网页批量接口', endpoint: GOOGLE_TRANSLATE_LIST_URL, baseWeight: 1,
             translate: timeout => translateGoogleList(texts, fromLang, toLang, timeout, signal)},
         ...GOOGLE_TRANSLATE_BATCH_URLS.map((endpoint, index) => ({
@@ -384,6 +407,8 @@ async function executeGoogleTexts(texts: readonly string[], fromLang: string, to
     const failureStatuses: Array<number | undefined> = [];
     const structuralFailures: boolean[] = [];
     const ranked = prioritizeGoogleProviders(providers, ++googleSelectionSequence % GOOGLE_EXPLORATION_INTERVAL === 0);
+    // 只有 HTML 入口消费同图邻文；先尝试它，仍尊重共享冷却和限流，再沿原排序回退。
+    if (import.meta.env.BROWSER !== 'userscript' && imageContext) ranked.sort((a, b) => Number(b.endpoint === GOOGLE_TRANSLATE_HTML_URL) - Number(a.endpoint === GOOGLE_TRANSLATE_HTML_URL));
     for (let index = 0; index < ranked.length; index++) {
         const provider = ranked[index]!;
         if (signal.aborted) throw abortErrorFromSignal(signal);
@@ -535,12 +560,10 @@ function enqueueGoogleText(
     if (!hasTranslationContent(text)) return Promise.resolve(text);
     return new Promise((resolve, reject) => {
         const task: PendingGoogleText = {text, fromLang, toLang, signal, deadlineAt, lease,
-            settled: false, resolve, reject, removeAbortListener: () => undefined};
-        const onAbort = () => {
-            settleGoogleText(task, abortErrorFromSignal(signal), true);
-            task.cancelBatch?.();
-        };
-        task.removeAbortListener = subscribeAbort(onAbort);
+            settled: false, resolve, reject, removeAbortListener: subscribeAbort(() => {
+                settleGoogleText(task, abortErrorFromSignal(signal), true);
+                task.cancelBatch?.();
+            })};
         pendingTexts.push(task);
         const matching = pendingTexts.filter(item => item.fromLang === fromLang && item.toLang === toLang);
         const characters = matching.reduce((total, item) => total + escapeGoogleText(item.text).length + 11, 0);
@@ -559,7 +582,7 @@ export function translateGoogleOwnerTexts(
 }
 
 export async function translateGoogleTexts(texts: readonly string[], fromLang: string, toLang: string, signal?: AbortSignal,
-    requestTimeoutMs?: number, enableNativeBatch = true, lease?: TranslationRequestLease): Promise<string[]> {
+    requestTimeoutMs?: number, enableNativeBatch = true, lease?: TranslationRequestLease, imageContext: ImageContextInput = false): Promise<string[]> {
     texts = [...texts];
     const controller = new AbortController();
     const abortCallbacks = new Set<VoidFunction>();
@@ -577,6 +600,32 @@ export async function translateGoogleTexts(texts: readonly string[], fromLang: s
     if (signal?.aborted) onAbort();
     else signal?.addEventListener('abort', onAbort, {once: true});
     try {
+        if (import.meta.env.BROWSER !== 'userscript' && imageContext && enableNativeBatch) {
+            if (controller.signal.aborted) throw abortErrorFromSignal(controller.signal);
+            // 同图邻文不进入全局收集窗；每批独占原始顺序，仍共享限流、截止时间和真实传输租约。
+            const groups: string[][] = [];
+            let group: string[] = [], characters = 0;
+            for (const text of texts) {
+                const size = escapeGoogleText(text).length + 64;
+                if (group.length && (group.length === GOOGLE_BATCH_MAX_ITEMS || characters + size > GOOGLE_BATCH_MAX_CHARACTERS)) {
+                    groups.push(group); group = []; characters = 0;
+                }
+                group.push(text); characters += size;
+            }
+            if (group.length) groups.push(group);
+            const labelSlots = imageContext === true ? undefined : new Set(imageContext);
+            let offset = 0;
+            return (await Promise.all(groups.map(items => {
+                const groupContext = labelSlots ? items.flatMap((_, index) => labelSlots.has(offset + index) ? [index] : []) : true;
+                offset += items.length;
+                const transport = executeGoogleTexts(items, googleLanguage(fromLang), googleLanguage(toLang), controller.signal, deadlineAt, groupContext);
+                lease?.holdUntil(transport);
+                return new Promise<string[]>((resolve, reject) => {
+                    const remove = subscribeAbort(() => reject(abortErrorFromSignal(controller.signal)));
+                    void transport.then(value => {remove(); resolve(value);}, error => {remove(); reject(error);});
+                });
+            }))).flat();
+        }
         if (!enableNativeBatch) {
             // 共享 HTTP 限流仍有效；关闭收集窗后每段独立发送，完整结果才交给调用方。
             const translated: string[] = [];
@@ -617,8 +666,10 @@ async function google(message: TranslationProviderRequest) {
     const enableNativeBatch = message.enableNativeBatch
         ?? isNativeTranslationBatchEnabled('google', current.nativeBatchTranslationEnabled);
     const texts = typeof message.origin === 'string' ? [message.origin] : message.origin;
+    const imageContext = import.meta.env.BROWSER !== 'userscript' && isImageTextBatch(message)
+        && (getImageLabelSlots(message) ?? true);
     const results = await translateGoogleTexts(texts, sourceLanguage, targetLanguage, message.abortSignal, message.requestTimeoutMs,
-        enableNativeBatch, getTranslationRequestScheduler(message)?.lease);
+        enableNativeBatch, getTranslationRequestScheduler(message)?.lease, imageContext);
     return typeof message.origin === 'string' ? results[0]! : results;
 }
 

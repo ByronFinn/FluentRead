@@ -1,7 +1,15 @@
 <!--
  @file src/features/document-translation/ui/PdfReader.vue
- 文件职责：以左右对照的连续页面显示可划词的 PDF 原页和保持原版排版的译文页，并保留“重排阅读”作为可选的显示方式。
- 主要内容：智能高亮按所选模型重新评分，模型切换传递固定请求身份；页面占满阅读区且不再附带逐页标题；原版排版在原页像素上按段落叠加可选择的译文文字层，译文逐段到达时只更新对应段落，等待中的段落显示设置中选定的翻译加载样式；公式、图表和页眉页脚保持原样，放不下的段落悬停展开，拖选与原生选区保留期间保持展开，译文文字层接住段间空白且背景不拦截选择；悬停译文高亮对应原文；拖选原文时把选区终点钉在指针附近，避免划过空白选中整页；重排阅读使用同一实际计划组织正文与原图裁剪，区域身份或坐标变化才重裁剪，普通译文变化复用原像素并保持阅读位置；目录按阅读顺序列出识别到的章节标题并标出当前位置，点击即跳转，可自行展开或传送到页面侧栏；触控板捏合与 Ctrl/Cmd 加减号只缩放阅读内容，保留指针所在页内坐标，捏合期间复用画布和文字层、停下后重绘；缩放与显示方式使用与页面一致的菜单而非浏览器原生下拉；搜索同时匹配原文与译文并逐处跳转，译文样式可调字号与字体；只挂载附近五页，目录开关、页码、缩放和显示方式控件可以传送到页面工具栏；卸载时释放全部页面资源；显式开启的信息高亮只评分真实可选文字，进度放在按钮提示里、只有出错才在工具栏显示并可重试，配置、页面和文档失效时取消旧绘制。
+ 协作批注：批注面板提供官方 Hypothesis 侧栏开关与连接状态，复用 PDF 租约与虚拟页定位；重排按实际文字隔离指纹，翻译中暂停，可主动关闭，切换文件撤销；不读取账号或上传文件。
+ 智能配色：固定版式使用 sRGB SVG 滤镜更换纸张与文字颜色，并合回识别到的原图像素，按解析器确认的图形区域保护原色；遮罩不接管鼠标、选区或页资源，切换主题复用原始画布。
+ 阅读外观：原文、双语与译文均可单栏重排，字体、字号、行距、段距及六种配色按本机偏好显示；阅读外观变化复用页面资源，并在 DOM 更新前保留段落锚点。
+ 扫描核对：原页按 OCR 返回的有效页面坐标显示待核对内容的虚线框；识别行叠加透明原文选择层，沿用划词、复制和页内定位，缩放或其他页更新时保留节点；原图与画布不因补入文字层而重建。
+ 文件职责：以左右对照的连续页面显示可划词的 PDF 原页和保持原版排版的译文页，每个新译文段落用一次有界局部像素读回匹配版面配色，并保留“重排阅读”作为可选的显示方式。
+ 主要内容：智能高亮按所选模型重新评分，模型切换传递固定请求身份；页面占满阅读区且不再附带逐页标题；原版排版在原页像素上按段落叠加可选择的译文文字层，译文逐段到达时只更新对应段落，等待中的段落显示设置中选定的翻译加载样式；公式、图表和页眉页脚保持原样，放不下的段落悬停展开并提供键盘可达的全文对照弹窗，拖选与原生选区保留期间保持展开，译文文字层接住段间空白且背景不拦截选择；悬停译文高亮对应原文；拖选原文时把选区终点钉在指针附近，避免划过空白选中整页；重排阅读使用同一实际计划组织正文与原图裁剪，区域身份或坐标变化才重裁剪，普通译文变化复用原像素并保持阅读位置；目录按阅读顺序列出识别到的章节标题并标出当前位置，点击即跳转，可自行展开或传送到页面侧栏；全文对照、目录标题和搜索词各自自动确定文字方向，不改变工具栏或原译文列顺序；触控板捏合与 Ctrl/Cmd 加减号只缩放阅读内容，保留指针所在页内坐标，捏合期间复用画布和文字层、停下后重绘；缩放与显示方式使用与页面一致的菜单而非浏览器原生下拉；搜索同时匹配原文与译文并逐处跳转，译文样式可调字号与字体；只挂载附近五页，目录开关、页码、缩放和显示方式控件可以传送到页面工具栏；卸载时释放全部页面资源；显式开启的信息高亮只评分真实可选文字，进度放在按钮提示里、只有出错才在工具栏显示并可重试，配置、页面和文档失效时取消旧绘制。
+ 扫描续读：同源 OCR 逐页检查点保留当前页、滚动位置与已就绪画布；只在实际几何变化时调整阅读锚点。
+ 缩放与排版：原版译文固定在 PDF 页面坐标系中排版，画布、原文文字层、译文和遮罩共享同一个视口变换；缩放结束后才请求可见页补足画布清晰度。
+ 材料续读：仅公开等待 DOM 提交并淘汰旧布局锚点的 resumePage 页码方法，供已验证文件身份的文档组合根调用；原页渲染与下载结构保持自身职责。
+ 原位遮罩：表格单元格和图文卡片共用解析阶段确认的边界，避免擦除相邻版块。
  模块边界：组件只组织阅读布局、叠加层与页面调度；文档由组合根导入、翻译由既有服务提供，划词卡片由页面组合根复用统一翻译卡。
 -->
 <template>
@@ -25,30 +33,59 @@
           </div>
           <button type="button" :aria-label="t('document.pdfReading.zoomIn')" :title="t('document.pdfReading.zoomIn')" :disabled="scale >= ZOOM_STEPS[ZOOM_STEPS.length - 1]" @click="stepZoom(1)">+</button>
         </div>
-        <div v-if="mode !== 'source'" class="pdf-presentation-control pdf-menu" :class="{open: openMenu === 'presentation'}">
+        <div class="pdf-presentation-control pdf-menu" :class="{open: openMenu === 'presentation'}">
           <button type="button" class="pdf-menu-button" aria-haspopup="listbox" :aria-expanded="openMenu === 'presentation'" :aria-label="t('document.pdfReading.presentationLabel')" @click="openMenu = openMenu === 'presentation' ? null : 'presentation'">{{ t(presentation === 'layout' ? 'document.pdfReading.layoutPresentation' : 'document.pdfReading.readablePresentation') }}<i aria-hidden="true" /></button>
           <ul v-if="openMenu === 'presentation'" class="pdf-menu-list" role="listbox" :aria-label="t('document.pdfReading.presentationLabel')">
-            <li v-for="value in PRESENTATIONS" :key="value" role="presentation" :class="{selected: presentation === value}"><button type="button" role="option" :aria-selected="presentation === value" :class="{selected: presentation === value}" :data-value="value" @click="choosePresentation(value)">{{ t(value === 'layout' ? 'document.pdfReading.layoutPresentation' : 'document.pdfReading.readablePresentation') }}</button></li>
+            <li v-for="value in PRESENTATIONS" :key="value" role="presentation" :class="{selected: presentation === value}"><button type="button" role="option" :aria-selected="presentation === value" :class="{selected: presentation === value}" :data-value="value" @click="closeMenu(true); choosePresentation(value)">{{ t(value === 'layout' ? 'document.pdfReading.layoutPresentation' : 'document.pdfReading.readablePresentation') }}</button></li>
           </ul>
         </div>
         <div class="pdf-menu pdf-search" :class="{open: openMenu === 'search'}">
           <button type="button" class="pdf-tool-button" :class="{active: openMenu === 'search' || searchHits.length > 0}" aria-haspopup="dialog" :aria-expanded="openMenu === 'search'" :aria-label="t('document.pdfReading.search')" :title="t('document.pdfReading.search')" @click="toggleSearch"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="5.5" stroke="currentColor" stroke-width="1.5"/><path d="m13.2 13.2 3.6 3.6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
           <div v-if="openMenu === 'search'" class="pdf-menu-panel pdf-search-panel" role="dialog" :aria-label="t('document.pdfReading.search')">
-            <input ref="searchInput" v-model="searchQuery" type="search" :placeholder="t('document.pdfReading.searchPlaceholder')" :aria-label="t('document.pdfReading.search')" @keydown.enter.prevent="stepSearch($event.shiftKey ? -1 : 1)" />
+            <input ref="searchInput" v-model="searchQuery" dir="auto" type="search" :placeholder="t('document.pdfReading.searchPlaceholder')" :aria-label="t('document.pdfReading.search')" @keydown.enter.prevent="stepSearch($event.shiftKey ? -1 : 1)" />
             <span class="pdf-search-count" role="status">{{ searchHits.length ? `${searchIndex + 1} / ${searchHits.length}` : searchQuery.trim() ? '0' : '' }}</span>
             <button type="button" :disabled="!searchHits.length" :aria-label="t('document.pdfReading.searchPrevious')" :title="t('document.pdfReading.searchPrevious')" @click="stepSearch(-1)">‹</button>
             <button type="button" :disabled="!searchHits.length" :aria-label="t('document.pdfReading.searchNext')" :title="t('document.pdfReading.searchNext')" @click="stepSearch(1)">›</button>
           </div>
         </div>
-        <div v-if="mode !== 'source'" class="pdf-menu pdf-style" :class="{open: openMenu === 'style'}">
+        <div class="pdf-menu pdf-style" :class="{open: openMenu === 'style'}">
           <button type="button" class="pdf-tool-button" :class="{active: openMenu === 'style'}" aria-haspopup="dialog" :aria-expanded="openMenu === 'style'" :aria-label="t('document.pdfReading.style')" :title="t('document.pdfReading.style')" @click="openMenu = openMenu === 'style' ? null : 'style'"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M4 15.5 8.2 4.5h1.2l4.2 11M5.6 11.8h6.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M15.5 6.5v6M13 9.5h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>
           <div v-if="openMenu === 'style'" class="pdf-menu-panel pdf-style-panel" role="dialog" :aria-label="t('document.pdfReading.style')">
             <div class="pdf-style-row"><span>{{ t('document.pdfReading.styleSize') }}</span><div class="pdf-style-stepper"><button type="button" :disabled="textScale <= 0.8" :aria-label="t('document.pdfReading.zoomOut')" @click="textScale = Math.max(0.8, Math.round((textScale - 0.05) * 100) / 100)">−</button><output>{{ Math.round(textScale * 100) }}%</output><button type="button" :disabled="textScale >= 1.3" :aria-label="t('document.pdfReading.zoomIn')" @click="textScale = Math.min(1.3, Math.round((textScale + 0.05) * 100) / 100)">+</button></div></div>
-            <label class="pdf-style-row pdf-style-switch"><span>{{ t('document.pdfReading.styleHighlight') }}</span><input v-model="hoverHighlight" type="checkbox" role="switch" /></label>
+            <label v-if="mode !== 'source' && !readable" class="pdf-style-row pdf-style-switch"><span>{{ t('document.pdfReading.styleHighlight') }}</span><input v-model="hoverHighlight" type="checkbox" role="switch" /></label>
             <div class="pdf-style-row"><span>{{ t('document.pdfReading.styleFont') }}</span><div class="pdf-style-fonts" role="group"><button v-for="font in FONT_CHOICES" :key="font" type="button" :class="{selected: textFont === font}" :aria-pressed="textFont === font" @click="textFont = font">{{ t(`document.pdfReading.styleFont.${font}`) }}</button></div></div>
+            <template v-if="readable">
+              <label class="pdf-style-row"><span>{{ t('document.pdfReading.lineSpacing') }}</span><input v-model.number="lineSpacing" type="range" min="1.3" max="2.2" step="0.1" /><output>{{ lineSpacing.toFixed(1) }}</output></label>
+              <label class="pdf-style-row"><span>{{ t('document.pdfReading.paragraphSpacing') }}</span><input v-model.number="paragraphSpacing" type="range" min="0.4" max="1.8" step="0.1" /><output>{{ paragraphSpacing.toFixed(1) }}</output></label>
+            </template>
+            <div class="pdf-style-row"><span>{{ t('document.pdfReading.theme') }}</span><div class="pdf-theme-choices" role="group" :aria-label="t('document.pdfReading.theme')"><button v-for="choice in THEME_CHOICES" :key="choice" type="button" :class="{selected: readingTheme === choice}" :aria-pressed="readingTheme === choice" @click="readingTheme = choice">{{ t(`document.pdfReading.theme.${choice}`) }}</button></div></div>
+            <div v-if="readingTheme === 'custom'" class="pdf-style-row"><label>{{ t('document.pdfReading.backgroundColor') }} <input v-model="backgroundColor" type="color" /></label><label>{{ t('document.pdfReading.textColor') }} <input v-model="textColor" type="color" /></label></div>
+            <p v-if="!readable" class="pdf-style-hint">{{ t('document.pdfReading.reflowStyleHint') }}</p>
           </div>
         </div>
-        <button v-if="informationHighlight" class="pdf-information-highlight" type="button" :aria-pressed="informationState.enabled" :disabled="!informationHighlight.available" :title="informationState.enabled ? `${t(`informationHighlight.phase.${informationState.phase}`)} · ${t('informationHighlight.progress', {paragraphs: informationState.processedParagraphs, spans: informationState.highlightedSpans})}` : undefined" @click="informationController?.setEnabled(!informationState.enabled)">{{ t('informationHighlight.title') }}</button>
+        <PdfAnnotations ref="annotationControls" :document="document" :root="viewport" :annotations="annotations" :translations="translations"
+          :storage-unavailable="annotationStorageUnavailable" :open="openMenu === 'annotations'" @toggle="openMenu = openMenu === 'annotations' ? null : 'annotations'"
+          @update:annotations="emit('update:annotations', $event)" @jump="jumpToAnnotation">
+          <template #collaboration>
+            <button class="pdf-hypothesis-toggle" type="button" data-testid="pdf-hypothesis-toggle" :aria-pressed="hypothesisCanCancel ? undefined : hypothesisRequested"
+              :aria-busy="hypothesisBusy && !hypothesisRequested" :aria-disabled="translating && !hypothesisRequested || undefined" :disabled="hypothesisBusy && !hypothesisRequested"
+              :title="t(hypothesisCanCancel ? 'document.pdfReading.hypothesisCancelConnection' : translating && !hypothesisRequested ? 'document.pdfReading.hypothesisWaiting' : 'document.pdfReading.hypothesisEmbeddedNotice')" @click="toggleHypothesis">
+              {{ t(hypothesisCanCancel ? 'document.pdfReading.hypothesisCancelConnection' : 'document.pdfReading.hypothesisToggle') }}
+            </button>
+          </template>
+          <template #collaboration-feedback>
+            <div v-if="hypothesisStatus" class="pdf-hypothesis-feedback">
+              <p role="status">{{ t(hypothesisStatus) }}</p>
+              <details v-if="hypothesisMessage === 'document.pdfReading.hypothesisFailed'">
+                <summary>{{ t('document.pdfReading.hypothesisFallback') }}</summary>
+                <p>{{ t(hypothesisUrl ? 'document.pdfReading.hypothesisNotice' : 'document.pdfReading.hypothesisLocal') }}</p>
+                <a v-if="hypothesisUrl" :href="hypothesisUrl" target="_blank" rel="noopener noreferrer">{{ t('document.pdfReading.hypothesisOpen') }}</a>
+                <a v-else href="https://web.hypothes.is/help/annotating-locally-saved-pdfs/" target="_blank" rel="noopener noreferrer">{{ t('document.pdfReading.hypothesisHelp') }}</a>
+              </details>
+            </div>
+          </template>
+        </PdfAnnotations>
+        <button v-if="informationHighlight" class="pdf-information-highlight" type="button" :aria-pressed="informationState.enabled" :disabled="!informationHighlight.available" :title="informationState.enabled ? `${t(`informationHighlight.phase.${informationState.phase}`)} · ${t('informationHighlight.progress', {paragraphs: informationState.processedParagraphs, spans: informationState.highlightedSpans})}` : t('informationHighlight.title')" @click="informationController?.setEnabled(!informationState.enabled)">{{ t('informationHighlight.title') }}</button>
         <span v-if="informationState.enabled && informationState.phase === 'error'" class="pdf-information-status" role="status">{{ t('informationHighlight.phase.error') }} <button type="button" @click="informationController?.retry()">{{ t('informationHighlight.retry') }}</button></span>
       </div>
     </Teleport>
@@ -59,87 +96,169 @@
         <button type="button" :class="{selected: outlineLanguage === 'source'}" :aria-pressed="outlineLanguage === 'source'" @click="outlineLanguage = 'source'">{{ t('document.pdfReading.original') }}</button>
         <button type="button" :class="{selected: outlineLanguage === 'translated'}" :aria-pressed="outlineLanguage === 'translated'" @click="outlineLanguage = 'translated'">{{ t('document.pdfReading.translated') }}</button>
       </div>
-      <button v-for="item in outlineItems" :key="item.id" type="button" class="pdf-outline-item" :class="{current: item.id === activeOutlineId}" :style="{paddingLeft: `${12 + (item.level - 1) * 14}px`}" :aria-current="item.id === activeOutlineId ? 'location' : undefined" :title="item.source" data-i18n-ignore @click="jumpToPosition(item.pageIndex, item.y)"><span>{{ item.title }}</span><small>{{ item.pageIndex + 1 }}</small></button>
+      <button v-for="item in outlineItems" :key="item.id" type="button" class="pdf-outline-item" :class="{current: item.id === activeOutlineId}" :style="{paddingLeft: `${12 + (item.level - 1) * 14}px`}" :aria-current="item.id === activeOutlineId ? 'location' : undefined" :title="item.source" data-i18n-ignore @click="jumpToPosition(item.pageIndex, item.y)"><span dir="auto">{{ item.title }}</span><small>{{ item.pageIndex + 1 }}</small></button>
     </nav>
     </Teleport>
-    <div ref="viewport" class="pdf-page-scroll" data-pdf-scroll tabindex="0" :data-reader-zoom="scale" :aria-label="t('document.pdfReading.continuousPages')" @scroll.passive="scheduleViewport" @keydown="handleViewportKey">
+    <div ref="viewport" class="pdf-page-scroll" :class="{'pdf-reflow': readable}" :data-pdf-theme="readingTheme" data-pdf-scroll tabindex="0" :data-reader-zoom="scale" :style="{'--pdf-display-scale': scale, ...readingStyle}" :aria-label="t('document.pdfReading.continuousPages')" @scroll.passive="scheduleViewport" @keydown="handleViewportKey">
       <div class="pdf-page-list" :style="{ height: `${totalHeight}px`, width: `${totalWidth}px` }">
         <article v-for="layout in residentLayouts" :key="layout.page.pageNumber" class="pdf-page-row" :aria-label="t('document.pdfReading.pageNumber', {page: layout.page.pageNumber})" :data-page-number="layout.page.pageNumber" :data-render-state="states.get(layout.page.pageNumber)?.status ?? 'pending'" :style="{ top: `${layout.top}px`, height: `${layout.rowHeight}px` }">
-          <div class="pdf-page-stage" :class="{single: mode !== 'bilingual', stacked: stackedBilingual}" :style="{'--pdf-page-width': `${layout.width}px`, '--pdf-page-height': `${layout.height}px`}">
-            <figure v-if="mode !== 'translated'" class="pdf-page-column" :aria-label="t('document.pdfReading.original')">
-              <div class="pdf-page-frame">
-                <div :ref="element => setPageHost(layout.page.pageNumber, 'source', element)" class="pdf-canvas-host" :style="canvasHostStyle(layout)" />
-                <i v-if="highlight?.pageNumber === layout.page.pageNumber" class="pdf-source-highlight" :style="highlight.style" data-fluentread-pdf-decoration aria-hidden="true" />
-                <i v-if="searchHighlight?.pageNumber === layout.page.pageNumber" class="pdf-source-highlight search" :style="searchHighlight.style" data-fluentread-pdf-decoration aria-hidden="true" />
+          <svg v-if="fixedTheme" class="pdf-theme-definitions" width="0" height="0" data-fluentread-pdf-decoration aria-hidden="true"><defs>
+            <filter :id="themeId(layout.page.pageNumber)" filterUnits="objectBoundingBox" primitiveUnits="objectBoundingBox" x="0" y="0" width="1" height="1" color-interpolation-filters="sRGB">
+              <feComponentTransfer in="SourceGraphic" result="readingColors"><feFuncR type="linear" :slope="themeTransfer[0].slope" :intercept="themeTransfer[0].intercept" /><feFuncG type="linear" :slope="themeTransfer[1].slope" :intercept="themeTransfer[1].intercept" /><feFuncB type="linear" :slope="themeTransfer[2].slope" :intercept="themeTransfer[2].intercept" /></feComponentTransfer>
+              <template v-if="themeRegions.get(layout.page.pageNumber)?.length">
+                <feFlood v-for="(rect, index) in themeRegions.get(layout.page.pageNumber)" :key="index" :x="rect.x" :y="rect.y" :width="rect.width" :height="rect.height" flood-color="white" :result="`figure-${index}`" />
+                <feMerge result="figureMask"><feMergeNode v-for="(_rect, index) in themeRegions.get(layout.page.pageNumber)" :key="index" :in="`figure-${index}`" /></feMerge>
+                <feComposite in="SourceGraphic" in2="figureMask" operator="in" result="originalFigures" />
+                <feMerge><feMergeNode in="readingColors" /><feMergeNode in="originalFigures" /></feMerge>
+              </template>
+            </filter>
+          </defs></svg>
+          <div class="pdf-page-stage" :class="{single: mode !== 'bilingual' || readable, stacked: stackedBilingual}" :style="{'--pdf-page-width': `${layout.width}px`, '--pdf-page-height': `${layout.height}px`, '--pdf-content-width': `${layout.page.width}px`, '--pdf-content-height': `${layout.page.height}px`}">
+            <figure v-if="mode !== 'translated' && !readable" class="pdf-page-column" :aria-label="t('document.pdfReading.original')">
+              <div class="pdf-page-frame" :data-page-number="layout.page.pageNumber">
+                <div class="pdf-page-content" :style="fixedThemeStyle(layout.page.pageNumber)">
+                  <div :ref="element => setPageHost(layout.page.pageNumber, 'source', element)" class="pdf-canvas-host" />
+                  <i v-if="highlight?.pageNumber === layout.page.pageNumber" class="pdf-source-highlight" :style="highlight.style" data-fluentread-pdf-decoration aria-hidden="true" />
+                  <i v-if="searchHighlight?.pageNumber === layout.page.pageNumber" class="pdf-source-highlight search" :style="searchHighlight.style" data-fluentread-pdf-decoration aria-hidden="true" />
+                  <i v-for="(region, index) in layout.page.ocrReviewRegions" :key="index" class="pdf-ocr-review" :style="{left: `${region.x}px`, top: `${region.y}px`, width: `${region.width}px`, height: `${region.height}px`}" data-fluentread-pdf-decoration aria-hidden="true" />
+                </div>
+
+                <template v-for="annotation in annotationsByPage.get(layout.page.pageNumber)" :key="annotation.id"><i v-for="(rect, index) in annotation.rects" :key="index" class="pdf-user-annotation" :class="annotation.kind" :data-pdf-annotation="annotation.id" :style="{left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.width * 100}%`, height: `${rect.height * 100}%`, '--annotation-color': PDF_ANNOTATION_COLORS[annotation.color]}" data-fluentread-pdf-decoration aria-hidden="true" /></template>
                 <span v-if="!states.has(layout.page.pageNumber) || states.get(layout.page.pageNumber)?.status === 'loading'" class="pdf-page-loading" data-fluentread-pdf-decoration role="status">{{ t('document.pdfReading.loadingSource') }}</span>
               </div>
             </figure>
-            <figure v-if="mode !== 'source'" class="pdf-page-column translated" :aria-label="t('document.pdfReading.translated')">
-              <article v-if="presentation === 'readable'" :ref="element => setReadingHost(layout.page.pageNumber, element)" class="pdf-reading-sheet" :data-pdf-reading-page="layout.page.pageNumber" :style="{'--pdf-reading-font-size': `${readingFontSize}px`}">
+            <figure v-if="mode !== 'source' || readable" class="pdf-page-column" :class="{translated: mode !== 'source'}" :aria-label="t(mode === 'source' ? 'document.pdfReading.original' : 'document.pdfReading.translated')">
+              <article v-if="presentation === 'readable'" :ref="element => setReadingHost(layout.page.pageNumber, element)" class="pdf-reading-sheet" :data-page-number="layout.page.pageNumber" :data-pdf-reading-page="layout.page.pageNumber" :style="{'--pdf-reading-font-size': `${readingFontSize}px`}">
                 <template v-for="entry in readingPlans.get(layout.page.pageNumber)?.entries" :key="entry.id">
                   <figure v-if="entry.kind === 'region'" class="pdf-reading-region" :data-pdf-region-id="entry.id" :data-pdf-region-kind="entry.role" :data-pdf-source-rect="JSON.stringify(entry.sourceRect)">
                     <div :ref="element => setRegionHost(layout.page.pageNumber, entry.id, element)" class="pdf-region-canvas" :style="{width: `${entry.sourceRect.width * (entry.role === 'figure' ? 2 : 1.5) * readingFontSize / 16}px`, aspectRatio: `${entry.sourceRect.width} / ${entry.sourceRect.height}`}" :aria-label="t('document.pdfReading.preservedRegion')" />
                   </figure>
-                  <p v-else class="pdf-reading-paragraph" :class="paragraphClasses(entry)" :data-pdf-segment-index="entry.segmentIndex" :data-pdf-source-text="entry.source" :data-pdf-source-id="entry.id" :data-pdf-role="entry.role" data-i18n-ignore>{{ entry.text }}<span v-if="translating && !entry.translated && isPending(entry.segmentIndex)" class="pdf-translation-spinner inline" data-fluentread-pdf-decoration aria-hidden="true"><TranslationLoadingPreview :loading-style="loadingStyle" :animated="animated" /></span></p>
+                  <p v-else class="pdf-reading-paragraph" :class="paragraphClasses(entry)" :style="paragraphAnnotationStyle(entry)" :data-pdf-segment-index="entry.segmentIndex" :data-pdf-source-text="entry.source" :data-pdf-source-id="entry.id" :data-pdf-role="entry.role" data-i18n-ignore><span v-if="mode === 'bilingual' && entry.translated" class="pdf-reflow-source" dir="auto">{{ entry.source }}</span><span dir="auto">{{ entry.text }}</span><span v-if="mode !== 'source' && translating && !entry.translated && isPending(entry.segmentIndex)" class="pdf-translation-spinner inline" data-fluentread-pdf-decoration aria-hidden="true"><TranslationLoadingPreview :loading-style="loadingStyle" :animated="animated" /></span><button v-if="continuationBySegment.has(entry.segmentIndex)" type="button" class="pdf-cross-page-context" data-fluentread-pdf-decoration :aria-label="t('document.pdfReading.crossPageContext')" :title="t('document.pdfReading.crossPageContext')" @click="openFullPassage(layout.page.pageNumber, entry.segmentIndex)"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true"><path d="m6 4-3 3 3 3M3 7h9a4 4 0 0 1 0 8H9m2-3-3 3 3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg></button></p>
                 </template>
               </article>
-              <div v-else class="pdf-page-frame">
-                <div :ref="element => setPageHost(layout.page.pageNumber, 'translated', element)" class="pdf-canvas-host" :style="canvasHostStyle(layout)" />
-                <div class="pdf-translation-layer" data-fluentread-pdf-translation :data-pdf-reading-page="layout.page.pageNumber" :style="layerStyle(layout)" @pointerleave="highlight = undefined">
-                  <i v-if="searchHighlight?.pageNumber === layout.page.pageNumber" class="pdf-source-highlight search" :style="searchHighlight.style" data-fluentread-pdf-decoration aria-hidden="true" />
-                  <template v-for="entry in overlayPages.get(layout.page.pageNumber)" :key="entry.id">
-                    <div v-if="entry.translated" class="pdf-translation-block" :class="{overflowing: entry.overflow, heading: entry.role === 'heading', 'selection-expanded': expandedSelectionBlocks.has(entry.id)}" :style="entry.boxStyle" :data-pdf-segment-index="entry.segmentIndex" :data-pdf-source-text="entry.source" :data-pdf-source-id="entry.id" :data-pdf-role="entry.role" data-i18n-ignore @pointerenter="showHighlight(layout, entry)">
-                      <i v-for="(rect, index) in entry.eraseStyles" :key="index" class="pdf-translation-erase" :style="rect" aria-hidden="true" />
-                      <p class="pdf-translation-text" :style="entry.textStyle" data-fluentread-pdf-lines><span v-for="(line, index) in entry.lines" :key="index" :class="{justified: line.justified}">{{ line.text }}</span></p>
-                    </div>
-                    <span v-else-if="translating && entry.pending" class="pdf-translation-spinner" :style="entry.spinnerStyle" :data-pdf-pending-segment="entry.segmentIndex" data-fluentread-pdf-decoration role="status" :aria-label="t('document.pdfReading.translatingBlock')"><TranslationLoadingPreview :loading-style="loadingStyle" :animated="animated" /></span>
-                  </template>
+              <div v-else class="pdf-page-frame" :data-page-number="layout.page.pageNumber">
+                <div class="pdf-page-content" :style="fixedThemeStyle(layout.page.pageNumber)">
+                  <div :ref="element => setPageHost(layout.page.pageNumber, 'translated', element)" class="pdf-canvas-host" />
+                  <div class="pdf-translation-layer" data-fluentread-pdf-translation :data-pdf-reading-page="layout.page.pageNumber" :style="layerStyle(layout.page)" @pointerleave="highlight = undefined">
+                    <i v-if="searchHighlight?.pageNumber === layout.page.pageNumber" class="pdf-source-highlight search" :style="searchHighlight.style" data-fluentread-pdf-decoration aria-hidden="true" />
+                    <template v-for="entry in overlayPages.get(layout.page.pageNumber)" :key="entry.id">
+                      <div v-if="entry.translated" class="pdf-translation-block" :class="{overflowing: entry.overflow, heading: entry.role === 'heading', 'selection-expanded': expandedSelectionBlocks.has(entry.id)}" :style="entry.boxStyle" :data-pdf-segment-index="entry.segmentIndex" :data-pdf-source-text="entry.source" :data-pdf-source-id="entry.id" :data-pdf-role="entry.role" data-i18n-ignore @pointerenter="showHighlight(layout, entry)">
+                        <i v-for="(rect, index) in entry.eraseStyles" :key="index" class="pdf-translation-erase" :style="rect" aria-hidden="true" />
+                        <p class="pdf-translation-text" :style="entry.textStyle" data-fluentread-pdf-lines><span v-for="(line, index) in entry.lines" :key="index" :class="{justified: line.justified}">{{ line.text }}</span></p>
+                        <button v-if="entry.overflow || continuationBySegment.has(entry.segmentIndex)" type="button" class="pdf-full-passage-button" data-fluentread-pdf-decoration :aria-label="t(continuationBySegment.has(entry.segmentIndex) ? 'document.pdfReading.crossPageContext' : 'document.pdfReading.fullPassage')" :title="t(continuationBySegment.has(entry.segmentIndex) ? 'document.pdfReading.crossPageContext' : 'document.pdfReading.fullPassage')" @click.stop="openFullPassage(layout.page.pageNumber, entry.segmentIndex)"><svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true"><path d="M10 5v11M3 4.5c2.4-.8 4.7-.5 7 1.2 2.3-1.7 4.6-2 7-1.2v10c-2.4-.8-4.7-.5-7 1.2-2.3-1.7-4.6-2-7-1.2z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+                      </div>
+                      <span v-else-if="translating && entry.pending" class="pdf-translation-spinner" :style="entry.spinnerStyle" :data-pdf-pending-segment="entry.segmentIndex" data-fluentread-pdf-decoration role="status" :aria-label="t('document.pdfReading.translatingBlock')"><TranslationLoadingPreview :loading-style="loadingStyle" :animated="animated" /></span>
+                    </template>
+                  </div>
                 </div>
+
                 <span v-if="!states.has(layout.page.pageNumber) || states.get(layout.page.pageNumber)?.status === 'loading'" class="pdf-page-loading" data-fluentread-pdf-decoration role="status">{{ t('document.pdfReading.loadingTranslation') }}</span>
               </div>
             </figure>
           </div>
-          <div v-if="states.get(layout.page.pageNumber)?.status === 'error'" class="pdf-page-error" role="alert"><span>{{ errorFor(layout.page.pageNumber) }}</span><button type="button" @click="scheduler?.retry(layout.index)">{{ t('document.pdfReading.retryPage') }}</button></div>
+          <div v-if="errorFor(layout.page.pageNumber) !== undefined" class="pdf-page-error" role="alert"><span>{{ errorFor(layout.page.pageNumber) }}</span><button type="button" @click="scheduler?.retry(layout.index)">{{ t('document.pdfReading.retryPage') }}</button></div>
         </article>
       </div>
     </div>
     </div>
+    <dialog ref="fullPassageDialog" class="pdf-full-passage-dialog" aria-labelledby="pdf-full-passage-heading" @close="fullPassage = undefined">
+      <header><h2 id="pdf-full-passage-heading">{{ t(fullPassageParts.length > 1 ? 'document.pdfReading.crossPageContext' : 'document.pdfReading.fullPassage') }}<small v-if="fullPassage">{{ fullPassageParts.map(part => t('document.pdfReading.pageNumber', {page: part.page})).join(' → ') }}</small></h2><button type="button" autofocus :aria-label="t('document.pdfReading.closePassage')" @click="fullPassageDialog?.close()">×</button></header>
+      <div v-if="fullPassage" class="pdf-full-passage-content">
+        <div v-for="part in fullPassageParts" :key="part.segmentIndex" class="pdf-full-passage-pair">
+          <section class="pdf-full-passage-source"><h3>{{ t('document.pdfReading.original') }}<small v-if="fullPassageParts.length > 1"> · {{ t('document.pdfReading.pageNumber', {page: part.page}) }}</small></h3><p dir="auto" data-i18n-ignore>{{ document.segments[part.segmentIndex]?.source }}</p></section>
+          <section><h3>{{ t('document.pdfReading.translated') }}</h3><p dir="auto" class="pdf-full-passage-translation" data-i18n-ignore>{{ translations[part.segmentIndex] || t('document.pdfReading.waitingTranslation') }}</p></section>
+        </div>
+      </div>
+    </dialog>
   </section>
 </template>
 
 <script setup lang="ts">
 import {computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch, type ComponentPublicInstance} from 'vue';
 import {useUiI18n} from '@/src/ui/i18n';
+import PdfAnnotations from './PdfAnnotations.vue';
+import {pdfHypothesisUrl, PDF_ANNOTATION_COLORS, type PdfAnnotation} from '../core/pdfAnnotations';
+import {PDF_READING_THEMES as THEME_CHOICES, pdfReadingThemeColors, pdfReadingThemeTransfer, pdfReadingThemeRegions} from '../core/pdfReadingTheme';
 import TranslationLoadingPreview from '@/src/ui/components/TranslationLoadingPreview.vue';
 import {DEFAULT_TRANSLATION_LOADING_STYLE, type TranslationLoadingStyle} from '@/src/core/config/translationLoadingStyle';
 import {hasDistinctTranslation} from '@/src/core/translation/result';
+import {findPdfContinuations} from '@/src/features/document-translation/core/pdfContinuations';
 import type {ParsedDocument, PdfDocumentPage} from '@/src/features/document-translation/core/document';
 import {fitPdfBlockText, pdfOverlayBlocks, type PdfBlockFit, type PdfOverlayBlock} from '@/src/features/document-translation/core/pdfBlockFit';
 import {buildPdfReadingPlan, type PdfReadingPlan, type PdfReadingPresentation, type PdfReadingRegionEntry, type PdfReadingTextEntry} from '@/src/features/document-translation/core/pdfReadingPlan';
-import {sampledBackgroundRgb, sampledForegroundColor} from '@/src/features/document-translation/ui/pdfPreview';
-import {createPdfReaderRenderPort, pdfReaderPageKey, pdfReaderPageWindow, PdfReaderScheduler, type PdfReaderMode, type PdfReaderPageState} from '@/src/features/document-translation/ui/pdfReader';
+import {sampledPdfBlockColors, acquirePdfDocument} from '@/src/features/document-translation/ui/pdfPreview';
+import {createHypothesisClient, injectHypothesisDocumentScript} from '@/src/features/hypothesis/public';
+import {installPdfHypothesisAdapter} from './pdfHypothesis';
+import {createPdfReaderRenderPort, pdfReaderDisplayRect, pdfReaderPageKey, pdfReaderPageWindow, PdfReaderScheduler, type PdfReaderMode, type PdfReaderPageState} from '@/src/features/document-translation/ui/pdfReader';
+import {updatePdfOcrTextLayer} from './pdfOcrTextLayer';
 import {installInformationHighlight, type InformationHighlightController} from '@/src/features/information-highlight/public';
 import {DEFAULT_INFORMATION_HIGHLIGHT_PREFERENCES, type InformationHighlightPreferences} from '@/src/core/config/informationHighlight';
 import type {InformationHighlightModelId} from '@/src/core/config/informationHighlightModel';
 import {matchesConfiguredHotkey} from '@/src/core/hotkey';
 import type {InformationHighlightResult, InformationHighlightState} from '@/src/features/information-highlight/protocol';
 import {installDocumentZoomGestures, type DocumentZoomPoint} from './documentZoom';
+import {captureVisiblePdfMaterialLocation, createPdfMaterialNavigation, resolvePdfMaterialSelection, waitPdfMaterialFrame, type PdfMaterialLocation} from './pdfMaterialNavigation';
 
-const props = withDefaults(defineProps<{document: ParsedDocument; translations?: readonly string[]; mode: PdfReaderMode; sourceUrl?: string; presentation?: PdfReadingPresentation; translating?: boolean; controlsTarget?: HTMLElement | null; outlineTarget?: HTMLElement | null; loadingStyle?: TranslationLoadingStyle; animated?: boolean; informationHighlight?: {preferences: InformationHighlightPreferences; scoreLocal(text: string, signal: AbortSignal, modelId?: InformationHighlightModelId): Promise<InformationHighlightResult>; available: boolean}}>(), {translations: () => [], sourceUrl: '', presentation: 'layout', translating: false, controlsTarget: null, outlineTarget: null, loadingStyle: DEFAULT_TRANSLATION_LOADING_STYLE, animated: true});
-const emit = defineEmits<{ 'update:presentation': [value: PdfReadingPresentation]; 'page-change': [page: number] }>();
+const annotationControls = ref<{markSelection(range: Range, kind: 'highlight' | 'underline'): boolean}>();
+const props = withDefaults(defineProps<{document: ParsedDocument; translations?: readonly string[]; annotations?: readonly PdfAnnotation[]; annotationStorageUnavailable?: boolean; mode: PdfReaderMode; sourceUrl?: string; presentation?: PdfReadingPresentation; translating?: boolean; controlsTarget?: HTMLElement | null; outlineTarget?: HTMLElement | null; loadingStyle?: TranslationLoadingStyle; animated?: boolean; informationHighlight?: {preferences: InformationHighlightPreferences; scoreLocal(text: string, signal: AbortSignal, modelId?: InformationHighlightModelId): Promise<InformationHighlightResult>; available: boolean}}>(), {translations: () => [], annotations: () => [], annotationStorageUnavailable: false, sourceUrl: '', presentation: 'layout', translating: false, controlsTarget: null, outlineTarget: null, loadingStyle: DEFAULT_TRANSLATION_LOADING_STYLE, animated: true});
+const emit = defineEmits<{ 'update:presentation': [value: PdfReadingPresentation]; 'update:annotations': [value: PdfAnnotation[]]; 'page-change': [page: number]; 'material-position-change': [] }>();
 const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
 const PRESENTATIONS: PdfReadingPresentation[] = ['layout', 'readable'];
 const PAGE_GUTTER = 12;
+const RASTER_REFRESH_DELAY_MS = 160;
 const SERIF_FAMILY = '"Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", STSong, SimSun, Georgia, "Times New Roman", serif';
 const SANS_FAMILY = '"Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", "Arial Unicode MS", Arial, sans-serif';
+const annotationsByPage = computed(() => {
+  const map = new Map<number, PdfAnnotation[]>();
+  for (const annotation of props.annotations) {const list = map.get(annotation.page) ?? []; list.push(annotation); map.set(annotation.page, list);}
+  return map;
+});
+function paragraphAnnotations(entry: PdfReadingTextEntry): PdfAnnotation[] {
+  const page = pages.value.find(page => page.pageNumber === entry.pageNumber)!;
+  const source = pdfReaderDisplayRect(entry.sourceRect, page);
+  return annotationsByPage.value.get(entry.pageNumber)?.filter(annotation => annotation.rects.some(rect =>
+    rect.x * page.width < source.x + source.width && (rect.x + rect.width) * page.width > source.x && rect.y * page.height < source.y + source.height && (rect.y + rect.height) * page.height > source.y)) ?? [];
+}
+function paragraphAnnotationStyle(entry: PdfReadingTextEntry): Record<string, string> {
+  const annotations = paragraphAnnotations(entry);
+  return {'--pdf-annotation-highlight': PDF_ANNOTATION_COLORS[annotations.find(annotation => annotation.kind === 'highlight')?.color ?? 'yellow'],
+    '--pdf-annotation-underline': PDF_ANNOTATION_COLORS[annotations.find(annotation => annotation.kind === 'underline')?.color ?? 'green']};
+}
 function paragraphClasses(entry: PdfReadingTextEntry): Record<string, boolean> {
-  return {'pdf-reading-heading': entry.role === 'heading', 'pdf-reading-caption': entry.role === 'caption', 'pdf-reading-metadata': entry.role === 'metadata', 'pdf-reading-footer': entry.role === 'footer', 'pdf-reading-untranslated': !entry.translated};
+  const annotations = paragraphAnnotations(entry);
+  return {'pdf-reading-heading': entry.role === 'heading', 'pdf-reading-caption': entry.role === 'caption', 'pdf-reading-metadata': entry.role === 'metadata', 'pdf-reading-footer': entry.role === 'footer', 'pdf-reading-untranslated': !entry.translated, 'pdf-annotated-highlight': annotations.some(annotation => annotation.kind === 'highlight'), 'pdf-annotated-underline': annotations.some(annotation => annotation.kind === 'underline')};
 }
 const presentation = ref<PdfReadingPresentation>(props.presentation);
 watch(() => props.presentation, value => {presentation.value = value;});
 const {t} = useUiI18n();
 const viewport = ref<HTMLElement>();
 const toolbar = ref<HTMLElement>();
+/** 原位放不下的译文可用键盘打开独立全文；原生 dialog 管理焦点、Esc 与返回触发按钮。 */
+const fullPassageDialog = ref<HTMLDialogElement>();
+const fullPassage = ref<{page: number; segmentIndex: number}>();
+const continuationBySegment = computed(() => {
+  const map = new Map<number, ReturnType<typeof findPdfContinuations>>();
+  for (const pair of findPdfContinuations(props.document)) for (const part of [pair.from, pair.to]) {
+    const linked = map.get(part.segmentIndex) ?? []; linked.push(pair); map.set(part.segmentIndex, linked);
+  }
+  return map;
+});
+const fullPassageParts = computed(() => {
+  const current = fullPassage.value;
+  if (!current) return [];
+  const parts = new Map([[current.segmentIndex, current]]), queue = [current.segmentIndex];
+  for (let index = 0; index < queue.length; index++) for (const pair of continuationBySegment.value.get(queue[index]) ?? []) {
+    for (const part of [pair.from, pair.to]) if (!parts.has(part.segmentIndex)) {
+      parts.set(part.segmentIndex, {page: part.pageNumber, segmentIndex: part.segmentIndex}); queue.push(part.segmentIndex);
+    }
+  }
+  return [...parts.values()].sort((left, right) => left.page - right.page);
+});
+async function openFullPassage(page: number, segmentIndex: number): Promise<void> {
+  fullPassage.value = {page, segmentIndex};
+  await nextTick();
+  if (!closed && fullPassage.value) fullPassageDialog.value?.showModal();
+}
 const rasterScale = ref(1);
 let disposeZoomGestures: (() => void) | undefined;
 let rasterTimer: ReturnType<typeof setTimeout> | undefined;
@@ -173,7 +292,7 @@ function syncInformationHighlight(): void {
 watch(() => [props.informationHighlight?.available, props.informationHighlight?.preferences.enabled, props.informationHighlight?.preferences.mode, props.informationHighlight?.preferences.model, props.informationHighlight?.preferences.density, props.informationHighlight?.preferences.color, props.informationHighlight?.preferences.style, props.informationHighlight?.preferences.intensity], syncInformationHighlight, {flush: 'post'});
 const zoom = ref('fit');
 /** 工具栏菜单同一时间只展开一个；点击别处或按 Esc 收起。 */
-const openMenu = ref<'zoom' | 'presentation' | 'search' | 'style' | null>(null);
+const openMenu = ref<'zoom' | 'presentation' | 'search' | 'style' | 'annotations' | null>(null);
 /** 工具栏可在小窗口分组换行；浮层按实际按钮位置展开，再把横向边界收进窗口。 */
 function fitToolbarMenus(): void {
   if (closed || !openMenu.value) return;
@@ -206,10 +325,34 @@ function storedStyle(): {scale: number; font: typeof FONT_CHOICES[number]; highl
   } catch {return {scale: 1, font: 'auto', highlight: true};}
 }
 /** 悬停译文时在原文页标出对应段落；觉得干扰可以关掉。 */
-const hoverHighlight = ref(storedStyle().highlight);
-const textScale = ref(storedStyle().scale);
-const textFont = ref<typeof FONT_CHOICES[number]>(storedStyle().font);
+const initialTextStyle = storedStyle();
+const hoverHighlight = ref(initialTextStyle.highlight);
+const textScale = ref(initialTextStyle.scale);
+const textFont = ref<typeof FONT_CHOICES[number]>(initialTextStyle.font);
 watch([textScale, textFont, hoverHighlight], ([scaleValue, font, highlightValue]) => {if (!highlightValue) highlight.value = undefined; try {globalThis.localStorage?.setItem(STYLE_KEY, JSON.stringify({scale: scaleValue, font, highlight: highlightValue}));} catch { /* 无法写入时只在本次阅读生效。 */ }});
+/** 阅读外观与译文拟合参数分开保存；颜色仅接受十六进制，范围值在存储边界归一。 */
+const READING_STYLE_KEY = 'fluentread.pdfReader.readingStyle';
+function storedReadingStyle() {
+  let value: Record<string, unknown> = {};
+  try {value = JSON.parse(globalThis.localStorage?.getItem(READING_STYLE_KEY) || '{}') ?? {};} catch { /* 损坏设置使用默认阅读外观。 */ }
+  const bounded = (input: unknown, fallback: number, min: number, max: number) => typeof input === 'number' && Number.isFinite(input) ? Math.min(max, Math.max(min, input)) : fallback;
+  const color = (input: unknown, fallback: string) => typeof input === 'string' && /^#[\da-f]{6}$/iu.test(input) ? input : fallback;
+  return {theme: THEME_CHOICES.includes(value.theme as typeof THEME_CHOICES[number]) ? value.theme as typeof THEME_CHOICES[number] : 'auto' as const,
+    lineSpacing: bounded(value.lineSpacing, 1.7, 1.3, 2.2), paragraphSpacing: bounded(value.paragraphSpacing, 1.2, 0.4, 1.8),
+    background: color(value.background, '#fff7e6'), text: color(value.text, '#302b24')};
+}
+const initialReadingStyle = storedReadingStyle();
+const readingTheme = ref(initialReadingStyle.theme), lineSpacing = ref(initialReadingStyle.lineSpacing), paragraphSpacing = ref(initialReadingStyle.paragraphSpacing);
+const backgroundColor = ref(initialReadingStyle.background), textColor = ref(initialReadingStyle.text);
+const themeColors = computed(() => pdfReadingThemeColors(readingTheme.value, backgroundColor.value, textColor.value));
+const themeTransfer = computed(() => pdfReadingThemeTransfer(themeColors.value ?? {background: '#ffffff', text: '#111827'}));
+const readingStyle = computed(() => {
+  return {'--pdf-reading-background': themeColors.value?.background ?? 'var(--surface)', '--pdf-reading-color': themeColors.value?.text ?? 'var(--ink)', '--pdf-reading-line-height': lineSpacing.value,
+    '--pdf-reading-paragraph-gap': `${paragraphSpacing.value}em`, '--pdf-reading-family': textFont.value === 'serif' ? SERIF_FAMILY : SANS_FAMILY};
+});
+watch([readingTheme, lineSpacing, paragraphSpacing, backgroundColor, textColor], () => {
+  try {globalThis.localStorage?.setItem(READING_STYLE_KEY, JSON.stringify({theme: readingTheme.value, lineSpacing: lineSpacing.value, paragraphSpacing: paragraphSpacing.value, background: backgroundColor.value, text: textColor.value}));} catch { /* 存储不可用时本次阅读继续生效。 */ }
+});
 /** 搜索同时匹配原文与译文，按阅读顺序列出命中的段落；回车跳到下一处，Shift+回车回到上一处。 */
 const searchInput = ref<HTMLInputElement>();
 const searchQuery = ref('');
@@ -218,16 +361,15 @@ const searchHits = computed(() => {
   const query = searchQuery.value.trim().toLocaleLowerCase();
   if (!query) return [];
   return pages.value.flatMap((page, pageIndex) => page.blocks.flatMap(block => {
-    const source = props.document.segments[block.segmentIndex]?.source ?? '';
+    const source = props.document.segments[block.segmentIndex]?.source ?? block.source ?? (block.lines ?? []).map(line => line.text).join(' ');
     const translation = props.translations[block.segmentIndex] ?? '';
-    return block.segmentIndex >= 0 && (source.toLocaleLowerCase().includes(query) || translation.toLocaleLowerCase().includes(query)) ? [{pageIndex, pageNumber: page.pageNumber, rotation: page.rotation, x: block.x, y: block.y, width: block.width, height: block.height}] : [];
+    return source.toLocaleLowerCase().includes(query) || translation.toLocaleLowerCase().includes(query) ? [{pageIndex, pageNumber: page.pageNumber, rotation: page.rotation, x: block.x, y: block.y, width: block.width, height: block.height}] : [];
   }));
 });
 const searchHighlight = computed(() => {
   const hit = searchHits.value[searchIndex.value];
   if (!hit || hit.rotation || openMenu.value !== 'search') return undefined;
-  const s = scale.value;
-  return {pageNumber: hit.pageNumber, style: {left: px(hit.x * s - 3), top: px(hit.y * s - 3), width: px(hit.width * s + 6), height: px(hit.height * s + 6)}};
+  return {pageNumber: hit.pageNumber, style: highlightStyle(hit)};
 });
 function showSearchHit(): void {const hit = searchHits.value[searchIndex.value]; if (hit) jumpToPosition(hit.pageIndex, hit.y);}
 function stepSearch(direction: 1 | -1): void {
@@ -240,14 +382,21 @@ function toggleSearch(): void {
   openMenu.value = openMenu.value === 'search' ? null : 'search';
   if (openMenu.value === 'search') void nextTick(() => searchInput.value?.focus());
 }
-watch(searchQuery, () => {searchIndex.value = 0; showSearchHit();});
+watch([searchQuery, searchHits, () => props.document], ([query, hits, document], [previousQuery, previousHits, previousDocument]) => {
+  const previous = previousHits[searchIndex.value];
+  const preserved = query === previousQuery && document === previousDocument && previous
+    ? hits.findIndex(hit => hit.pageNumber === previous.pageNumber && hit.x === previous.x && hit.y === previous.y) : -1;
+  searchIndex.value = Math.max(0, preserved);
+  // 翻译分批完成可能在当前命中前新增结果；保留当前段落，只有原命中消失才跳回首个结果。
+  if (preserved < 0) showSearchHit();
+});
 const zoomOptions = computed(() => [{value: 'fit', label: t('document.pdfReading.fitWidth')}, {value: 'page', label: t('document.pdfReading.fitPage')}, ...ZOOM_STEPS.map(step => ({value: String(step), label: `${Math.round(step * 100)}%`}))]);
 const zoomLabel = computed(() => zoomOptions.value.find(option => option.value === zoom.value)?.label ?? `${Math.round(Number(zoom.value) * 100)}%`);
 function closeMenu(restoreFocus = false): void {
   if (restoreFocus) toolbar.value?.querySelector<HTMLButtonElement>('.pdf-menu.open > .pdf-menu-button')?.focus();
   openMenu.value = null;
 }
-function choosePresentation(value: PdfReadingPresentation): void {closeMenu(true); if (presentation.value === value) return; presentation.value = value; emit('update:presentation', value);}
+function choosePresentation(value: PdfReadingPresentation): void {if (presentation.value === value) return; presentation.value = value; emit('update:presentation', value);}
 function closeMenus(event: Event): void {
   if (!openMenu.value) return;
   if (event.type === 'keydown') {if ((event as KeyboardEvent).key === 'Escape') closeMenu(true);}
@@ -262,18 +411,18 @@ const residentIndexes = ref<number[]>([]);
 const documentIdentity = ref(`${Date.now()}-${Math.random().toString(36).slice(2)}`);
 const pages = computed(() => props.document.binary?.kind === 'pdf' ? props.document.binary.pages : []);
 const numericZoom = computed(() => zoom.value === 'fit' || zoom.value === 'page' ? 1 : Number(zoom.value));
-const readingFontSize = computed(() => 16 * numericZoom.value);
+const readingFontSize = computed(() => 16 * numericZoom.value * textScale.value);
 const readingHeights = shallowRef(new Map<number, number>());
-const readable = computed(() => presentation.value === 'readable' && props.mode !== 'source');
+const readable = computed(() => presentation.value === 'readable');
 const readingPlans = computed(() => new Map<number, PdfReadingPlan>(readable.value ? residentIndexes.value.flatMap(index => {
   const page = pages.value[index];
-  return page ? [[page.pageNumber, buildPdfReadingPlan(props.document, page, props.translations)] as [number, PdfReadingPlan]] : [];
+  return page ? [[page.pageNumber, buildPdfReadingPlan(props.document, page, props.mode === 'source' ? [] : props.translations)] as [number, PdfReadingPlan]] : [];
 }) : []));
-const stackedBilingual = computed(() => props.mode === 'bilingual' && viewportWidth.value < 900);
+const stackedBilingual = computed(() => !readable.value && props.mode === 'bilingual' && viewportWidth.value < 900);
 const scale = computed(() => {
   if (zoom.value !== 'fit' && zoom.value !== 'page') return Number(zoom.value);
   const maxPageWidth = pages.value.reduce((width, page) => Math.max(width, page.width), 1);
-  const columns = props.mode === 'bilingual' && !stackedBilingual.value ? 2 : 1;
+  const columns = !readable.value && props.mode === 'bilingual' && !stackedBilingual.value ? 2 : 1;
   const widthScale = (viewportWidth.value - PAGE_GUTTER * 2 - (columns - 1) * PAGE_GUTTER) / columns / maxPageWidth;
   const maxPageHeight = pages.value.reduce((height, page) => Math.max(height, page.height), 1);
   const fitted = zoom.value === 'page' ? Math.min(widthScale, (viewportHeight.value - PAGE_GUTTER * 2) / maxPageHeight) : widthScale;
@@ -283,10 +432,10 @@ interface PageLayout {page: PdfDocumentPage; index: number; top: number; rowHeig
 const layouts = computed<PageLayout[]>(() => {
   let top = PAGE_GUTTER;
   return pages.value.map((page, index) => {
-    const width = Math.max(1, page.width * scale.value);
+    const width = readable.value ? Math.max(1, Math.min(900, viewportWidth.value - PAGE_GUTTER * 2)) : Math.max(1, page.width * scale.value);
     const height = Math.max(1, page.height * scale.value);
     const translatedHeight = readable.value ? readingHeights.value.get(page.pageNumber) ?? height : height;
-    const rowHeight = props.mode === 'source' ? height : props.mode === 'translated' ? translatedHeight
+    const rowHeight = readable.value ? translatedHeight : props.mode === 'source' ? height : props.mode === 'translated' ? translatedHeight
       : stackedBilingual.value ? height + PAGE_GUTTER + translatedHeight : Math.max(height, translatedHeight);
     const layout = {page, index, top, rowHeight, width, height};
     top += rowHeight + PAGE_GUTTER;
@@ -295,14 +444,20 @@ const layouts = computed<PageLayout[]>(() => {
 });
 const totalHeight = computed(() => {const last = layouts.value.at(-1); return last ? last.top + last.rowHeight + PAGE_GUTTER : 0;});
 const totalWidth = computed(() => {
-  const columns = props.mode === 'bilingual' && !stackedBilingual.value ? 2 : 1;
+  const columns = !readable.value && props.mode === 'bilingual' && !stackedBilingual.value ? 2 : 1;
   return layouts.value.reduce((width, layout) => Math.max(width, layout.width * columns + PAGE_GUTTER * (columns + 1)), 0);
 });
 const residentLayouts = computed(() => residentIndexes.value.map(index => layouts.value[index]).filter(Boolean).sort((left, right) => left.index - right.index));
-function canvasHostStyle(layout: PageLayout): Record<string, string> {
-  return {width: `${layout.page.width * rasterScale.value}px`, height: `${layout.page.height * rasterScale.value}px`, transform: `scale(${scale.value / rasterScale.value})`};
+/** 遮罩只存在于附近五页；SVG 颜色映射与原图合成复用原画布，不重绘或覆盖原生文字层。 */
+const fixedTheme = computed(() => !readable.value && readingTheme.value !== 'auto');
+const themeRegions = computed(() => new Map(residentLayouts.value.map(({page}) => [page.pageNumber, pdfReadingThemeRegions(page).map(region => {
+  const rect = pdfReaderDisplayRect(region, page);
+  return {x: rect.x / page.width, y: rect.y / page.height, width: rect.width / page.width, height: rect.height / page.height};
+})])));
+function themeId(page: number): string {return `fluentread-pdf-colors-${documentIdentity.value}-${page}`;}
+function fixedThemeStyle(page: number): Record<string, string> {
+  return fixedTheme.value ? {filter: `url(#${themeId(page)})`} : {};
 }
-
 /** 记录指针下页面内的坐标；单独记录栏位，双语间距和居中留白不会被误当作页面一起放大。 */
 function captureZoomAnchor(point?: DocumentZoomPoint): ZoomAnchor | undefined {
   const scroll = viewport.value;
@@ -336,13 +491,7 @@ function restoreZoomAnchor(anchor: ZoomAnchor): boolean {
 }
 function setGestureZoom(value: number, point?: DocumentZoomPoint): void {
   zoomPoint = point;
-  if (point) {
-    // 捏合时复用当前画布和文字层，手势停下再按最终比例重绘，避免连续取消 PDF.js 渲染。
-    clearTimeout(rasterTimer);
-    rasterTimer = setTimeout(() => {rasterTimer = undefined; if (!closed) {rasterScale.value = scale.value; updateViewport();}}, 160);
-  } else {clearTimeout(rasterTimer); rasterTimer = undefined;}
   zoom.value = String(value);
-  if (!point) rasterScale.value = scale.value;
 }
 function bindZoomGestures(): void {
   disposeZoomGestures?.();
@@ -350,20 +499,28 @@ function bindZoomGestures(): void {
 }
 function chooseZoom(value: string): void {
   bindZoomGestures();
-  clearTimeout(rasterTimer); rasterTimer = undefined; zoomPoint = undefined;
-  zoom.value = value; rasterScale.value = scale.value;
+  zoomPoint = undefined;
+  zoom.value = value;
 }
 function resetZoom(): void {chooseZoom('fit');}
 watch(zoom, () => {pendingZoomAnchor = captureZoomAnchor(zoomPoint); zoomPoint = undefined;}, {flush: 'pre'});
-watch(scale, value => {if (rasterTimer === undefined) rasterScale.value = value;}, {flush: 'sync'});
+watch(scale, value => {
+  // 手势、工具栏和适合宽度共用一次延迟；页面几何立即提交，底图在连续操作中复用。
+  clearTimeout(rasterTimer);
+  rasterTimer = setTimeout(() => {
+    rasterTimer = undefined;
+    if (!closed) {rasterScale.value = value; updateViewport();}
+  }, RASTER_REFRESH_DELAY_MS);
+}, {flush: 'sync'});
 
+type OverlayLine = {text: string; justified: boolean};
 interface OverlayEntry {
   id: string; segmentIndex: number; source: string; role: string; translated: boolean; pending: boolean; overflow: boolean;
-  lines: Array<{text: string; justified: boolean}>; boxStyle: Record<string, string>; textStyle: Record<string, string>; eraseStyles: Array<Record<string, string>>; spinnerStyle: Record<string, string>;
+  lines: OverlayLine[]; boxStyle: Record<string, string>; textStyle: Record<string, string>; eraseStyles: Array<Record<string, string>>; spinnerStyle: Record<string, string>;
   rect: {x: number; y: number; width: number; height: number};
 }
 const overlayBlocks = new WeakMap<PdfDocumentPage, PdfOverlayBlock[]>();
-const fitCache = new WeakMap<object, {text: string; scale: number; style: string; fit: PdfBlockFit}>();
+const fitCache = new WeakMap<PdfOverlayBlock, {text: string; style: string; fit: PdfBlockFit; lines: OverlayLine[]}>();
 const blockColors = shallowRef(new Map<string, {background: string; foreground: string}>());
 const highlight = ref<{pageNumber: number; style: Record<string, string>}>();
 /** 目录来自版面分析识别出的标题；编号的层数决定缩进，已有译文时显示译文标题。 */
@@ -399,53 +556,60 @@ const px = (value: number) => `${Math.round(value * 100) / 100}px`;
 const overlayPages = computed(() => {
   const result = new Map<number, OverlayEntry[]>();
   if (presentation.value !== 'layout' || props.mode === 'source') return result;
-  const s = scale.value;
+  const styleKey = `${textScale.value}|${textFont.value}`;
   for (const index of residentIndexes.value) {
     const page = pages.value[index];
     if (!page) continue;
     let blocks = overlayBlocks.get(page);
     if (!blocks) overlayBlocks.set(page, blocks = pdfOverlayBlocks(page));
-    result.set(page.pageNumber, blocks.map(({block, spaceBelow, spaceRight}) => {
+    result.set(page.pageNumber, blocks.map(geometry => {
+      const {block, spaceBelow, spaceRight} = geometry;
       const source = props.document.segments[block.segmentIndex]?.source ?? '';
       const value = props.translations[block.segmentIndex] ?? '';
       const translated = hasDistinctTranslation(source, value);
       const id = `pdf-${page.pageNumber}-segment-${block.segmentIndex}`;
       const lines = block.lines?.length ? block.lines : [block];
       const last = lines[lines.length - 1];
-      const spinnerSize = Math.max(10, Math.min(16, block.fontSize * s));
+      const spinnerSize = Math.max(10, Math.min(16, block.fontSize));
       const entry: OverlayEntry = {
         id, segmentIndex: block.segmentIndex, source, role: block.kind ?? 'text', translated, pending: !value.trim(), overflow: false, lines: [],
         rect: {x: block.x, y: block.y, width: block.width, height: block.height},
-        boxStyle: {left: px(block.x * s), top: px(block.y * s), width: px(block.width * s), height: px(block.height * s)}, textStyle: {}, eraseStyles: [],
-        spinnerStyle: {left: px((last.x + last.width) * s + 2), top: px((last.y + last.height / 2) * s - 8), transform: `scale(${Math.round(spinnerSize / 16 * 100) / 100})`},
+        boxStyle: {left: px(block.x), top: px(block.y), width: px(block.width), height: px(block.height)}, textStyle: {}, eraseStyles: [],
+        spinnerStyle: {left: px(last.x + last.width + 2), top: px(last.y + last.height / 2 - 8), transform: `scale(${Math.round(spinnerSize / 16 * 100) / 100})`},
       };
       if (!translated) return entry;
       const singleLine = block.lineCount <= 1;
-      const width = (block.width + (singleLine ? spaceRight : 0)) * s;
+      const width = block.width + (singleLine ? spaceRight : 0);
+      const height = block.height + spaceBelow;
       const serif = textFont.value === 'auto' ? /serif|roman|times|song|ming/iu.test(block.fontFamily) && !/sans/iu.test(block.fontFamily) : textFont.value === 'serif';
-      const styleKey = `${textScale.value}|${textFont.value}`;
-      const cached = fitCache.get(block);
-      const measure = measureText(serif ? SERIF_FAMILY : SANS_FAMILY);
-      const fit = cached && cached.text === value && cached.scale === s && cached.style === styleKey ? cached.fit : fitPdfBlockText({
-        text: value, width: width * 0.985, height: (block.height + spaceBelow) * s, fontSize: block.fontSize * s * textScale.value, lineHeight: (singleLine ? block.fontSize : block.lineHeight) * s * textScale.value,
-        minFontSize: Math.max(6, block.fontSize * s * 0.5), weight: block.fontWeight,
-      }, measure);
-      fitCache.set(block, {text: value, scale: s, style: styleKey, fit});
+      const family = serif ? SERIF_FAMILY : SANS_FAMILY;
+      let cached = fitCache.get(geometry);
+      if (!cached || cached.text !== value || cached.style !== styleKey) {
+        const measure = measureText(family);
+        const fit = fitPdfBlockText({
+          text: value, width: width * 0.985, height, fontSize: block.fontSize * textScale.value, lineHeight: (singleLine ? block.fontSize : block.lineHeight) * textScale.value,
+          minFontSize: Math.max(6, block.fontSize * 0.5), weight: block.fontWeight,
+        }, measure);
+        // 提前折断的短行和段落末行保留自然字距；把测量结果和断行一起复用。
+        const justify = !singleLine && block.textAlign === 'left' && block.kind !== 'heading';
+        const fittedLines = fit.lines.map((text, at) => ({text, justified: justify && at < fit.lines.length - 1 && Boolean(fit.lines[at + 1]) && measure(text, fit.fontSize, block.fontWeight) >= width * 0.88}));
+        cached = {text: value, style: styleKey, fit, lines: fittedLines};
+        fitCache.set(geometry, cached);
+      }
+      const {fit} = cached;
       const colors = blockColors.value.get(id);
-      // 只把接近满行的行拉齐到栏宽；被长引文提前折断的短行保持自然字距，段落末行不拉齐。
-      const justify = !singleLine && block.textAlign === 'left' && block.kind !== 'heading';
-      entry.lines = fit.lines.map((text, at) => ({text, justified: justify && at < fit.lines.length - 1 && Boolean(fit.lines[at + 1]) && measure(text, fit.fontSize, block.fontWeight) >= width * 0.88}));
+      entry.lines = cached.lines;
       entry.overflow = fit.overflow;
-      entry.boxStyle = {...entry.boxStyle, width: px(width), height: px((block.height + spaceBelow) * s), '--pdf-block-background': colors?.background ?? '#fff'};
-      entry.textStyle = {fontSize: px(fit.fontSize), lineHeight: px(fit.lineHeight), fontWeight: String(block.fontWeight), textAlign: block.textAlign, color: colors?.foreground ?? '#111827', fontFamily: serif ? SERIF_FAMILY : SANS_FAMILY};
+      entry.boxStyle = {...entry.boxStyle, width: px(width), height: px(height), '--pdf-block-background': colors?.background ?? '#fff'};
+      entry.textStyle = {fontSize: px(fit.fontSize), lineHeight: px(fit.lineHeight), fontWeight: String(block.fontWeight), textAlign: block.textAlign, color: colors?.foreground ?? '#111827', fontFamily: family};
       entry.eraseStyles = lines.flatMap(line => {
-        // 表格保留原表线；擦除字形的内边距也必须停在单元格边界内，与导出画布一致。
-        const cell = block.cellBounds;
-        const left = Math.max(line.x - 1, cell ? cell.x + 0.5 : -Infinity);
-        const top = Math.max(line.y - 1, cell ? cell.y + 0.5 : -Infinity);
-        const right = Math.min(line.x + line.width + 1, cell ? cell.x + cell.width - 0.5 : Infinity);
-        const bottom = Math.min(line.y + line.height + 2, cell ? cell.y + cell.height - 0.5 : Infinity);
-        return right > left && bottom > top ? [{left: px((left - block.x) * s), top: px((top - block.y) * s), width: px((right - left) * s), height: px((bottom - top) * s)}] : [];
+        // 擦除范围留在单元格或图文卡片内部，与导出画布一致。
+        const boundary = block.cellBounds ?? block.panelBounds;
+        const left = Math.max(line.x - 1, boundary ? boundary.x + 0.5 : -Infinity);
+        const top = Math.max(line.y - 1, boundary ? boundary.y + 0.5 : -Infinity);
+        const right = Math.min(line.x + line.width + 1, boundary ? boundary.x + boundary.width - 0.5 : Infinity);
+        const bottom = Math.min(line.y + line.height + 2, boundary ? boundary.y + boundary.height - 0.5 : Infinity);
+        return right > left && bottom > top ? [{left: px(left - block.x), top: px(top - block.y), width: px(right - left), height: px(bottom - top)}] : [];
       });
       return entry;
     }));
@@ -453,20 +617,22 @@ const overlayPages = computed(() => {
   return result;
 });
 /** 译文层使用未旋转的内容坐标；展示方向与 PDF.js 画布一致。 */
-function layerStyle(layout: PageLayout): Record<string, string> {
-  const rotation = layout.page.rotation ?? 0;
+function layerStyle(page: PdfDocumentPage): Record<string, string> {
+  const rotation = page.rotation ?? 0;
   const quarterTurn = rotation === 90 || rotation === 270;
-  const width = quarterTurn ? layout.height : layout.width, height = quarterTurn ? layout.width : layout.height;
-  const transform = rotation === 90 ? `translateX(${layout.width}px) rotate(90deg)` : rotation === 180 ? `translate(${layout.width}px, ${layout.height}px) rotate(180deg)`
-    : rotation === 270 ? `translateY(${layout.height}px) rotate(270deg)` : '';
-  return {width: px(width), height: px(height), ...(transform ? {transform} : {})};
+  const width = quarterTurn ? page.height : page.width, height = quarterTurn ? page.width : page.height;
+  const transform = rotation === 90 ? `translateX(${page.width}px) rotate(90deg)` : rotation === 180 ? `translate(${page.width}px, ${page.height}px) rotate(180deg)`
+    : rotation === 270 ? `translateY(${page.height}px) rotate(270deg)` : '';
+  return {width: `${width}px`, height: `${height}px`, ...(transform ? {transform} : {})};
+}
+function highlightStyle(rect: OverlayEntry['rect']): Record<string, string> {
+  return {left: px(rect.x - 3), top: px(rect.y - 3), width: px(rect.width + 6), height: px(rect.height + 6)};
 }
 function showHighlight(layout: PageLayout, entry: OverlayEntry): void {
   if (!hoverHighlight.value || props.mode !== 'bilingual' || layout.page.rotation) {highlight.value = undefined; return;}
-  const s = scale.value;
-  highlight.value = {pageNumber: layout.page.pageNumber, style: {left: px(entry.rect.x * s - 3), top: px(entry.rect.y * s - 3), width: px(entry.rect.width * s + 6), height: px(entry.rect.height * s + 6)}};
+  highlight.value = {pageNumber: layout.page.pageNumber, style: highlightStyle(entry.rect)};
 }
-/** 从原页像素取段落的底色与字色，译文在彩色或灰底版面上也不突兀；每个段落只取一次。 */
+/** 从原页像素取段落的底色与字色；每个段落只读回一次有界局部快照，不保留整页像素。 */
 function sampleBlockColors(): void {
   let next: Map<string, {background: string; foreground: string}> | undefined;
   for (const [pageNumber, entries] of overlayPages.value) {
@@ -482,8 +648,8 @@ function sampleBlockColors(): void {
         const ratio = canvas.width / page.width;
         if (context) {
           const line = page.blocks.find(block => block.segmentIndex === entry.segmentIndex)?.lines?.[0] ?? entry.rect;
-          const background = sampledBackgroundRgb(context, line.x * ratio, line.y * ratio, line.width * ratio, line.height * ratio);
-          colors = {background: `rgb(${background.join(', ')})`, foreground: sampledForegroundColor(context, line.x * ratio, line.y * ratio, line.width * ratio, line.height * ratio, background)};
+          const sampled = sampledPdfBlockColors(context, line.x * ratio, line.y * ratio, line.width * ratio, line.height * ratio);
+          colors = {background: `rgb(${sampled.background.join(', ')})`, foreground: sampled.foreground};
         }
       } catch { /* 读不到像素时使用白底深色字。 */ }
       (next ??= new Map(blockColors.value)).set(entry.id, colors);
@@ -500,6 +666,7 @@ let scheduler: PdfReaderScheduler | undefined;
 let observer: ResizeObserver | undefined;
 let animationFrame: number | undefined;
 let mounted = false;
+let materialRenderDocument = props.document;
 let closed = false;
 let nativePins: number[] = [];
 let cardPins: number[] = [];
@@ -676,7 +843,13 @@ function mountPage(pageNumber: number): void {
   if (state?.status !== 'ready') return;
   const source = sourceHosts.get(pageNumber);
   const translated = translatedHosts.get(pageNumber);
-  if (source && state.output.sourceCanvas && source.firstChild !== state.output.sourceCanvas) source.replaceChildren(state.output.sourceCanvas, ...(state.output.sourceText ? [state.output.sourceText] : []));
+  const sourceText = state.output.sourceText?.element;
+  const model = pages.value.find(page => page.pageNumber === pageNumber);
+  if (sourceText && model) updatePdfOcrTextLayer(sourceText, model);
+  if (source && state.output.sourceCanvas && source.firstChild !== state.output.sourceCanvas) {
+    if (sourceText?.parentNode === source) source.insertBefore(state.output.sourceCanvas, sourceText);
+    else source.replaceChildren(state.output.sourceCanvas, ...(sourceText ? [sourceText] : []));
+  }
   if (translated && state.output.translatedCanvas && translated.firstChild !== state.output.translatedCanvas) translated.replaceChildren(state.output.translatedCanvas);
   for (const [id, canvas] of state.output.regions ?? []) {
     const host = regionHosts.get(id);
@@ -726,17 +899,20 @@ function updateViewport(): void {
   }
   scheduler?.update(residentIndexes.value, pageIndex => {
     const page = pages.value[pageIndex];
+    const renderPresentation = readable.value ? 'readable' : 'layout';
     const regionEntries = readingPlans.value.get(page.pageNumber)?.entries.filter((entry): entry is PdfReadingRegionEntry => entry.kind === 'region');
-    return {scale: rasterScale.value, mode: props.mode, presentation: presentation.value, regionEntries,
-      key: pdfReaderPageKey(page, rasterScale.value, props.mode, presentation.value, regionEntries)};
-  });
+    return {scale: rasterScale.value, mode: props.mode, presentation: renderPresentation, regionEntries, refine: !readable.value && visible.includes(pageIndex),
+      key: pdfReaderPageKey(page, rasterScale.value, props.mode, renderPresentation, regionEntries)};
+  }, pages.value);
   lastReadingAnchor = captureReadingAnchor();
+  emit('material-position-change');
 }
 function scheduleViewport(): void {
   if (animationFrame !== undefined || closed) return;
   animationFrame = window.requestAnimationFrame(updateViewport);
 }
-function jumpTo(page: number): void {
+function jumpTo(page: number, restoringMaterial = false): void {
+  if (!restoringMaterial) materialNavigation.cancel();
   pendingReadingAnchor = lastReadingAnchor = undefined;
   readingUpdateGeneration += 1;
   const number = Math.max(1, Math.min(pages.value.length, Math.round(Number.isFinite(page) ? page : currentPage.value)));
@@ -745,7 +921,164 @@ function jumpTo(page: number): void {
   updateViewport();
   pageInput.value = currentPage.value;
 }
+let resumeRevision = 0;
+/** 等待首次 DOM 与页面高度提交，再淘汰此前排队的布局锚点；文档切换或后续请求取消旧恢复。 */
+async function resumePage(page: number, exactLocation = false): Promise<void> {
+  if (!exactLocation) materialNavigation.cancel();
+  const revision = ++resumeRevision; const document = props.document;
+  await nextTick();
+  if (closed || !mounted || revision !== resumeRevision || document !== props.document) return;
+  layoutUpdateGeneration += 1;
+  jumpTo(page, true);
+}
+/** 坐标属于当前已解析模型；每次落点都淘汰旧布局锚点，重排使用实际段落节点。 */
+function alignMaterialLocation(location: PdfMaterialLocation): {position: number; visible: boolean} | undefined {
+  const scroll = viewport.value; const layout = layouts.value.find(entry => entry.page.pageNumber === location.page.pageNumber);
+  if (!scroll || !layout) return;
+  layoutUpdateGeneration += 1; readingUpdateGeneration += 1;
+  pendingReadingAnchor = undefined; pendingZoomAnchor = undefined;
+  if (readable.value) {
+    const host = readingHosts.get(location.page.pageNumber);
+    const elements = host ? Array.from(host.querySelectorAll<HTMLElement>(`[data-pdf-segment-index="${location.segmentIndex}"]`)) : [];
+    if (elements.length !== 1 || elements[0].getAttribute('data-pdf-source-text') !== props.document.segments[location.segmentIndex]?.source) return;
+    const element = elements[0], bounds = scroll.getBoundingClientRect();
+    scroll.scrollTop = Math.max(0, scroll.scrollTop + element.getBoundingClientRect().top - bounds.top - PAGE_GUTTER * 2);
+    updateViewport();
+    const placed = element.getBoundingClientRect();
+    return {position: scroll.scrollTop, visible: placed.bottom > bounds.top && placed.top < bounds.top + scroll.clientHeight};
+  }
+  const rect = pdfReaderDisplayRect(location.block, location.page);
+  if (![rect.y, rect.height].every(Number.isFinite)) return;
+  scroll.scrollTop = Math.max(0, layout.top + rect.y * scale.value - PAGE_GUTTER * 2);
+  updateViewport();
+  const top = layout.top + rect.y * scale.value - scroll.scrollTop;
+  return {position: scroll.scrollTop, visible: top + rect.height * scale.value > 0 && top < scroll.clientHeight};
+}
+const materialNavigation = createPdfMaterialNavigation({
+  document: () => props.document,
+  active: () => mounted && !closed && materialRenderDocument === props.document,
+  mode: () => `${presentation.value}:${props.mode}`,
+  resumePage: page => resumePage(page, true), nextTick,
+  nextFrame: signal => waitPdfMaterialFrame(window, signal),
+  prepare: () => {if (readable.value) measureReadingHeights();},
+  align: alignMaterialLocation,
+  landed: location => {
+    if (!readable.value) return;
+    const element = readingHosts.get(location.page.pageNumber)?.querySelector<HTMLElement>(`[data-pdf-segment-index="${location.segmentIndex}"]`);
+    const id = element?.getAttribute('data-pdf-source-id');
+    if (id && element && viewport.value) lastReadingAnchor = {id, pageNumber: location.page.pageNumber, offset: element.getBoundingClientRect().top - viewport.value.getBoundingClientRect().top};
+  },
+});
+async function resumeLocation(segmentIndex: number): Promise<boolean> {return materialNavigation.resumeLocation(segmentIndex);}
+/** 可信用户阅读操作抢占自动恢复，同时淘汰此前排队的页码、布局与重排锚点。 */
+function cancelMaterialResume(): void {
+  resumeRevision += 1; materialNavigation.cancel();
+  layoutUpdateGeneration += 1; readingUpdateGeneration += 1;
+  pendingReadingAnchor = lastReadingAnchor = undefined; pendingZoomAnchor = undefined;
+}
+function resolveMaterialSelection(range: Range): number | undefined {
+  if (!mounted || closed || !viewport.value) return;
+  return resolvePdfMaterialSelection(range, {document: props.document, renderedDocument: materialRenderDocument, identity: documentIdentity.value, viewport: viewport.value, sourceHosts});
+}
+/** 与选区一样只返回当前模型索引；存储身份仍由文档组合根创建。 */
+function captureMaterialLocation(): number | undefined {
+  if (!mounted || closed || !viewport.value) return;
+  return captureVisiblePdfMaterialLocation({document: props.document, renderedDocument: materialRenderDocument, identity: documentIdentity.value,
+    viewport: viewport.value, sourceHosts, translatedHosts, readingHosts, mode: props.mode, readable: readable.value,
+    residentPages: residentLayouts.value.map(layout => layout.page),
+    readyPages: new Set(residentLayouts.value.filter(layout => states.value.get(layout.page.pageNumber)?.status === 'ready').map(layout => layout.page.pageNumber))});
+}
+function markSelection(range: Range, kind: 'highlight' | 'underline'): boolean {return annotationControls.value?.markSelection(range, kind) ?? false;}
+const hypothesisRequested = ref(false), hypothesisBusy = ref(false), hypothesisMessage = ref('');
+const hypothesisCanCancel = computed(() => hypothesisBusy.value && hypothesisRequested.value);
+const hypothesisUrl = computed(() => pdfHypothesisUrl(props.sourceUrl));
+const hypothesisStatus = computed(() => {
+  if (hypothesisMessage.value) return hypothesisMessage.value;
+  if (props.translating && hypothesisRequested.value) return 'document.pdfReading.hypothesisWaiting';
+  return hypothesisBusy.value && hypothesisRequested.value ? 'document.pdfReading.hypothesisConnecting' : '';
+});
+let hypothesisRevision = 0;
+let hypothesisClient: ReturnType<typeof createHypothesisClient> | undefined;
+function documentHypothesisClient() {
+  return hypothesisClient ??= createHypothesisClient({document: globalThis.document, window,
+    assetUrl: path => browser.runtime.getURL(`/${path}`),
+    inject: () => injectHypothesisDocumentScript(globalThis.document, browser.runtime.getURL('/hypothesis/build/scripts/annotator.bundle.js')),
+    prepare: async signal => {
+      const binary = props.document.binary;
+      if (binary?.kind !== 'pdf' || !viewport.value) throw new Error('PDF reader unavailable');
+      const reading = readable.value;
+      const text = reading ? pages.value.map(page => buildPdfReadingPlan(props.document, page, props.mode === 'source' ? [] : props.translations).entries.map(entry => entry.kind === 'text' ? `${props.mode === 'bilingual' && entry.translated ? entry.source : ''}${entry.text}` : '').join('')) : undefined;
+      return installPdfHypothesisAdapter({window, viewport: viewport.value, viewer: viewport.value.querySelector('.pdf-page-list')!,
+        container: viewport.value.closest('.pdf-layout-viewer')!, sourceUrl: props.sourceUrl, text,
+        acquire: () => acquirePdfDocument(binary.bytes), top: index => layouts.value[index]?.top ?? 0,
+        page: index => {
+          const number = index + 1;
+          if (reading) {const frame = readingHosts.get(number); return frame ? {frame, text: frame} : undefined;}
+          const host = sourceHosts.get(number), frame = host?.closest<HTMLElement>('.pdf-page-frame');
+          return frame ? {frame, text: states.value.get(number)?.status === 'ready' ? host!.querySelector<HTMLElement>('[data-fluentread-pdf-text]') ?? undefined : undefined} : undefined;
+        },
+      }, signal);
+    },
+  });
+}
+async function syncHypothesis(): Promise<boolean> {
+  const revision = ++hypothesisRevision;
+  hypothesisBusy.value = true; hypothesisMessage.value = '';
+  const client = documentHypothesisClient();
+  await client.setEnabled(false);
+  if (closed || revision !== hypothesisRevision) return false;
+  let result = {status: 'success', active: false};
+  if (hypothesisRequested.value && !props.translating) {
+    await nextTick();
+    if (closed || revision !== hypothesisRevision) return false;
+    result = await client.setEnabled(true);
+  }
+  if (closed || revision !== hypothesisRevision) return false;
+  hypothesisBusy.value = false;
+  if (result.status !== 'success') {
+    hypothesisRequested.value = false;
+    hypothesisMessage.value = result.status === 'external' ? 'document.pdfReading.hypothesisExternal' : 'document.pdfReading.hypothesisFailed';
+  }
+  return result.active;
+}
+async function toggleHypothesis(event: MouseEvent): Promise<void> {
+  if (hypothesisBusy.value && !hypothesisRequested.value) return;
+  const button = event.currentTarget as HTMLButtonElement | null;
+  if (props.translating && !hypothesisRequested.value) {
+    hypothesisMessage.value = 'document.pdfReading.hypothesisWaiting';
+    return;
+  }
+  if (!hypothesisRequested.value && (props.mode === 'translated' || pages.value.some(page => page.ocrRecognized)) && !readable.value) {
+    choosePresentation('readable');
+    await nextTick();
+  }
+  hypothesisRequested.value = !hypothesisRequested.value;
+  // 等待期间可能已打开备注编辑器，或收起后重新打开了面板。
+  if (await syncHypothesis() && button?.isConnected && openMenu.value === 'annotations') closeMenu(true);
+}
+watch([presentation, () => props.mode, () => props.translating, () => props.translations, () => props.document], () => {
+  if (!props.translating && hypothesisMessage.value === 'document.pdfReading.hypothesisWaiting') hypothesisMessage.value = '';
+  if (!hypothesisRequested.value) return;
+  if ((props.mode === 'translated' || pages.value.some(page => page.ocrRecognized)) && !readable.value) {hypothesisRequested.value = false;}
+  void syncHypothesis();
+}, {flush: 'post'});
+watch(() => props.document.binary?.bytes, () => {
+  hypothesisMessage.value = '';
+  if (hypothesisClient) {hypothesisRequested.value = false; void syncHypothesis();}
+}, {flush: 'sync'});
+defineExpose({resumePage, resumeLocation, cancelMaterialResume, resolveMaterialSelection, captureMaterialLocation, markSelection});
+function jumpToAnnotation(annotation: PdfAnnotation): void {
+  closeMenu(true);
+  const index = annotation.page - 1;
+  const page = pages.value[index];
+  if (readable.value || !page || !annotation.rects.length) {
+    jumpTo(annotation.page);
+    return;
+  }
+  jumpToPosition(index, Math.min(...annotation.rects.map(rect => rect.y)) * page.height);
+}
 function jumpToPosition(pageIndex: number, y: number): void {
+  materialNavigation.cancel();
   const layout = layouts.value[pageIndex];
   if (!layout || !viewport.value) return;
   pendingReadingAnchor = lastReadingAnchor = undefined;
@@ -770,8 +1103,12 @@ function handleViewportKey(event: KeyboardEvent): void {
   else if (event.key === 'Home') {event.preventDefault(); jumpTo(1);}
   else if (event.key === 'End') {event.preventDefault(); jumpTo(pages.value.length);}
 }
-function errorFor(pageNumber: number): string {const state = states.value.get(pageNumber); return state?.status === 'error' ? state.message : '';}
+function errorFor(pageNumber: number): string | undefined {
+  const state = states.value.get(pageNumber);
+  return state?.status === 'error' ? state.message : state?.status === 'ready' ? state.refreshError : undefined;
+}
 function createScheduler(): void {
+  materialNavigation.cancel(); materialRenderDocument = props.document;
   bindZoomGestures();
   clearTimeout(rasterTimer); rasterTimer = undefined; rasterScale.value = scale.value;
   pendingZoomAnchor = undefined; zoomPoint = undefined;
@@ -796,12 +1133,24 @@ function createScheduler(): void {
   emit('page-change', 1);
   updateViewport();
 }
-watch(() => props.document, () => {informationController?.setEnabled(false); informationWanted = false; if (mounted) {createScheduler(); syncInformationHighlight();}}, {flush: 'post'});
-watch([zoom, presentation, () => props.mode], () => informationController?.refresh(), {flush: 'pre'});
+watch(() => props.document, (document, previous) => {
+  fullPassageDialog.value?.close(); fullPassage.value = undefined;
+  informationController?.setEnabled(false); informationWanted = false;
+  if (!mounted) return;
+  if (document.binary?.kind === 'pdf' && previous.binary?.kind === 'pdf' && document.binary.bytes === previous.binary.bytes) {
+    // OCR 逐页补入文字时保持当前页、缩放和已有画布，不把读者拉回第一页。
+    materialNavigation.cancel(); materialRenderDocument = document;
+    updateViewport();
+    for (const pageNumber of sourceHosts.keys()) mountPage(pageNumber);
+  } else createScheduler();
+  syncInformationHighlight();
+}, {flush: 'post'});
+// 原版缩放保留文字节点与 Range；重排阅读或切换视图时再重新扫描正文。
+watch([() => readable.value ? zoom.value : undefined, presentation, () => props.mode], () => informationController?.refresh(), {flush: 'pre'});
 watch([presentation, () => props.mode, outlineOpen], () => {highlight.value = undefined; if (mounted) scheduleViewport();}, {flush: 'post'});
 watch([overlayPages, states], sampleBlockColors, {flush: 'post'});
 // 在 DOM 更新前记录可见段落；新译文或换行只移动其前后的内容，不能把同页阅读点按比例移走。
-watch([readingPlans, zoom, presentation, viewportWidth, () => props.mode], () => {
+watch([readingPlans, zoom, presentation, viewportWidth, textScale, textFont, lineSpacing, paragraphSpacing, () => props.mode], () => {
   if (!mounted || closed) return;
   pendingReadingAnchor = readable.value ? captureReadingAnchor() ?? lastReadingAnchor : undefined;
   const generation = ++readingUpdateGeneration;
@@ -815,8 +1164,13 @@ watch([readingPlans, zoom, presentation, viewportWidth, () => props.mode], () =>
   });
 }, {flush: 'pre'});
 // 必须在 DOM 改变总高度前读取旧页；否则切到较短的阅读模式时，浏览器已把 scrollTop 限制到新底部。
-watch(layouts, async (_next, previous) => {
+watch(layouts, async (next, previous) => {
   if (!mounted || closed) return;
+  if (next.length === previous.length && next.every((layout, index) => {
+    const old = previous[index];
+    return layout.page.pageNumber === old.page.pageNumber && layout.top === old.top && layout.rowHeight === old.rowHeight
+      && layout.width === old.width && layout.height === old.height;
+  })) {scheduleViewport(); return;}
   const generation = ++layoutUpdateGeneration, identity = documentIdentity.value;
   const anchor = readAnchor(previous);
   const zoomAnchor = pendingZoomAnchor;
@@ -846,9 +1200,14 @@ onMounted(() => {
   if (typeof ResizeObserver !== 'undefined' && viewport.value) {
     observer = new ResizeObserver(entries => {
       if (!pendingReadingAnchor && readable.value) pendingReadingAnchor = lastReadingAnchor;
+      const scroll = viewport.value;
+      // 末页比视口短时页码定位会停在滚动底部；工具栏提示压缩视口不能把读者退到前一页。
+      const keepBottom = scroll && scroll.scrollTop > 0 && scroll.scrollTop + viewportHeight.value >= scroll.scrollHeight - 1;
       viewportWidth.value = viewport.value?.clientWidth || 920;
       viewportHeight.value = viewport.value?.clientHeight || 720;
+      if (keepBottom) scroll.scrollTop = Math.max(0, scroll.scrollHeight - viewportHeight.value);
       measureReadingHeights(entries.map(entry => entry.target));
+      scheduleViewport();
       void nextTick(fitToolbarMenus);
     });
     observer.observe(viewport.value);
@@ -856,7 +1215,10 @@ onMounted(() => {
   }
 });
 onBeforeUnmount(() => {
+  hypothesisRequested.value = false; hypothesisRevision += 1; void hypothesisClient?.dispose();
+  materialNavigation.dispose();
   closed = true;
+  fullPassageDialog.value?.close();
   disposeZoomGestures?.();
   clearTimeout(rasterTimer); rasterTimer = undefined; pendingZoomAnchor = undefined;
   window.removeEventListener('resize', fitToolbarMenus);
@@ -880,8 +1242,27 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.pdf-full-passage-dialog {padding: 0; width: min(920px, calc(100vw - 32px)); max-width: none; max-height: calc(100dvh - 32px); overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: var(--surface, #fff); color: var(--ink, #172033); box-shadow: 0 24px 80px #10182840;}
+.pdf-full-passage-dialog::backdrop {background: #10182870;}
+.pdf-full-passage-dialog header {display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--line);}
+.pdf-full-passage-dialog h2 {margin: 0; font-size: 16px; display: flex; gap: 12px; align-items: baseline;}
+.pdf-full-passage-dialog h2 small {font-size: 12px; font-weight: 400; color: var(--muted);}
+.pdf-full-passage-dialog header button {border: 0; background: transparent; color: inherit; font-size: 24px; width: 32px; height: 32px; cursor: pointer; border-radius: 8px;}
+.pdf-full-passage-content {padding: 20px; max-height: calc(100dvh - 140px); overflow: auto; overscroll-behavior: contain;}
+.pdf-full-passage-pair {position: relative; display: grid; grid-template-columns: minmax(180px, .6fr) minmax(0, 1.4fr); gap: 28px; align-items: start;}
+.pdf-full-passage-pair + .pdf-full-passage-pair {margin-top: 28px;}
+.pdf-full-passage-content section {min-width: 0;}
+.pdf-full-passage-source {position: sticky; top: 0; align-self: start; max-height: calc(100dvh - 180px); overflow: auto; overscroll-behavior: contain; background: var(--surface);}
+.pdf-full-passage-source p {font-size: 14px;}
+.pdf-full-passage-content h3 {font-size: 12px; font-weight: 500; margin: 0 0 10px; color: var(--muted);}
+.pdf-full-passage-content p {white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; margin: 0; font-size: 15px; line-height: 1.8;}
+.pdf-full-passage-button {position: absolute; right: -4px; bottom: -4px; z-index: 4; display: inline-flex; align-items: center; justify-content: center; pointer-events: auto; cursor: pointer; border: 0; border-radius: 4px; padding: 0; width: 24px; height: 24px; background: transparent; color: #64748b; font: 16px/1 sans-serif; box-shadow: none;}
+.pdf-full-passage-button:hover, .pdf-full-passage-button:focus-visible {background: #f1f5f9; color: #334155;}
+.pdf-cross-page-context {display: inline-flex; align-items: center; justify-content: center; vertical-align: middle; margin-left: 6px; width: 26px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-soft); color: var(--muted); cursor: pointer;}
+.pdf-full-passage-dialog button:focus-visible, .pdf-cross-page-context:focus-visible, .pdf-full-passage-button:focus-visible {outline: 2px solid var(--brand); outline-offset: 2px;}
+@media (max-width: 600px) {.pdf-full-passage-content {padding: 16px;} .pdf-full-passage-pair {grid-template-columns: 1fr; gap: 20px;} .pdf-full-passage-source {position: static; max-height: none; overflow: visible;} .pdf-full-passage-dialog header {padding: 12px 16px;}}
 .pdf-layout-viewer {width: 100%; height: 100%; min-height: 0; flex: 1; min-width: 0; display: flex; flex-direction: column; color: var(--ink);}
-.pdf-viewer-toolbar {display: flex; align-items: center; gap: 14px; min-width: 0; font-size: 12px; color: var(--ink);}
+.pdf-viewer-toolbar {position: relative; display: flex; align-items: center; gap: 14px; min-width: 0; font-size: 12px; color: var(--ink);}
 .pdf-viewer-toolbar.inline {padding: 8px 12px; flex-wrap: wrap; background: var(--surface); border-bottom: 1px solid var(--line);}
 .pdf-page-navigation, .pdf-page-navigation label, .pdf-zoom-control, .pdf-presentation-control {display: flex; align-items: center; gap: 6px; flex: none;}
 .pdf-viewer-toolbar button {width: 28px; height: 28px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: inherit; font-size: 17px; line-height: 1; cursor: pointer;}
@@ -895,6 +1276,13 @@ onBeforeUnmount(() => {
 .pdf-viewer-toolbar .pdf-tool-button {display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; color: var(--muted);}
 .pdf-tool-button svg {width: 17px; height: 17px;}
 .pdf-viewer-toolbar .pdf-tool-button.active {color: var(--brand-strong); background: var(--brand-soft);}
+.pdf-viewer-toolbar .pdf-hypothesis-toggle {width: auto; min-height: 28px; height: auto; margin-inline-start: auto; padding: 3px 7px; color: var(--muted); font: inherit; text-align: start;}
+.pdf-viewer-toolbar .pdf-hypothesis-toggle[aria-pressed="true"] {color: var(--brand-strong); background: var(--brand-soft);}
+.pdf-hypothesis-toggle:focus-visible, .pdf-hypothesis-feedback :is(a, summary):focus-visible {outline: 2px solid var(--brand); outline-offset: 2px;}
+.pdf-hypothesis-feedback {margin-top: 4px; color: var(--muted);}
+.pdf-hypothesis-feedback p {margin: 4px 0;}
+.pdf-hypothesis-feedback summary {cursor: pointer;}
+.pdf-hypothesis-feedback a {color: var(--brand-strong);}
 .pdf-menu-panel {position: absolute; top: calc(100% + 8px); left: 0; white-space: nowrap; z-index: 30; display: flex; align-items: center; gap: 6px; max-width: calc(100vw - 16px); box-sizing: border-box; padding: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 12px 32px #10182826;}
 .pdf-search-panel input {width: min(220px, calc(100vw - 176px)); min-width: 0; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-soft); color: var(--ink); font: inherit; font-size: 12.5px; outline: none;}
 .pdf-search-panel input:focus {border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft);}
@@ -911,7 +1299,15 @@ onBeforeUnmount(() => {
 .pdf-style-fonts {display: flex; padding: 2px; border-radius: 8px; background: var(--surface-soft);}
 .pdf-viewer-toolbar .pdf-style-fonts button {width: auto; height: 26px; padding: 0 11px; white-space: nowrap; border-radius: 6px; color: var(--muted); font-size: 12px;}
 .pdf-viewer-toolbar .pdf-style-fonts button.selected {color: var(--brand-strong); background: var(--surface); box-shadow: 0 1px 4px rgba(35, 47, 82, .1); font-weight: 700;}
+.pdf-user-annotation {position: absolute; box-sizing: border-box; z-index: 3; pointer-events: none;}
+.pdf-user-annotation.highlight {background: var(--annotation-color); opacity: .35; mix-blend-mode: multiply;}
+.pdf-page-scroll:is([data-pdf-theme="dark"], [data-pdf-theme="invert"]) .pdf-user-annotation.highlight {mix-blend-mode: screen;}
+.pdf-page-scroll[data-pdf-theme="custom"] .pdf-user-annotation.highlight {mix-blend-mode: normal;}
+.pdf-user-annotation.underline {border-bottom: 2px solid var(--annotation-color);}
+.pdf-annotated-highlight {background: color-mix(in srgb, var(--pdf-annotation-highlight), transparent 72%);}
+.pdf-annotated-underline {text-decoration: underline; text-decoration-color: var(--pdf-annotation-underline); text-underline-offset: .15em;}
 .pdf-source-highlight.search {background: color-mix(in srgb, #ffcf33, transparent 72%); outline: 2px solid #f0a800;}
+.pdf-ocr-review {position: absolute; z-index: 2; outline: 1px dashed #a85e00; outline-offset: 2px; border-radius: 2px; pointer-events: none;}
 .pdf-viewer-toolbar .pdf-menu-button {display: inline-flex; align-items: center; gap: 6px; width: auto; height: 28px; padding: 0 8px 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; font-size: 12px; white-space: nowrap;}
 .pdf-viewer-toolbar .pdf-menu-button:hover, .pdf-menu.open .pdf-menu-button {border-color: var(--brand); background: var(--surface);}
 .pdf-menu.open .pdf-menu-button {box-shadow: 0 0 0 3px var(--brand-soft);}
@@ -932,7 +1328,7 @@ onBeforeUnmount(() => {
 .pdf-outline-language button {flex: 1; height: 26px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer;}
 .pdf-outline-language button.selected {color: var(--brand-strong); background: var(--surface); box-shadow: 0 1px 4px rgba(35, 47, 82, .1); font-weight: 700;}
 .pdf-outline-item {display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 6px 10px 6px 12px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); font: inherit; font-size: 12.5px; line-height: 1.45; text-align: left; cursor: pointer;}
-.pdf-outline-item span {flex: 1; min-width: 0; overflow-wrap: anywhere;}
+.pdf-outline-item span {flex: 1; min-width: 0; overflow-wrap: anywhere; text-align: start;}
 .pdf-outline-item small {flex: none; color: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums;}
 .pdf-outline-item:hover {background: var(--surface-soft);}
 .pdf-outline-item.current {color: var(--brand-strong); background: var(--brand-soft); font-weight: 600;}
@@ -946,8 +1342,9 @@ onBeforeUnmount(() => {
 .pdf-page-stage {display: flex; gap: 12px; width: max-content; min-width: 100%; justify-content: center; align-items: flex-start;}
 .pdf-page-stage.stacked:not(.single) {flex-direction: column; align-items: center;}
 .pdf-page-column {margin: 0; width: var(--pdf-page-width); flex: none;}
-.pdf-page-frame {position: relative; width: var(--pdf-page-width); height: var(--pdf-page-height); background: #fff; box-shadow: 0 1px 3px #1018281f, 0 0 0 1px #1018280a;}
-.pdf-canvas-host {position: absolute; top: 0; left: 0; overflow: hidden; transform-origin: 0 0;}
+.pdf-page-frame {position: relative; width: var(--pdf-page-width); height: var(--pdf-page-height); overflow: clip; background: #fff; box-shadow: 0 1px 3px #1018281f, 0 0 0 1px #1018280a;}
+.pdf-page-content {position: absolute; top: 0; left: 0; width: var(--pdf-content-width); height: var(--pdf-content-height); transform: scale(var(--pdf-display-scale)); transform-origin: 0 0;}
+.pdf-canvas-host {position: absolute; inset: 0; overflow: hidden;}
 .pdf-canvas-host :deep(canvas) {display: block; max-width: none;}
 .pdf-page-loading {position: absolute; inset: 0; display: flex; justify-content: center; align-items: center; color: #788196; font-size: 12px; pointer-events: none;}
 .pdf-page-error {position: absolute; inset: 50px 20px auto; max-width: 520px; margin: auto; padding: 16px; background: #fff7f5; color: #1d2535; border: 1px solid #efc9c1; border-radius: 8px; display: flex; flex-direction: column; gap: 12px; font-size: 12px; z-index: 4;}
@@ -968,22 +1365,45 @@ onBeforeUnmount(() => {
 /* 等待中的段落使用设置里选定的翻译加载样式，按原文字号缩放并跟在段落末行之后。 */
 .pdf-translation-spinner {position: absolute; display: inline-flex; width: 16px; height: 16px; transform-origin: 0 50%; pointer-events: none;}
 .pdf-translation-spinner.inline {position: static; margin-left: .3em; vertical-align: -.15em;}
-.pdf-reading-sheet {padding: 32px; box-sizing: border-box; width: 100%; background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px #1018281f; font-family: "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; font-size: var(--pdf-reading-font-size); line-height: 1.7; user-select: text; overflow-wrap: anywhere;}
-.pdf-reading-paragraph {margin: 0 0 1.2em; white-space: pre-wrap; text-align: start; font-weight: 400;}
+.pdf-reading-sheet {padding: 32px; box-sizing: border-box; width: 100%; background: var(--pdf-reading-background); color: var(--pdf-reading-color); box-shadow: 0 1px 3px #1018281f; font-family: var(--pdf-reading-family); font-size: var(--pdf-reading-font-size); line-height: var(--pdf-reading-line-height); user-select: text; overflow-wrap: anywhere;}
+.pdf-reading-paragraph {margin: 0 0 var(--pdf-reading-paragraph-gap); white-space: pre-wrap; text-align: start; font-weight: 400;}
 .pdf-reading-paragraph:last-child {margin-bottom: 0;}
 .pdf-reading-heading {font-size: 1.35em; font-weight: 650; line-height: 1.45; margin-top: 1.25em;}
 .pdf-reading-heading:first-child {margin-top: 0;}
 .pdf-reading-caption {font-size: .9em; line-height: 1.65;}
 .pdf-reading-metadata, .pdf-reading-footer {font-size: .8125em; line-height: 1.55; margin-bottom: .45em;}
-.pdf-reading-untranslated {color: var(--muted);}
+.pdf-reading-untranslated {color: inherit;}
+.pdf-reflow-source {display: block; margin-bottom: .45em; opacity: .78;}
+.pdf-reflow .pdf-page-stage {width: 100%; min-width: 0;}
+.pdf-reflow .pdf-reading-sheet {min-height: 100px;}
+.pdf-theme-choices {display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; max-width: 220px;}
+.pdf-viewer-toolbar .pdf-theme-choices button {width: auto; height: 26px; padding: 0 8px; font: inherit; font-size: 12px; border: 1px solid var(--line); border-radius: 6px;}
+.pdf-viewer-toolbar .pdf-theme-choices button.selected {border-color: var(--brand); color: var(--brand-strong); background: var(--brand-soft);}
+.pdf-style-row input[type="range"] {min-width: 0; width: 135px; accent-color: var(--brand);}
+.pdf-style-row input[type="color"] {width: 32px; height: 24px; padding: 1px; vertical-align: middle; border: 1px solid var(--line); border-radius: 4px; background: transparent;}
+.pdf-style-hint {max-width: 290px; margin: 0; font-size: 12px; line-height: 1.5; color: var(--muted);}
+.pdf-page-scroll:not([data-pdf-theme="auto"]) {background: var(--pdf-reading-background);}
+.pdf-page-frame {isolation: isolate;}
+.pdf-theme-definitions {position: absolute; pointer-events: none;}
+
 .pdf-reading-region {margin: 0 0 1.2em; width: 100%;}
 .pdf-region-canvas {max-width: 100%; margin-inline: auto; background: #fff;}
 .pdf-region-canvas :deep(canvas) {display: block; width: 100%; height: auto;}
-/* 锁定 PDF.js 4.10.38 TextLayer 的必需几何规则，限定在阅读器内，避免导入整个 viewer 的全局样式。 */
-.pdf-canvas-host :deep(.fluentread-pdf-text-layer) {position: absolute; text-align: initial; inset: 0; overflow: clip; line-height: 1; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; caret-color: transparent; z-index: 1; user-select: text;}
+/* PDF.js 6 TextLayer 将字号、水平缩放和旋转作为变量写入，几何规则只作用于本阅读器。 */
+.pdf-canvas-host :deep(.fluentread-pdf-text-layer) {
+  position: absolute; text-align: initial; inset: 0; overflow: clip; line-height: 1; text-size-adjust: none;
+  forced-color-adjust: none; transform-origin: 0 0; caret-color: transparent; z-index: 1; user-select: text;
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  --min-font-size: 1;
+}
 .pdf-canvas-host :deep(.fluentread-pdf-text-layer :is(span, br)) {color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0 0;}
-.pdf-canvas-host :deep(.fluentread-pdf-text-layer > :not(.markedContent)), .pdf-canvas-host :deep(.fluentread-pdf-text-layer .markedContent span:not(.markedContent)) {z-index: 1;}
-.pdf-canvas-host :deep(.fluentread-pdf-text-layer span.markedContent) {top: 0; height: 0;}
+.pdf-canvas-host :deep(.fluentread-pdf-text-layer > :is(span, br):not(.markedContent)), .pdf-canvas-host :deep(.fluentread-pdf-text-layer .markedContent span:not(.markedContent)) {
+  z-index: 1;
+  font-size: calc(var(--total-scale-factor) * var(--min-font-size) * var(--font-height, 0px));
+  transform: rotate(var(--rotate, 0deg)) scaleX(var(--scale-x, 1)) scale(calc(1 / var(--min-font-size)));
+}
+.pdf-canvas-host :deep(.fluentread-pdf-text-layer span.markedContent) {display: contents;}
 .pdf-canvas-host :deep(.fluentread-pdf-text-layer span[role='img']) {user-select: none; cursor: default;}
 .pdf-canvas-host :deep(.fluentread-pdf-text-layer[data-main-rotation='90']) {transform: rotate(90deg) translateY(-100%);}
 .pdf-canvas-host :deep(.fluentread-pdf-text-layer[data-main-rotation='180']) {transform: rotate(180deg) translate(-100%, -100%);}

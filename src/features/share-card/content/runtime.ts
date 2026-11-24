@@ -27,6 +27,10 @@ function reportOpenFailure(): void {
     showPageNotice(translate('shareCard.openFailed', normalizeUiLanguage(config.uiLanguage)), 'error');
 }
 async function ensureStudio(): Promise<Studio | null> {
+    if (ui && !ui.shadowHost.isConnected) {
+        // 先释放旧引用，再卸载旧 Vue，避免清理回调误用后来创建的工作台。
+        const detached = ui; ui = null; detached.remove();
+    }
     if (!controller || !context || context.isInvalid || config.on === false) return null;
     if (ui) return instance();
     if (!pending) {
@@ -57,5 +61,5 @@ export function mountShareCard(ctx: ContentScriptContext): void {
 }
 export function unmountShareCard(): void {
     generation++; controller?.abort(); controller = null; context = null;
-    pending = null; ui?.remove(); ui = null;
+    pending = null; const previous = ui; ui = null; previous?.remove();
 }

@@ -6,7 +6,12 @@
  */
 import type {RegisteredUiLanguage} from '../types';
 type Row = readonly [string, string, string, string, string, string, string];
-const rows: readonly Row[] = [
+export const siteRuleTextRows: readonly Row[] = [
+  ['仅显示译文网站', 'Translation-only sites', '訳文のみを表示するサイト', '번역만 표시하는 사이트', 'Sites avec traduction seule', 'Сайты только с переводом', 'Sitios con solo traducción'],
+  ["仅此网站使用仅译文，其他网站沿用全局显示模式；谷歌翻译仅支持双语", "Use translation only on this site; other sites follow the global mode. Google Translate supports bilingual mode only.", "このサイトでは訳文のみを表示し、他のサイトは全体設定に従います。Google 翻訳は対訳表示のみ対応します。", "이 사이트에서는 번역만 표시하며 다른 사이트는 전역 설정을 따릅니다. Google 번역은 이중 언어만 지원합니다.", "Traduction seule sur ce site ; les autres suivent le mode global. Google Traduction ne prend en charge que le mode bilingue.", "Только перевод на этом сайте; другие используют общий режим. Google Переводчик поддерживает только двуязычный режим.", "Solo traducción en este sitio; los demás siguen el modo global. Google Traductor solo admite el modo bilingüe."],
+  ["此网站已设为仅译文，可在网站偏好中修改", "This site uses translation only. Change it in Site preferences.", "このサイトは訳文のみの表示です。サイト設定で変更できます。", "이 사이트는 번역만 표시합니다. 사이트 환경설정에서 변경하세요.", "Ce site affiche uniquement la traduction. Modifiez ce choix dans les préférences du site.", "На этом сайте показан только перевод. Измените это в настройках сайта.", "Este sitio muestra solo la traducción. Cámbialo en las preferencias del sitio."],
+  ["全局翻译模式", "Global translation mode", "全体の翻訳モード", "전역 번역 모드", "Mode de traduction global", "Общий режим перевода", "Modo de traducción global"],
+  ["译文显示", "Translation display", "訳文の表示", "번역 표시", "Affichage de la traduction", "Отображение перевода", "Visualización de la traducción"],
   ['自动翻译已暂停', 'Automatic translation paused', '自動翻訳は一時停止中', '자동 번역 일시 중지', 'Traduction automatique suspendue', 'Автоперевод приостановлен', 'Traducción automática pausada'],
   ['应用于此网站及其子域名，跳转后按新网站规则执行', 'Applies to this site and its subdomains. After navigation, the destination site’s rules apply.', 'このサイトとサブドメインに適用します。移動後は移動先のルールに従います。', '이 사이트와 하위 도메인에 적용됩니다. 이동 후에는 새 사이트의 규칙이 적용됩니다.', 'S’applique à ce site et à ses sous-domaines. Après navigation, les règles du site de destination s’appliquent.', 'Действует на этот сайт и его поддомены. После перехода применяются правила нового сайта.', 'Se aplica a este sitio y sus subdominios. Al navegar se aplican las reglas del sitio de destino.'],
   ['禁用会停止此网站的翻译，保留始终翻译偏好', 'Disabling stops translation on this site and keeps your always-translate preference.', '無効化するとこのサイトの翻訳を停止し、常時翻訳の設定は保持します。', '사용 중지하면 이 사이트의 번역이 멈추며 항상 번역 설정은 유지됩니다.', 'La désactivation arrête la traduction sur ce site et conserve votre préférence de traduction systématique.', 'Отключение останавливает перевод на сайте и сохраняет настройку постоянного перевода.', 'Desactivar detiene la traducción en este sitio y conserva la preferencia de traducir siempre.'],
@@ -59,6 +64,7 @@ const rows: readonly Row[] = [
   ['限定正文', 'Content-only scope', '本文に限定', '본문으로 제한', 'Contenu limité', 'Только выбранное содержимое', 'Solo contenido indicado'],
   ['补充识别', 'Augment recognition', '認識を補完', '인식 보완', 'Compléter la détection', 'Дополнить распознавание', 'Ampliar detección'],
   ['取消编辑', 'Cancel editing', '編集をキャンセル', '편집 취소', 'Annuler la modification', 'Отменить редактирование', 'Cancelar edición'],
+  ['结束编辑', 'Finish editing', '編集を終了', '편집 마치기', 'Terminer la modification', 'Завершить редактирование', 'Terminar edición'],
   ['规则名称', 'Rule name', 'ルール名', '규칙 이름', 'Nom de la règle', 'Название правила', 'Nombre de regla'],
   ['规则标识', 'Rule ID', 'ルール ID', '규칙 ID', 'ID de règle', 'ID правила', 'ID de regla'],
   ['例如：我的技术博客', 'For example: My tech blog', '例：技術ブログ', '예: 내 기술 블로그', 'Par exemple : Mon blog technique', 'Например: Мой технический блог', 'Por ejemplo: Mi blog técnico'],
@@ -70,14 +76,23 @@ const rows: readonly Row[] = [
   ['限定范围：只翻译指定的正文区域', 'Focus: translate only declared content regions', '限定：指定した本文領域だけ翻訳', '제한: 지정한 본문 영역만 번역', 'Limiter : traduire uniquement les zones déclarées', 'Ограничение: переводить только заданные области', 'Limitar: traducir solo las áreas indicadas'],
   ['正文区域', 'Content regions', '本文領域', '본문 영역', 'Zones de contenu', 'Области содержимого', 'Áreas de contenido'],
   ['正文 CSS 选择器', 'Content CSS selector', '本文 CSS セレクター', '본문 CSS 선택자', 'Sélecteur CSS du contenu', 'CSS-селектор содержимого', 'Selector CSS del contenido'],
-  ['将选中节点作为整体翻译', 'Translate the selected node as a whole', '選択ノードを一括翻訳', '선택한 노드를 통째로 번역', 'Traduire le nœud sélectionné en entier', 'Перевести выбранный узел целиком', 'Traducir el nodo seleccionado completo'],
+  ['区域', 'Region', '領域', '영역', 'Zone', 'Область', 'Área'],
+  ['基于 CSS 选择器', 'Using CSS selectors', 'CSS セレクターで指定', 'CSS 선택자 기반', 'Avec des sélecteurs CSS', 'По CSS-селекторам', 'Mediante selectores CSS'],
+  ['一行一个 CSS 选择器', 'One CSS selector per line', '1 行に 1 つの CSS セレクター', '한 줄에 CSS 선택자 하나', 'Un sélecteur CSS par ligne', 'Один CSS-селектор на строку', 'Un selector CSS por línea'],
+  ['移除区域', 'Remove region', '領域を削除', '영역 제거', 'Supprimer la zone', 'Удалить область', 'Quitar área'],
+  ['将所有选择器选中的节点作为整体翻译', 'Translate each node matched by the selectors as a whole', '各セレクターに一致するノードをそれぞれ一括翻訳', '선택자와 일치하는 각 노드를 통째로 번역', 'Traduire chaque nœud correspondant en entier', 'Переводить каждый подходящий узел целиком', 'Traducir cada nodo coincidente completo'],
+  ['每个匹配节点分别作为一个翻译单元，不合并多个节点；关闭后继续识别其内部正文。', 'Each matched node is a separate translation unit; nodes are not merged. When off, content inside each node is detected further.', '一致するノードごとに翻訳し、複数のノードは結合しません。無効にすると内部の本文をさらに認識します。', '일치하는 노드를 각각 번역하며 여러 노드를 합치지 않습니다. 끄면 각 노드 내부의 본문을 계속 인식합니다.', 'Chaque nœud est traduit séparément, sans fusion. Si désactivé, la détection se poursuit à l’intérieur du nœud.', 'Каждый узел переводится отдельно, без объединения. Если выключено, поиск текста продолжается внутри узла.', 'Cada nodo se traduce por separado, sin fusionarlos. Al desactivarlo, se sigue detectando el contenido dentro del nodo.'],
+  ['只使用本身匹配选择器的节点；例如 article p 直接匹配段落。', 'Use only nodes that match the selector themselves. For example, article p matches paragraphs directly.', '自身がセレクターに一致するノードだけを使用します。例：article p は段落に直接一致します。', '노드 자체가 선택자와 일치할 때만 사용합니다. 예: article p는 문단과 직접 일치합니다.', 'Utiliser uniquement les nœuds qui correspondent eux-mêmes au sélecteur. Par exemple, article p cible directement les paragraphes.', 'Используются только узлы, которые сами подходят под селектор. Например, article p выбирает абзацы напрямую.', 'Usa solo nodos que coincidan por sí mismos. Por ejemplo, article p selecciona párrafos directamente.'],
+  ['从当前节点向上查找（含自身），使用第一个匹配本区域选择器的节点；例如 article p 内的 span 会归入所在段落。', 'Search upward from the current node, including itself, and use the first match for this region. For example, a span inside article p resolves to its paragraph.', '現在のノード自身から親方向にたどり、この領域のセレクターに最初に一致するノードを使用します。例：article p 内の span はその段落にまとめられます。', '현재 노드 자신부터 상위로 찾아 이 영역의 선택자와 처음 일치하는 노드를 사용합니다. 예: article p 안의 span은 해당 문단에 포함됩니다.', 'Remonter depuis le nœud actuel, lui-même inclus, jusqu’au premier nœud correspondant à la zone. Par exemple, un span dans article p est rattaché à son paragraphe.', 'Поиск идёт от текущего узла вверх, включая его самого, до первого совпадения с селектором области. Например, span внутри article p относится к своему абзацу.', 'Busca hacia arriba desde el nodo actual, incluyéndolo, y usa la primera coincidencia del área. Por ejemplo, un span dentro de article p se asigna a su párrafo.'],
+  ['仅在节点的直接子级 <br> 处分段；嵌套在其他标签内的 <br> 不分段。', 'Split only at direct child <br> tags. A <br> nested inside another tag does not split the node.', 'ノード直下の <br> でのみ分割します。他のタグ内に入れ子になった <br> では分割しません。', '노드의 직계 자식 <br>에서만 나눕니다. 다른 태그 안에 중첩된 <br>에서는 나누지 않습니다.', 'Diviser uniquement aux balises <br> directement enfants du nœud. Les <br> imbriqués dans une autre balise ne divisent pas le nœud.', 'Разделять только по тегам <br>, являющимся прямыми дочерними элементами узла. Вложенные в другие теги <br> не разделяют узел.', 'Divide solo en etiquetas <br> que sean hijas directas del nodo. Un <br> dentro de otra etiqueta no lo divide.'],
+  ['区域描述', 'Region description', '領域の説明', '영역 설명', 'Description de la zone', 'Описание области', 'Descripción del área'],
+  ['区域描述（可选）', 'Region description (optional)', '領域の説明（任意）', '영역 설명(선택)', 'Description de la zone (facultatif)', 'Описание области (необязательно)', 'Descripción del área (opcional)'],
+  ['用于辅助辨认该区域位置或作用', 'Identify the location or purpose of this region', '領域の場所や役割を見分けるための説明', '이 영역의 위치나 용도를 알아보기 위한 설명', 'Pour repérer l’emplacement ou le rôle de la zone', 'Помогает определить расположение или назначение области', 'Ayuda a identificar la ubicación o función del área'],
   ['移除正文区域', 'Remove content region', '本文領域を削除', '본문 영역 제거', 'Supprimer la zone', 'Удалить область содержимого', 'Quitar área de contenido'],
-  ['区域高级选项', 'Advanced region options', '領域の詳細設定', '영역 고급 옵션', 'Options avancées de la zone', 'Расширенные настройки области', 'Opciones avanzadas del área'],
   ['节点解析', 'Node resolution', 'ノード解決', '노드 해석', 'Résolution du nœud', 'Определение узла', 'Resolución del nodo'],
   ['使用选中节点', 'Use selected node', '選択ノードを使用', '선택한 노드 사용', 'Utiliser le nœud sélectionné', 'Использовать выбранный узел', 'Usar nodo seleccionado'],
   ['使用最近的匹配祖先', 'Use nearest matching ancestor', '最も近い一致する祖先を使用', '가장 가까운 일치 조상 사용', 'Utiliser le parent correspondant le plus proche', 'Использовать ближайшего подходящего предка', 'Usar ancestro coincidente más cercano'],
   ['按直接子级换行标签分段', 'Split at direct child line breaks', '直下の改行タグで分割', '직계 자식 줄바꿈 태그로 분할', 'Diviser aux sauts de ligne enfants directs', 'Разделять по прямым дочерним переносам строк', 'Dividir en saltos de línea hijos directos'],
-  ['区域标识（可选）', 'Region ID (optional)', '領域 ID（任意）', '영역 ID(선택)', 'ID de zone (facultatif)', 'ID области (необязательно)', 'ID de área (opcional)'],
   ['添加正文区域', 'Add content region', '本文領域を追加', '본문 영역 추가', 'Ajouter une zone', 'Добавить область содержимого', 'Añadir área de contenido'],
   ['保留原文区域（可选）', 'Keep-original regions (optional)', '原文を保持する領域（任意）', '원문 유지 영역(선택)', 'Zones à conserver (facultatif)', 'Области сохранения оригинала (необязательно)', 'Áreas para conservar el original (opcional)'],
   ['排除扫描区域（可选）', 'Exclude from scanning (optional)', '走査から除外する領域（任意）', '스캔 제외 영역(선택)', 'Exclure de la détection (facultatif)', 'Исключить из поиска (необязательно)', 'Excluir del análisis (opcional)'],
@@ -163,7 +178,18 @@ const rows: readonly Row[] = [
   ["已从草稿移除；保存后生效，同 ID 内置规则将恢复", 'Removed from draft. Saving restores the built-in rule with the same ID.', '下書きから削除しました。保存すると同じ ID の内蔵ルールが復帰します。', '초안에서 제거했습니다. 저장하면 같은 ID의 내장 규칙이 복원됩니다.', 'Retiré du brouillon. Enregistrer restaure la règle intégrée de même ID.', 'Удалено из черновика. Сохранение восстановит встроенное правило с тем же ID.', 'Quitado del borrador. Guardar restaura la regla integrada con el mismo ID.'],
 ];
 const columns = {'en-US': 1, 'ja-JP': 2, 'ko-KR': 3, 'fr-FR': 4, 'ru-RU': 5, 'es-ES': 6} as const;
-export function getSiteRuleTextSources(): string[] {return rows.map(row => row[0]);}
 export function createSiteRuleText(language: RegisteredUiLanguage): Readonly<Record<string, string>> {
-  return Object.fromEntries(rows.map(row => [row[0], row[columns[language]]]));
+  return Object.fromEntries(siteRuleTextRows.map(row => [row[0], row[columns[language]]]));
+}
+
+const extensionSiteActionRows: readonly Row[] = [
+  ['官方规则', 'Official rules', '公式ルール', '공식 규칙', 'Règles officielles', 'Официальные правила', 'Reglas oficiales'],
+  ['检查规则更新', 'Check for rule updates', 'ルールの更新を確認', '규칙 업데이트 확인', 'Vérifier les mises à jour', 'Проверить обновления правил', 'Buscar actualizaciones de reglas'],
+  ["查看原网页","View original webpage","元のページを開く","원래 웹페이지 보기","Voir la page d’origine","Открыть исходную страницу","Ver la página original"],
+  ["无法打开原网页","Could not open the original webpage","元のページを開けませんでした","원래 웹페이지를 열 수 없습니다","Impossible d’ouvrir la page d’origine","Не удалось открыть исходную страницу","No se pudo abrir la página original"],
+];
+
+/** 官方规则更新和已保存网页正文的文案仅随扩展资源生成。 */
+export function createExtensionSiteActionText(language: RegisteredUiLanguage): Readonly<Record<string, string>> {
+  return Object.fromEntries(extensionSiteActionRows.map(row => [row[0], row[columns[language]]]));
 }

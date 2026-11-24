@@ -63,6 +63,27 @@ function createSubject(overrides: Partial<SelectionTtsBackgroundDependencies> = 
 }
 
 describe('selection TTS background handlers', () => {
+    it.each(['resolve', 'reject'] as const)('late Google PLAY %s remains cancelled even when both remote STOP acknowledgements fail', async outcome => {
+        const play = deferred<void>();
+        const {dependencies, router} = createSubject({playWithOffscreen: vi.fn(() => play.promise),
+            stopWithOffscreen: vi.fn().mockRejectedValue(new Error('Offscreen disconnected'))});
+        const sender = {sender: {tab: {id: 11}}};
+        const request = router.dispatch({type: SELECTION_TTS_GOOGLE_MESSAGE_TYPE, text: 'hello', clientRequestId: 'stop-failure'}, sender);
+        await vi.waitFor(() => expect(dependencies.playWithOffscreen).toHaveBeenCalledOnce());
+        await expect(router.dispatch({type: SELECTION_TTS_STOP_MESSAGE_TYPE, clientRequestId: 'stop-failure'}, sender))
+            .resolves.toEqual({handled: true, response: {success: true}});
+        if (outcome === 'resolve') play.resolve(); else play.reject(new Error('Late PLAY failure'));
+        await expect(request).resolves.toEqual({handled: true, response: {success: false, error: '语音播放已取消'}});
+        expect(dependencies.stopWithOffscreen).toHaveBeenCalledTimes(2);
+        expect(dependencies.stopWithOffscreen).toHaveBeenLastCalledWith(expect.objectContaining({tabId: 11, clientRequestId: 'stop-failure'}));
+    });
+
+    it('terminal playback receipt remains acknowledged when its original tab has already closed', async () => {
+        const {dependencies, router} = createSubject({sendTabMessage: vi.fn().mockRejectedValue(new Error('Tab no longer exists'))});
+        await expect(router.dispatch({type: SELECTION_TTS_PLAYBACK_STATE_MESSAGE_TYPE, tabId: 7,
+            clientRequestId: 'closed-tab', state: 'ended'}, {})).resolves.toEqual({handled: true, response: {success: true}});
+        expect(dependencies.sendTabMessage).toHaveBeenCalledWith(7, {type: 'selectionTtsState', clientRequestId: 'closed-tab', state: 'ended', error: undefined});
+    });
     it('rejects Google playback when extension playback is disabled without touching transport', async () => {
         const {router, dependencies} = createSubject({offscreenPlaybackEnabled: false});
         await expect(router.dispatch({type: SELECTION_TTS_GOOGLE_MESSAGE_TYPE, text: 'hello', clientRequestId: 'disabled-google'},
@@ -540,6 +561,31 @@ describe('selection TTS background handlers', () => {
         }));
     });
 
+    it.each(['stop', 'replace'] as const)('Google 等待旧播放停止期间被 %s 后不会迟到启动', async action => {
+        const oldStop = deferred<void>();
+        const stopWithOffscreen = vi.fn(async (): Promise<void> => undefined).mockImplementationOnce(() => oldStop.promise);
+        const {dependencies, router} = createSubject({stopWithOffscreen});
+        const context = {sender: {tab: {id: 6}}};
+        const message = (id: string) => ({type: SELECTION_TTS_GOOGLE_MESSAGE_TYPE, text: id, clientRequestId: id});
+        await router.dispatch(message('old-playing'), context);
+
+        const waiting = router.dispatch(message('waiting-google'), context);
+        await vi.waitFor(() => expect(stopWithOffscreen).toHaveBeenCalledWith(expect.objectContaining({tabId: 6, clientRequestId: 'old-playing'})));
+        expect(dependencies.playWithOffscreen).toHaveBeenCalledOnce();
+        if (action === 'stop') {
+            await router.dispatch({type: SELECTION_TTS_STOP_MESSAGE_TYPE, clientRequestId: 'waiting-google'}, context);
+        } else {
+            await expect(router.dispatch(message('replacement-google'), context)).resolves.toMatchObject({
+                handled: true, response: {success: true, transport: 'offscreen'},
+            });
+        }
+        oldStop.resolve();
+
+        await expect(waiting).resolves.toEqual({handled: true, response: {success: false, error: '语音播放已取消'}});
+        expect(vi.mocked(dependencies.playWithOffscreen).mock.calls.map(([request]) => request.clientRequestId))
+            .toEqual(action === 'stop' ? ['old-playing'] : ['old-playing', 'replacement-google']);
+    });
+
     it('Edge offscreen 当前请求失败时回退 page audio，并记录 warn', async () => {
         const failure = new Error('offscreen unavailable');
         const {dependencies, router} = createSubject({
@@ -646,6 +692,73 @@ describe('selection TTS background handlers', () => {
         }, {sender: {tab: {id: 9}}})).resolves.toEqual({
             handled: true,
             response: {success: false, error: 'google error object'},
+        });
+    });
+
+    it('Google TTS 扩展页面缺少音频获取端口时明确拒绝且没有播放副作用', async () => {
+        const {router, dependencies} = createSubject();
+
+        await expect(router.dispatch({
+            type: SELECTION_TTS_GOOGLE_MESSAGE_TYPE,
+            text: 'hello',
+            language: 'en-US',
+            clientRequestId: 'google-page-unavailable',
+        }, {sender: {url: 'chrome-extension://controlled-extension/options.html#settings-vocabulary'}})).resolves.toEqual({
+            handled: true,
+            response: {success: false, error: '扩展页面 Google TTS 不可用'},
+        });
+
+        expect(dependencies.fetchPageAudio).toBeUndefined();
+        expect(dependencies.synthesize).not.toHaveBeenCalled();
+        expect(dependencies.playWithOffscreen).not.toHaveBeenCalled();
+        expect(dependencies.stopWithOffscreen).not.toHaveBeenCalled();
+        expect(dependencies.seekWithOffscreen).not.toHaveBeenCalled();
+        expect(dependencies.sendTabMessage).not.toHaveBeenCalled();
+        expect(dependencies.warn).not.toHaveBeenCalled();
+    });
+
+    it('Google TTS 在扩展页面返回音频数据供页面播放', async () => {
+        const fetchPageAudio = vi.fn(async (url: string, signal: AbortSignal) => {
+            expect(url).toBe(googleSelectionTtsUrl('hello', 'en-US'));
+            expect(signal).toBeInstanceOf(AbortSignal);
+            return {audio: new Uint8Array([4, 5, 6]).buffer, contentType: 'audio/mpeg'};
+        });
+        const {router, dependencies} = createSubject({fetchPageAudio});
+        await expect(router.dispatch({type: SELECTION_TTS_GOOGLE_MESSAGE_TYPE, text: 'hello', language: 'en-US', clientRequestId: 'google-page'},
+            {sender: {url: 'chrome-extension://controlled-extension/options.html#settings-vocabulary'}})).resolves.toEqual({
+                handled: true,
+                response: {success: true, transport: 'page', audioBase64: 'BAUG', contentType: 'audio/mpeg', voice: 'Google TTS'},
+            });
+        expect(fetchPageAudio).toHaveBeenCalledOnce();
+        expect(dependencies.playWithOffscreen).not.toHaveBeenCalled();
+    });
+
+    it('Google TTS 扩展页面获取失败时释放请求并返回具体错误', async () => {
+        const fetchPageAudio = vi.fn(async () => {throw new Error('Google TTS failed: 503 Service Unavailable');});
+        const {router} = createSubject({fetchPageAudio});
+        await expect(router.dispatch({type: SELECTION_TTS_GOOGLE_MESSAGE_TYPE, text: 'hello', language: 'en-US', clientRequestId: 'google-page-error'},
+            {sender: {url: 'chrome-extension://controlled-extension/options.html#settings-vocabulary'}})).resolves.toEqual({
+                handled: true,
+                response: {success: false, error: 'Google TTS failed: 503 Service Unavailable'},
+            });
+        expect(fetchPageAudio).toHaveBeenCalledOnce();
+    });
+
+    it('Google TTS 扩展页面请求途中被停止时丢弃迟到的音频', async () => {
+        const pageUrl = 'chrome-extension://controlled-extension/options.html#settings-vocabulary';
+        const fetchPageAudio = vi.fn(() => page.promise);
+        const page = deferred<{audio: ArrayBuffer; contentType: string}>();
+        const {router} = createSubject({fetchPageAudio});
+        const request = router.dispatch({type: SELECTION_TTS_GOOGLE_MESSAGE_TYPE, text: 'hello', language: 'en-US', clientRequestId: 'google-page-cancel'},
+            {sender: {url: pageUrl}});
+        await vi.waitFor(() => expect(fetchPageAudio).toHaveBeenCalledOnce());
+
+        await router.dispatch({type: SELECTION_TTS_STOP_MESSAGE_TYPE, clientRequestId: 'google-page-cancel'}, {sender: {url: pageUrl}});
+        page.resolve({audio: new Uint8Array([4, 5, 6]).buffer, contentType: 'audio/mpeg'});
+
+        await expect(request).resolves.toEqual({
+            handled: true,
+            response: {success: false, error: '语音播放已取消'},
         });
     });
 

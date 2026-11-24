@@ -1,49 +1,30 @@
 # AI usage
 
-Open **Model usage** to see recent services and models, request counts, successes, and reported token use.
+Open **Translation statistics → Model usage** to see AI services and models, request counts, successes, and usage trends.
 
 <GuideVisual kind="stats" en />
 
-<details class="guide-details">
-<summary>What is a token?</summary>
+## Check usage
 
-## What is a token?
+1. Choose a time range to view request and usage trends.
+2. Select a service or model to filter its records. Select it again to clear the filter.
+3. Filter request records by scenario, status, or cache to inspect failures and retries. You can also export them.
 
-A token is a unit of text processed by a model. Input is what you send; output is what the model produces. Tokens do not equal characters or words, and counting differs between models.
+A **token** is a unit of text processed by a model, not a character or word count. Input tokens come from the text sent; output tokens come from the response. Models can count them differently. When the service supplies details, the page separates input, output, and cache usage.
 
-</details>
+## Read the numbers
 
-## Look at a period of time
+Records cover AI requests connected to usage tracking. Some connection checks, retries, and multi-part tasks also count. Missing provider reports, untracked features, and activity on other devices may be absent. Use your provider’s bill for actual charges.
 
-Choose a date range to view trends. When the service reports details, input, output, and cache use can be shown separately. Missing values are not exact billing data.
+**Output speed (token/s)** uses successful requests’ output tokens and duration, including waiting and transfer time. Missing required data displays `—`; zero output displays `0`. Average duration still includes all calls.
 
-Model lists show your commonly used services. Request records can help explain failures and retries. Your provider’s bill is the source of truth for charges.
+## Save or clear records
 
-<details class="guide-details">
-<summary>What is counted?</summary>
+Records stay in this browser and can be exported or cleared on the page. They are usage history, not a full translation backup. Clearing them does not reverse provider charges.
 
-## What is counted?
-
-AI requests covered by usage tracking appear here, including some connection checks, retries, and multi-paragraph jobs. Requests without reported use, features outside tracking, and activity on other devices may be absent.
-
-</details>
-
-<details class="guide-details">
-<summary>Manage records</summary>
-
-## Manage records
-
-Records stay in this browser and can be exported or cleared using the page’s controls. This is request and usage history, not a full translation archive. Clearing it does not reverse provider charges.
-
-To reduce use, translate only the sentences you need or turn off extra AI context when unnecessary. See [Translation services](/en/config/translation-engines).
-
-Output speed (token/s) divides the total output tokens of eligible successful requests by their summed duration in seconds, including waiting and transfer time. It is not pure generation speed. Missing output or valid duration displays `—`; zero output displays `0`. The overview shows the aggregate speed and eligible request count, and request details show individual speed. Average duration still includes all calls.
-
-Request records are expanded by default and each row shows output speed (token/s). Each service/model breakdown row also shows its aggregate output speed. Records remain visible. Filter by scenario, status, and cache, or enter a page number to jump directly. Click a selected service/model row again to clear that selection. Statistics help opens in an overlay; hover over the local badge for retention details. Average composition per request is always visible.
-
-</details>
+Translate only the text you need and limit optional AI context to reduce usage.
 
 ## Related guides
 
-- [All guides](/en/docs/)
-- [Troubleshooting](/en/guide/faq)
+- [Translation statistics](/en/guide/translation-stats)
+- [Translation services](/en/config/translation-engines)

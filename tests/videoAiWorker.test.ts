@@ -50,7 +50,10 @@ const webGpuMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/src/shared/onnx/webgpu', () => webGpuMocks);
-const modelCacheMocks = vi.hoisted(() => ({cacheVideoAiQ8ModelFiles: vi.fn(async () => undefined)}));
+const modelCacheMocks = vi.hoisted(() => ({
+    cacheVideoAiQ8ModelFiles: vi.fn(async () => undefined),
+    createVideoAiModelCache: vi.fn(async (): Promise<any> => ({cache: {}, localCache: {}})),
+}));
 vi.mock('@/src/features/video-subtitle/offscreen/modelCache', () => ({
     VIDEO_AI_MODEL_REMOTE_HOST: 'https://modelscope.cn',
     VIDEO_AI_MODEL_REMOTE_PATH_TEMPLATE: 'models/{model}/resolve/{revision}/',
@@ -80,11 +83,52 @@ async function loadProtocolWorker(transcriber: any, backend: 'webgpu' | 'wasm' =
     vi.stubGlobal('navigator', {hardwareConcurrency: 1});
     webGpuMocks.probeWebGpu.mockReset().mockResolvedValue({available: backend === 'webgpu', info: 'native GPU'});
     workerMocks.pipeline.mockReset().mockResolvedValue(transcriber);
-    (await import('@/src/features/video-subtitle/offscreen/transcription.worker')).startVideoTranscriptionWorker();
+    (await import('@/src/app/offscreen/videoTranscriptionWorker')).startVideoTranscriptionWorkerApp();
     return scope;
 }
 
 describe('视频 AI Worker timestamp parser', () => {
+    it('语言检测在部分语言 token 为非有限值时保留有效候选并归一化置信度', () => {
+        expect(chooseWhisperSourceLanguage({data: new Float32Array([1, NaN, Infinity]), dims: [1, 1, 3]},
+            {isMultilingual: true, langToId: {'<|en|>': 0, '<|ja|>': 1, '<|ko|>': 2}}))
+            .toEqual({language: 'en', confidence: 1});
+    });
+    it('continues its single-consumer queue after a detached response port rejects both replies for a task', async () => {
+        const scope=await loadProtocolWorker(vi.fn());
+        try {
+            scope.postMessage.mockImplementationOnce(()=>{throw new Error('success channel closed');}).mockImplementationOnce(()=>{throw new Error('error channel closed');});
+            scope.onmessage({data:{requestId:1,type:'prepare',model:'tiny'}});
+            await waitForWorkerMessages(scope,2);expect(scope.postMessage).toHaveBeenCalledTimes(2);
+            scope.onmessage({data:{requestId:2,type:'prepare',model:'tiny'}});
+            await waitForWorkerMessages(scope,3);expect(scope.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({requestId:2,success:true}));
+            expect(workerMocks.pipeline).toHaveBeenCalledOnce();
+        } finally {vi.unstubAllGlobals();}
+    });
+    it('gives Transformers the shared cache while disabling duplicate browser and filesystem writes', async () => {
+        const cache = {match: vi.fn(), put: vi.fn()};
+        modelCacheMocks.createVideoAiModelCache.mockResolvedValueOnce({cache, localCache: {}, sharedCache: cache});
+        const scope = await loadProtocolWorker(vi.fn());
+        try {
+            scope.onmessage({data: {requestId: 1, type: 'prepare', model: 'tiny'}});
+            await waitForWorkerMessages(scope, 1);
+            expect(scope.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({success: true, model: 'tiny'}));
+            expect(workerMocks.env).toMatchObject({useCustomCache: true, customCache: cache, useBrowserCache: false, useFSCache: false});
+        } finally {vi.unstubAllGlobals();}
+    });
+    it('rejects a malformed correlated command before loading a model and still accepts a later valid preparation', async () => {
+        const scope = await loadProtocolWorker(vi.fn());
+        try {
+            for (const value of [null, {}, {requestId: 0}, {requestId: NaN}]) scope.onmessage({data: value});
+            expect(scope.postMessage).not.toHaveBeenCalled();
+            scope.onmessage({data: {requestId: 1, type: 'transcribe', audio: new Uint8Array(4)}});
+            expect(scope.postMessage).toHaveBeenLastCalledWith({requestId: 1, success: false, error: expect.stringContaining('消息格式无效')});
+            expect(workerMocks.pipeline).not.toHaveBeenCalled();
+            scope.onmessage({data: {requestId: 2, type: 'prepare', model: 'tiny'}});
+            await waitForWorkerMessages(scope, 2);
+            expect(scope.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({requestId: 2, success: true, model: 'tiny', backend: 'wasm'}));
+            expect(workerMocks.pipeline).toHaveBeenCalledOnce();
+        } finally {vi.unstubAllGlobals();}
+    });
     it('忽略不属于识别协议的消息，未加载模型也能dispose，缺少音频返回数字静音', async () => {
         const scope = await loadProtocolWorker(vi.fn());
         try {
@@ -93,6 +137,7 @@ describe('视频 AI Worker timestamp parser', () => {
             const listener = scope.addEventListener.mock.calls[0][1];
             listener({});
             listener({data: {type: 'other'}});
+            scope.onmessage({data: {type: 'dispose'}});
             listener({data: {type: 'dispose'}});
             scope.onmessage({data: {requestId: 1, type: 'transcribe'}});
             await waitForWorkerMessages(scope, 1);

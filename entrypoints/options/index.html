@@ -2,7 +2,7 @@
 <!--
   @file entrypoints/options/index.html
   文件职责：提供 FluentRead 设置页的最小 HTML 外壳。
-  主要内容：声明中文、独立标签页元数据、响应式视口、#app 挂载点和 main.ts。
+  主要内容：声明中文、独立标签页元数据、响应式视口、#app 挂载点和 main.ts，并为尚未挂载时的安全恢复提示提供独立样式。
   模块边界：不保存配置或内联页面逻辑，设置交互由 Vue 应用和后台消息协议负责。
 -->
 <html lang="zh-CN">
@@ -11,6 +11,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="manifest.open_in_tab" content="true" />
     <title>流畅阅读 · 设置</title>
+    <style>
+      #app > .popup-startup-recovery { max-width: 32rem; margin: 4rem auto; padding: 1.5rem; color: CanvasText; background: Canvas; font: 1rem/1.6 system-ui, sans-serif; }
+      #app > .popup-startup-recovery p { margin: 0.75rem 0; }
+      #app > .popup-startup-recovery button { padding: 0.5rem 1rem; font: inherit; cursor: pointer; }
+    </style>
   </head>
   <body>
     <div id="app"></div>

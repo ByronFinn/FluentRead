@@ -4,7 +4,7 @@ vi.mock('webextension-polyfill', () => ({default: {extension: m.extension, runti
 vi.mock('@/src/services/config/store', () => ({config: m.config, configReady: Promise.resolve(), subscribeConfig: m.subscribe}));
 vi.mock('@/src/features/writing-assistant/background', () => ({createWritingHandler: m.handlerFactory}));
 vi.mock('@/src/services/writing/runtime', () => ({createWritingRuntime: m.runtimeFactory}));
-vi.mock('@/src/platform/storage/modelUsageRepository', () => ({modelUsageRepository: {captureGeneration: () => 3, recordMany: m.record}}));
+vi.mock('@/src/platform/storage/modelUsageRepository', () => ({getModelUsageRepository: () => ({captureGeneration: () => 3, recordMany: m.record})}));
 vi.mock('@/src/platform/storage/learningMemoryRepository', () => ({learningMemoryRepository: {list: m.memoryList}}));
 vi.mock('@/src/services/harness/memoryRecall', () => ({createLearningMemoryRecall: () => m.recall}));
 vi.mock('@/src/platform/shadow-ui/vue', () => ({createVueShadowUi: m.shadow}));
@@ -31,10 +31,57 @@ describe('Writing client cleanup', () => {
   });
 });
 describe('Writing mounting and background composition', () => {
+  it('同步重入的配置更新保持最新快照，不让旧回调恢复旧取消基线', () => {
+    installWritingBackgroundRuntime();const changed=m.subscribe.mock.calls[0][0];
+    m.config.to='ja';m.handler.cancelAll.mockImplementationOnce(() => {m.config.to='en';changed(m.config);});
+    changed(m.config);expect(m.handler.cancelAll).toHaveBeenCalledTimes(2);
+    changed(m.config);expect(m.handler.cancelAll).toHaveBeenCalledTimes(2);
+  });
   it('removes late mounts and replaces only its own previous surface', async () => {
     unmountWritingAssistant(); expect(isWritingAssistantMounted()).toBe(false);
     let resolve!: (value: any) => void; const late = {remove: vi.fn()}; m.shadow.mockImplementationOnce(() => new Promise(r => {resolve = r;})); const pending = mountWritingAssistant({} as any); unmountWritingAssistant(); resolve(late); await pending; expect(late.remove).toHaveBeenCalledOnce();
     const current = {remove: vi.fn()}; m.shadow.mockResolvedValue(current); await mountWritingAssistant({} as any); expect(isWritingAssistantMounted()).toBe(true); await mountWritingAssistant({} as any); expect(current.remove).toHaveBeenCalledOnce(); unmountWritingAssistant(); expect(current.remove).toHaveBeenCalledTimes(2);
+  });
+  it('recognizes the current top-level GitHub route after same-document navigation without refresh', () => {
+    installWritingBackgroundRuntime();
+    const {eligibility} = m.handlerFactory.mock.calls[0][0];
+    for (const initialUrl of ['https://github.com/FluentRead/FluentRead', 'https://github.com/FluentRead/FluentRead/issues']) {
+      for (const currentUrl of ['https://github.com/FluentRead/FluentRead/issues/1056', 'https://github.com/FluentRead/FluentRead/issues/new?template=bug.md', 'https://github.com/FluentRead/FluentRead/pull/1057/files']) {
+        expect(eligibility({frameId: 0, url: initialUrl, tab: {url: currentUrl}})).toBeUndefined();
+      }
+    }
+  });
+  it('rejects unsupported, missing, malformed or cross-origin current top-level routes', () => {
+    installWritingBackgroundRuntime();
+    const {eligibility} = m.handlerFactory.mock.calls[0][0];
+    const url = 'https://github.com/FluentRead/FluentRead/issues/1056';
+    for (const currentUrl of ['https://github.com/FluentRead/FluentRead', 'https://github.com/FluentRead/FluentRead/issues', 'https://github.com/FluentRead/FluentRead/issues/new/choose', 'https://github.com/FluentRead/FluentRead/discussions/1', 'https://mail.google.com/mail/u/0/', 'https://github.com.evil.test/FluentRead/FluentRead/issues/1056', 'http://github.com/FluentRead/FluentRead/issues/1056', '!', '']) {
+      expect(eligibility({frameId: 0, url, tab: {url: currentUrl}})).toContain('仅支持');
+    }
+    expect(eligibility({frameId: 0, url})).toContain('仅支持');
+    expect(eligibility({frameId: 0, url, tab: {}})).toContain('仅支持');
+    expect(eligibility({frameId: 0, tab: {url}})).toContain('仅支持');
+    expect(eligibility({frameId: 0, url: '!', tab: {url}})).toContain('仅支持');
+  });
+  it('keeps child frames and senders without frame identity bound to their own routes', () => {
+    installWritingBackgroundRuntime();
+    const {eligibility} = m.handlerFactory.mock.calls[0][0];
+    const url = 'https://github.com/FluentRead/FluentRead/issues/1056';
+    for (const frameId of [1, undefined]) {
+      expect(eligibility({frameId, url: 'https://github.com/FluentRead/FluentRead/issues', tab: {url}})).toContain('仅支持');
+      expect(eligibility({frameId, url: 'https://example.com/', tab: {url}})).toContain('仅支持');
+      expect(eligibility({frameId, url, tab: {url: 'https://example.com/'}})).toBeUndefined();
+    }
+  });
+  it('still honors global and writing-specific site exclusions after same-document navigation', () => {
+    installWritingBackgroundRuntime();
+    const {eligibility} = m.handlerFactory.mock.calls[0][0];
+    const sender = {frameId: 0, url: 'https://github.com/FluentRead/FluentRead/issues', tab: {url: 'https://github.com/FluentRead/FluentRead/issues/1056'}};
+    m.config.disabledExtensionDomains = ['github.com'];
+    expect(eligibility(sender)).toContain('禁用');
+    m.config.disabledExtensionDomains = [];
+    m.config.writing.disabledDomains = ['github.com'];
+    expect(eligibility(sender)).toContain('禁用');
   });
   it('gates non-writing URLs and disabled sites, binds config and tab invalidation, and records a captured generation', async () => {
     const run = vi.fn(async () => ({success: true})); m.runtimeFactory.mockReturnValue(run); const cancel = installWritingBackgroundRuntime();

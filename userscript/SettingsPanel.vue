@@ -1,7 +1,7 @@
 <!--
  * @file userscript/SettingsPanel.vue
  * 文件职责：提供 userscript 紧凑设置对话框，编辑翻译服务、触发方式、输入翻译与界面配置草稿。
- * 主要内容：复用配置目录、持久化入口和共享模型删除命令，清理模型选择、思考偏好与请求限制；AI 翻译超时按秒编辑，保留逐键输入草稿并在确认或保存时规范化为毫秒；动画样式末尾的“无”直接关闭界面动画并保留上次静态反馈样式。
+ * 主要内容：以共享纯配置 editor 管理手动保存、外部快照和在途草稿所有权，后继编辑与默认恢复不被旧保存覆盖；编辑资源由应用卸载入口与组件正常卸载共用幂等清理，失败挂载也释放订阅；复用配置目录及模型删除命令，AI 超时按秒保留输入草稿并在确认或保存时规范化；只有已保存的运行时设置应用到当前页面；页面翻译动作等待时禁止重复触发，失败可重试；无变更保存的页面重应用也按会话隔离，后续编辑或卸载使旧反馈失效。
  * 模块边界：只管理设置草稿和保存反馈，不实现网页翻译或扩展专有能力。
 -->
 <template>
@@ -26,7 +26,7 @@
           <label><span>源语言</span><UiSelect v-model="draft.from" :append-to="menuContainer" filterable aria-label="源语言"><ElOption v-for="item in options.from" :key="item.value" :value="item.value" :label="item.label" /></UiSelect></label>
           <label><span>目标语言</span><UiSelect v-model="draft.to" :append-to="menuContainer" filterable aria-label="目标语言"><ElOption v-for="item in options.to" :key="item.value" :value="item.value" :label="item.label" /></UiSelect></label>
           <label><span>译文显示</span><UiSelect v-model="draft.display" :append-to="menuContainer" aria-label="译文显示"><ElOption v-for="item in options.display" :key="item.value" :value="item.value" :label="item.label" /></UiSelect></label>
-          <label><span>双语样式</span><UiSelect v-model="draft.style" :append-to="menuContainer" aria-label="双语样式"><ElOption v-for="item in styleOptions" :key="item.value" :value="item.value" :label="item.label" /></UiSelect></label>
+          <label><span>双语样式</span><UiSelect :model-value="draft.style" :append-to="menuContainer" aria-label="双语样式" @update:model-value="selectTranslationStyle"><ElOption v-for="item in styleOptions" :key="item.value" :value="item.value" :label="item.label" /></UiSelect></label>
           <label class="toggle"><span>打开网页后自动翻译</span><input v-model="draft.autoTranslate" type="checkbox" /></label>
           <label class="toggle"><span>使用翻译缓存</span><input v-model="draft.useCache" type="checkbox" /></label>
         </fieldset>
@@ -166,7 +166,7 @@
         <span class="status" :class="{ error: statusIsError }">{{ status }}</span>
         <div>
           <button type="button" class="secondary" :disabled="!hydrated" @click="restoreDefaults">恢复默认</button>
-          <button type="button" class="secondary" @click="togglePageTranslation">翻译 / 恢复当前页</button>
+          <button type="button" class="secondary" :disabled="pageTranslationPending || saving" @click="togglePageTranslation">翻译 / 恢复当前页</button>
           <button type="button" class="primary" :disabled="saving || !hydrated" @click="save">{{ !hydrated ? '加载设置中…' : saving ? '保存中…' : '保存设置' }}</button>
         </div>
       </footer>
@@ -175,7 +175,7 @@
 </template>
 
 <script setup lang="ts">
-import {computed, onMounted, ref, watch} from 'vue';
+import {computed, getCurrentInstance, onMounted, onUnmounted, ref, watch} from 'vue';
 import browser from 'webextension-polyfill';
 import {FREE_TRANSLATION_PROVIDERS} from '@/src/core/config/freeTranslation';
 import {removeConfiguredModel} from '@/src/core/config/modelEditing';
@@ -183,10 +183,12 @@ import {Config, MIN_AI_REQUEST_TIMEOUT_MS, MAX_AI_REQUEST_TIMEOUT_MS, normalizeA
 import {useUiI18n} from '@/src/ui/i18n';
 import {useSettingsActionContext} from '@/src/features/settings/model/useSettingsActionContext';
 import {applyTranslationLoadingStyleChoice, getTranslationLoadingStyleChoice, translationLoadingStyleChoices} from '@/src/core/config/translationLoadingStyle';
+import {getTranslationPresetAppearance, getTranslationStylePreset} from '@/src/core/config/translationAppearance';
 import TranslationLoadingPreview from '@/src/ui/components/TranslationLoadingPreview.vue';
 import UiSelect from '@/src/ui/components/UiSelect.vue';
 import {ElOption} from 'element-plus';
-import {config as runtimeConfig, configReady, saveConfig} from '@/src/services/config/store';
+import {config as runtimeConfig, configReady, requestConfigPatch, subscribeConfig} from '@/src/services/config/store';
+import {createConfigEditor} from '@/src/services/config/editor';
 import {customModelString, models, options, resolveConfiguredModel, services, servicesType} from '@/src/core/config/catalog';
 import {supportsInputBoxTranslationPrompt} from '@/src/core/config/inputTranslation';
 import {
@@ -243,6 +245,12 @@ function moveFallback(index: number, delta: number) {
 
 
 const saving = ref(false);
+const pageTranslationPending = ref(false);
+let pageFeedbackRevision = 0;
+// 仅在保存或页面动作等待期间观察草稿；后续编辑撤销旧反馈，旧动作不得关闭当前编辑器。
+watch(() => pageTranslationPending.value || saving.value ? draft.value : null, () => {
+  if (pageTranslationPending.value || saving.value) pageFeedbackRevision += 1;
+}, {deep: true, flush: 'sync'});
 const status = ref('');
 const statusIsError = ref(false);
 const addingCustomModel = ref(false);
@@ -250,6 +258,17 @@ const customModelDraft = ref('');
 const customModelError = ref('');
 
 const styleOptions = options.styles.filter(item => !item.disabled && typeof item.value === 'number');
+function selectTranslationStyle(value: unknown): void {
+  const style = typeof value === 'string' ? Number(value) : value;
+  const preset = getTranslationStylePreset(style);
+  if (!preset) return;
+  draft.value.style = preset.value;
+  // 只处理用户在下拉中的选择；配置载入、导入和命名样式的外观不经过此处。
+  if (preset.category === 'color') {
+    draft.value.translationAppearance = getTranslationPresetAppearance(preset.value, draft.value.translationAppearance);
+    draft.value.activeTranslationStyleProfileId = '';
+  }
+}
 const hoverOptions = options.keys.filter(item => !item.disabled);
 const selectedLoadingStyle = computed({
   get: () => getTranslationLoadingStyleChoice(draft.value),
@@ -382,6 +401,10 @@ function cancelAddCustomModel(): void {
 }
 
 function submitCustomModel(): void {
+  if (customModelLimitReached.value) {
+    customModelError.value = '已达到 50 个模型上限';
+    return;
+  }
   const model = customModelDraft.value.trim();
   if (!model) {
     customModelError.value = '请输入模型标识';
@@ -426,52 +449,109 @@ function removeSelectedCustomModel(): void {
 
 watch(() => draft.value.service, cancelAddCustomModel);
 
-onMounted(async () => {
-  await configReady;
-  draft.value = normalizeUserscriptConfig(runtimeConfig);
-  hydrated.value = true;
+let disposed = false;
+let submitted = false;
+let pageApplied = false;
+const configEditor = createConfigEditor({
+  copySnapshot: normalizeUserscriptConfig,
+  readDraft: () => draft.value,
+  writeDraft: snapshot => {draft.value = snapshot;},
+  async saveDraft(snapshot) {
+    submitted = true;
+    // 本地 patch 仍由 store 记录即时历史；失败回读权威状态，避免把乐观回声当成保存成功。
+    await requestConfigPatch(snapshot);
+    if (!disposed) pageApplied = await syncCurrentPage();
+  },
+  onEdited: () => {status.value = '';statusIsError.value = false;},
+  onSaved: () => {statusIsError.value = !pageApplied; status.value = pageApplied ? '本次提交已保存，并已应用到当前页面。' : '设置已保存，当前页面应用状态未确认，请重试或刷新页面。';},
+  onSaveError: error => {
+    statusIsError.value = true;
+    status.value = `保存失败：${error instanceof Error ? error.message : String(error)}`;
+  },
 });
+const unsubscribeConfig = subscribeConfig(configEditor.hydrate);
+const editorApp = getCurrentInstance()!.appContext.app;
+const previousUnmount = editorApp.unmount;
+function disposeEditor(): void {
+  if (disposed) return;
+  disposed = true;
+  saving.value = false;
+  try { unsubscribeConfig(); }
+  finally {
+    configEditor.dispose();
+    if (editorApp.unmount === unmountEditor) editorApp.unmount = previousUnmount;
+  }
+}
+function unmountEditor(): void {
+  try { disposeEditor(); }
+  finally { previousUnmount.call(editorApp); }
+}
+// mount 期间的 DOM 端口也可能抛错；Vue 此时不会运行 onUnmounted。
+// 与 i18n 插件共用 app 的释放入口，失败构造和正常关闭都只释放本次编辑会话。
+editorApp.unmount = unmountEditor;
+onMounted(async () => {
+  try {
+    await configReady;
+    if (disposed) return;
+    configEditor.initialize(runtimeConfig);
+    hydrated.value = true;
+  } catch (error) {
+    if (disposed) return;
+    statusIsError.value = true;
+    status.value = `设置加载失败：${error instanceof Error ? error.message : String(error)}`;
+  }
+});
+onUnmounted(disposeEditor);
 
 function close(): void {
   emit('close');
 }
 
-async function syncCurrentPage(next: Config): Promise<void> {
-  await browser.tabs.sendMessage(1, {
-    type: 'toggleFloatingBall',
-    isEnabled: next.on && !next.disableFloatingBall,
-  });
-  await browser.tabs.sendMessage(1, {
-    type: 'updateSelectionTranslatorMode',
-    mode: next.on ? next.selectionTranslatorMode : 'disabled',
-  });
-  await browser.tabs.sendMessage(1, {
-    type: 'toggleTranslationProgressPanel',
-    isEnabled: next.on && next.translationProgressPanelEnabled,
-  });
+async function syncCurrentPage(): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const response = await Promise.race([
+      browser.tabs.sendMessage(1, {type: 'reconcileUserscriptPage'}),
+      new Promise<undefined>(resolve => {timer = setTimeout(() => resolve(undefined), 2000);}),
+    ]);
+    return Boolean(response && typeof response === 'object' && 'status' in response && response.status === 'success');
+  } catch {return false;}
+  finally {if (timer !== undefined) clearTimeout(timer);}
 }
 
 async function save(): Promise<void> {
-  if (saving.value || !hydrated.value) return;
+  if (disposed || saving.value || !hydrated.value) return;
+  pageFeedbackRevision += 1;
   aiRequestTimeoutActions.value.commit();
   saving.value = true;
   status.value = '';
   statusIsError.value = false;
+  submitted = false;
+  const feedbackRevision = pageFeedbackRevision;
   try {
-    const next = normalizeUserscriptConfig(draft.value);
-    await saveConfig(next, {recordHistory: true, immediateHistory: true});
-    draft.value = normalizeUserscriptConfig(next);
-    await syncCurrentPage(next);
-    status.value = '设置已保存，并已应用到当前页面。';
+    await configEditor.save();
+    // 无变化的手动保存仍允许把已有设置重新应用到页面，不生成空持久化请求。
+    if (!submitted && !disposed) {
+      const applied = await syncCurrentPage();
+      if (!disposed && feedbackRevision === pageFeedbackRevision && !status.value) {
+        statusIsError.value = !applied;
+        status.value = applied ? '本次提交已保存，并已应用到当前页面。' : '设置已保存，当前页面应用状态未确认，请重试或刷新页面。';
+      }
+    }
   } catch (error) {
-    statusIsError.value = true;
-    status.value = `保存失败：${error instanceof Error ? error.message : String(error)}`;
+    if (!disposed && feedbackRevision === pageFeedbackRevision && !status.value) {
+      statusIsError.value = true;
+      status.value = `保存失败：${error instanceof Error ? error.message : String(error)}`;
+    }
   } finally {
-    saving.value = false;
+    if (!disposed) saving.value = false;
   }
 }
 
 function restoreDefaults(): void {
+  if (disposed || !hydrated.value) return;
+  pageFeedbackRevision += 1;
+  configEditor.invalidateFeedback();
   const next = new Config();
   next.disableFloatingBall = false;
   draft.value = normalizeUserscriptConfig(next);
@@ -480,8 +560,22 @@ function restoreDefaults(): void {
 }
 
 async function togglePageTranslation(): Promise<void> {
-  await browser.tabs.sendMessage(1, {type: 'userscriptTogglePageTranslation'});
-  close();
+  if (disposed || pageTranslationPending.value || saving.value) return;
+  pageTranslationPending.value = true;
+  const revision = ++pageFeedbackRevision;
+  status.value = '';
+  statusIsError.value = false;
+  try {
+    await browser.tabs.sendMessage(1, {type: 'userscriptTogglePageTranslation'});
+    if (!disposed && revision === pageFeedbackRevision) close();
+  } catch (error) {
+    if (!disposed && revision === pageFeedbackRevision) {
+      statusIsError.value = true;
+      status.value = `翻译操作失败：${error instanceof Error ? error.message : String(error)}`;
+    }
+  } finally {
+    pageTranslationPending.value = false;
+  }
 }
 </script>
 

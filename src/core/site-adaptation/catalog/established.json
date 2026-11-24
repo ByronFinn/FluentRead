@@ -1,5 +1,62 @@
 [
   {
+    "id": "openai-community",
+    "name": "OpenAI 社区阅读区",
+    "match": {"hosts": ["community.openai.com"]},
+    "allScopes": true,
+    "mode": "augment",
+    "exclude": [
+      ".d-header",
+      ".sidebar-container",
+      ".list-controls",
+      ".topic-list > thead",
+      ".badge-category__wrapper",
+      ".badge-wrapper",
+      ".topic-list-item :is(.link-bottom-line, .topic-item-stats)",
+      ".topic-list-item > :is(td.posters, td.posts, td.replies, td.views, td.activity)",
+      "body.crawler .topic-list-item > td:last-child:not(.main-link)"
+    ],
+    "content": [
+      {
+        "css": [".topic-list-item .link-top-line", ".topic-list-item .main-link > a.raw-topic-link"],
+        "resolve": "closest",
+        "key": "openai-community:topic-title"
+      },
+      {
+        "css": [".topic-list-item .topic-excerpt", ".topic-list-item p.excerpt"],
+        "resolve": "closest",
+        "key": "openai-community:topic-excerpt"
+      }
+    ]
+  },
+  {
+    "id": "kagi-news",
+    "name": "Kagi News 新闻标题",
+    "match": {
+      "hosts": ["news.kagi.com"]
+    },
+    "allScopes": true,
+    "mode": "augment",
+    "content": [
+      {
+        "css": [
+          "button[aria-label=\"Expand story\"] > span[dir]",
+          "button[aria-label=\"Collapse story\"] > span[dir]"
+        ],
+        "resolve": "closest",
+        "key": "kagi-news:headline"
+      },
+      {
+        "css": [
+          "button[aria-label=\"Expand story\"]",
+          "button[aria-label=\"Collapse story\"]"
+        ],
+        "atomic": false,
+        "key": "kagi-news:headline-button"
+      }
+    ]
+  },
+  {
     "id": "openrouter",
     "name": "OpenRouter",
     "allScopes": true,
@@ -37,6 +94,22 @@
     ]
   },
   {
+    "id": "twitch-live-chat",
+    "name": "Twitch 直播聊天",
+    "match": {"hosts": ["twitch.tv", "www.twitch.tv"]},
+    "mode": "augment",
+    "content": [
+      {
+        "css": [
+          ".chat-scrollable-area__message-container [data-a-target=\"chat-line-message-body\"]",
+          ".chat-scrollable-area__message-container .chat-line__message span[data-a-target=\"chat-message-text\"]:not([data-a-target=\"chat-line-message-body\"] *)"
+        ],
+        "resolve": "closest",
+        "key": "twitch-live-chat:message"
+      }
+    ]
+  },
+  {
     "id": "bilibili",
     "name": "哔哩哔哩",
     "match": {
@@ -52,6 +125,20 @@
       "bili-comment-thread-renderer",
       "bili-comment-renderer",
       "bili-rich-text"
+    ]
+  },
+  {
+    "id": "github-repository-identity",
+    "name": "GitHub 用户名与仓库名",
+    "allScopes": true,
+    "match": {"hosts": ["github.com"]},
+    "priority": 600,
+    "mode": "augment",
+    "watchIgnore": [
+      "a[href]:is(header nav[data-component=Breadcrumbs] [data-component=\"Breadcrumbs.Item\"],main [data-listview-component=items-list] [data-testid=author-filter-link]):not(.markdown-body,.markdown-body *)"
+    ],
+    "omit": [
+      "a[href]:is(header nav[data-component=Breadcrumbs] [data-component=\"Breadcrumbs.Item\"],main [data-listview-component=items-list] [data-testid=author-filter-link]):not(.markdown-body,.markdown-body *)"
     ]
   },
   {
@@ -148,6 +235,7 @@
     ],
     "protect": [
       "[class*=\"PullsListItem-module__description__\"]",
+      "main [data-listview-component=\"items-list\"] > li:has([data-testid=\"listitem-title-link\"]) [data-testid=\"timestamp-container\"]:not(.markdown-body):not(.markdown-body *):not([data-testid=\"listitem-title-link\"] *):not(:has([data-testid=\"listitem-title-link\"]))",
       "[data-testid=\"issue-labels\"]",
       "span[class*=\"IssueLabel\"]",
       "[data-testid=\"list-row-repo-name-and-number\"]",
@@ -159,6 +247,9 @@
       "[class*=\"PinnedIssue-module__metadataContainer\"]",
       "[class*=\"PinnedIssue-module__issueMetadata\"]",
       "[class*=\"IssueBodyHeader-module__IssueBodyHeaderContainer\"]",
+      "main a[data-testid=\"issue-body-header-author\"][data-hovercard-type=\"user\"][href]:not(.markdown-body):not(.markdown-body *)",
+      "main [data-testid=\"comment-header\"]:not(.markdown-body):not(.markdown-body *):not(:has(.markdown-body))",
+      "main #issue-timeline a[data-testid=\"actor-link\"][href]:not(.markdown-body):not(.markdown-body *)",
       "[aria-live]",
       "[role=\"status\"]",
       "[role=\"alert\"]",
@@ -175,6 +266,7 @@
     ],
     "exclude": [
       "[class*=\"PullsListItem-module__description__\"]",
+      "main [data-listview-component=\"items-list\"] > li:has([data-testid=\"listitem-title-link\"]) [data-testid=\"timestamp-container\"]:not(.markdown-body):not(.markdown-body *):not([data-testid=\"listitem-title-link\"] *):not(:has([data-testid=\"listitem-title-link\"]))",
       "dialog",
       "[role=\"dialog\"]",
       "[data-testid=\"search-modal\"]",
@@ -204,6 +296,8 @@
     ],
     "watchIgnore": [
       "[class*=\"PullsListItem-module__description__\"]",
+      "main:has([data-target=\"react-app.reactRoot\"] > meta[name=\"react-app-name\"][content=\"pull-requests\"]) header[data-component=\"PageLayout.Header\"] h1[data-testid=\"header-title\"]:not(.markdown-body,.markdown-body *)",
+      "main [data-listview-component=\"items-list\"] > li:has([data-testid=\"listitem-title-link\"]) [data-testid=\"timestamp-container\"]:not(.markdown-body):not(.markdown-body *):not([data-testid=\"listitem-title-link\"] *):not(:has([data-testid=\"listitem-title-link\"]))",
       "[data-testid=\"issue-labels\"]",
       "span[class*=\"IssueLabel\"]",
       "[data-testid=\"list-row-repo-name-and-number\"]",
@@ -215,6 +309,9 @@
       "[class*=\"PinnedIssue-module__metadataContainer\"]",
       "[class*=\"PinnedIssue-module__issueMetadata\"]",
       "[class*=\"IssueBodyHeader-module__IssueBodyHeaderContainer\"]",
+      "main a[data-testid=\"issue-body-header-author\"][data-hovercard-type=\"user\"][href]:not(.markdown-body):not(.markdown-body *)",
+      "main [data-testid=\"comment-header\"]:not(.markdown-body):not(.markdown-body *):not(:has(.markdown-body))",
+      "main #issue-timeline a[data-testid=\"actor-link\"][href]:not(.markdown-body):not(.markdown-body *)",
       "dialog",
       "[role=\"dialog\"]",
       "form[role=\"search\"]",
@@ -233,6 +330,8 @@
       "[data-listview-item-visibility-label=\"true\"]"
     ],
     "omit": [
+      "main:has([data-target=\"react-app.reactRoot\"] > meta[name=\"react-app-name\"][content=\"pull-requests\"]) header[data-component=\"PageLayout.Header\"] h1[data-testid=\"header-title\"]:not(.markdown-body,.markdown-body *)",
+      "main [data-listview-component=\"items-list\"] > li:has([data-testid=\"listitem-title-link\"]) [data-testid=\"timestamp-container\"]:not(.markdown-body):not(.markdown-body *):not([data-testid=\"listitem-title-link\"] *):not(:has([data-testid=\"listitem-title-link\"]))",
       "[class*=\"ReposListItem-module__TopicsList\"]",
       "[data-listview-component=\"items-list\"] [class*=\"TopicsList__\"]",
       "[class*=\"ReposListItem-module__LabelsContainer\"]",
@@ -278,13 +377,35 @@
     "protect": [
       "time",
       "[role=\"progressbar\"]",
-      "[data-testid=\"app-bar-back\"]"
+      "[data-testid=\"app-bar-back\"]",
+      "main article span:has(+ span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1) > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > div.text-body.font-bold.line-clamp-1:not([dir=\"auto\"] *)"
     ],
     "exclude": [
       "[data-testid=\"tweetTextarea_0\"]",
       "[data-testid=\"DMComposerTextInput\"]",
       "[data-testid=\"User-Name\"]",
-      "[data-testid=\"UserName\"]"
+      "[data-testid=\"UserName\"]",
+      "main article div:has(> video) > [data-slot=\"xds-context-menu-trigger\"] span:has(> span > .x-avatar > img[alt^=\"@\"]) > div > span > div.text-white.line-clamp-1:not([dir=\"auto\"]):not([dir=\"auto\"] *)",
+      "main article div:has(> [data-engagement-action=\"reply\"]):has(> [data-engagement-action=\"retweet\"]):has(> [data-engagement-action=\"like\"])"
+    ],
+    "watchIgnore": [
+      "main article span:has(+ span > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > span.text-secondary.line-clamp-1) > a.x-link[href^=\"/\"]:not([href^=\"//\"]) > div.text-body.font-bold.line-clamp-1:not([dir=\"auto\"] *)"
+    ]
+  },
+  {
+    "id": "x-post-expand-control",
+    "name": "X 帖子展开控件",
+    "allScopes": true,
+    "match": {
+      "hosts": [
+        "*.x.com",
+        "*.twitter.com"
+      ]
+    },
+    "priority": 410,
+    "mode": "augment",
+    "omit": [
+      "main article [data-testid=\"tweet-text-show-more-link\"]"
     ]
   },
   {
@@ -338,15 +459,98 @@
       {
         "css": [
           "shreddit-comment [slot=\"comment\"] p",
-          "shreddit-comment [slot=\"comment\"] li",
-          "shreddit-comment [slot=\"comment\"] blockquote",
+          "shreddit-comment [slot=\"comment\"] h1",
+          "shreddit-comment [slot=\"comment\"] h2",
+          "shreddit-comment [slot=\"comment\"] h3",
+          "shreddit-comment [slot=\"comment\"] h4",
+          "shreddit-comment [slot=\"comment\"] h5",
+          "shreddit-comment [slot=\"comment\"] h6",
           "shreddit-comment [id$=\"-comment-rtjson-content\"] p",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] h1",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] h2",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] h3",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] h4",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] h5",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] h6",
           "[data-testid=\"comment\"] p",
           "[data-testid=\"comment\"] li",
           "[data-click-id=\"comment\"] p"
         ],
         "key": "reddit-comment-prose",
         "resolve": "closest"
+      },
+      {
+        "css": [
+          "shreddit-comment [slot=\"comment\"] li",
+          "shreddit-comment [slot=\"comment\"] blockquote",
+          "shreddit-comment [slot=\"comment\"] th",
+          "shreddit-comment [slot=\"comment\"] td",
+          "shreddit-comment [slot=\"comment\"] li div",
+          "shreddit-comment [slot=\"comment\"] blockquote div",
+          "shreddit-comment [slot=\"comment\"] th div",
+          "shreddit-comment [slot=\"comment\"] td div",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] li",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] blockquote",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] th",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] td",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] li div",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] blockquote div",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] th div",
+          "shreddit-comment [id$=\"-comment-rtjson-content\"] td div"
+        ],
+        "key": "reddit-comment-prose",
+        "resolve": "self",
+        "atomic": false
+      },
+      {
+        "css": [
+          "shreddit-profile-comment [id$=\"-post-rtjson-content\"] p",
+          "shreddit-profile-comment [id$=\"-post-rtjson-content\"] li",
+          "shreddit-profile-comment [id$=\"-post-rtjson-content\"] blockquote",
+          "shreddit-profile-comment [id$=\"-post-rtjson-content\"] h1",
+          "shreddit-profile-comment [id$=\"-post-rtjson-content\"] h2",
+          "shreddit-profile-comment [id$=\"-post-rtjson-content\"] h3",
+          "shreddit-profile-comment [id$=\"-post-rtjson-content\"] h4",
+          "shreddit-profile-comment [id$=\"-post-rtjson-content\"] h5",
+          "shreddit-profile-comment [id$=\"-post-rtjson-content\"] h6"
+        ],
+        "key": "reddit-profile-comment-prose",
+        "resolve": "closest"
+      },
+      {
+        "css": [
+          "shreddit-profile-comment [id$=\"-post-rtjson-content\"]"
+        ],
+        "key": "reddit-profile-comment-body",
+        "resolve": "self",
+        "atomic": false
+      },
+      {
+        "css": [
+          "shreddit-profile-comment h2 a"
+        ],
+        "key": "reddit-profile-card-title",
+        "resolve": "closest",
+        "atomic": true
+      },
+      {
+        "css": [
+          "[data-testid=\"post-title-text\"]"
+        ],
+        "key": "reddit-search-title",
+        "resolve": "self",
+        "atomic": true
+      },
+      {
+        "css": [
+          "[data-testid=\"search-comment-content\"] p",
+          "[data-testid=\"search-comment-content\"] li",
+          "[data-testid=\"search-comment-content\"] blockquote",
+          "[data-testid=\"search-comment-content\"]"
+        ],
+        "key": "reddit-search-comment",
+        "resolve": "self",
+        "atomic": false
       }
     ],
     "protect": [
@@ -468,6 +672,14 @@
       },
       {
         "css": [
+          "ytd-video-renderer .metadata-snippet-text"
+        ],
+        "key": "youtube-search-card-description",
+        "resolve": "closest",
+        "atomic": true
+      },
+      {
+        "css": [
           "#description-inline-expander yt-attributed-string",
           "ytd-text-inline-expander yt-attributed-string"
         ],
@@ -501,7 +713,15 @@
       "yt-live-chat-app",
       "ytd-video-preview",
       "input#search",
-      "ytd-comment-simplebox-renderer"
+      "ytd-comment-simplebox-renderer",
+      "ytd-video-renderer ytd-channel-name",
+      "ytd-video-renderer #metadata-line",
+      "yt-lockup-view-model yt-content-metadata-view-model a[href^=\"/@\"]"
+    ],
+    "watchIgnore": [
+      "ytd-video-renderer ytd-channel-name",
+      "ytd-video-renderer #metadata-line",
+      "yt-lockup-view-model yt-content-metadata-view-model a[href^=\"/@\"]"
     ]
   },
   {
@@ -556,6 +776,16 @@
     "omit": [
       "div.flex.items-center.ml-auto.shrink-0.gap-1"
     ]
+  },
+  {
+    "id": "man7",
+    "name": "Linux man-pages",
+    "match": {"hosts": ["man7.org"], "paths": ["/linux/man-pages/man*/*.html"]},
+    "priority": 360,
+    "allScopes": true,
+    "mode": "augment",
+    "literalTokens": ["pre b", "pre i"],
+    "omit": ["h2 .top-link", "pre .headline", "pre .footline"]
   },
   {
     "id": "ubuntu-manpage",

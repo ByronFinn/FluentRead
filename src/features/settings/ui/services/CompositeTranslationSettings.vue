@@ -1,16 +1,18 @@
 <!--
  * @file src/features/settings/ui/services/CompositeTranslationSettings.vue
  * 文件职责：编辑已保存的组合服务，并提供有当前服务归属的删除确认。
- * 主要内容：草稿显式保存名称、成员顺序、三种策略和逐路超时，保存后由共享配置观察器持久化；配置或服务切换、停用和删除确认重开时淘汰旧事件。
+ * 主要内容：草稿显式保存名称、成员顺序、三种策略和逐路超时，保存后由共享配置观察器持久化；校验统一交给草稿验证，为无效等待时间提供字段旁反馈；底部以分隔线承接统一表单，左侧删除与右侧保存及反馈分开排列；配置或服务切换、停用和删除确认重开时淘汰旧事件。
  * 模块边界：只更新不含凭据的组合配置；删除事件由 SettingsSections 清理默认引用，连接测试由 ServiceConfiguration 经已有后台消息执行。
  -->
 <template>
-  <form v-if="provider" class="composite-settings" data-composite-service-settings :onSubmit="withModifiers(actions.save, ['prevent'])">
+  <form v-if="provider" class="composite-settings" novalidate data-composite-service-settings :onSubmit="withModifiers(actions.save, ['prevent'])">
     <CompositeTranslationFields :draft="draft" :members="members" :errors="errors" :active="active" :context="props.config" :onUpdate="actions.update" />
     <footer>
-      <button type="submit" class="save-button" data-testid="composite-service-edit-save" :disabled="!active">{{ t('common.save') }}</button>
-      <button type="button" class="delete-button" data-testid="composite-service-delete" :disabled="!active" :onClick="actions.remove">{{ t('settings.services.composite.delete') }}</button>
-      <span v-if="saved" class="saved-status" role="status">{{ t('settings.services.library.saved') }}</span>
+      <button type="button" class="delete-button" data-testid="composite-service-delete" :disabled="!active" :onClick="actions.remove"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h14M8 3h4m-7 2 1 12h8l1-12M8 8v6m4-6v6" /></svg>{{ t('settings.services.composite.delete') }}</button>
+      <div class="composite-save-actions">
+        <span v-if="saved" class="saved-status" role="status">{{ t('settings.services.library.saved') }}</span>
+        <button type="submit" class="save-button" data-testid="composite-service-edit-save" :disabled="!active">{{ t('common.save') }}</button>
+      </div>
     </footer>
   </form>
   <el-dialog :key="revision" :model-value="deleteOpen && active" :onUpdate:modelValue="deleteActions.open" :title="t('settings.services.composite.deleteTitle')" width="min(460px, calc(100vw - 32px))" append-to-body destroy-on-close>
@@ -64,12 +66,16 @@ watch(() => [props.config, props.service, provider.value], () => {Object.assign(
 watch(() => active.value, () => {deleteOpen.value = false}, {flush: 'sync'})
 </script>
 <style scoped>
-.composite-settings { display: grid; gap: 18px; width: 100%; max-width: 760px; }
-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; padding-left: 114px; }
-button { min-height: 34px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); font: inherit; font-size: 12px; cursor: pointer; }
+.composite-settings { container: composite-editor / inline-size; display: grid; gap: 0; width: 100%; }
+footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+.composite-save-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; min-width: 0; margin-inline-start: auto; }
+button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--fr-service-control-height, 40px); padding: 8px 16px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--surface); font: inherit; font-size: 12px; font-weight: 550; line-height: 1.5; cursor: pointer; }
 .delete-button { border-color: transparent; color: var(--el-color-danger); }
+.delete-button svg { flex: none; width: 16px; height: 16px; }
 .save-button { border-color: var(--brand, #ef4776); color: white; background: var(--brand, #ef4776); }
+.delete-button:hover:not(:disabled) { background: var(--el-color-danger-light-9); }
+.save-button:hover:not(:disabled) { background: var(--brand-strong); border-color: var(--brand-strong); }
+button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .saved-status { color: var(--muted); font-size: 12px; }
 button:disabled { opacity: .5; cursor: default; }
-@media (max-width: 560px) { footer { padding-left: 0; } }
 </style>

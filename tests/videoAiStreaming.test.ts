@@ -4,8 +4,6 @@ import {
   VIDEO_AI_SAMPLE_RATE,
   VideoAiStreamingResampler,
   encodeVideoAiPcm16Base64,
-  getVideoAiStreamProfile,
-  getVideoAiAdaptiveSubmitStepMs,
   measureVideoAiSpeechActivity,
 } from '@/src/features/video-subtitle/content/video-ai/audioWindow';
 import {
@@ -22,10 +20,14 @@ import {
   getVisibleVideoAiCue,
   mergeVideoAiSubtitleCues,
   normalizeVideoAiSubtitleTimeline,
-  upsertVideoAiSubtitleCue,
   finalizeVideoAiCuesForPlayback,
 } from '@/src/features/video-subtitle/content/video-ai/cueTimeline';
 import { VideoAiCanceledGenerationRegistry } from '@/src/features/video-subtitle/content/video-ai/generationRegistry';
+
+
+// 使用完整识别路径现行的合并与边界规范化，不再测试已退役的逐句尾部缓存。
+const updateCueTimeline = (cues: VideoAiStabilizedCue[], cue: VideoAiStabilizedCue) =>
+  normalizeVideoAiSubtitleTimeline(mergeVideoAiSubtitleCues([...cues, cue]));
 
 describe('完成识别字幕的原文回放', () => {
   it('保留稳定身份、使用实际说话时长并清除识别和翻译等待时间', () => {
@@ -60,74 +62,6 @@ function decodePcm16Base64(value: string): Int16Array {
 }
 
 describe('本地 AI 字幕音频窗口', () => {
-  it('为 Tiny 与 Base 使用有界滚动窗口，并让 Base 降低提交频率', () => {
-    const tiny = getVideoAiStreamProfile('tiny');
-    const base = getVideoAiStreamProfile('base');
-
-    for (const profile of [tiny, base]) {
-      expect(profile.initialWindowMs).toBeGreaterThan(0);
-      expect(profile.initialWindowMs).toBeLessThanOrEqual(profile.targetWindowMs);
-      expect(profile.submitStepMs).toBeLessThan(profile.targetWindowMs);
-      expect(profile.targetWindowMs).toBeLessThanOrEqual(profile.maxBufferedMs);
-      expect(profile.maxBufferedMs).toBeLessThanOrEqual(30_000);
-
-      const maxBufferedPcmBytes = VIDEO_AI_SAMPLE_RATE * profile.maxBufferedMs / 1_000 * Float32Array.BYTES_PER_ELEMENT;
-      expect(maxBufferedPcmBytes).toBeLessThanOrEqual(1_920_000);
-    }
-
-    expect(base.initialWindowMs).toBeGreaterThanOrEqual(tiny.initialWindowMs);
-    expect(base.targetWindowMs).toBeGreaterThan(tiny.targetWindowMs);
-    expect(base.submitStepMs).toBeGreaterThan(tiny.submitStepMs);
-    expect(getVideoAiStreamProfile('unsupported')).toEqual(getVideoAiStreamProfile('small'));
-  });
-
-  it('设备推理变慢时自适应降频，同时保留至少 800ms 重叠', () => {
-    const tiny = getVideoAiStreamProfile('tiny');
-    const base = getVideoAiStreamProfile('base');
-    expect(getVideoAiAdaptiveSubmitStepMs('tiny', 1_000, tiny)).toBe(tiny.submitStepMs);
-    expect(getVideoAiAdaptiveSubmitStepMs('tiny', 5_000, tiny)).toBeGreaterThan(tiny.submitStepMs);
-    expect(getVideoAiAdaptiveSubmitStepMs('base', 20_000, base)).toBe(base.maxBufferedMs - 800);
-  });
-
-  it.each([
-    { model: 'tiny', dutyCycleBudget: 0.72 },
-    { model: 'base', dutyCycleBudget: 0.62 },
-  ] as const)('$model 自适应步长覆盖无效值、启调点、线性区和硬上限', ({
-    model,
-    dutyCycleBudget,
-  }) => {
-    const profile = getVideoAiStreamProfile(model);
-    const maximumStepMs = profile.maxBufferedMs - 800;
-    const linearStepMs = profile.submitStepMs + 1_000;
-
-    for (const invalidInferenceMs of [Number.NaN, Number.POSITIVE_INFINITY, 0, -1]) {
-      expect(getVideoAiAdaptiveSubmitStepMs(model, invalidInferenceMs, profile))
-        .toBe(profile.submitStepMs);
-    }
-
-    expect(getVideoAiAdaptiveSubmitStepMs(
-      model,
-      profile.submitStepMs * dutyCycleBudget,
-      profile,
-    )).toBeCloseTo(profile.submitStepMs, 8);
-    expect(getVideoAiAdaptiveSubmitStepMs(
-      model,
-      linearStepMs * dutyCycleBudget,
-      profile,
-    )).toBeCloseTo(linearStepMs, 8);
-    expect(getVideoAiAdaptiveSubmitStepMs(
-      model,
-      maximumStepMs * dutyCycleBudget,
-      profile,
-    )).toBeCloseTo(maximumStepMs, 8);
-    expect(getVideoAiAdaptiveSubmitStepMs(
-      model,
-      (maximumStepMs + 5_000) * dutyCycleBudget,
-      profile,
-    )).toBe(maximumStepMs);
-    expect(profile.maxBufferedMs - maximumStepMs).toBe(800);
-  });
-
   it('把 Float32 PCM 钳位并编码成 little-endian PCM16', () => {
     const encoded = encodeVideoAiPcm16Base64(new Float32Array([
       -2,
@@ -498,8 +432,8 @@ describe('本地 AI 字幕滑窗文本合并', () => {
     });
 
     let timeline: VideoAiStabilizedCue[] = [];
-    timeline = upsertVideoAiSubtitleCue(timeline, first[0]) as VideoAiStabilizedCue[];
-    timeline = upsertVideoAiSubtitleCue(timeline, continuation[0]) as VideoAiStabilizedCue[];
+    timeline = updateCueTimeline(timeline, first[0]) as VideoAiStabilizedCue[];
+    timeline = updateCueTimeline(timeline, continuation[0]) as VideoAiStabilizedCue[];
     expect(timeline).toHaveLength(1);
     expect(timeline[0].text).toBe(
       'They finished the test with a concise summary and a plan for tomorrow.',
@@ -604,8 +538,8 @@ describe('本地 AI 字幕滑窗文本合并', () => {
     });
 
     let timeline: VideoAiStabilizedCue[] = [];
-    timeline = upsertVideoAiSubtitleCue(timeline, first[0]) as VideoAiStabilizedCue[];
-    timeline = upsertVideoAiSubtitleCue(timeline, corrected[0]) as VideoAiStabilizedCue[];
+    timeline = updateCueTimeline(timeline, first[0]) as VideoAiStabilizedCue[];
+    timeline = updateCueTimeline(timeline, corrected[0]) as VideoAiStabilizedCue[];
     expect(timeline).toHaveLength(1);
     expect(timeline[0].text).toBe(
       'Inside, the team compared both models and recorded every observation.',
@@ -956,7 +890,7 @@ describe('本地 AI 字幕滑窗文本合并', () => {
     expect(outputs[1].cueId).toBe(outputs[0].cueId);
     let timeline: VideoAiStabilizedCue[] = [];
     for (const cue of outputs) {
-      timeline = upsertVideoAiSubtitleCue(timeline, cue) as VideoAiStabilizedCue[];
+      timeline = updateCueTimeline(timeline, cue) as VideoAiStabilizedCue[];
     }
     expect(timeline.map((cue) => cue.text)).toEqual([
       'Local subtitles stay synchronized with the video.',
@@ -996,9 +930,13 @@ describe('本地 AI 字幕滑窗文本合并', () => {
       .toBe(true);
   });
 
-  it('词面高度相似但语义不同的相邻句不会被当作重复吞掉', () => {
-    const firstText = 'We can release the local model today.';
-    const secondText = 'We cannot release the local model today.';
+  it.each([
+    ['can release', 'cannot release'], ['do support', "don't support"], ['will release', 'won’t release'],
+    ['should release', "shouldn't release"], ['are using', 'aren’t using'],
+  ])('词面高度相似但 %s / %s 的否定差异不会被当作重复吞掉', (affirmative, negative) => {
+    const firstText = `We ${affirmative} the local model today.`;
+    const secondText = `We ${negative} the local model today.`;
+    expect.soft(areVideoAiTranscriptCorrectionVariants(firstText, secondText)).toBe(false);
     const stabilizer = new VideoAiTranscriptStabilizer();
 
     expect(areVideoAiTranscriptTextsRelated(firstText, secondText)).toBe(false);
@@ -1164,6 +1102,13 @@ describe('本地 AI 字幕时间轴稳定性', () => {
     expect(invalid[0]).toMatchObject({ durationMs: 500, spokenEndMs: 2_500 });
   });
 
+  it('较早和同起点但更旧的重叠 cue 不抢占当前最新字幕', () => {
+    const current={startMs:1_000,durationMs:3_000,availableAtMs:900,text:'Latest visible caption.'};
+    const older={startMs:0,durationMs:4_000,availableAtMs:800,text:'Older overlapping caption.'};
+    const duplicate={...current,availableAtMs:500,text:'Earlier result at the same start.'};
+    expect(getVisibleVideoAiCue([current,older,duplicate] as VideoAiStabilizedCue[],1_200)).toBe(current);
+  });
+
   it('没有 spokenEnd 时按 cue 时长 fallback', () => {
     const cue = { startMs: 1_000, durationMs: Number.NaN, text: 'fallback duration' };
     expect(getVisibleVideoAiCue([cue], 1_000)?.text).toBe(cue.text);
@@ -1219,12 +1164,11 @@ describe('本地 AI 字幕时间轴稳定性', () => {
     expect(getVisibleVideoAiCue([cue], 10_799)).toBeNull();
   });
 
-  it('长期追加 cue 后历史有界，递增播放头始终选择最新可用项且不回退', () => {
+  it('完整识别的长时间轴有界，递增播放头始终选择最新可用项且不回退', () => {
     const overflowCount = 75;
-    let cues: VideoAiStabilizedCue[] = [];
-    for (let index = 0; index < VIDEO_AI_MAX_CUE_COUNT + overflowCount; index += 1) {
+    const input: VideoAiStabilizedCue[] = Array.from({length: VIDEO_AI_MAX_CUE_COUNT + overflowCount}, (_, index) => {
       const startMs = index * 1_000;
-      const cue: VideoAiStabilizedCue = {
+      return {
         startMs,
         durationMs: 900,
         text: `Bounded cue ${index} remains distinct.`,
@@ -1232,8 +1176,8 @@ describe('本地 AI 字幕时间轴稳定性', () => {
         availableAtMs: startMs + 120,
         spokenEndMs: startMs + 800,
       };
-      cues = upsertVideoAiSubtitleCue(cues, cue) as VideoAiStabilizedCue[];
-    }
+    });
+    const cues = normalizeVideoAiSubtitleTimeline(mergeVideoAiSubtitleCues(input)) as VideoAiStabilizedCue[];
 
     expect(cues).toHaveLength(VIDEO_AI_MAX_CUE_COUNT);
     expect(cues[0].cueId).toBe(`bounded-${overflowCount}`);

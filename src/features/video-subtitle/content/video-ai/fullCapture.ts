@@ -1,11 +1,12 @@
 /**
  * @file src/features/video-subtitle/content/video-ai/fullCapture.ts
  * 文件职责：执行完整视频 AI 字幕的独立音频读取、分窗识别和最终 cue 整理。
- * 主要内容：支持 HLS PCM 注入、限额流式媒体读取与可取消的 16 kHz 原生解码、可取消元数据等待的隐藏扫描副本、有界串行 Whisper 窗口、完整模式字幕整理和取消清理。
+ * 主要内容：普通 HTML 流媒体可只读采集原播放音轨，由 AudioWorklet 在渲染线程采集 PCM，以原始时间轴发布字幕，跳转或倍速变化作废请求、积压超过一分钟时停止，结束的片段不冒充整片缓存；支持 HLS PCM 注入、限额流式媒体读取与可取消的 16 kHz 原生解码、可取消元数据等待的隐藏扫描副本、有界串行 Whisper 窗口、完整模式字幕整理和取消清理；解码返回先复核会话再读取 PCM，解码上下文的关闭握手不阻塞识别完成或扫描回退。
  * 模块边界：不得接管用户可见 video 的播放状态；页面源隔离由调用方通过选项注入。
  */
 import {
   normalizeVideoLocalTranscriptionModel,
+  type VideoAiRecognitionMetadata,
   resampleToWhisperAudio,
 } from '@/src/features/video-subtitle/transcription';
 import {
@@ -25,10 +26,43 @@ import {
 import {alignVideoAiSegmentsToSpeech, findVideoAiPauseBoundary} from './speechAlignment';
 import {readBoundedMediaResponse} from '../hlsAudio';
 import type {VideoSubtitleCue} from '../youtubeSubtitleData';
-import type {
-  VideoAiAudioChunk,
-  VideoAiTranscriptionResult,
-} from './capture';
+export interface VideoAiAudioChunk {
+  /** 连续采集后的 16 kHz 单声道 PCM；不会再经过 WebM 编解码。 */
+  pcm: Float32Array;
+  /** 这段滚动窗口在播放器时间轴上的起点。 */
+  startMs: number;
+  /** 这段滚动窗口覆盖的播放器时间轴长度。 */
+  durationMs: number;
+  /** PCM 自身的墙钟时长，供诊断和非 1x 播放映射使用。 */
+  audioDurationMs: number;
+  playbackRate: number;
+  sequence: number;
+  sessionId: number;
+}
+
+export interface VideoAiTranscriptionSegment {
+  startMs?: number;
+  endMs?: number;
+  text?: string;
+}
+
+export interface VideoAiTranscriptionResult extends VideoAiRecognitionMetadata {
+  provider?: 'browser' | 'native-qwen';
+  timingSource?: 'audio-window';
+  text?: string;
+  segments?: VideoAiTranscriptionSegment[];
+  /** 当 offscreen 正在处理另一条流时，旧请求被丢弃；这不是识别错误。 */
+  skipped?: boolean;
+  model?: string;
+  backend?: 'webgpu' | 'wasm';
+  gpuInfo?: string;
+  decodeMs?: number;
+  inferenceMs?: number;
+  audioDurationMs?: number;
+  threads?: number;
+  dtype?: 'q4' | 'q8';
+}
+
 
 export type VideoAiFullCapturePhase =
   | 'idle'
@@ -40,7 +74,7 @@ export type VideoAiFullCapturePhase =
 
 export interface VideoAiFullCaptureProgress {
   phase: VideoAiFullCapturePhase;
-  captureMode?: 'fast-decode' | 'realtime-scan';
+  captureMode?: 'fast-decode' | 'realtime-scan' | 'playback';
   progress: number;
   capturedMs: number;
   durationMs: number;
@@ -50,11 +84,15 @@ export interface VideoAiFullCaptureProgress {
 }
 
 export interface VideoAiFullCaptureOptions {
-  getVideo: () => HTMLVideoElement | null;
+  getVideo: () => HTMLMediaElement | null;
   /** 可选的 HLS/独立音轨快速读取器，返回 16 kHz 单声道 PCM。 */
-  getAudio?: (video: HTMLVideoElement, signal: AbortSignal) => Promise<Float32Array | null>;
+  getAudio?: (video: HTMLMediaElement, signal: AbortSignal) => Promise<Float32Array | null>;
   /** 可选的独立扫描元素/源，由 X runtime 提供以支持 MSE/blob 媒体。 */
-  getIsolatedVideo?: (sourceVideo: HTMLVideoElement, sessionId: number) => Promise<HTMLVideoElement | null>;
+  getIsolatedVideo?: (sourceVideo: HTMLMediaElement, sessionId: number) => Promise<HTMLMediaElement | null>;
+  /** 不可复制的 HTML 流或长媒体只采集用户正在播放的音轨；不改变原媒体状态。 */
+  capturePlayback?: (media: HTMLMediaElement) => boolean;
+  /** 由扩展组合层提供的静态 AudioWorklet 地址；旧调用方可保留兼容采集器。 */
+  pcmWorkletUrl?: string;
   getModel: () => unknown;
   isSupported: () => boolean;
   transcribe: (chunk: VideoAiAudioChunk) => Promise<VideoAiTranscriptionResult>;
@@ -68,7 +106,7 @@ export interface VideoAiFullCaptureOptions {
   onInvalidate?: (reason: 'cancel' | 'error' | 'destroy', sessionId: number) => void;
 }
 
-type CaptureStreamVideo = HTMLVideoElement & {
+type CaptureStreamVideo = HTMLMediaElement & {
   captureStream?: () => MediaStream;
   mozCaptureStream?: () => MediaStream;
 };
@@ -98,6 +136,7 @@ const FULL_FAST_DECODE_DURATION_TOLERANCE_MS = 750;
 const FULL_SCAN_VIDEO_LOAD_TIMEOUT_MS = 2_500;
 
 const FULL_CANCELLED_ERROR = '本地视频 AI 字幕已取消';
+const FULL_TOO_LONG_ERROR = '当前视频超过 20 分钟，完整本地识别会占用过多内存，请改用较短视频';
 
 function toError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(typeof value === 'string' ? value : fallback);
@@ -181,11 +220,11 @@ export class VideoAiFullCaptureController {
   private session = 0;
   private audioContext: AudioContext | null = null;
   private sourceNode: MediaStreamAudioSourceNode | MediaElementAudioSourceNode | null = null;
-  private processorNode: ScriptProcessorNode | null = null;
+  private processorNode: ScriptProcessorNode | AudioWorkletNode | null = null;
   private silentSinkNode: GainNode | null = null;
   private stream: MediaStream | null = null;
   private captureSourceStream: MediaStream | null = null;
-  private scanVideo: HTMLVideoElement | null = null;
+  private scanVideo: HTMLMediaElement | null = null;
   private trackEndCleanups: Array<() => void> = [];
   private videoEndedCleanup: (() => void) | null = null;
   private finalizeTimer: number | undefined;
@@ -202,7 +241,6 @@ export class VideoAiFullCaptureController {
   private fullTranscriptionChain: Promise<void> | null = null;
   private readonly fullTranscriptionStabilizer = new VideoAiTranscriptStabilizer({mode: 'complete'});
   private readonly fullCuesById = new Map<string, VideoAiStabilizedCue>();
-  private fullFallbackCues: VideoAiStabilizedCue[] = [];
   private fullTranscriptionError: Error | null = null;
   private fullCaptureFinished = false;
   private fullNextWindowStartMs = 0;
@@ -258,7 +296,7 @@ export class VideoAiFullCaptureController {
   start(): boolean {
     if (this.isActive()) return true;
     if (!this.options.isSupported()) {
-      this.failBeforeStart(new Error('当前浏览器无法完整采集 X 视频音频，请使用桌面版 Edge 或 Chrome'));
+      this.failBeforeStart(new Error('当前浏览器无法完整采集媒体音频，请使用桌面版 Edge 或 Chrome'));
       return false;
     }
 
@@ -266,14 +304,20 @@ export class VideoAiFullCaptureController {
     const captureStream = video?.captureStream;
     const legacyCaptureStream = video?.mozCaptureStream;
     const AudioContextClass = getAudioContextConstructor();
-    if (!video || (!captureStream && !legacyCaptureStream && !this.options.getAudio)
-      || (!this.options.getAudio && !AudioContextClass)) {
-      this.failBeforeStart(new Error('当前浏览器无法完整采集 X 视频音频，请使用桌面版 Edge 或 Chrome'));
+    const playback = Boolean(video && this.options.capturePlayback?.(video));
+    const suppliedStream = video?.srcObject as MediaStream | null;
+    const hasSuppliedAudio = typeof suppliedStream?.getAudioTracks === 'function';
+    if (!video || (!captureStream && !legacyCaptureStream && !this.options.getAudio && !hasSuppliedAudio)
+      || ((playback || !this.options.getAudio) && !AudioContextClass)) {
+      this.failBeforeStart(new Error('当前浏览器无法完整采集媒体音频，请使用桌面版 Edge 或 Chrome'));
       return false;
     }
 
-    if (Number.isFinite(video.duration) && video.duration * 1_000 > FULL_MAX_DURATION_MS) {
-      this.failBeforeStart(new Error('当前视频超过 20 分钟，完整本地识别会占用过多内存，请改用较短视频'));
+    if (playback && video.playbackRate !== 1) {
+      this.failBeforeStart(new Error('实时本地字幕需要 1 倍速播放，请调整倍速后重试')); return false;
+    }
+    if (!playback && Number.isFinite(video.duration) && video.duration * 1_000 > FULL_MAX_DURATION_MS) {
+      this.failBeforeStart(new Error(FULL_TOO_LONG_ERROR));
       return false;
     }
 
@@ -285,12 +329,12 @@ export class VideoAiFullCaptureController {
     const audioAbortController = new AbortController();
     this.audioAbortController = audioAbortController;
     this.resetAudio();
-    this.expectedDurationMs = Number.isFinite(video.duration) && video.duration > 0
+    this.expectedDurationMs = !playback && Number.isFinite(video.duration) && video.duration > 0
       ? Math.min(FULL_MAX_DURATION_MS, video.duration * 1_000)
       : 0;
     this.setProgress({
       phase: 'capturing',
-      captureMode: 'realtime-scan',
+      captureMode: playback ? 'playback' : 'realtime-scan',
       progress: 0,
       capturedMs: 0,
       durationMs: this.expectedDurationMs,
@@ -391,7 +435,7 @@ export class VideoAiFullCaptureController {
     let createdStream: MediaStream | null = null;
     let createdSourceStream: MediaStream | null = null;
     let createdContext: AudioContext | null = null;
-    let scanVideo: HTMLVideoElement | null = null;
+    let scanVideo: HTMLMediaElement | null = null;
     try {
       if (!this.isCurrentSession(session)) return;
       // 模型预热与媒体解码/扫描并行。对于可直接读取的 data/blob 媒体，
@@ -399,13 +443,15 @@ export class VideoAiFullCaptureController {
       // captureStream，不改变它原本的时间轴和兼容性。
       this.options.onSessionStart?.(session);
       if (!this.isCurrentSession(session) || signal.aborted) return;
-      const customAudio = this.options.getAudio
+      const playback = this.progress.captureMode === 'playback';
+      const customAudio = !playback && this.options.getAudio
         ? await this.options.getAudio(video, signal)
         : null;
       if (signal.aborted || !this.isCurrentSession(session)) throw new Error(FULL_CANCELLED_ERROR);
+      if (customAudio && customAudio.length > FULL_MAX_DURATION_MS * VIDEO_AI_SAMPLE_RATE / 1_000) throw new Error(FULL_TOO_LONG_ERROR);
       const fastAudio = (customAudio && customAudio.length > 0)
         ? customAudio
-        : await this.tryFastDecodeAudio(video, session, signal);
+        : playback ? null : await this.tryFastDecodeAudio(video, session, signal);
       if (!this.isCurrentSession(session)) return;
       if (fastAudio) {
         this.audioBlocks = [fastAudio];
@@ -428,19 +474,13 @@ export class VideoAiFullCaptureController {
         return;
       }
 
-      let audioVideo: HTMLVideoElement;
-      try {
-        audioVideo = this.options.getIsolatedVideo
-          ? await this.options.getIsolatedVideo(video, session) || await this.createScanVideo(video, session, signal)
-          : await this.createScanVideo(video, session, signal);
-        scanVideo = audioVideo;
-        if (!this.isCurrentSession(session) || signal.aborted) throw new Error(FULL_CANCELLED_ERROR);
-        this.scanVideo = audioVideo;
-      } catch (scanError) {
-        // 完整模式不能接管可见 video，否则会改写用户的暂停、seek、倍速
-        // 或静音状态。无法建立独立扫描副本时交给上层改用实时模式。
-        throw scanError;
-      }
+      // 完整模式使用独立扫描副本；失败向用户显示重试入口，不能接管可见 video。
+      const audioVideo = playback ? video : this.options.getIsolatedVideo
+        ? await this.options.getIsolatedVideo(video, session) || await this.createScanVideo(video, session, signal)
+        : await this.createScanVideo(video, session, signal);
+      scanVideo = playback ? null : audioVideo;
+      if (!this.isCurrentSession(session) || signal.aborted) throw new Error(FULL_CANCELLED_ERROR);
+      this.scanVideo = playback ? null : audioVideo;
 
       const context = new AudioContextClass!({
         sampleRate: VIDEO_AI_SAMPLE_RATE,
@@ -451,7 +491,19 @@ export class VideoAiFullCaptureController {
       let audioTracks: MediaStreamTrack[] = [];
       let sourceStream: MediaStream | null = null;
       let audioStream: MediaStream | null = null;
-      try {
+      if (playback) {
+        const provided = video.srcObject as MediaStream | null;
+        // srcObject 的捕获 API 可能返回原轨；优先克隆，停止自有采集时不结束网页音轨。
+        audioTracks = typeof provided?.getAudioTracks === 'function' ? provided.getAudioTracks().map(track => track.clone()) : [];
+        if (!audioTracks.length) {
+          sourceStream = captureStreamFactory?.call(video) || null;
+          createdSourceStream = sourceStream;
+          audioTracks = sourceStream?.getAudioTracks() || [];
+        }
+        if (!audioTracks.length) throw new Error('当前媒体没有可读取的音轨，请先播放后重试；受保护媒体无法生成本地字幕');
+        audioStream = new MediaStream(audioTracks); createdStream = audioStream;
+        source = context.createMediaStreamSource(audioStream);
+      } else try {
         // MediaElementAudioSourceNode 会接管该 video 的默认音频输出；这里只
         // 把它接到 0 增益 sink，因此扫描期间不会把原声播放给用户。
         source = context.createMediaElementSource(audioVideo);
@@ -474,12 +526,22 @@ export class VideoAiFullCaptureController {
         if (audioTracks.length === 0 && providedStream && typeof providedStream.getAudioTracks === 'function') {
           audioTracks = providedStream.getAudioTracks().map((track) => track.clone());
         }
-        if (audioTracks.length === 0) throw new Error('当前 X 视频没有可捕获的音轨');
+        if (audioTracks.length === 0) throw new Error('当前媒体没有可捕获的音轨');
         audioStream = new MediaStream(audioTracks);
         createdStream = audioStream;
         source = context.createMediaStreamSource(audioStream);
       }
-      const processor = context.createScriptProcessor(AUDIO_PROCESSOR_BUFFER_SIZE, 1, 1);
+      let processor: ScriptProcessorNode | AudioWorkletNode;
+      if (this.options.pcmWorkletUrl) {
+        if (!context.audioWorklet || typeof AudioWorkletNode !== 'function') {
+          throw new Error('播放采集需要 HTTPS 或本地页面及支持 AudioWorklet 的浏览器');
+        }
+        await context.audioWorklet.addModule(this.options.pcmWorkletUrl);
+        if (signal.aborted || !this.isCurrentSession(session)) throw new Error(FULL_CANCELLED_ERROR);
+        processor = new AudioWorkletNode(context, 'fluent-read-video-pcm', {numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1]});
+      } else {
+        processor = context.createScriptProcessor(AUDIO_PROCESSOR_BUFFER_SIZE, 1, 1);
+      }
       const silentSink = context.createGain();
       silentSink.gain.value = 0;
       source.connect(processor);
@@ -497,21 +559,17 @@ export class VideoAiFullCaptureController {
       createdSourceStream = null;
       createdContext = null;
 
-      processor.onaudioprocess = (event) => {
-        if (!this.isCurrentSession(epoch) || this.phase !== 'capturing') return;
-        const channels = Array.from(
-          { length: event.inputBuffer.numberOfChannels },
-          (_, channel) => event.inputBuffer.getChannelData(channel),
-        );
-        const pcm = this.resampler.process(channels, event.inputBuffer.sampleRate, VIDEO_AI_SAMPLE_RATE);
+      const receiveAudio = (channels: Float32Array[], sampleRate: number) => {
+        if (!this.isCurrentSession(epoch) || this.phase !== 'capturing' || playback && (video.paused || video.seeking)) return;
+        const pcm = this.resampler.process(channels, sampleRate, VIDEO_AI_SAMPLE_RATE);
         if (pcm.length === 0) return;
-        if (this.bufferedSamples === 0) {
+        if (this.bufferedSamples === 0 && this.audioBlocksStartSample === 0) {
           const currentTimeMs = Number.isFinite(audioVideo.currentTime) ? Math.max(0, audioVideo.currentTime * 1_000) : 0;
           const blockDurationMs = pcm.length * 1_000 / VIDEO_AI_SAMPLE_RATE;
           this.captureStartOffsetMs = Math.max(0, currentTimeMs - blockDurationMs);
         }
         // resampler.process 已经返回了独立的 Float32Array；这里直接保留，
-        // 避免每个 ScriptProcessor 回调再复制一遍 PCM。
+        // 避免每个采集回调再复制一遍 PCM。
         this.audioBlocks.push(pcm);
         this.bufferedSamples += pcm.length;
         if (!this.audioHasSpeech && measureVideoAiSpeechActivity(pcm).active) {
@@ -519,7 +577,13 @@ export class VideoAiFullCaptureController {
         }
         const capturedSamples = this.audioBlocksStartSample + this.bufferedSamples;
         const capturedMs = this.captureStartOffsetMs + capturedSamples * 1_000 / VIDEO_AI_SAMPLE_RATE;
-        if (capturedMs > FULL_MAX_DURATION_MS + 1_000) {
+        if (playback && this.bufferedSamples > 60 * VIDEO_AI_SAMPLE_RATE) {
+          this.fail(new Error('本地识别速度跟不上播放，已停止以保护浏览器性能，请暂停后重试')); return;
+        }
+        if (playback && capturedSamples >= FULL_MAX_DURATION_MS * VIDEO_AI_SAMPLE_RATE / 1000) {
+          void this.finishCapture(epoch); return;
+        }
+        if (!playback && capturedMs > FULL_MAX_DURATION_MS + 1_000) {
           this.fail(new Error('本地视频音频缓冲超过安全上限，已停止以保护浏览器性能'));
           return;
         }
@@ -534,9 +598,18 @@ export class VideoAiFullCaptureController {
         this.queueAvailableFullTranscriptionWindows(epoch);
       };
 
+      if ('port' in processor) {
+        processor.port.onmessage = event => receiveAudio([event.data.pcm], event.data.sampleRate);
+        processor.onprocessorerror = () => {if (this.isCurrentSession(epoch)) this.fail(new Error('当前浏览器无法完整采集媒体音频，请使用桌面版 Edge 或 Chrome'));};
+      } else {
+        processor.onaudioprocess = event => receiveAudio(Array.from({length: event.inputBuffer.numberOfChannels},
+          (_, channel) => event.inputBuffer.getChannelData(channel)), event.inputBuffer.sampleRate);
+      }
+
       const handleTrackEnded = () => {
         if (this.isCurrentSession(epoch) && this.phase === 'capturing' && !audioVideo.ended) {
-          this.fail(new Error('X 视频音轨在完整采集前结束，请重新请求 AI 字幕'));
+          if (playback) void this.finishCapture(epoch);
+          else this.fail(new Error('X 视频音轨在完整采集前结束，请重新请求 AI 字幕'));
         }
       };
       this.trackEndCleanups = audioTracks.map((track) => {
@@ -554,13 +627,18 @@ export class VideoAiFullCaptureController {
         }, FULL_CAPTURE_FINALIZE_DELAY_MS);
       };
       audioVideo.addEventListener('ended', handleVideoEnded);
-      this.videoEndedCleanup = () => audioVideo.removeEventListener('ended', handleVideoEnded);
+      const discontinuity = () => this.fail(new Error('媒体位置或倍速已改变，请重新开始本地字幕'));
+      if (playback) {video.addEventListener('seeking', discontinuity); video.addEventListener('ratechange', discontinuity);}
+      this.videoEndedCleanup = () => {
+        audioVideo.removeEventListener('ended', handleVideoEnded);
+        if (playback) {video.removeEventListener('seeking', discontinuity); video.removeEventListener('ratechange', discontinuity);}
+      };
 
       await context.resume();
       if (!this.isCurrentSession(epoch)) throw new Error(FULL_CANCELLED_ERROR);
       // 完整扫描的 audio source 已经接到 0 增益 sink；视频本身先前已经在
       // 播放时，桌面浏览器通常会直接允许该播放请求。
-      await audioVideo.play();
+      if (!playback) await audioVideo.play();
     } catch (error) {
       createdStream?.getTracks().forEach((track) => track.stop());
       createdSourceStream?.getTracks().forEach((track) => track.stop());
@@ -581,7 +659,7 @@ export class VideoAiFullCaptureController {
   }
 
   private async tryFastDecodeAudio(
-    video: HTMLVideoElement,
+    video: HTMLMediaElement,
     session: number,
     signal?: AbortSignal,
   ): Promise<Float32Array | null> {
@@ -627,10 +705,14 @@ export class VideoAiFullCaptureController {
         decodeContext.decodeAudioData(encoded.buffer as ArrayBuffer),
         interrupted,
       ]);
+      // decode 与取消可在同一 turn 竞争；成功分支已赢得 race 也不代表会话仍有效。
+      if (!this.isCurrentSession(session)) throw new Error(FULL_CANCELLED_ERROR);
       const channels = Array.from(
         { length: decoded.numberOfChannels },
         (_, channel) => decoded.getChannelData(channel),
       );
+      // 元数据可能缺失或过时；先核对实际 PCM 时长，再分配下采样副本。
+      if (channels.some(channel => channel.length * 1_000 / decoded.sampleRate > FULL_MAX_DURATION_MS)) throw new Error(FULL_TOO_LONG_ERROR);
       const audio = resampleToWhisperAudio(channels, decoded.sampleRate, VIDEO_AI_SAMPLE_RATE);
       if (audio.length === 0) return null;
       const decodedAudioDurationMs = audio.length * 1_000 / VIDEO_AI_SAMPLE_RATE;
@@ -645,21 +727,22 @@ export class VideoAiFullCaptureController {
       }
       return audio;
     } catch (error) {
-      if (error instanceof Error && error.message === FULL_CANCELLED_ERROR) throw error;
+      if (error instanceof Error && (error.message === FULL_CANCELLED_ERROR || error.message === FULL_TOO_LONG_ERROR)) throw error;
     } finally {
       abortFetch();
-      if (fetchTimeout !== undefined) window.clearTimeout(fetchTimeout);
+      window.clearTimeout(fetchTimeout);
       signal?.removeEventListener('abort', abortFetch);
       if (abortDecode) signal?.removeEventListener('abort', abortDecode);
       if (timeout !== undefined) window.clearTimeout(timeout);
       if (decodeContext && decodeContext.state !== 'closed') {
-        await decodeContext.close().catch(() => undefined);
+        // 关闭握手可能迟到，不能延长解码预算或阻塞成功结果与扫描回退。
+        void decodeContext.close().catch(() => undefined);
       }
     }
     return null;
   }
 
-  private async createScanVideo(sourceVideo: HTMLVideoElement, session: number, signal: AbortSignal): Promise<HTMLVideoElement> {
+  private async createScanVideo(sourceVideo: HTMLMediaElement, session: number, signal: AbortSignal): Promise<HTMLMediaElement> {
     if (signal.aborted) throw new Error(FULL_CANCELLED_ERROR);
     const scanVideo = document.createElement('video');
     try {
@@ -670,6 +753,7 @@ export class VideoAiFullCaptureController {
       scanVideo.muted = false;
       scanVideo.volume = 1;
       scanVideo.playbackRate = 1;
+      scanVideo.className = 'fluent-read-video-ui';
       scanVideo.setAttribute('aria-hidden', 'true');
       scanVideo.style.cssText = 'position:fixed;left:-10000px;top:-10000px;width:1px;height:1px;opacity:0;pointer-events:none;';
       if (sourceVideo.crossOrigin) scanVideo.crossOrigin = sourceVideo.crossOrigin;
@@ -677,7 +761,7 @@ export class VideoAiFullCaptureController {
         scanVideo.srcObject = sourceVideo.srcObject;
       } else {
         const source = sourceVideo.currentSrc || sourceVideo.src;
-        if (!source) throw new Error('当前 X 视频没有可复制的音频源');
+        if (!source) throw new Error('当前媒体没有可复制的音频源');
         scanVideo.src = source;
       }
       document.documentElement.appendChild(scanVideo);
@@ -691,7 +775,7 @@ export class VideoAiFullCaptureController {
             scanVideo.removeEventListener('canplay', onReady);
             scanVideo.removeEventListener('error', onError);
             signal.removeEventListener('abort', onAbort);
-            if (timeout !== undefined) window.clearTimeout(timeout);
+            window.clearTimeout(timeout);
           };
           const onReady = () => { cleanup(); resolve(); };
           const onError = () => { cleanup(); reject(new Error('扫描副本无法加载 X 视频音频')); };
@@ -718,6 +802,11 @@ export class VideoAiFullCaptureController {
       scanVideo.remove();
       throw error;
     }
+  }
+
+  finishPlaybackCapture(): boolean {
+    if (this.progress.captureMode !== 'playback' || this.phase !== 'capturing') return false;
+    void this.finishCapture(this.session); return true;
   }
 
   private async finishCapture(session: number): Promise<void> {
@@ -753,10 +842,9 @@ export class VideoAiFullCaptureController {
       if (!this.isCurrentSession(session)) throw new Error(FULL_CANCELLED_ERROR);
 
       const flushed = this.fullTranscriptionStabilizer.flush(0, true);
-      this.fullFallbackCues = this.absorbCues(flushed, this.fullCuesById, this.fullFallbackCues);
+      this.absorbCues(flushed);
       const cues = normalizeVideoAiSubtitleTimeline(consolidateVideoAiFullCues(mergeVideoAiSubtitleCues([
         ...this.fullCuesById.values(),
-        ...this.fullFallbackCues,
       ]).map((cue) => ({
         ...cue,
         // 完整采集已结束：流式短句标记不再代表未完成的识别会话。
@@ -798,16 +886,11 @@ export class VideoAiFullCaptureController {
     }
   }
 
-  private absorbCues(
-    incoming: VideoAiStabilizedCue[],
-    cuesById: Map<string, VideoAiStabilizedCue>,
-    fallbackCues: VideoAiStabilizedCue[],
-  ): VideoAiStabilizedCue[] {
+  private absorbCues(incoming: VideoAiStabilizedCue[]): void {
     for (const cue of incoming) {
       const normalized = { ...cue, availableAtMs: 0, translationAvailableAtMs: 0 } as VideoAiStabilizedCue;
-      cuesById.set(normalized.cueId!, normalized);
+      this.fullCuesById.set(normalized.cueId!, normalized);
     }
-    return fallbackCues;
   }
 
   private createFullAudioWindowFromBlocks(startMs: number, endMs: number): FullAudioWindow {
@@ -978,12 +1061,12 @@ export class VideoAiFullCaptureController {
   ): Promise<void> {
     try {
       if (window.overlapMs === 0) {
-        this.fullFallbackCues = this.absorbCues(this.fullTranscriptionStabilizer.flush(0, true), this.fullCuesById, this.fullFallbackCues);
+        this.absorbCues(this.fullTranscriptionStabilizer.flush(0, true));
         this.fullTranscriptionStabilizer.reset(true);
       }
       const chunk: VideoAiAudioChunk = {
         pcm: window.pcm,
-        startMs: window.startMs,
+        startMs: window.startMs + this.captureStartOffsetMs,
         durationMs: window.endMs - window.startMs,
         audioDurationMs: window.pcm.length * 1_000 / VIDEO_AI_SAMPLE_RATE,
         playbackRate: 1,
@@ -1004,18 +1087,17 @@ export class VideoAiFullCaptureController {
       this.fullAttributedSpeechEndMs = window.startMs
         + Math.max(0, ...segments.map(segment => segment.endMs!));
       const cues = this.fullTranscriptionStabilizer.ingest({
-        startMs: window.startMs,
+        startMs: window.startMs + this.captureStartOffsetMs,
         durationMs: chunk.durationMs,
         availableAtMs: 0,
         text: result.text,
         segments,
       });
-      this.fullFallbackCues = this.absorbCues(cues, this.fullCuesById, this.fullFallbackCues);
+      this.absorbCues(cues);
       if (this.options.onCuesProgress) {
         const stableCues = normalizeVideoAiSubtitleTimeline(consolidateVideoAiFullCues((mergeVideoAiSubtitleCues([
           ...this.fullCuesById.values(),
-          ...this.fullFallbackCues,
-        ]) as VideoAiStabilizedCue[]).filter(cue => !cue.partial).map(cue => ({...cue})))) as VideoAiStabilizedCue[];
+          ]) as VideoAiStabilizedCue[]).filter(cue => !cue.partial).map(cue => ({...cue})))) as VideoAiStabilizedCue[];
         if (stableCues.length > 0) this.options.onCuesProgress(stableCues, session);
         if (!this.isCurrentSession(session)) throw new Error(FULL_CANCELLED_ERROR);
       }
@@ -1041,7 +1123,6 @@ export class VideoAiFullCaptureController {
     this.fullTranscriptionChain = null;
     this.fullTranscriptionStabilizer.reset();
     this.fullCuesById.clear();
-    this.fullFallbackCues = [];
     this.fullTranscriptionError = null;
     this.fullCaptureFinished = false;
     this.fullNextWindowStartMs = 0;
@@ -1076,7 +1157,13 @@ export class VideoAiFullCaptureController {
     this.videoEndedCleanup = null;
     this.trackEndCleanups.forEach((cleanup) => cleanup());
     this.trackEndCleanups = [];
-    if (this.processorNode) this.processorNode.onaudioprocess = null;
+    if (this.processorNode) {
+      if ('port' in this.processorNode) {
+        this.processorNode.port.onmessage = null;
+        this.processorNode.port.close();
+        this.processorNode.onprocessorerror = null;
+      } else this.processorNode.onaudioprocess = null;
+    }
     try { this.sourceNode?.disconnect(); } catch { /* 浏览器可能已关闭节点。 */ }
     try { this.processorNode?.disconnect(); } catch { /* 浏览器可能已关闭节点。 */ }
     try { this.silentSinkNode?.disconnect(); } catch { /* 浏览器可能已关闭节点。 */ }

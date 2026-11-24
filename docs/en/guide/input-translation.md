@@ -1,58 +1,47 @@
 # Input translation
 
-Write in one language and translate inside the input field. Replace the original or keep both languages for a bilingual reply.
+Write your message in a chat, email or other webpage, then translate it into the language you need. Replace the original or keep both languages. FluentRead does not send the reply for you.
 
 <GuideVisual kind="input" en />
 
-## Try the display
-
-<TranslationDemo en variant="input" />
-
-This example uses fixed text. It does not read your input or call a provider.
-
 ## Set up the feature
 
-Open **Settings → Translation → Input translation**, enable it, and choose the target language, trigger, and output mode. Provider settings reuse your existing saved connections; the default follows page translation unless you choose a separate service.
+1. Open **Settings → Translation → Input translation** and enable it.
+2. Choose the target language, trigger and output mode. The provider follows page translation unless you choose a separate one.
+3. Write in the input field, then press your chosen **Space, equals or hyphen key three times**. Wait for the translation to appear. Existing **Ctrl+Enter** preferences also work.
 
-## Translate what you type
-
-Write in a regular input or a supported rich-text editor. Use your configured trigger: three consecutive spaces, equals signs, or hyphens. Existing **Ctrl+Enter** preferences remain supported.
-
-The time between consecutive presses defaults to 1,000 milliseconds and can be adjusted from 200 to 2,000 milliseconds under **Press speed**. Key repeats and input-method composition do not count as triple presses.
-
-<details class="guide-details">
-<summary>Keep both languages</summary>
+Settings save automatically. Changing a language or provider does not enable the feature. Password fields and code editors are excluded.
 
 ## Keep both languages
 
 | Output | Result |
 | --- | --- |
-| Replace original | The translation replaces the input |
+| Replace original (default) | Replace the input with the translation |
 | Original first | Keep the original and append the translation on a new line |
 | Translation first | Put the translation before the original |
 
-Bilingual output needs an input that supports multiple lines. In a single-line input, FluentRead preserves the original and explains the limitation. Existing formatting in supported rich-text editors is preserved through their input flow.
-
-</details>
+Bilingual output needs an input that supports multiple lines. A single-line input keeps the original and explains the limitation. Supported rich-text editors preserve formatting such as paragraphs, bold text and links where possible.
 
 ## Cancel or restore
 
-Press **Esc** or select **Cancel** in the status message to stop the request. Editing cancels it automatically. Leaving a rich-text editor also cancels translation so a late result cannot pull focus back. Translation in a regular input field preserves the focus and selection in other controls.
+Press **Esc** or select **Cancel** while translating. Editing also cancels the request. Leaving a rich-text editor prevents a late result from pulling focus back.
 
-Triggering translation again while the same content is still being translated keeps the current request. Triple-key triggers remove only the two characters inserted by that trigger, leaving the original text clean after a failure or cancellation. If a request stops responding, waiting ends automatically. Select **Retry** in the failure message to try again; an old retry cannot overwrite newly edited text.
+After translation, select **Restore original** before editing again. Rich-text restoration recovers the text; use the editor's Undo to recover formatting such as links and mentions. If automatic insertion fails, copy the translation from the status message and paste it yourself.
 
-After translation, use **Restore original** in the success message before making another edit. Rich-text restoration restores the text; use the editor's Undo to recover formatting such as links and mentions.
-
-If an editor rejects automatic insertion, the message keeps a selectable translation that you can copy and paste manually or dismiss.
-
-Password fields and code editors are excluded. Translation does not send your reply.
+Select **Retry** after a failure. Old results cannot overwrite later edits, and characters inserted by the trigger are removed from the original.
 
 <details class="guide-details">
-<summary>AI prompts</summary>
+<summary>Press speed and AI prompts</summary>
+
+## Translate what you type
+
+**Press speed** sets the longest gap between consecutive presses: 1,000 milliseconds by default, adjustable from 200 to 2,000. Shorten it if you trigger translation accidentally; lengthen it if triple presses are difficult. Holding a key and input-method composition do not count. Triggering the same content again while it is being translated keeps the current request.
 
 ## AI prompts
 
-Choose an AI service and model if you need a particular tone. The optional prompt uses <code v-pre>{{origin}}</code> for the original input and <code v-pre>{{to}}</code> for the target language. An empty prompt uses the built-in default. Changing settings does not automatically enable the feature.
+For a provider that supports prompts, set the tone or translation requirements. An empty model uses the provider's default. The prompt uses <code v-pre>{{origin}}</code> for the original text and <code v-pre>{{to}}</code> for the target language.
+
+An empty prompt uses the built-in default. Select **Start from the default prompt** to edit it; restoring the default affects only this prompt.
 
 </details>
 

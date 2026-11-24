@@ -1,8 +1,9 @@
 <!--
  * @file src/features/reading-assistant/ui/ReadingPanel.vue
  * 文件职责：在划词卡内以内容为主呈现学习回答，复用父卡片导航、把次级操作送入顶栏固定槽、按需展开的原文译文对照与连续追问，并把「评论」动作透传给划词卡切换页签。
- * 主要内容：相同译文保留原文且不重复展示；按原文与配置复用各学习动作的已完成回答，显式重新生成；独立面板动作行在学习方式后按需显示「评论」入口；历史问答按轮次与问题摘要逐条展开，区分当前问答与旧回答，切换回答时收起历史；统一导航的学习卡默认收起原文与匹配译文，查看原文后可返回当前阅读，短回答不再保留一屏空白；独立面板仍在滚动区顶部展示对照内容，进入回答时滚过原文，译文晚到时保持回答位置，关闭局部浏览器滚动锚定以避免流式格式变化移动阅读位置；流式正文只更新内部滚动内容，回答出现或消失及状态变化才通知父卡片检查布局；重复点击当前动作保留位置和待发送追问；把原文朗读和 30 天问答记录收进次级操作，在回答下方区分原文收藏与学习笔记；原文收藏仅保存对应译文，笔记保存不依赖 AI 参考开关，让多语言动作标签按空间换行，统一呈现 Markdown，以局部主题变量保持正文、状态和操作文字的对比度，并以代次隔离过期请求；冻结每轮许可原文身份，显示就近引用和来源状态，历史恢复保留引文而不授予当前网页定位权限，回写前核查页面归属。
- * 模块边界：不持有模型密钥、不扫描页面、不直接请求供应商；双布局复用追问节点而不加容器，保留父 scoped 样式、Vue 输入法指令及键盘边界；按有效服务限制B站为基础读懂/用法，隐藏且拒绝未验证的追问，临时默认动作不改保存偏好；历史回答保留原动作与追问，按当前服务限制重试/再生成，父导航回写不重新请求；记录由后台会话仓库保存，日期格式器只在本组件同步模板每轮渲染内复用并在下轮重解系统默认值，父划词组件负责选区、位置和 Shadow UI 生命周期。
+ * 主要内容：相同译文保留原文且不重复展示；按原文与配置复用各学习动作的已完成回答，显式重新生成；独立面板动作行在学习方式后按需显示「评论」入口；历史问答按轮次与问题摘要逐条展开，区分当前问答与旧回答，切换回答时收起历史；统一导航的学习卡默认收起原文与匹配译文，查看原文后可返回当前阅读，短回答不再保留一屏空白；独立面板仍在滚动区顶部展示对照内容，进入回答时滚过原文，译文晚到时保持回答位置，关闭局部浏览器滚动锚定以避免流式格式变化移动阅读位置；流式正文只更新内部滚动内容，回答出现或消失及状态变化才通知父卡片检查布局；重复点击当前动作保留位置和待发送追问；把原文朗读和 30 天问答记录收进次级操作，在回答下方区分原文收藏与学习笔记；原文收藏仅保存对应译文，笔记保存不依赖 AI 参考开关，让多语言动作标签按空间换行，统一呈现 Markdown，以局部主题变量保持正文、状态和操作文字的对比度，并以代次隔离过期请求，取消消息统一交给流客户端释放；冻结每轮许可原文身份，显示就近引用和来源状态，历史恢复保留引文而不授予当前网页定位权限，回写前核查页面归属。
+ * 材料关联：只将会话或笔记标识与选中原句关联到本机材料，不复制回答正文；源快照不会发送给模型，取消与清空代次淘汰迟到写入。
+ * 模块边界：不持有模型密钥、不扫描页面、不直接请求供应商；双布局在正文滚动区外复用同一追问节点，保留父 scoped 样式、Vue 输入法指令及键盘边界；按有效服务限制B站为基础读懂/用法，隐藏且拒绝未验证的追问，临时默认动作不改保存偏好；历史回答保留原动作与追问，按当前服务限制重试/再生成，父导航回写不重新请求；记录由后台会话仓库保存，日期格式器只在本组件同步模板每轮渲染内复用并在下轮重解系统默认值，父划词组件负责选区、位置和 Shadow UI 生命周期。
  -->
 <template>
   <Teleport v-if="externalNavigation && toolsTarget && active && !showRecords" :to="toolsTarget">
@@ -94,10 +95,9 @@
       <button v-if="!privateContext && !stopped && !error" type="button" data-i18n-ignore :disabled="remembering || remembered" :title="t('reading.saveNoteTitle')" @click="rememberLearning">{{ t(remembered ? 'reading.noteSavedButton' : 'reading.saveNote') }}</button>
       <button v-if="remembered" type="button" data-i18n-ignore @click="openLearningMemory">{{ t('reading.viewNotes') }}</button>
     </footer>
-      <ReadingFollowUp v-if="externalNavigation" />
       </div>
     </div>
-    <ReadingFollowUp v-if="!externalNavigation" />
+    <ReadingFollowUp />
     <p v-if="!followUpSupported || !actionSupported" class="fr-reading-feedback">{{ generationHint }}<button type="button" @click="openSettings()">{{ followUpSupported ? '设置' : '切换服务' }}</button></p>
     </template>
   </div>
@@ -107,6 +107,7 @@
 import {hasDistinctTranslation} from '@/src/core/translation/result';
 import {useUiI18n} from "@/src/ui/i18n";
 import {useRenderDateFormatter} from '@/src/ui/dateFormat';
+import {getSafeVisualViewportRect} from '@/src/platform/dom/visualViewport';
 const {t, translateLegacy} = useUiI18n();
 import {computed, getCurrentInstance, h, nextTick, onBeforeUnmount, onMounted, ref, vModelText, watch, withCtx, withDirectives, withKeys, withModifiers, type VNodeChild} from 'vue';
 import browser from 'webextension-polyfill';
@@ -120,6 +121,7 @@ import type {HarnessSession, HarnessSessionSummary, HarnessStoredTurnStatus} fro
 import {normalizeLearningSourceText} from '@/src/features/vocabulary/public';
 import {VOCABULARY_BOOK_MESSAGE, type VocabularyBookResponse} from '@/src/features/vocabulary/protocol';
 import {detectlang} from '@/src/core/language/detect';
+import {beginMaterialCapture, completeMaterialCapture} from '@/src/features/vocabulary/material/public';
 
 const props = defineProps<{
   selection: ReadingSelection;
@@ -285,10 +287,17 @@ function fitToolsMenu(): void {
   if (!summary || !menu || !view) return;
   const rect = summary.getBoundingClientRect();
   const scale = rect.height > 0 ? rect.height / (summary.offsetHeight || rect.height) : 1;
-  const below = Math.max(0, view.innerHeight - rect.bottom - 8);
-  const above = Math.max(0, rect.top - 8);
+  const viewport = getSafeVisualViewportRect(view);
+  const below = Math.max(0, viewport.bottom - rect.bottom - 8);
+  const above = Math.max(0, rect.top - viewport.top - 8);
   const upward = below < Math.min(310, menu.scrollHeight) * scale && above > below;
-  menu.style.width = `${Math.min(204, Math.max(0, (view.innerWidth - 24) / scale))}px`;
+  const width = Math.min(204, Math.max(0, (viewport.width - 24) / scale));
+  const origin = details.getBoundingClientRect();
+  const naturalLeft = view.getComputedStyle(details).direction === 'rtl' ? rect.left : rect.right - width * scale;
+  const left = Math.max(viewport.left + 12, Math.min(naturalLeft, viewport.right - 12 - width * scale));
+  menu.style.width = `${width}px`;
+  menu.style.insetInlineEnd = 'auto';
+  menu.style.left = `${(left - origin.left) / scale}px`;
   menu.style.top = upward ? 'auto' : `${summary.offsetHeight + 4}px`;
   menu.style.bottom = upward ? `${summary.offsetHeight + 4}px` : 'auto';
   menu.style.maxHeight = `${Math.min(310, Math.max(0, (upward ? above : below) / scale - 4))}px`;
@@ -315,7 +324,8 @@ function dismissTools(): boolean {
   closeTools(true);
   return true;
 }
-defineExpose({dismissTools, dismissToolsOutside, closeTools, stop});
+defineExpose({dismissTools, dismissToolsOutside, closeTools, stop,
+  getCompletedAnswer: () => busy.value || stopped.value || error.value ? '' : answer.value});
 function dismissToolsOutside(event: Event): void {
   if (toolsMenu.value?.open && !toolsMenu.value.contains(event.target as Node)) closeTools();
 }
@@ -343,7 +353,7 @@ const ReadingTools = () => {
     ]),
   ]);
 };
-// 两种布局只挂载一组追问节点；沿用父渲染上下文，保留 Fragment 子节点的 scoped 样式与 v-model 输入法行为。
+// 两种布局始终在正文滚动区外挂载同一组追问节点；缩小视口或切换导航不替换输入及其输入法状态。
 const ReadingFollowUp = withCtx(() => {
   const stopKey = (event: Event) => event.stopPropagation();
   const feedbackLine = (text: string) => text ? h('p', {class: 'fr-reading-feedback', role: 'status'}, text) : null;
@@ -392,7 +402,6 @@ interface CachedAnswer {
 // 只在当前卡片内保留四个动作的成功结果；持久历史仍由后台的 30 天会话仓库负责。
 const actionCache = new Map<HarnessActionId, CachedAnswer>();
 const copyTurns = (turns: ReadingTurn[]) => turns.map(turn => ({...turn}));
-let pendingId = '';
 let generation = 0;
 let lastQuestion = '';
 let lastHistory: ReadingTurn[] = [];
@@ -410,8 +419,6 @@ function cancelRequest(): void {
   generation += 1;
   streamHandle?.cancel();
   streamHandle = undefined;
-  if (pendingId) void browser.runtime.sendMessage({type: 'fluentReadHarness', action: 'cancel', requestId: pendingId}).catch(() => undefined);
-  pendingId = '';
   busy.value = false;
 }
 function stop(): void { cancelRequest(); stopped.value = true; }
@@ -458,7 +465,6 @@ async function run(prompt: string, turns: ReadingTurn[], retrying = false): Prom
   evidenceSources.value = requestEvidenceSources.value;
   const requestId = `reading-${crypto.randomUUID()}`;
   currentTurnKey.value = requestId;
-  pendingId = requestId;
   lastQuestion = prompt;
   lastHistory = turns.map(turn => ({...turn}));
   lastAnchorTurnId = requestAnchor;
@@ -475,6 +481,7 @@ async function run(prompt: string, turns: ReadingTurn[], retrying = false): Prom
   copied.value = false;
   feedback.value = '';
   try {
+    const materialOperation = beginMaterialCapture(historicalText.value ? undefined : props.selection.material, props.privateContext);
     streamHandle = streamReading({
       type: 'fluentReadHarness', action: 'run', requestId,
       selection: {text: activeText.value, context: props.preferences.contextMode === 'paragraph' ? historicalContext.value || props.selection.context : '', sentence: ''},
@@ -491,13 +498,13 @@ async function run(prompt: string, turns: ReadingTurn[], retrying = false): Prom
       result: response => {
         if (token !== generation || !sourceStillCurrent()) return;
         busy.value = false;
-        pendingId = '';
         streamHandle = undefined;
         if (!response.success) { if (response.cancelled) stopped.value = true; else error.value = response.error; return; }
         currentQuestion.value = prompt;
         answer.value = response.text;
         model.value = response.model;
         if (response.sessionId) sessionId = response.sessionId;
+        if (response.sessionId) {const excerpt = activeText.value; void materialOperation.then(operation => completeMaterialCapture(operation, {kind: 'session', id: response.sessionId!, excerpt}, () => token === generation && sourceStillCurrent()));}
         if (response.turnId) anchorTurnId = response.turnId;
         if (response.persistenceWarning) sessionWarning.value = response.persistenceWarning;
         memoryCount.value = response.memoryCount || 0;
@@ -508,13 +515,12 @@ async function run(prompt: string, turns: ReadingTurn[], retrying = false): Prom
       error: failure => {
         if (token !== generation || !sourceStillCurrent()) return;
         busy.value = false;
-        pendingId = '';
         streamHandle = undefined;
         if (!stopped.value) error.value = failure.message;
       },
     });
   } catch (failure) {
-    if (token === generation) { busy.value = false; pendingId = ''; error.value = failure instanceof Error ? failure.message : '请求失败，请重试。'; }
+    if (token === generation) { busy.value = false; error.value = failure instanceof Error ? failure.message : '请求失败，请重试。'; }
   }
 }
 function chooseAction(action: HarnessActionId): void {
@@ -624,25 +630,36 @@ async function openLearningCollection(): Promise<void> {
 async function rememberLearning(): Promise<void> {
   if (props.privateContext || busy.value || stopped.value || error.value || !answer.value || remembering.value || remembered.value) return;
   const owner = currentTurnKey.value;
+  const epoch = generation;
+  const isCurrent = () => epoch === generation && currentTurnKey.value === owner && props.active && !props.privateContext;
   remembering.value = true;
   try {
-    await saveLearningMemory({kind: 'lesson', content: `原文：${activeText.value.slice(0, 350)}\n${currentQuestion.value ? `问题：${currentQuestion.value.slice(0, 200)}\n` : ''}学习要点：${readableAnswer().slice(0, 1400)}`});
-    if (currentTurnKey.value === owner) { remembered.value = true; feedback.value = t('reading.noteSaved'); }
-  } catch (failure) { if (currentTurnKey.value === owner) feedback.value = failure instanceof Error ? failure.message : t('reading.noteSaveFailed'); }
+    const operation = await beginMaterialCapture(historicalText.value ? undefined : props.selection.material, props.privateContext);
+    if (!isCurrent()) return;
+    const memory = await saveLearningMemory({kind: 'lesson', content: `原文：${activeText.value.slice(0, 350)}\n${currentQuestion.value ? `问题：${currentQuestion.value.slice(0, 200)}\n` : ''}学习要点：${readableAnswer().slice(0, 1400)}`});
+    await completeMaterialCapture(operation, {kind: 'memory', id: memory.id, excerpt: activeText.value}, isCurrent);
+    if (isCurrent()) { remembered.value = true; feedback.value = t('reading.noteSaved'); }
+  } catch (failure) { if (isCurrent()) feedback.value = failure instanceof Error ? failure.message : t('reading.noteSaveFailed'); }
   finally { remembering.value = false; }
 }
 async function saveWord(): Promise<void> {
   if (!canSaveWord.value || saving.value) return;
   saving.value = true;
   const savingText = activeText.value;
+  const epoch = generation;
+  const isCurrent = () => epoch === generation && activeText.value === savingText && props.active && canSaveWord.value;
   try {
+    const operation = await beginMaterialCapture(historicalText.value ? undefined : props.selection.material, props.privateContext);
+    if (!isCurrent()) return;
     const response = await browser.runtime.sendMessage({type: VOCABULARY_BOOK_MESSAGE, action: 'upsert', input: {
       sourceLanguage: props.sourceLanguage && props.sourceLanguage !== 'auto' ? props.sourceLanguage : detectlang(savingText), targetLanguage: props.targetLanguage, term: normalizeLearningSourceText(savingText),
       translation: activeTranslation.value?.text || '', context: {text: historicalContext.value || props.selection.context || activeText.value},
     }}) as VocabularyBookResponse;
     if (!response.success) throw new Error(response.error.message);
-    if (activeText.value === savingText) { saved.value = true; feedback.value = t('reading.sourceSaved'); }
-  } catch (failure) { if (activeText.value === savingText) feedback.value = failure instanceof Error ? failure.message : '收藏失败，请重试。'; }
+    const id = (response.data as {id?: unknown})?.id;
+    if (typeof id === 'string') await completeMaterialCapture(operation, {kind: 'vocabulary', id, excerpt: savingText}, isCurrent);
+    if (isCurrent()) { saved.value = true; feedback.value = t('reading.sourceSaved'); }
+  } catch (failure) { if (isCurrent()) feedback.value = failure instanceof Error ? failure.message : '收藏失败，请重试。'; }
   finally { saving.value = false; }
 }
 watch(() => JSON.stringify([props.preferences, effectiveService.value, props.targetLanguage, props.sourceLanguage, props.modelRevision]), () => { actionCache.clear(); cancelRequest(); stopped.value = true; feedback.value = '设置已更新，重新生成可使用新的设置。'; });
@@ -776,7 +793,6 @@ onBeforeUnmount(() => { closeTools(); recordsGeneration += 1; restoreEpoch += 1;
 .fr-reading-answer { user-select: text; overflow-wrap: anywhere; }
 .fr-reading-footer { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 8px 0 0; font-size: 11px; }
 .fr-reading-followup { flex-shrink: 0; display: flex; gap: 6px; margin-top: 6px; padding: 3px 3px 3px 10px; border: 1px solid #eae2e7; border-radius: 11px; }
-.fr-reading-body > .fr-reading-followup { clear: both; }
 .fr-reading-followup input { min-width: 0; flex: 1; width: 100%; border: 0; outline: none; color: inherit; background: transparent; font-size: 12px; user-select: text; }
 .fr-reading-followup input::placeholder { color: var(--fr-reading-muted); font-size: 11px; }
 .fr-reading-followup button { background: #b85579; color: white; width: 28px; height: 28px; line-height: 20px; }
@@ -787,6 +803,16 @@ onBeforeUnmount(() => { closeTools(); recordsGeneration += 1; restoreEpoch += 1;
 .fr-dark-theme .fr-reading-error { background: #482e35; color: #f5acb6; }
 .fr-dark-theme .fr-reading-navigation button, .fr-dark-theme .fr-reading-session small span, .fr-dark-theme .fr-reading-question { color: #e4a0bc; }
 @media (max-height: 420px) { .fr-reading-toolbar { padding-bottom: 4px; } .fr-reading-followup { margin-top: 4px; } }
+/* 避免 Safari 聚焦小字号追问框时自动放大、滚动宿主页并收起卡片。 */
+@media (any-pointer: coarse) {
+  .fr-reading-followup input, .fr-reading-followup input::placeholder { font-size: 16px; }
+  .fr-reading button, .fr-reading .fr-reading-session, .fr-reading summary,
+  .fr-reading-controls > button, .fr-reading-controls > .fr-reading-inline-stop,
+  .fr-reading-tools :deep(button), .fr-reading-tools :deep(.fr-reading-tool-list button),
+  .fr-reading-tools :deep(summary) { min-width: 44px; min-height: 44px; font-size: 14px; }
+  .fr-reading-controls > .fr-reading-inline-stop { flex-basis: 44px; width: 44px; height: 44px; }
+  .fr-reading-tools :deep(.fr-reading-tool-list) { top: 48px; }
+}
 @keyframes fr-reading-breathe { 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { .fr-reading-pulse { animation: none; } }
 </style>

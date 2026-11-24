@@ -9,9 +9,15 @@ const PROVIDER_ROOT = resolve(PROJECT_ROOT, 'src/providers/translation');
 const EXPECTED_PROVIDER_FILES = [
     'registry.ts',
     'chatgpt-plan.ts',
+    'ai-sdk/boundedErrorResponse.ts',
+    'ai-sdk/chatCompletionRequest.ts',
     'ai-sdk/endpoints.ts',
     'ai-sdk/errors.ts',
     'ai-sdk/openai-compatible.ts',
+    'ai-sdk/openai-http.ts',
+    'ai-sdk/openai-response-text.ts',
+    'ai-sdk/openai-transport.ts',
+    'ai-sdk/transport-errors.ts',
     'aliyun-translation.ts',
     'auth.ts',
     'azure-openai.ts',
@@ -42,6 +48,8 @@ const EXPECTED_PROVIDER_FILES = [
     'bilibili-free.ts',
     'gemini.ts',
     'google.ts',
+    'googleErrorBody.ts',
+    'googleImageContext.ts',
     'googleRequestGate.ts',
     'hunyuan-translation.ts',
     'local-translation.ts',
@@ -221,15 +229,28 @@ describe('translation provider architecture', () => {
 
         expect(violations).toEqual([]);
         const microsoftAdapter = readProjectFile('src/providers/translation/microsoft.ts');
-        expect(microsoftAdapter).toContain('translateMicrosoftTextsWithTransport(runtimeFetch, texts, fromLang, toLang, abortSignal, enableNativeBatch)');
+        expect(microsoftAdapter).toContain('translateMicrosoftTextsWithTransport(runtimeFetch, texts, fromLang, toLang, abortSignal, enableNativeBatch, lease)');
         const microsoftTransportCalls = runtimeFetchCalls('microsoftTransport.ts', 'transport');
         expect(microsoftTransportCalls).toHaveLength(1);
         expect(microsoftTransportCalls.every((call) => objectLiteralHasSignal(call.arguments[1]))).toBe(true);
     });
 
-    it('AI SDK compatibility transport 通过 runtimeFetch，不绕过 userscript 网络端口', () => {
-        const source = readProjectFile('src/providers/translation/ai-sdk/openai-compatible.ts');
-        expect(source).toContain('runtimeFetch(endpoint.exactEndpoint || input, init)');
+    it('共享 OpenAI transport 通过 runtimeFetch，两个执行器都不绕过其网络端口', () => {
+        const source = readProjectFile('src/providers/translation/ai-sdk/openai-transport.ts');
+        const calls = runtimeFetchCalls('ai-sdk/openai-transport.ts');
+        expect(calls).toHaveLength(1);
+        expect(calls[0].arguments).toHaveLength(3);
+        const [target, init, policy] = calls[0].arguments;
+        expect(target.getText()).toBe('endpoint.exactEndpoint || input');
+        expect(init.getText()).toMatch(/^\{\s*\.\.\.init,\s*signal:\s*transport\.signal\s*\}$/u);
+        // The limit is a separate local transport argument, not an HTTP header.
+        // The GM boundary test additionally checks the actual transmitted headers.
+        expect(policy.getText()).toMatch(/^\{\s*errorBodyLimit:\s*OPENAI_ERROR_BODY_LIMIT\s*,?\s*\}$/u);
         expect(source).not.toMatch(/\bawait\s+fetch\(/u);
+        const sdk = readProjectFile('src/providers/translation/ai-sdk/openai-compatible.ts');
+        const http = readProjectFile('src/providers/translation/ai-sdk/openai-http.ts');
+        expect(sdk).toContain('fetch: call.fetch');
+        expect(http).toContain('await call.fetch(');
+        expect(sdk + http).not.toMatch(/\b(?:await\s+fetch|globalThis\.fetch)\(/u);
     });
 });

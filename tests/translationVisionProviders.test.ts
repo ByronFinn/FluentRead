@@ -16,6 +16,8 @@ import claude from '@/src/providers/translation/claude';
 import tongyi from '@/src/providers/translation/tongyi';
 import zhipu from '@/src/providers/translation/zhipu';
 import deepseek from '@/src/providers/translation/deepseek';
+import doubaoSeedTranslation from '@/src/providers/translation/doubao-seed-translation';
+import {withProviderSnapshot} from './helpers/providerSnapshot';
 
 const image = 'data:image/jpeg;base64,/9j/4AAQSkZJRg==';
 const response = (body: unknown) => new Response(JSON.stringify(body), {status: 200, headers: {'content-type': 'application/json'}});
@@ -30,6 +32,44 @@ function request(config: Config, service: string, model: string) {
 describe('translation vision provider payloads', () => {
     afterEach(() => setRuntimeFetch());
 
+    it.each([
+        ['deepseek-chat', deepseek], ['deepseek-responses', deepseek], ['tongyi', tongyi],
+        ['zhipu', zhipu], ['doubao', doubaoSeedTranslation],
+    ] as const)('%s propagates abort during successful response JSON reading', async (name, adapter) => {
+        const service = name.startsWith('deepseek') ? 'deepseek' : name;
+        const config = new Config();
+        config.service = service;
+        config.model.doubao = 'doubao-seed-translation';
+        config.token[service] = service === 'zhipu' ? 'id.secret' : 'synthetic-key';
+        config.deepseekApiType = name === 'deepseek-responses' ? 'responses' : 'chat';
+        const owner = new AbortController();
+        let notifyRead!: () => void;
+        const readStarted = new Promise<void>(resolve => {notifyRead = resolve;});
+        setRuntimeFetch(async (_input, init) => new Response(new ReadableStream<Uint8Array>({
+            start(output) {init!.signal!.addEventListener('abort', () => output.error(new DOMException('aborted', 'AbortError')), {once: true});},
+            pull() {notifyRead();},
+        }, {highWaterMark: 0})));
+        const pending = adapter(withProviderSnapshot({origin: 'hello', serviceOverride: service, abortSignal: owner.signal}, config)).catch(error => error);
+        await readStarted;
+        owner.abort();
+        await expect(pending).resolves.toMatchObject({name: 'AbortError'});
+    });
+
+    it.each([
+        ['deepseek-chat', deepseek], ['deepseek-responses', deepseek], ['tongyi', tongyi],
+        ['zhipu', zhipu], ['doubao', doubaoSeedTranslation], ['gemini', gemini], ['claude', claude],
+    ] as const)('%s keeps malformed JSON and credentials out of error text without cancellation', async (name, adapter) => {
+        const service = name.startsWith('deepseek') ? 'deepseek' : name;
+        const config = new Config(); config.service = service;
+        config.model.doubao = 'doubao-seed-translation';
+        config.token[service] = service === 'zhipu' ? 'private-id.private-secret' : 'private-secret';
+        config.deepseekApiType = name === 'deepseek-responses' ? 'responses' : 'chat';
+        setRuntimeFetch(async () => new Response('{private-secret'));
+        const error = await adapter(withProviderSnapshot({origin: 'private-original', serviceOverride: service}, config)).catch(cause => cause);
+        expect(error.message).toContain('不是有效 JSON');
+        expect(error.message).not.toMatch(/private-secret|private-original/u);
+    });
+
     it.each(['deepseek-chat', 'deepseek-responses', 'sdk', 'gemini', 'claude', 'tongyi', 'zhipu'])('preserves explicit image rejection through %s transport', async kind => {
         const config = new Config();
         const service = kind === 'sdk' ? 'openai' : kind.startsWith('deepseek') ? 'deepseek' : kind;
@@ -37,11 +77,37 @@ describe('translation vision provider payloads', () => {
         config.deepseekApiType = kind === 'deepseek-responses' ? 'responses' : 'chat';
         const adapter = kind === 'sdk' ? translateWithOpenAICompatibleAiSdk
             : service === 'deepseek' ? deepseek : service === 'gemini' ? gemini : service === 'claude' ? claude : service === 'tongyi' ? tongyi : zhipu;
-        setRuntimeFetch(async () => new Response(JSON.stringify({error:{message:'This model does not support image input'}}), {status:400}));
+        const rejectedResponse = new Response(JSON.stringify({error:{message:'This model does not support image input'}}), {status:400});
+        setRuntimeFetch(async () => rejectedResponse);
         await expect(adapter(request(config, service, 'test-vision-model').message)).rejects.toMatchObject({statusCode:400,imageInputUnsupported:true});
+        expect(rejectedResponse.bodyUsed).toBe(true);
         setRuntimeFetch(async () => new Response(JSON.stringify({error:{message:'unsupported image format'}}), {status:400}));
         try { await adapter(request(config, service, 'test-vision-model').message); throw new Error('expected failure'); }
         catch(error) { expect((error as {imageInputUnsupported?: boolean}).imageInputUnsupported).toBeUndefined(); }
+    });
+
+    it.each([
+        ['gemini', gemini], ['claude', claude], ['tongyi', tongyi], ['zhipu', zhipu], ['deepseek', deepseek],
+    ] as const)('%s cancels an unread rate-limit response without waiting for cancellation', async (service, adapter) => {
+        const config = new Config();
+        config.token[service] = service === 'zhipu' ? 'id.secret' : 'synthetic-key';
+        const cancel = vi.fn(() => new Promise<void>(() => {}));
+        const failedResponse = new Response(new ReadableStream({cancel}), {status: 429, headers: {'Retry-After': '2'}});
+        setRuntimeFetch(async () => failedResponse);
+        const message = withProviderSnapshot({origin: 'Translate a paragraph', serviceOverride: service}, config);
+        await expect(adapter(message)).rejects.toMatchObject({statusCode: 429, retryAfterMs: 2000});
+        expect(cancel).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+        ['gemini', gemini, {}], ['claude', claude, {}],
+        ['deepseek-chat', deepseek, {choices: [{message: {content: '   '}}]}],
+        ['deepseek-responses', deepseek, {output: [{type: 'reasoning', summary: []}]}],
+    ] as const)('%s rejects missing final text instead of rendering an empty or reasoning-only success', async (name, adapter, payload) => {
+        const config = new Config();config.service = name.startsWith('deepseek') ? 'deepseek' : name;
+        config.token[config.service] = 'synthetic-key';config.deepseekApiType = name === 'deepseek-responses' ? 'responses' : 'chat';
+        setRuntimeFetch(async () => response(payload));
+        await expect(adapter(withProviderSnapshot({origin: 'Read this paragraph'}, config))).rejects.toThrow(/缺少/u);
     });
 
     it.each(['chat', 'responses'] as const)('sends DeepSeek %s images with frozen prompts, model and thinking', async apiType => {

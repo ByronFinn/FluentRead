@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {parseHTML} from "linkedom";
-import {collectLiveTranslationTextSlots, getCurrentTranslationCore} from '@/src/core/translation/public';
+import {collectLiveTranslationTextSlots, getCurrentTranslationCore, setCurrentTranslationAdapters} from '@/src/core/translation/public';
+import {getCurrentTranslationStateTextNodes} from '@/src/features/full-page-translation/content/translationStability';
+import {defaultTranslationAdapters} from '@/src/core/translation/registry';
+import {builtinSiteRulePack} from '@/src/core/site-adaptation/catalog';
+import {composeSiteAdapters} from '@/src/core/site-adaptation/compiler';
+import {normalizeSiteAdaptationSettings} from '@/src/core/site-adaptation/schema';
 import {
     acquireTranslationLayoutOverride,
     beginTranslation,
@@ -101,6 +106,31 @@ describe('普通 owner 的结构签名与真实 Text 槽一致', () => {
             else Reflect.deleteProperty(view, 'getComputedStyle');
         }
     });
+});
+
+it('preserves a reconnected shared-layout owner during synchronous abort of another detached owner', () => {
+    const {document} = parseHTML('<html><body><article style="height: 20px"><p>first</p><p>second</p><p>new</p></article></body></html>');
+    const article = document.querySelector<HTMLElement>('article')!;
+    const [first, second, newest] = Array.from(article.querySelectorAll<HTMLElement>('p'));
+    const attempts = [first, second, newest].map(owner => beginTranslation(owner, 'bilingual')!);
+    expect(markTranslationComplete(second, attempts[1].state, attempts[1].generation)).toBe(true);
+    const wrapper = document.createElement('span');
+    wrapper.className = 'fluent-read-bilingual-content'; wrapper.setAttribute('data-fr-translation-owned', 'true');
+    wrapper.textContent = '已翻译'; second.appendChild(wrapper); setBilingualContent(second, wrapper);
+    try {
+        expect(acquireTranslationLayoutOverride(first, article, [{property: 'height', value: 'auto', priority: 'important'}])).toBe(true);
+        expect(acquireTranslationLayoutOverride(second, article, [])).toBe(true);
+        attempts[0].state.controller.signal.addEventListener('abort', () => article.appendChild(second), {once: true});
+        first.remove(); second.remove();
+        expect(acquireTranslationLayoutOverride(newest, article, [])).toBe(true);
+        expect(second.isConnected).toBe(true);
+        expect(getTranslationState(second)).toBe(attempts[1].state);
+        expect(wrapper.parentNode).toBe(second);
+        expect(restoreTranslation(newest)).toBe(true);
+        expect(article.style.getPropertyValue('height')).toBe('auto');
+        expect(restoreTranslation(second)).toBe(true);
+        expect(article.style.getPropertyValue('height')).toBe('20px');
+    } finally { [first, second, newest].forEach(owner => restoreTranslation(owner)); }
 });
 
 /**
@@ -654,6 +684,31 @@ describe("指定节点翻译状态机", () => {
         expect(getTranslationOwnersForRemovedNode(wrapper)).toEqual([]);
     });
 
+    it.each([false, true])('宿主移除或篡改译文后重挂保留本代前置顺序（clone=%s）', clone => {
+        const {document} = parseHTML('<html><body><p>Readable paragraph.</p></body></html>');
+        const owner = document.querySelector('p')!;
+        const source = owner.firstChild;
+        const attempt = beginTranslation(owner, 'bilingual')!;
+        expect(markTranslationComplete(owner, attempt.state, attempt.generation)).toBe(true);
+        const wrapper = document.createElement('span');
+        wrapper.className = 'fluent-read-bilingual-content';
+        wrapper.setAttribute('data-fr-translation-owned', 'true');
+        wrapper.textContent = '可读段落。';
+        owner.prepend(wrapper);
+        setBilingualContent(owner, wrapper);
+        try {
+            wrapper.remove();
+            if (clone) wrapper.textContent = 'Host replaced the removed artifact.';
+            expect(tryRepairBilingualTranslationArtifact(owner, attempt.state)).toBe('repaired');
+            expect(owner.firstChild).toBe(attempt.state.bilingualContent);
+            expect(owner.lastChild).toBe(source);
+            expect(owner.firstChild?.textContent).toBe('可读段落。');
+            expect(attempt.state.bilingualBeforeSource).toBe(true);
+        } finally {restoreTranslation(owner);}
+        expect(owner.textContent).toBe('Readable paragraph.');
+        expect(owner.firstChild).toBe(source);
+    });
+
     it("短时窗口内宿主持续删除双语 wrapper 时最多重挂三次，耗尽后本代持续熔断", async () => {
         vi.useFakeTimers();
         const {document} = parseHTML('<html><body><p id="target">Readable paragraph.</p></body></html>');
@@ -842,14 +897,19 @@ describe("指定节点翻译状态机", () => {
         const owner = document.querySelector<HTMLElement>('p')!;
         const source = owner.firstChild;
         // 观察实际反向索引桶的创建，避免用受 JIT/机器影响的耗时阈值。
-        const writes = vi.spyOn(WeakMap.prototype, 'set');
-        const ownerBucketWrites = () => writes.mock.calls.filter(([key, value]) =>
-            key === owner && value instanceof Set &&
-            [...value].some(member => member instanceof WeakRef));
+        // Vitest 自身使用 WeakMap，直接记录目标 owner 的写入，避免 spy 重入。
+        const nativeSet = WeakMap.prototype.set;
+        const writes: unknown[] = [];
+        WeakMap.prototype.set = function (key, value) {
+            if (key === owner) writes.push(value);
+            return nativeSet.call(this, key, value);
+        };
+        const ownerBucketWrites = () => writes.filter(value =>
+            value instanceof Set && [...value].some(member => member instanceof WeakRef));
         try {
             const attempt = beginTranslation(owner, 'bilingual')!;
             expect(ownerBucketWrites()).toHaveLength(1);
-            writes.mockClear();
+            writes.length = 0;
             expect(markTranslationComplete(owner, attempt.state, attempt.generation)).toBe(true);
             const first = document.createElement('span');
             const second = document.createElement('span');
@@ -866,7 +926,7 @@ describe("指定节点翻译状态机", () => {
             expect(owner.firstChild).toBe(source);
             expect(source?.textContent).toBe('Readable source.');
         } finally {
-            writes.mockRestore();
+            WeakMap.prototype.set = nativeSet;
             restoreTranslation(owner);
         }
         expect(getTranslationOwnersForIndexedNode(owner)).toEqual([]);
@@ -1153,6 +1213,102 @@ describe("指定节点翻译状态机", () => {
 
         expect(restoreTranslation(target as unknown as HTMLElement)).toBe(true);
         expect(target.getAttribute("class")).toBeNull();
+    });
+});
+
+describe('Mastodon 独立 owner observer 的策略撤销', () => {
+    async function flushObservers() {
+        await Promise.resolve(); await Promise.resolve();
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        await Promise.resolve();
+    }
+
+    async function withCommittedOwner(check: (fixture: {
+        document: Document; owner: HTMLElement; shell: HTMLElement; wrapper: HTMLElement;
+        state: TranslationState; source: Text;
+    }) => Promise<void>) {
+        const {document, window} = parseHTML('<html><body><div id="mastodon" class="app-holder notranslate"><main><article><div class="status__content"><div class="status__content__text translate"><p id="post">A public post keeps its original text when automatic permission is revoked.</p></div></div></article></main></div></body></html>');
+        const owner = document.querySelector<HTMLElement>('#post')!;
+        const shell = document.querySelector<HTMLElement>('#mastodon')!;
+        const locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'location');
+        const observe = vi.spyOn(window.MutationObserver.prototype, 'observe');
+        try {
+            Object.defineProperty(globalThis, 'location', {configurable: true, value: {href: 'https://mastodon.social/@Mastodon'}});
+            setCurrentTranslationAdapters(composeSiteAdapters(builtinSiteRulePack, normalizeSiteAdaptationSettings(undefined)));
+            const core = getCurrentTranslationCore();
+            const candidate = core.discover(document)[0]!;
+            expect(candidate).toMatchObject({element: owner, applicationShellPolicyId: 'mastodon'});
+            const slots = collectLiveTranslationTextSlots(owner, core.shouldStayOriginal, undefined,
+                {allowTopLevelApplicationShell: true, protectedElement: owner});
+            expect(slots).toHaveLength(1);
+            const source = slots[0]!.node;
+            const attempt = beginTranslation(owner, 'bilingual', 'content', false, slots[0]!.source,
+                [source], true, undefined, 'content', candidate.applicationShellPolicyId)!;
+            expect(attempt).not.toBeNull();
+            const wrapper = document.createElement('span');
+            wrapper.className = 'fluent-read-bilingual-content';
+            wrapper.setAttribute('data-fr-translation-owned', 'true');
+            wrapper.setAttribute('translate', 'no');
+            wrapper.textContent = '这条译文会在授权撤销后安全恢复。';
+            owner.append(wrapper); setBilingualContent(owner, wrapper);
+            expect(markTranslationComplete(owner, attempt.state, attempt.generation, false)).toBe(true);
+            expect(ensureTranslationTruncationLayout(owner)).toBe(true);
+            expect(observe.mock.calls.some(([root, options]) => root === document.documentElement &&
+                options?.subtree === true && options?.attributeFilter?.includes('id'))).toBe(true);
+            await flushObservers();
+            expect(getTranslationState(owner)).toBe(attempt.state);
+            await check({document, owner, shell, wrapper, state: attempt.state, source});
+        } finally {
+            restoreTranslation(owner);
+            await flushObservers();
+            setCurrentTranslationAdapters(defaultTranslationAdapters);
+            if (locationDescriptor) Object.defineProperty(globalThis, 'location', locationDescriptor);
+            else Reflect.deleteProperty(globalThis, 'location');
+            observe.mockRestore();
+        }
+    }
+
+    it.each(['id', 'translate', 'data-notranslate', 'move'])('真实独立 observer 在 %s 撤销后恢复原文并取消旧状态', async change => {
+        await withCommittedOwner(async ({document, owner, shell, wrapper, state, source}) => {
+            if (change === 'move') {
+                const other = document.createElement('div'); other.className = 'notranslate';
+                document.body.append(other); other.append(shell.firstElementChild!);
+            } else shell.setAttribute(change, change === 'id' ? 'another-app' : change === 'translate' ? 'no' : 'true');
+            await flushObservers();
+            expect(getTranslationState(owner)).toBeUndefined();
+            expect(state.controller.signal.aborted).toBe(true);
+            expect(wrapper.parentNode).toBeNull();
+            expect(owner.firstChild).toBe(source);
+            expect(owner.textContent).toBe('A public post keeps its original text when automatic permission is revoked.');
+            expect(owner.isConnected).toBe(true);
+        });
+    });
+
+    it('真实独立 observer 保留策略仍有效的原状态与译文', async () => {
+        await withCommittedOwner(async ({owner, shell, wrapper, state, source}) => {
+            shell.classList.add('host-layout-change');
+            shell.setAttribute('title', 'Public application');
+            await flushObservers();
+            expect(getTranslationState(owner)).toBe(state);
+            expect(state.applicationShellPolicyId).toBe('mastodon');
+            expect(state.controller.signal.aborted).toBe(false);
+            expect(wrapper.parentNode).toBe(owner);
+            expect(owner.firstChild).toBe(source);
+        });
+    });
+    it('已拥有候选保留策略；观察器投递前撤销后不能再次开始或读取旧来源槽', async () => {
+        await withCommittedOwner(async ({document, owner, shell, state, source}) => {
+            Object.defineProperty(document, 'elementsFromPoint', {configurable: true, value: () => [owner]});
+            expect(getOwnedTranslationCandidateAtPoint(document, 10, 10))
+                .toMatchObject({element: owner, applicationShellPolicyId: 'mastodon'});
+            expect(getCurrentTranslationStateTextNodes(owner, state)).toEqual([source]);
+            shell.setAttribute('translate', 'no');
+            expect(getCurrentTranslationStateTextNodes(owner, state)).toEqual([]);
+            expect(beginTranslation(owner, 'bilingual', 'content', false, state.sourceText,
+                [source], true, undefined, 'content', state.applicationShellPolicyId)).toBeNull();
+            expect(markTranslationComplete(owner, state, state.generation, false)).toBe(false);
+            expect(tryRepairBilingualTranslationArtifact(owner, state)).toBe('not-repairable');
+        });
     });
 });
 
@@ -1599,6 +1755,46 @@ describe('state 公共入口的降级与资源恢复边界', () => {
         }
     });
 
+    it.each(['loading', 'aborted', 'translated'] as const)('布局观察器清理断开的 %s owner 时只标记有效 loading', async phase => {
+        const {document, window} = parseHTML('<html><body><article><p>Original text</p></article></body></html>');
+        const owner = document.querySelector<HTMLElement>('p')!;
+        const attempt = beginTranslation(owner, 'bilingual')!;
+        expect(ensureTranslationTruncationLayout(owner)).toBe(true);
+        if (phase === 'aborted') attempt.state.controller.abort();
+        if (phase === 'translated') expect(markTranslationComplete(owner, attempt.state, attempt.generation, false)).toBe(true);
+        owner.remove();
+        window.dispatchEvent(new window.Event('resize'));
+        await Promise.resolve(); await Promise.resolve();
+        expect(getTranslationState(owner)).toBeUndefined();
+        expect(attempt.state.controller.signal.aborted).toBe(true);
+        expect(attempt.state.layoutDetachedDiscard).toBe(phase === 'loading' ? true : undefined);
+    });
+
+    it('共享布局清理断开的 loading owner 时记录脱离原因，主动恢复不记录', async () => {
+        const {hasTranslationLayoutOverride} = await import('@/src/features/full-page-translation/content/state');
+        const {document} = parseHTML('<html><body><article style="height:24px"><p id="detached">Source</p><p id="restored">Other source</p><p id="aborted">Cancelled source</p></article></body></html>');
+        const detached = document.querySelector<HTMLElement>('#detached')!;
+        const restored = document.querySelector<HTMLElement>('#restored')!;
+        const aborted = document.querySelector<HTMLElement>('#aborted')!;
+        const ancestor = document.querySelector<HTMLElement>('article')!;
+        const detachedAttempt = beginTranslation(detached, 'bilingual')!;
+        const restoredAttempt = beginTranslation(restored, 'bilingual')!;
+        const abortedAttempt = beginTranslation(aborted, 'bilingual')!;
+        expect(acquireTranslationLayoutOverride(detached, ancestor, [{property: 'height', value: 'auto', priority: 'important'}])).toBe(true);
+        detached.remove();
+        expect(hasTranslationLayoutOverride(ancestor)).toBe(false);
+        expect(detachedAttempt.state.layoutDetachedDiscard).toBe(true);
+        expect(detachedAttempt.state.controller.signal.aborted).toBe(true);
+        restored.remove();
+        expect(restoreTranslation(restored)).toBe(true);
+        expect(restoredAttempt.state.layoutDetachedDiscard).toBeUndefined();
+        expect(acquireTranslationLayoutOverride(aborted, ancestor, [{property: 'height', value: 'auto', priority: 'important'}])).toBe(true);
+        abortedAttempt.state.controller.abort();
+        aborted.remove();
+        expect(hasTranslationLayoutOverride(ancestor)).toBe(false);
+        expect(abortedAttempt.state.layoutDetachedDiscard).toBeUndefined();
+    });
+
     it('共享布局查询释放模拟已回收的最后租户，精确恢复宿主样式', async () => {
         const {hasTranslationLayoutOverride} = await import('@/src/features/full-page-translation/content/state');
         const {document} = parseHTML('<html><body><article style="height:24px"><p>Source</p></article></body></html>');
@@ -1821,15 +2017,52 @@ describe('state 克隆、重挂与能力缺失的公共契约', () => {
 
     it('overflow 来源身份忽略装饰样式，保留可见性语义变化', async () => {
         const {getTranslationOverflowGenerationIdentity} = await import('@/src/features/full-page-translation/content/state');
-        const {document} = parseHTML('<html><body><p><span style="visibility:hidden;color:red">Protected source</span></p></body></html>');
+        const {document} = parseHTML('<html><body><p><span style="visibility:hidden;color:red">Protected source</span>' +
+            '<a href="../paper"><img src="../icon.png" srcset="../icon@2x.png 2x">Reference</a></p></body></html>');
         const owner = document.querySelector<HTMLElement>('p')!;
         const child = owner.querySelector<HTMLElement>('span')!;
+        const link = owner.querySelector('a')!, image = owner.querySelector('img')!;
+        const source = child.firstChild;
         const before = getTranslationOverflowGenerationIdentity(owner);
         child.style.color = 'blue'; child.className = 'hover';
         expect(getTranslationOverflowGenerationIdentity(owner)).toBe(before);
         child.style.visibility = 'visible';
         expect(getTranslationOverflowGenerationIdentity(owner)).not.toBe(before);
         expect(child.style.color).toBe('blue');
+        expect(owner.querySelector('img')).toBe(image); expect(child.firstChild).toBe(source);
+        expect(link.getAttribute('href')).toBe('../paper');
+        expect(image.getAttribute('srcset')).toBe('../icon@2x.png 2x');
+    });
+
+    it('合成段来源归档与译文漂移复验保留来源资源、原始属性及真实节点身份', async () => {
+        const {isTrustedBilingualArtifactWithHostClass} = await import('@/src/features/full-page-translation/content/state');
+        const {document} = parseHTML('<html><body><div><span id="owner" data-fr-translation-segment="true">' +
+            '<a href="../paper">Source text.</a><img src="../source-icon.png"></span></div></body></html>');
+        const owner = document.querySelector<HTMLElement>('#owner')!;
+        const link = owner.querySelector('a')!, image = owner.querySelector('img')!;
+        const source = link.firstChild as Text, sourceHTML = owner.innerHTML;
+        const sourceNodes = Array.from(owner.childNodes);
+        const attempt = beginTranslation(owner, 'bilingual', 'content', true, 'Source text.', [source])!;
+        const wrapper = document.createElement('span');
+        wrapper.className = 'fluent-read-bilingual-content'; wrapper.setAttribute('data-fr-translation-owned', 'true');
+        wrapper.innerHTML = '<a href="../translated-paper"><img src="../translated-icon.png">译文</a>';
+        owner.appendChild(wrapper); setBilingualContent(owner, wrapper);
+        try {
+            const translatedImage = wrapper.querySelector('img')!;
+            expect(attempt.state.sourceHTML).toBe(sourceHTML);
+            expect(attempt.state.syntheticSourceNodes).toEqual(sourceNodes);
+            expect(owner.querySelector('a')).toBe(link); expect(owner.querySelector('img')).toBe(image);
+            expect(link.firstChild).toBe(source);
+            translatedImage.setAttribute('data-spai-bg-prepared', '1');
+            const before = owner.outerHTML;
+            expect(isTrustedBilingualArtifactWithHostClass(wrapper, attempt.state)).toBe(true);
+            expect(owner.outerHTML).toBe(before);
+            expect(wrapper.querySelector('img')).toBe(translatedImage);
+            expect(translatedImage.getAttribute('src')).toBe('../translated-icon.png');
+            translatedImage.setAttribute('src', '../tampered.png');
+            expect(isTrustedBilingualArtifactWithHostClass(wrapper, attempt.state)).toBe(false);
+        } finally {restoreTranslation(owner);}
+        expect(link.firstChild).toBe(source); expect(image.getAttribute('src')).toBe('../source-icon.png');
     });
 
     it('可信译文 wrapper 接受 ShortPixel 扫描标记，但拒绝属性与 class 丢失', async () => {
@@ -2161,6 +2394,143 @@ describe('公共 state 入口的跨 document 与 manager 根交还边界', () =>
         } finally {
             setBilingualLifecycleExternalManager(undefined); restoreTranslation(owner);
             view.restore(); disconnect.mockRestore();
+        }
+    });
+});
+
+/** 浏览器观察器端口提供精确 records，弥补 linkedom 对 Text/childList 的简化通知。 */
+describe('独立双语状态机的观察器与恢复边界', () => {
+    function fixture(markup = '<p id="owner">Source</p>') {
+        const {document, window} = parseHTML(`<html><body>${markup}</body></html>`);
+        const observers: Array<{callback: MutationCallback; disconnect: ReturnType<typeof vi.fn>}> = [];
+        class Observer {
+            observe = vi.fn(); disconnect = vi.fn();
+            constructor(readonly callback: MutationCallback) { observers.push(this); }
+        }
+        Object.defineProperty(document, 'defaultView', {configurable: true, value: {
+            MutationObserver: Observer, HTMLElement: window.HTMLElement,
+            addEventListener: window.addEventListener.bind(window), removeEventListener: window.removeEventListener.bind(window),
+        }});
+        const owner = document.querySelector<HTMLElement>('#owner')!;
+        const emit = (record: Partial<MutationRecord>) => observers[0].callback([
+            {type: 'attributes', target: owner, attributeName: 'title', oldValue: null, addedNodes: [], removedNodes: [], ...record} as unknown as MutationRecord,
+        ], {} as MutationObserver);
+        const checkpoint = async () => {await Promise.resolve(); await Promise.resolve();};
+        const commit = (synthetic = false, applicationShell = false) => {
+            const nodes = collectLiveTranslationTextSlots(owner, getCurrentTranslationCore().shouldStayOriginal, synthetic ? owner : undefined, {protectedElement: owner, allowTopLevelApplicationShell: applicationShell}).map(slot => slot.node);
+            const attempt = beginTranslation(owner, 'bilingual', 'content', synthetic, owner.textContent ?? '', nodes, applicationShell)!;
+            const wrapper = document.createElement('span'); wrapper.className = 'fluent-read-bilingual-content';
+            wrapper.setAttribute('data-fr-translation-owned', 'true'); wrapper.innerHTML = '<span>译文</span>';
+            owner.append(wrapper); setBilingualContent(owner, wrapper); markTranslationComplete(owner, attempt.state, attempt.generation, false);
+            ensureTranslationTruncationLayout(owner); return {attempt, wrapper};
+        };
+        return {document, window, owner, emit, checkpoint, commit, observers};
+    }
+
+    it('重复布局事件合并一次检查点，恢复完成后旧检查点不能影响下一轮翻译', async () => {
+        const page = fixture(); const {owner, window, checkpoint, commit} = page;
+        const {attempt} = commit(); const clone = vi.spyOn(owner, 'cloneNode');
+        try {
+            for (let index = 0; index < 200; index++) window.dispatchEvent(new window.Event('resize'));
+            expect(restoreTranslation(owner)).toBe(true);
+            const next = beginTranslation(owner, 'bilingual')!;
+            await checkpoint(); expect(getTranslationState(owner)).toBe(next.state);
+            expect(next.state.controller.signal.aborted).toBe(false);expect(attempt.state.controller.signal.aborted).toBe(true);
+            expect(clone).not.toHaveBeenCalled();
+        } finally {clone.mockRestore();restoreTranslation(owner);}
+    });
+
+    it.each([false, true])('超预算原文 synthetic=%s 忽略译文内部通知并重绑等价新 Text', async synthetic => {
+        const page = fixture(synthetic ? '<div><span id="owner" data-fr-translation-segment="true"></span></div>' : undefined);
+        const {document, owner, emit, checkpoint, commit} = page;
+        owner.textContent = 'Readable source. '.repeat(9000);const source=owner.firstChild as Text;
+        const {attempt, wrapper}=commit(synthetic,true);
+        try {
+            expect(attempt.state.sourceStructureSignature).toBe('overflow');
+            emit({target:wrapper,attributeName:'class'});await checkpoint();expect(getTranslationState(owner)).toBe(attempt.state);
+            emit({type:'childList',target:owner,addedNodes:[wrapper] as unknown as NodeList});await checkpoint();expect(attempt.state.sourceStructureDirty).not.toBe(true);
+            const replacement=document.createTextNode(source.data);source.replaceWith(replacement);
+            emit({type:'childList',target:owner,addedNodes:[replacement] as unknown as NodeList,removedNodes:[source] as unknown as NodeList});await checkpoint();
+            expect(getTranslationState(owner)).toBe(attempt.state);expect(attempt.state.sourceTextNodes).toEqual([replacement]);expect(wrapper.parentNode).toBe(owner);
+        } finally {restoreTranslation(owner);}
+    });
+
+    it('普通 synthetic 来源以 application-shell 策略重挂后更新实时原文引用', () => {
+        const {document,owner,commit}=fixture('<div><span id="owner" data-fr-translation-segment="true">Readable source.</span></div>');
+        const {attempt,wrapper}=commit(true,true);const source=owner.firstChild as Text;const replacement=document.createTextNode(source.data);
+        try {source.replaceWith(replacement);expect(tryRepairBilingualTranslationArtifact(owner,attempt.state)).toBe('repaired');expect(attempt.state.sourceTextNodes).toEqual([replacement]);expect(wrapper.parentNode).toBe(owner);}
+        finally {restoreTranslation(owner);}
+    });
+
+    it('ShortPixel 的嵌套扫描标记保留已提交译文，移动到别处的 wrapper 回到其所属 owner', () => {
+        const {document,owner,commit}=fixture();const {attempt,wrapper}=commit();
+        try {
+            wrapper.firstElementChild!.setAttribute('data-spai-bg-prepared','1');
+            expect(tryRepairBilingualTranslationArtifact(owner,attempt.state)).toBe('repaired');expect(attempt.state.bilingualContent).toBe(wrapper);
+            const destination=document.createElement('aside');document.body.append(destination);destination.append(wrapper);
+            expect(tryRepairBilingualTranslationArtifact(owner,attempt.state)).toBe('repaired');expect(destination.childNodes).toHaveLength(0);
+            expect(attempt.state.bilingualContent?.parentNode).toBe(owner);
+        } finally {restoreTranslation(owner);}
+    });
+
+    it('持续篡改译文达到预算后通知上层并恢复原文，不继续写回宿主', async () => {
+        const {setBilingualArtifactCapitulationHandler}=await import('@/src/features/full-page-translation/content/state');
+        const {owner,emit,checkpoint,commit}=fixture();const {attempt}=commit();const capitulate=vi.fn();setBilingualArtifactCapitulationHandler(capitulate);
+        try {
+            for(let index=0;index<20&&getTranslationState(owner);index++) {attempt.state.bilingualContent!.textContent='Host replacement';emit({target:attempt.state.bilingualContent!});await checkpoint();}
+            expect(getTranslationState(owner)).toBeUndefined();expect(capitulate).toHaveBeenCalledWith(owner,attempt.state);expect(owner.textContent).toBe('Source');expect(attempt.state.controller.signal.aborted).toBe(true);
+        } finally {setBilingualArtifactCapitulationHandler(undefined);restoreTranslation(owner);}
+    });
+
+    it('共享样式有过宿主写入但最终为空时移除扩展引入的空 style 属性', async () => {
+        const {reconcileTranslationLayoutOverrides}=await import('@/src/features/full-page-translation/content/state');
+        const {owner}=fixture();beginTranslation(owner,'bilingual');
+        try {
+            acquireTranslationLayoutOverride(owner,owner,[{property:'height',value:'auto',priority:'important'}]);
+            owner.style.color='red';reconcileTranslationLayoutOverrides(owner);owner.style.removeProperty('color');
+            restoreTranslation(owner);expect(owner.hasAttribute('style')).toBe(false);
+        } finally {restoreTranslation(owner);}
+    });
+});
+
+
+describe('issue #1251：强制翻译的来源与独立 observer', () => {
+    it.each(['data-ready', 'class'])('覆盖选择器依赖 %s 时，失效会恢复原文并取消旧状态', async attribute => {
+        const {document} = parseHTML('<html><body><main><div id="comments" class="ready" data-ready="yes" translate="no"><p id="post">A readable public comment remains the exact source.</p></div></main></body></html>');
+        const owner = document.querySelector<HTMLElement>('#post')!;
+        const shell = document.querySelector<HTMLElement>('#comments')!;
+        const originalHTML = shell.outerHTML;
+        const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'location');
+        const flush = async () => {await Promise.resolve(); await Promise.resolve(); await new Promise(resolve => setTimeout(resolve, 0));};
+        try {
+            Object.defineProperty(globalThis, 'location', {configurable: true, value: {href: 'https://example.test/comments'}});
+            setCurrentTranslationAdapters(composeSiteAdapters({version: 1, rules: [{id: 'comments', name: 'Comments', match: {hosts: ['example.test']}, forceTranslate: [attribute === 'class' ? '#comments.ready' : '#comments[data-ready="yes"]']}]}, normalizeSiteAdaptationSettings({})));
+            const core = getCurrentTranslationCore();
+            const slots = collectLiveTranslationTextSlots(owner, core.shouldStayOriginal, undefined, core.textOptions());
+            expect(slots).toHaveLength(1);
+            const source = slots[0]!.node;
+            const attempt = beginTranslation(owner, 'bilingual', 'content', false, slots[0]!.source, [source])!;
+            const wrapper = document.createElement('span');
+            wrapper.className = 'fluent-read-bilingual-content'; wrapper.setAttribute('data-fr-translation-owned', 'true');
+            wrapper.textContent = '可读的公开评论译文。'; owner.append(wrapper); setBilingualContent(owner, wrapper);
+            expect(markTranslationComplete(owner, attempt.state, attempt.generation, false)).toBe(true);
+            expect(ensureTranslationTruncationLayout(owner)).toBe(true);
+            await flush();
+            expect(getTranslationState(owner)).toBe(attempt.state);
+            expect(getCurrentTranslationStateTextNodes(owner, attempt.state)).toEqual([source]);
+            shell.setAttribute(attribute, attribute === 'class' ? 'revoked' : 'no');
+            await flush();
+            expect(getTranslationState(owner)).toBeUndefined();
+            expect(attempt.state.controller.signal.aborted).toBe(true);
+            expect(wrapper.parentNode).toBeNull();
+            expect(owner.firstChild).toBe(source);
+            shell.setAttribute(attribute, attribute === 'class' ? 'ready' : 'yes');
+            expect(shell.outerHTML).toBe(originalHTML);
+        } finally {
+            restoreTranslation(owner); await flush();
+            setCurrentTranslationAdapters(defaultTranslationAdapters);
+            if (descriptor) Object.defineProperty(globalThis, 'location', descriptor);
+            else Reflect.deleteProperty(globalThis, 'location');
         }
     });
 });

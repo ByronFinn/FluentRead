@@ -8,11 +8,13 @@
 
 An open-source browser extension for bilingual translation.
 
-[Install](#installation) · [Website](https://read.thinkstu.com/en/) · [User guide](https://read.thinkstu.com/en/guide/) · [Privacy policy](https://read.thinkstu.com/en/guide/privacy) · [简体中文](./misc/README_ZH.md) · [LINUX DO Community](https://linux.do) · [GPL-3.0](./LICENSE)
+[Install](#installation) · [Website](https://read.thinkstu.com/en/) · [User guide](https://read.thinkstu.com/en/guide/) · [Sponsorship](#sponsorship) · [Privacy policy](https://read.thinkstu.com/en/guide/privacy) · [简体中文](./misc/README_ZH.md) · [LINUX DO Community](https://linux.do) · [GPL-3.0](./LICENSE)
 
 </div>
 
-FluentRead displays translations alongside the original webpage and provides selection translation, AI reading assistance, image and document translation, and bilingual video subtitles. Its reading card integrates a **browser adaptation of the DeepSeek Harness session core** for contextual explanations and follow-up questions.
+FluentRead displays translations alongside the original webpage and provides selection translation, AI reading assistance, image and document translation, and bilingual video subtitles. Its reading card provides contextual explanations and follow-up questions.
+
+We began developing FluentRead in January 2024. Since then, FluentRead has remained open source and free to use.
 
 <div align="center">
 
@@ -24,7 +26,9 @@ For a closer look, [watch the full official introduction (4+ minutes, in Chinese
 
 </div>
 
-[![FluentRead bilingual webpage translation](./docs/public/screenshots/en/translation.webp)](./docs/public/screenshots/en/translation.webp)
+<table align="center"><tr><td>
+<a href="./docs/public/screenshots/en/translation.webp"><img src="./docs/public/screenshots/en/translation.webp" alt="FluentRead bilingual webpage translation" width="600" /></a>
+</td></tr></table>
 
 ## Features
 
@@ -35,18 +39,10 @@ For a closer look, [watch the full official introduction (4+ minutes, in Chinese
 | Learning center | Save words, phrases, and sentences with their original context for study and review. |
 | Image and area translation | Recognize text in webpage images or selected screen areas and display translations that can be copied. |
 | Document translation | Read PDF, ePub, DOCX, and other supported formats in two languages, edit translations, and export files. |
-| Video subtitles | Bilingual subtitles on YouTube and X; supported X videos can also use local AI transcription. |
+| Video subtitles | Bilingual subtitles on YouTube and X, with original-only and translation-only display modes; supported X videos can also use local AI transcription. |
 | Services and settings | Free translation services, DeepL, AI providers, and local Ollama models, with glossaries, translation styles, shortcuts, and menu layout settings. |
 
 See the [user guide](https://read.thinkstu.com/en/guide/) for instructions and supported formats. AI explanations require a configured AI service. Third-party pricing and availability depend on the provider.
-
-## DeepSeek Harness
-
-The reading card adapts the conversation-event and message organization components of the DeepSeek Harness session core for the browser. FluentRead connects these to the selected text, permitted paragraph context, model services, and local reading history. It supports different AI providers and models, with optional learning memories.
-
-The adaptation is used for selection-based reading assistance. Full-page, hover, and regular selection translation use their respective translation pipelines. See the [integration map](./docs/reports/harness-embedding-map-20260905.md) for scope and upstream references, and the [third-party notice](./public/third-party-notices/deepseek-harness-MIT.txt) for its MIT license.
-
-[Reading card guide](https://read.thinkstu.com/en/guide/deepseek-harness)
 
 ## Installation
 
@@ -58,20 +54,29 @@ The adaptation is used for selection-based reading assistance. Full-page, hover,
 
 Store updates may arrive at different times. The userscript provides core webpage translation features. See the [installation guide](https://read.thinkstu.com/en/guide/getting-started) for browser and feature availability.
 
+## Sponsorship
+
+The project is currently funded mainly out of pocket, with a few hundred US dollars spent each month on maintenance. We believe FluentRead can make the world a little better.
+
+Thank you to [**bilibili Index-Translate**](https://index-translate.bilibili.com/) for becoming FluentRead’s first sponsor.
+
+[Become a sponsor](https://read.thinkstu.com/en/guide/support#sponsorship) · [Email us](mailto:a1914493943@gmail.com?subject=FluentRead%20sponsorship) · [Add on WeChat](https://read.thinkstu.com/support/wechat-contact.jpg)
+
 ## Local development
 
-Requirements: Node.js 20 or later and pnpm 9.
+Use the Node.js version in `.nvmrc` to match CI. Run pnpm through Corepack to use the version pinned in `package.json` even when your shell has an older global pnpm.
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm dev
+nvm install
+corepack pnpm install --frozen-lockfile
 ```
 
-Use `pnpm build` to build the Chrome extension and `pnpm zip` to generate one `-chrome.zip`, preserving its public key, fixed extension ID, and Google OAuth configuration. Use the same ZIP for manual installation and preparation for an update to the existing Chrome Web Store item. Packaging removes the obsolete `-chrome-store.zip` for the same version. See [extension identity and packages](./docs/maintainers/extension-identity-and-packages.md) for details.
+- `corepack pnpm dev` starts local development.
+- `corepack pnpm zip` builds and packages the Chrome extension.
 
-Use `pnpm build:firefox` to build the Firefox extension, `pnpm zip:firefox` to generate its installation and review-source ZIPs, and `pnpm zip:edge` to generate the separate Microsoft Edge Add-ons ZIP without the Chrome `key`. The review-source ZIP includes the extension build inputs; website assets, test evidence, and other distribution targets are omitted. Use `pnpm compile` for type checking and `pnpm docs:build` to build the website. See [architecture](./docs/architecture.md) and [testing](./docs/testing.md) for project conventions.
+[Extension code](./src/) · [Integrations](./integrations/) · [Documentation source](./docs/) · [Component previews](./docs/development/storybook/) · [Tests](./tests/)
 
-Run `pnpm storybook` to explore the real Vue components and interface themes locally. See the [design system guide](./docs/en/guide/design-system.md). Use `pnpm docs:build:site` to build the documentation with the component explorer.
+[Other browsers](./docs/maintainers/releases.md#本地打包) · [Firefox source review](./scripts/amo/README.md)
 
 ## Contributing
 
@@ -119,3 +124,9 @@ Thank you to everyone who has contributed to FluentRead, including the many we c
 FluentRead is released under [GPL-3.0](./LICENSE). See [third-party notices](./public/third-party-notices/) for component attribution and licenses.
 
 Settings and learning records stay local by default; cloud translation uses your selected provider. Optional cloud configuration backup supports Google Drive and [WebDAV](https://read.thinkstu.com/en/guide/webdav), including service credentials while excluding wordbooks, conversations, and usage statistics. See the [privacy policy](https://read.thinkstu.com/en/guide/privacy) for permissions, encryption, and deletion details.
+
+## Star History
+
+<table align="center"><tr><td>
+<a href="https://star-history.com/#FluentRead/FluentRead&amp;Date"><img src="https://api.star-history.com/svg?repos=FluentRead/FluentRead&amp;type=Date" alt="FluentRead Star History chart" width="600" /></a>
+</td></tr></table>

@@ -1,16 +1,34 @@
 /**
  * @file src/core/config/model.ts
+ * 图片与漫画共用自动或单线程 CPU/WASM 偏好，缺失及非法旧值回退自动。
  *
  * 文件职责：定义 FluentRead 完整配置模型、默认值及各项设置的合法范围，包括默认开启并按服务独立保存的原生翻译合批偏好，是配置读取、保存、迁移和 UI 绑定共同依赖的领域契约。
  * 主要内容：支持单图选择本地识别引擎，包含正文/全部节点识别范围，保留各功能独立服务，并将所有功能服务的空值解释为继承网页默认；统一中文简繁标识及历史配置别名，并保存常用服务顺序，保存默认空的 Origin/Referer 域名移除名单和组合翻译配置；组合成员只引用普通服务，删除自定义成员与组合时精确清理无效选择，包含 Config 接口、字幕和翻译模式类型、延迟与字号范围、默认 API 地址及多项功能开关，使新增配置项在一个位置获得类型和初始语义；归一化时以迭代克隆保留深层数据和共享引用，安全迁移任意自有凭据键，升级历史默认提示词，只迁移已登记模型编号，并在线性目录遍历中保护自定义服务的当前模型和 Thinking 偏好。 可核对的公开符号包括 DeepSeekApiType、DeepSeekThinkingMode、VideoSubtitleDisplayMode、FullPageTranslationMode、HarnessCallHost、DEFAULT_VIDEO_SUBTITLE_FONT_SIZE、DEFAULT_NEW_API_URL、DEFAULT_MOUSE_HOVER_TRANSLATION_DELAY。
+ * 悬浮球边距：默认与悬停展开分别保存有符号 px 值，旧配置缺失时补齐默认值，读取和导入统一按范围及整数步长规范化。
+ * 隐私防护：本地脱敏策略随配置归一化，自定义词使用独立凭据字段，不写入公共配置。
+ * 服务可用性：disabledTranslationServices 持久化用户关闭项；指定第三方 AI 平台新安装时默认关闭，旧配置只迁移一次并保留已有明确配置；导入时去重并约束标识长度。
+ * 查词来源：默认使用现有本地优先策略，按需指定单一词典，旧配置与非法来源回到默认自动。
+ * 侧边栏：保存原生翻译侧边栏的显示范围，旧配置与非法值默认使用当前标签页。
+ * 工具栏：保存图标点击后打开快捷面板或直接翻译的偏好，旧配置与非法值保留面板默认行为。
+ * 课程字幕：B 站、Udemy、edX 分别保存自动开启偏好，新接入站点默认关闭，Udemy 延续既有开启状态。
+ * 两点选取：默认关闭，独立保存单次启动快捷键，非法组合回到带修饰键的默认值。
+ * 局部区域记忆：默认空列表，按专用 schema 保留网站/路径、有限 CSS 定位、自动/提醒模式和可选快捷方案引用，不保存网页文字或请求凭据。
+ * AI 多段预算：默认每批最多 8 个可翻译片段、2000 原文字符，关闭功能保留预算，读取与导入时共享有界数字规范化。
  * AI 翻译超时：默认等待 120 秒，读取、导入及同步配置时共用 10 至 600 秒的有限数字毫秒规范化规则。ChatGPT 套餐模型来自账户发现，始终保存直接 slug；兼容已保存的自定义模型哨兵，不把动态模型再次变为通用自定义模型。
  * 模块边界：本文件属于 core 领域层，只定义规则、类型与纯转换；个人校订默认关闭且仅接受显式布尔开启，userscript 不保留该不可用设置；不直接读写浏览器存储、不发起网络请求、不挂载 Vue/WXT 入口，持久化、协议调用和界面编排分别由 services、providers 与 features 承担。
  */
 
+import {normalizePrivacyPolicy, normalizePrivacyTerms} from '../privacy/policy';
+import {DEFAULT_AI_MULTI_SEGMENT_MAX_SEGMENTS, DEFAULT_AI_MULTI_SEGMENT_MAX_CHARACTERS, normalizeAiMultiSegmentMaxSegments, normalizeAiMultiSegmentMaxCharacters} from './aiMultiSegment';
+import {DEFAULT_CLICK_SELECTION_HOTKEY, normalizeClickSelectionHotkey} from './clickSelection';
+import {DEFAULT_NATIVE_ASR_BASE_URL, normalizeNativeAsrBaseUrl} from './nativeAsr';
+import {normalizeWordDictionarySource, type WordDictionarySourceSetting} from './selectionDictionary';
+import {defaultDictionaryWorkspace, normalizeDictionaryWorkspace, dictionaryId, type DictionaryWorkspace} from './dictionaryWorkspace';
 import {DEFAULT_SENTENCE_HIGHLIGHT_STYLE, DEFAULT_SENTENCE_HIGHLIGHT_APPEARANCE, normalizeSentenceHighlightStyle, normalizeSentenceHighlightAppearance, normalizeSentenceHighlightProfiles, type SentenceHighlightStyle, type SentenceHighlightAppearance, type SentenceHighlightProfile} from './sentenceHighlight';
 import {DEFAULT_INFORMATION_HIGHLIGHT_PREFERENCES, normalizeInformationHighlightPreferences, type InformationHighlightPreferences} from './informationHighlight';
 import {normalizeMangaSiteRules, normalizeMangaPrefetchPages, normalizeMangaCachePages, type MangaSiteRule} from './mangaNormalization';
 import {normalizeShareCardPreferences, type ShareCardPreferences} from '@/src/core/config/shareCard';
+import {DEFAULT_DISABLED_AI_PLATFORM_SERVICES, normalizeDisabledTranslationServices} from './serviceAvailability';
 import type {TranslationScope} from '@/src/core/translation/types';
 import {
     currentModelIds,
@@ -92,6 +110,7 @@ import {
     normalizeSectionTranslationHotkey,
     resolveSectionTranslationHotkey,
 } from '@/src/core/config/sectionTranslation';
+import {normalizeSectionTranslationRules, type SectionTranslationRule} from './sectionTranslationRules';
 import { normalizeSelectionTtsVoiceOrder } from "./selectionTts";
 import {
     DEFAULT_LOCAL_TTS_MODE,
@@ -145,6 +164,7 @@ import {
     normalizeAlwaysTranslateDomains,
     normalizeDisabledExtensionDomains,
     normalizeFloatingBallDisabledDomains,
+    normalizeSiteDomains,
 } from "@/src/core/site-rules/domain";
 import {normalizeSiteAdaptationSettings} from '@/src/core/site-adaptation/schema';
 import type {SiteAdaptationSettings} from '@/src/core/site-adaptation/types';
@@ -187,6 +207,7 @@ import {
     type HarnessPreferences,
 } from './harness';
 import {DEFAULT_COMMENT_PREFERENCES, normalizeCommentPreferences, type CommentPreferences} from './comment';
+import {normalizeVideoCourseAutoStart, type VideoCourseAutoStart} from './videoCourse';
 import {
     DEFAULT_VIDEO_SUBTITLE_APPEARANCE,
     normalizeVideoSubtitleAppearance,
@@ -222,7 +243,9 @@ export * from './aiRequestTimeout';
 export type DeepSeekApiType = 'auto' | 'responses' | 'chat';
 export type DeepSeekThinkingMode = 'enabled' | 'disabled';
 export type VideoSubtitleDisplayMode = 'bilingual' | 'translation-only' | 'original-only';
+export type TranslationSidepanelScope = 'tab' | 'window';
 export type VideoLocalTranscriptionModel = 'tiny' | 'base' | 'small';
+export type VideoTranscriptionProvider = 'browser' | 'native-qwen';
 export type FullPageTranslationMode = 'viewport' | 'all';
 export const DEFAULT_VIDEO_SUBTITLE_FONT_SIZE = 100;
 export const DEFAULT_NEW_API_URL = 'http://localhost:3000';
@@ -282,6 +305,26 @@ export const DEFAULT_FLOATING_BALL_COLLAPSED_OPACITY = 52;
 export const FLOATING_BALL_COLLAPSED_OPACITY_MIN = 20;
 export const FLOATING_BALL_COLLAPSED_OPACITY_MAX = 100;
 export const FLOATING_BALL_COLLAPSED_OPACITY_STEP = 4;
+
+export const DEFAULT_FLOATING_BALL_DEFAULT_MARGIN = 0;
+export const DEFAULT_FLOATING_BALL_POPOUT_MARGIN = 20;
+export const FLOATING_BALL_MARGIN_MIN = -200;
+export const FLOATING_BALL_MARGIN_MAX = 200;
+export const FLOATING_BALL_MARGIN_STEP = 1;
+
+/** 悬浮球横向边距允许负数，使按钮可以贴到视口边缘或部分移出视口。 */
+export function normalizeFloatingBallMargin(
+    value: unknown,
+    fallback: number = DEFAULT_FLOATING_BALL_DEFAULT_MARGIN,
+): number {
+    return clampStepped(
+        value,
+        fallback,
+        FLOATING_BALL_MARGIN_MIN,
+        FLOATING_BALL_MARGIN_MAX,
+        FLOATING_BALL_MARGIN_STEP,
+    );
+}
 
 function clampStepped(value: unknown, fallback: number, min: number, max: number, step: number): number {
     const number = typeof value === 'number'
@@ -365,6 +408,7 @@ export class Config {
     autoTranslate: boolean; // 是否即时翻译
     alwaysTranslateDomains: string[]; // 始终自动翻译的可注册域名（eTLD+1）
     disabledExtensionDomains: string[]; // 禁用扩展的可注册域名（eTLD+1）
+    translationOnlyDomains: string[]; // 仅显示译文的网站；其他网站继续沿用全局 display
     siteAdaptation: SiteAdaptationSettings; // 网站内容范围、保护区域及本地 JSON 适配规则
     from: string;
     to: string;
@@ -373,22 +417,29 @@ export class Config {
     hoverShortcutBeforeDisable: string; // 关闭默认悬停开关前的选择，重开恢复；不参与运行时触发
     style: number;
     translationAppearance: TranslationAppearance; // 双语译文的颜色、线条、底色、字号、字重、字体与不透明度微调
+    browserDefaultTranslationFont: boolean; // 所有网页的双语和仅译文统一使用浏览器默认字体，不改写原有外观配置
     translationStyleProfiles: TranslationStyleProfile[]; // 用户保存的可命名译文样式快照
     activeTranslationStyleProfileId: string; // 当前选中的样式快照；外观可继续编辑，保存时再更新快照
     display: number = 1;
     service: string;
+    disabledTranslationServices: string[]; // 用户关闭的服务；关闭后停止新请求并从选择项中禁选
+    aiPlatformDefaultRemovalMigrated: boolean; // 指定 AI 平台默认移除策略的一次性迁移标记
     hoverTranslationService: string; // 悬浮翻译服务，空值跟随默认网页服务
     selectionTranslationService: string; // 普通划词翻译服务，空值跟随默认网页服务
     imageTranslationService: string; // 图片 OCR 后的文字翻译服务，空值跟随默认网页服务
     imageTranslationOcrEngine: 'tesseract' | 'paddle'; // 单图识别方式；漫画按源语言选择专用模型，俄语/韩语使用既有语言包
+    imageTranslationInferenceBackend: 'auto' | 'cpu'; // 图片与漫画的本地模型共用；CPU 从首次初始化起使用单线程 WASM
     documentService: string; // 文档服务，空值跟随网页默认
     documentModel: IMapping; // 文档翻译按服务保存的独立模型选择
     documentCustomModel: IMapping; // 文档翻译按服务保存的独立自定义模型
     videoTranslationEnabled: boolean; // 是否启用视频字幕翻译 Beta
     videoMeetingAutoEnabled: boolean; // 自动开启会议平台的本地字幕显示
+    videoCourseAutoStart: VideoCourseAutoStart; // 每个课程站点分别决定新视频是否自动翻译
     videoPreferHumanSubtitles: boolean; // 优先使用目标语言人工字幕
     videoService: string; // 字幕服务，空值跟随网页默认
     videoLocalModel: VideoLocalTranscriptionModel; // X 无原生字幕时使用的本地 Whisper 模型
+    videoTranscriptionProvider: VideoTranscriptionProvider; // 本机 Qwen 仅在明确选择后启用
+    videoNativeAsrBaseUrl: string; // 发送前仍须校验回环端点，保存不探测服务
     videoSourceLanguage: string; // 视频原语言，auto 表示自动识别；独立于网页翻译 from
     videoServiceDefaultMigrated: boolean; // 是否已迁移视频字幕默认服务
     videoSubtitleVisible: boolean; // 是否显示 FluentRead 视频字幕
@@ -433,8 +484,12 @@ export class Config {
     interfaceFont: InterfaceFont; // 设置页和扩展弹窗使用的字体方案
     interfaceVisibility: InterfaceVisibility; // Popup 栏目可见性
     popupModuleOrder: PopupModuleId[]; // Popup 可编排模块的显示顺序
+    toolbarClickAction: 'popup' | 'translate'; // 工具栏图标打开快捷面板或直接切换全文翻译
+    translationSidepanelScope: TranslationSidepanelScope; // Chromium 原生侧边栏的显示范围
     popupQuickFeatureOrder: PopupQuickFeatureId[]; // 快捷功能卡片的显示顺序
     popupQuickFeatureVisibility: PopupQuickFeatureVisibility; // 单张快捷功能卡片的可见性
+    privacyProtection: import('../privacy/policy').PrivacyProtectionPolicy; // 翻译出口的本地隐私防护策略
+    privacyProtectionSecretTerms: string[]; // 自定义敏感词，存入凭据区，不广播给网页或写入普通备份
     useCache: boolean; // 是否使用缓存
     translationCacheMaxBytes: number; // 翻译缓存内容容量上限（字节）
     translationCacheMaxEntries: number; // 翻译缓存条数上限
@@ -444,6 +499,8 @@ export class Config {
     documentGlossaryIds: string[] | null; // 文档术语选择；null 跟随全局，空数组停用
     videoGlossaryIds: string[] | null; // 字幕术语选择；null 跟随全局，空数组停用
     enableAIMultiSegment: boolean; // 是否把相邻全文段落合并为一次 AI 翻译请求
+    aiMultiSegmentMaxSegments: number; // 一批 AI 多段请求最多包含的可翻译文本片段数
+    aiMultiSegmentMaxCharacters: number; // 一批 AI 多段请求的原文字符预算，超长单候选仍保持完整
     nativeBatchTranslationEnabled: Record<string, boolean>; // 原生多文本服务的合批开关，按服务独立保存且默认开启
     informationHighlight: InformationHighlightPreferences; // 信息高亮偏好；当前页面开启状态不持久化
     bilingualSentenceHighlightEnabled: boolean; // 是否在双语翻译中同步高亮原文与译文
@@ -474,6 +531,8 @@ export class Config {
     floatingBallCompact: boolean; // 是否使用更小的悬浮球尺寸，减少对网页内容的遮挡
     floatingBallSettingsEntryVisible: boolean; // 是否在悬浮球上显示打开设置页的入口
     floatingBallCollapsedOpacity: number; // 悬浮球收起时的不透明度百分比
+    floatingBallDefaultMargin: number; // 悬浮球默认状态相对视口边缘的水平边距（px，可为负数）
+    floatingBallPopoutMargin: number; // 悬停展开时悬浮球相对视口边缘的水平边距（px，可为负数）
     floatingBallDisabledDomains: string[]; // 不显示悬浮球的可注册域名（eTLD+1）
     customHotkey: string; // 自定义鼠标悬浮快捷键
     quickTranslationProfiles: QuickTranslationProfile[]; // 额外快捷翻译方案；悬浮与全文各最多 8 项
@@ -485,6 +544,7 @@ export class Config {
     sectionTranslationHotkeyEnabled: boolean; // 是否用快捷键进入局部翻译的区域选择模式
     sectionTranslationHotkey: string; // 局部翻译快捷键；'custom' 表示使用自定义组合键
     customSectionTranslationHotkey: string; // 自定义局部翻译快捷键
+    sectionTranslationRules: SectionTranslationRule[]; // 用户明确保存的网站/路径局部翻译规则
     disableSelectionTranslator: boolean; // 是否禁用划词翻译
     selectionAreaEnabled: boolean; // 是否启用圈选翻译
     selectionAreaHotkey: string; // 圈选翻译触发快捷键；'custom' 表示使用自定义组合键
@@ -517,9 +577,14 @@ export class Config {
     selectionTranslatorTrigger: string; // 划词翻译互斥触发方式: 'direct' | 'icon' | 'dot' | 'hover' | 'contextMenu' | 'Control' | 'Alt' | 'Shift' | 'custom'
     selectionTranslatorHotkey: string; // 旧版快捷键字段；与 selectionTranslatorTrigger 中的快捷键选项保持镜像
     customSelectionTranslatorHotkey: string; // 自定义划词翻译快捷键
+    selectionClickSelectEnabled: boolean; // 主动开启后才允许用快捷键启动单次两点选取
+    selectionClickSelectHotkey: string; // 两点选取启动键，包含普通主键与修饰键
     selectionTranslatorDelay: number; // 选区稳定后显示划词翻译入口的延迟（毫秒）
     selectionTranslatorAutoDismiss: boolean; // 继续阅读或复制原文时收起，避免浮层长时间遮挡页面
     selectionTranslatorBidirectional: boolean; // 中英目标下为同语言选区提供反向划词入口
+    selectionDictionarySource: WordDictionarySourceSetting; // auto 保留本地优先；指定后只查询所选词典
+    declare selectionDictionaryRecipe: string; // 扩展主动选定的配方；空值继续使用内置词典
+    declare selectionDictionaryWorkspace: DictionaryWorkspace; // 复用加密配置，词库正文另存本地索引
     selectionTtsVoices: string[]; // 划词朗读的 Edge TTS 音色回退顺序
     selectionTtsMode: LocalTtsMode; // 朗读在线/本地合成策略
     selectionTtsLocalVoice: LocalTtsVoiceId; // 本地 Kokoro 音色，auto 表示按语言选择
@@ -571,22 +636,27 @@ export class Config {
         this.autoTranslate = false;
         this.alwaysTranslateDomains = [];
         this.disabledExtensionDomains = [];
+        this.translationOnlyDomains = [];
         this.siteAdaptation = normalizeSiteAdaptationSettings(undefined);
         this.from = defaultOption.from;
         this.to = defaultOption.to;
         this.excludedLanguages = [];
         this.style = defaultOption.style;
         this.translationAppearance = normalizeTranslationAppearance(DEFAULT_TRANSLATION_APPEARANCE); // 默认沿用各样式自带配色
+        this.browserDefaultTranslationFont = false;
         this.translationStyleProfiles = [];
         this.activeTranslationStyleProfileId = '';
         this.display = defaultOption.display;
         this.hotkey = defaultOption.hotkey;
         this.hoverShortcutBeforeDisable = defaultOption.hotkey;
         this.service = defaultOption.service;
+        this.disabledTranslationServices = [...DEFAULT_DISABLED_AI_PLATFORM_SERVICES];
+        this.aiPlatformDefaultRemovalMigrated = true;
         this.hoverTranslationService = '';
         this.selectionTranslationService = '';
         this.imageTranslationService = '';
         this.imageTranslationOcrEngine = 'paddle';
+        this.imageTranslationInferenceBackend = 'auto';
         this.documentService = '';
         this.documentModel = Object.fromEntries(
             [...defaultModels].filter(([service]) => service !== LEGACY_CUSTOM_OPENAI_PROVIDER_ID),
@@ -594,9 +664,12 @@ export class Config {
         this.documentCustomModel = {};
         this.videoTranslationEnabled = true; // 默认开启视频字幕翻译
         this.videoMeetingAutoEnabled = true;
+        this.videoCourseAutoStart = normalizeVideoCourseAutoStart(undefined);
         this.videoPreferHumanSubtitles = true;
         this.videoService = ''; // 默认跟随网页服务
         this.videoLocalModel = 'small';
+        this.videoTranscriptionProvider = 'browser';
+        this.videoNativeAsrBaseUrl = DEFAULT_NATIVE_ASR_BASE_URL;
         this.videoSourceLanguage = 'auto';
         this.videoServiceDefaultMigrated = true;
         this.videoSubtitleVisible = true; // 默认显示视频译文
@@ -643,8 +716,12 @@ export class Config {
         this.interfaceFont = DEFAULT_INTERFACE_FONT; // 默认使用现代无衬线字体栈
         this.interfaceVisibility = {...DEFAULT_INTERFACE_VISIBILITY};
         this.popupModuleOrder = [...DEFAULT_POPUP_MODULE_ORDER];
+        this.translationSidepanelScope = 'tab';
+        this.toolbarClickAction = 'popup';
         this.popupQuickFeatureOrder = [...DEFAULT_POPUP_QUICK_FEATURE_ORDER];
         this.popupQuickFeatureVisibility = {...DEFAULT_POPUP_QUICK_FEATURE_VISIBILITY};
+        this.privacyProtection = normalizePrivacyPolicy(undefined);
+        this.privacyProtectionSecretTerms = [];
         this.useCache = true; // 默认开启缓存
         this.translationCacheMaxBytes = DEFAULT_TRANSLATION_CACHE_MAX_BYTES;
         this.translationCacheMaxEntries = DEFAULT_TRANSLATION_CACHE_MAX_ENTRIES;
@@ -654,9 +731,11 @@ export class Config {
         this.documentGlossaryIds = null;
         this.videoGlossaryIds = null;
         this.enableAIMultiSegment = false; // 默认逐段请求，由用户按需开启 AI 多段翻译
+        this.aiMultiSegmentMaxSegments = DEFAULT_AI_MULTI_SEGMENT_MAX_SEGMENTS;
+        this.aiMultiSegmentMaxCharacters = DEFAULT_AI_MULTI_SEGMENT_MAX_CHARACTERS;
         this.nativeBatchTranslationEnabled = {...DEFAULT_NATIVE_BATCH_TRANSLATION_ENABLED};
         this.informationHighlight = {...DEFAULT_INFORMATION_HIGHLIGHT_PREFERENCES};
-        this.bilingualSentenceHighlightEnabled = false; // 默认关闭双语逐句高亮，避免改变现有网页视觉
+        this.bilingualSentenceHighlightEnabled = true; // 默认开启双语逐句高亮，便于对照阅读
         this.bilingualSentenceHighlightStyle = DEFAULT_SENTENCE_HIGHLIGHT_STYLE;
         this.bilingualSentenceHighlightAppearance = {...DEFAULT_SENTENCE_HIGHLIGHT_APPEARANCE};
         this.bilingualSentenceHighlightProfiles = [];
@@ -684,6 +763,8 @@ export class Config {
         this.floatingBallCompact = false; // 默认使用标准尺寸
         this.floatingBallSettingsEntryVisible = true; // 默认保留设置入口
         this.floatingBallCollapsedOpacity = DEFAULT_FLOATING_BALL_COLLAPSED_OPACITY; // 默认保持既有半透明收起效果
+        this.floatingBallDefaultMargin = DEFAULT_FLOATING_BALL_DEFAULT_MARGIN; // 默认按钮贴近视口边缘，减少对正文的遮挡
+        this.floatingBallPopoutMargin = DEFAULT_FLOATING_BALL_POPOUT_MARGIN; // 悬停展开时向内留出操作间距
         this.floatingBallDisabledDomains = []; // 开启后默认不额外排除网站
         this.customHotkey = ''; // 自定义鼠标悬浮快捷键为空
         this.quickTranslationProfiles = []; // 默认仅保留旧快捷键，新方案由用户按需添加
@@ -695,6 +776,7 @@ export class Config {
         this.sectionTranslationHotkeyEnabled = false; // 默认关闭，局部翻译先从 Popup 进入，避免未主动选择时接管快捷键
         this.sectionTranslationHotkey = DEFAULT_SECTION_TRANSLATION_HOTKEY; // 默认 Alt+R，开启后才监听
         this.customSectionTranslationHotkey = ''; // 自定义局部翻译快捷键为空
+        this.sectionTranslationRules = []; // 不自动记住网页区域，只有用户明确保存才建立规则
         this.disableSelectionTranslator = true; // 默认关闭划词翻译
         this.selectionAreaEnabled = true; // 默认开启，按快捷键圈选后才截图翻译
         this.selectionAreaHotkey = DEFAULT_AREA_TRANSLATION_HOTKEY; // 默认 Shift+Z，可改为其他预设或自定义组合键
@@ -727,9 +809,16 @@ export class Config {
         this.selectionTranslatorTrigger = 'icon'; // 默认显示可发现的操作图标
         this.selectionTranslatorHotkey = 'none'; // 默认不增加额外快捷键，保持原有划词行为
         this.customSelectionTranslatorHotkey = ''; // 自定义划词翻译快捷键为空
+        this.selectionClickSelectEnabled = false;
+        this.selectionClickSelectHotkey = DEFAULT_CLICK_SELECTION_HOTKEY;
         this.selectionTranslatorDelay = DEFAULT_SELECTION_TRANSLATOR_DELAY;
         this.selectionTranslatorAutoDismiss = true;
         this.selectionTranslatorBidirectional = false; // 保留默认的同语言跳过，用户可按需开启双向入口
+        this.selectionDictionarySource = 'auto';
+        if (import.meta.env?.BROWSER !== 'userscript') {
+            this.selectionDictionaryRecipe = '';
+            this.selectionDictionaryWorkspace = defaultDictionaryWorkspace();
+        }
         this.selectionTtsVoices = []; // 默认按当前语言使用内置音色回退顺序
         this.selectionTtsMode = DEFAULT_LOCAL_TTS_MODE;
         this.selectionTtsLocalVoice = DEFAULT_LOCAL_TTS_VOICE;
@@ -995,8 +1084,12 @@ function normalizeCustomOpenAIProviderState(normalized: Config, source: Partial<
     normalized.system_role = withoutOrphanCustomProviderEntries(normalized.system_role, configuredIds);
     normalized.user_role = withoutOrphanCustomProviderEntries(normalized.user_role, configuredIds);
     normalized.customBody = withoutOrphanCustomProviderEntries(normalized.customBody, configuredIds);
-    normalized.customHeaders = Object.fromEntries(Object.entries(normalized.customHeaders)
-        .filter(([service]) => configuredIds.has(service)));
+    normalized.customHeaders = withoutOrphanCustomProviderEntries(normalized.customHeaders, configuredIds);
+    if (import.meta.env?.BROWSER !== 'userscript') {
+        const dictionaryHeaderIds = new Set(normalizeDictionaryWorkspace(source.selectionDictionaryWorkspace).recipes.map(recipe => `dictionary:${recipe.id}`));
+        normalized.customHeaders = Object.fromEntries(Object.entries(normalized.customHeaders)
+            .filter(([service]) => !service.startsWith('dictionary:') || dictionaryHeaderIds.has(service)));
+    }
     normalized.apiKeys = withoutOrphanCustomProviderEntries(normalized.apiKeys, configuredIds);
     normalized.serviceRequestLimits = Object.fromEntries(Object.entries(normalized.serviceRequestLimits)
         .filter(([service]) => !isCustomOpenAIProviderId(service) || configuredIds.has(service)));
@@ -1069,6 +1162,87 @@ function normalizeCustomOpenAIProviderState(normalized: Config, source: Partial<
     normalized.token = apiKeysToToken(normalized.apiKeys);
 }
 
+/** 判定旧配置中目标平台是否已经被实际选用或单独配置。 */
+function hasConfiguredAiPlatformService(source: Partial<Config>, service: string): boolean {
+    const raw = source as Record<string, unknown>;
+    const selectedFields = [
+        'service', 'hoverTranslationService', 'selectionTranslationService',
+        'imageTranslationService', 'documentService', 'videoService',
+        'areaTranslationService', 'inputBoxTranslationService',
+    ];
+    if (selectedFields.some(field => raw[field] === service)) return true;
+
+    for (const field of ['harness', 'writing'] as const) {
+        const preferences = raw[field];
+        if (preferences && typeof preferences === 'object' && !Array.isArray(preferences)
+            && (preferences as Record<string, unknown>).service === service) return true;
+    }
+
+    for (const field of ['favoriteServices', 'translationCenterServices'] as const) {
+        const selected = raw[field];
+        if (Array.isArray(selected) && selected.includes(service)) return true;
+    }
+    const quickProfiles = raw.quickTranslationProfiles;
+    if (Array.isArray(quickProfiles) && quickProfiles.some(profile => (
+        profile !== null && typeof profile === 'object' && !Array.isArray(profile)
+        && (profile as Record<string, unknown>).service === service
+    ))) return true;
+    const composites = raw.compositeTranslationProviders;
+    if (Array.isArray(composites) && composites.some(provider => (
+        provider !== null && typeof provider === 'object' && !Array.isArray(provider)
+        && Array.isArray((provider as Record<string, unknown>).services)
+        && ((provider as Record<string, unknown>).services as unknown[]).includes(service)
+    ))) return true;
+
+    const mappings = raw as Record<string, unknown>;
+    for (const field of ['token', 'secret', 'proxy', 'customModel', 'customBody', 'customHeaders', 'serviceRegion'] as const) {
+        const mapping = mappings[field];
+        const value = mapping && typeof mapping === 'object' && !Array.isArray(mapping)
+            ? (mapping as Record<string, unknown>)[service]
+            : undefined;
+        if (typeof value === 'string' && value.trim()) return true;
+    }
+
+    const apiKeys = mappings.apiKeys && typeof mappings.apiKeys === 'object' && !Array.isArray(mappings.apiKeys)
+        ? (mappings.apiKeys as Record<string, unknown>)[service]
+        : undefined;
+    if (Array.isArray(apiKeys) && apiKeys.some(key => typeof key === 'string' && key.trim())) return true;
+
+    const customModels = mappings.customModels && typeof mappings.customModels === 'object' && !Array.isArray(mappings.customModels)
+        ? (mappings.customModels as Record<string, unknown>)[service]
+        : undefined;
+    if (Array.isArray(customModels) && customModels.some(model => typeof model === 'string' && model.trim())) return true;
+
+    const selectedModel = mappings.model && typeof mappings.model === 'object' && !Array.isArray(mappings.model)
+        ? (mappings.model as Record<string, unknown>)[service]
+        : undefined;
+    if (typeof selectedModel === 'string' && selectedModel.trim()
+        && selectedModel !== (defaultModelIds as Record<string, unknown>)[service]) return true;
+
+    for (const field of ['modelThinking', 'serviceRequestLimits', 'modelRequestLimits', 'modelVision'] as const) {
+        const mapping = mappings[field];
+        const value = mapping && typeof mapping === 'object' && !Array.isArray(mapping)
+            ? (mapping as Record<string, unknown>)[service]
+            : undefined;
+        if (value && typeof value === 'object' && Object.keys(value).length > 0) return true;
+    }
+    const rotation = mappings.apiKeyRotationEnabled && typeof mappings.apiKeyRotationEnabled === 'object'
+        && !Array.isArray(mappings.apiKeyRotationEnabled)
+        ? (mappings.apiKeyRotationEnabled as Record<string, unknown>)[service]
+        : undefined;
+    if (rotation === true) return true;
+
+    const systemRole = mappings.system_role && typeof mappings.system_role === 'object' && !Array.isArray(mappings.system_role)
+        ? (mappings.system_role as Record<string, unknown>)[service]
+        : undefined;
+    const userRole = mappings.user_role && typeof mappings.user_role === 'object' && !Array.isArray(mappings.user_role)
+        ? (mappings.user_role as Record<string, unknown>)[service]
+        : undefined;
+    return (typeof systemRole === 'string' && systemRole !== defaultOption.system_role)
+        || (typeof userRole === 'string' && userRole !== defaultOption.user_role
+            && !LEGACY_DEFAULT_USER_ROLES.includes(userRole));
+}
+
 /**
  * 将存储或导入的普通对象补齐为当前配置结构，并迁移已退役或错误的模型编号。
  */
@@ -1101,8 +1275,10 @@ export function normalizeConfig(value: unknown): Config {
             : false;
     }
     normalized.informationHighlight = normalizeInformationHighlightPreferences(source.informationHighlight);
+    normalized.privacyProtection = normalizePrivacyPolicy(source.privacyProtection);
+    normalized.privacyProtectionSecretTerms = normalizePrivacyTerms(source.privacyProtectionSecretTerms);
     normalized.nativeBatchTranslationEnabled = normalizeNativeBatchTranslationEnabled(source.nativeBatchTranslationEnabled);
-    normalized.bilingualSentenceHighlightEnabled = source.bilingualSentenceHighlightEnabled === true;
+    normalized.bilingualSentenceHighlightEnabled = source.bilingualSentenceHighlightEnabled !== false;
     normalized.bilingualSentenceHighlightStyle = normalizeSentenceHighlightStyle(source.bilingualSentenceHighlightStyle);
     normalized.bilingualSentenceHighlightAppearance = normalizeSentenceHighlightAppearance(source.bilingualSentenceHighlightAppearance);
     normalized.bilingualSentenceHighlightProfiles = normalizeSentenceHighlightProfiles(source.bilingualSentenceHighlightProfiles);
@@ -1110,6 +1286,7 @@ export function normalizeConfig(value: unknown): Config {
         && normalized.bilingualSentenceHighlightProfiles.some(profile => profile.id === source.activeSentenceHighlightProfileId)
         ? source.activeSentenceHighlightProfileId : '';
     normalized.translationAppearance = normalizeTranslationAppearance(source.translationAppearance);
+    normalized.browserDefaultTranslationFont = source.browserDefaultTranslationFont === true;
     normalized.translationStyleProfiles = normalizeTranslationStyleProfiles(source.translationStyleProfiles);
     normalized.activeTranslationStyleProfileId = typeof source.activeTranslationStyleProfileId === 'string'
         && normalized.translationStyleProfiles.some((profile) => profile.id === source.activeTranslationStyleProfileId)
@@ -1168,6 +1345,15 @@ export function normalizeConfig(value: unknown): Config {
     normalized.modelRequestLimits = withoutRetiredServiceEntries(normalizeModelRequestLimits(source.modelRequestLimits));
     normalized.apiKeyRecoveryMs = normalizeApiKeyRecoveryMs(source.apiKeyRecoveryMs);
     normalized.freeTranslationOrder = normalizeFreeTranslationOrder(source.freeTranslationOrder);
+    normalized.disabledTranslationServices = normalizeDisabledTranslationServices(source.disabledTranslationServices);
+    if (source.aiPlatformDefaultRemovalMigrated !== true) {
+        const disabledServices = new Set(normalized.disabledTranslationServices);
+        for (const service of DEFAULT_DISABLED_AI_PLATFORM_SERVICES) {
+            if (!hasConfiguredAiPlatformService(source, service)) disabledServices.add(service);
+        }
+        normalized.disabledTranslationServices = [...disabledServices];
+    }
+    normalized.aiPlatformDefaultRemovalMigrated = true;
     // 旧配置首次升级默认开启 B站；标记写入后尊重用户后续的手动关闭。
     if (source.freeTranslationBilibiliDefaultApplied !== true) {
         const order = normalized.freeTranslationOrder.filter(id => id !== 'bilibiliFree');
@@ -1263,6 +1449,14 @@ export function normalizeConfig(value: unknown): Config {
     if (!isSupportedTranslationService(normalized.service, normalized.customOpenAIProviders, normalized.compositeTranslationProviders)) {
         normalized.service = defaultOption.service;
     }
+    const disabledServices = new Set(normalized.disabledTranslationServices);
+    if (disabledServices.has(normalized.service)) {
+        const fallback = options.services.find(item => item.value !== 'machine' && item.value !== 'ai' && !item.disabled && !disabledServices.has(item.value))?.value
+            || normalized.customOpenAIProviders.find(provider => !disabledServices.has(provider.id))?.id
+            || normalized.compositeTranslationProviders.find(provider => !disabledServices.has(provider.id))?.id;
+        if (fallback) normalized.service = fallback;
+        else normalized.disabledTranslationServices = normalized.disabledTranslationServices.filter(service => service !== normalized.service);
+    }
 
     if (!isSupportedTranslationService(normalized.documentService, normalized.customOpenAIProviders, normalized.compositeTranslationProviders)) {
         normalized.documentService = '';
@@ -1283,11 +1477,15 @@ export function normalizeConfig(value: unknown): Config {
         normalized.videoTranslationEnabled = true;
     }
     normalized.videoMeetingAutoEnabled = typeof source.videoMeetingAutoEnabled === 'boolean' ? source.videoMeetingAutoEnabled : true;
+    normalized.videoCourseAutoStart = normalizeVideoCourseAutoStart(source.videoCourseAutoStart);
     normalized.videoPreferHumanSubtitles = typeof source.videoPreferHumanSubtitles === 'boolean' ? source.videoPreferHumanSubtitles : true;
     // 缺失或非法选择统一使用质量默认；明确保存的 Tiny/Base/Small 继续保留。
     if (normalized.videoLocalModel !== 'tiny' && normalized.videoLocalModel !== 'base' && normalized.videoLocalModel !== 'small') {
         normalized.videoLocalModel = 'small';
     }
+    normalized.videoTranscriptionProvider = source.videoTranscriptionProvider === 'native-qwen' ? 'native-qwen' : 'browser';
+    normalized.videoNativeAsrBaseUrl = source.videoNativeAsrBaseUrl === undefined
+        ? DEFAULT_NATIVE_ASR_BASE_URL : normalizeNativeAsrBaseUrl(source.videoNativeAsrBaseUrl);
     if (!VIDEO_SOURCE_LANGUAGE_OPTIONS.some((item) => item.value === normalized.videoSourceLanguage)) {
         normalized.videoSourceLanguage = 'auto';
     }
@@ -1384,6 +1582,14 @@ export function normalizeConfig(value: unknown): Config {
     normalized.floatingBallCollapsedOpacity = normalizeFloatingBallCollapsedOpacity(
         source.floatingBallCollapsedOpacity,
     );
+    normalized.floatingBallDefaultMargin = normalizeFloatingBallMargin(
+        source.floatingBallDefaultMargin,
+        DEFAULT_FLOATING_BALL_DEFAULT_MARGIN,
+    );
+    normalized.floatingBallPopoutMargin = normalizeFloatingBallMargin(
+        source.floatingBallPopoutMargin,
+        DEFAULT_FLOATING_BALL_POPOUT_MARGIN,
+    );
     normalized.floatingBallDisabledDomains = normalizeFloatingBallDisabledDomains(
         source.floatingBallDisabledDomains,
     );
@@ -1394,12 +1600,15 @@ export function normalizeConfig(value: unknown): Config {
     normalized.translationBeforeOriginal = source.translationBeforeOriginal === true;
     normalized.alwaysTranslateDomains = normalizeAlwaysTranslateDomains(source.alwaysTranslateDomains);
     normalized.disabledExtensionDomains = normalizeDisabledExtensionDomains(source.disabledExtensionDomains);
+    normalized.translationOnlyDomains = normalizeSiteDomains(source.translationOnlyDomains);
     normalized.siteAdaptation = normalizeSiteAdaptationSettings(source.siteAdaptation);
     normalized.shareCard = normalizeShareCardPreferences(source.shareCard);
     normalized.interfaceSkin = normalizeInterfaceSkin(source.interfaceSkin);
     normalized.interfaceFont = normalizeInterfaceFont(source.interfaceFont);
     normalized.interfaceVisibility = normalizeInterfaceVisibility(source.interfaceVisibility);
     normalized.popupModuleOrder = normalizePopupModuleOrder(source.popupModuleOrder);
+    normalized.translationSidepanelScope = source.translationSidepanelScope === 'window' ? 'window' : 'tab';
+    normalized.toolbarClickAction = source.toolbarClickAction === 'translate' ? 'translate' : 'popup';
     normalized.popupQuickFeatureOrder = normalizePopupQuickFeatureOrder(source.popupQuickFeatureOrder);
     normalized.popupQuickFeatureVisibility = normalizePopupQuickFeatureVisibility(source.popupQuickFeatureVisibility);
 
@@ -1428,10 +1637,18 @@ export function normalizeConfig(value: unknown): Config {
     if (typeof normalized.customSelectionTranslatorHotkey !== 'string') {
         normalized.customSelectionTranslatorHotkey = '';
     }
+    normalized.selectionClickSelectEnabled = source.selectionClickSelectEnabled === true;
+    normalized.selectionClickSelectHotkey = normalizeClickSelectionHotkey(source.selectionClickSelectHotkey);
     normalized.selectionTranslatorDelay = normalizeSelectionTranslatorDelay(
         source.selectionTranslatorDelay,
     );
     normalized.selectionTranslatorBidirectional = source.selectionTranslatorBidirectional === true;
+    normalized.selectionDictionarySource = normalizeWordDictionarySource(source.selectionDictionarySource);
+    if (import.meta.env?.BROWSER !== 'userscript') {
+        normalized.selectionDictionaryWorkspace = normalizeDictionaryWorkspace(source.selectionDictionaryWorkspace);
+        const recipe = dictionaryId(source.selectionDictionaryRecipe);
+        normalized.selectionDictionaryRecipe = normalized.selectionDictionaryWorkspace.recipes.some(item => item.id === recipe) ? recipe : '';
+    }
     normalized.selectionTranslatorAutoDismiss = typeof source.selectionTranslatorAutoDismiss === 'boolean'
         ? source.selectionTranslatorAutoDismiss : true;
     // 兼容上一版“触发方式 + 可选快捷键”配置，并将最终状态收敛为单一触发方式。
@@ -1486,6 +1703,7 @@ export function normalizeConfig(value: unknown): Config {
     if (typeof normalized.sectionTranslationHotkeyEnabled !== 'boolean') {
         normalized.sectionTranslationHotkeyEnabled = false;
     }
+    normalized.sectionTranslationRules = normalizeSectionTranslationRules(source.sectionTranslationRules);
     normalized.customSectionTranslationHotkey = normalizeCustomSectionTranslationHotkey(source.customSectionTranslationHotkey);
     normalized.sectionTranslationHotkey = normalizeSectionTranslationHotkey(source.sectionTranslationHotkey);
     // 选择自定义却没有可用组合键时回到预设默认值，开启的快捷键不会失去可用组合。
@@ -1498,6 +1716,7 @@ export function normalizeConfig(value: unknown): Config {
     normalized.imageTranslationMangaEnabled = typeof normalized.imageTranslationMangaEnabled === 'boolean' ? normalized.imageTranslationMangaEnabled : true;
     // 新安装、缺失或非法值使用 PaddleOCR；保留已保存的 Tesseract 选择。
     normalized.imageTranslationOcrEngine = normalized.imageTranslationOcrEngine === 'tesseract' ? 'tesseract' : 'paddle';
+    normalized.imageTranslationInferenceBackend = normalized.imageTranslationInferenceBackend === 'cpu' ? 'cpu' : 'auto';
     normalized.imageTranslationMangaPromptEnabled = typeof normalized.imageTranslationMangaPromptEnabled === 'boolean' ? normalized.imageTranslationMangaPromptEnabled : true;
     normalized.imageTranslationMangaDownloadConfirmed = normalized.imageTranslationMangaDownloadConfirmed === true;
     normalized.imageTranslationMangaSites = normalizeMangaSiteRules(normalized.imageTranslationMangaSites);
@@ -1554,6 +1773,8 @@ export function normalizeConfig(value: unknown): Config {
         },
     );
     normalized.enableAIMultiSegment = source.enableAIMultiSegment === true;
+    normalized.aiMultiSegmentMaxSegments = normalizeAiMultiSegmentMaxSegments(source.aiMultiSegmentMaxSegments);
+    normalized.aiMultiSegmentMaxCharacters = normalizeAiMultiSegmentMaxCharacters(source.aiMultiSegmentMaxCharacters);
     return normalized;
 }
 

@@ -1,7 +1,7 @@
 /**
  * @file src/services/translation/context/pageDiscourse.ts
  * 文件职责：把当前网页正文和候选位置适配到有界的单篇篇章状态。
- * 主要内容：有界遍历正文原文、排除输入与扩展译文、按标题分章，准备及提交带取消归属的证据。
+ * 主要内容：在当前材料根内有界遍历正文原文、排除输入与扩展译文、按标题分章，准备及提交带取消归属的证据。
  * 模块边界：只读 DOM，不挂载 UI、不请求模型、不持久化；调用方在恢复和卸载时清理。
  */
 import {createDiscourseContext, discourseContextLimits, type DiscourseBlock} from './discourse';
@@ -9,6 +9,7 @@ import {getPageTranslationMaterialIdentity} from './policy';
 
 const EXCLUDED = 'script,style,noscript,template,svg,math,pre,code,nav,aside,footer,form,button,input,textarea,select,[hidden],[inert],[aria-hidden="true"],[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="searchbox"],[role="combobox"],[translate="no"],[data-notranslate],[style*="display: none" i],[style*="visibility: hidden" i],.fluent-read-bilingual-content,.fluent-read-loading,.fluent-read-retry-wrapper';
 const BLOCK = 'p,h1,h2,h3,h4,h5,h6,li,blockquote,td,figcaption';
+const MATERIAL_ROOT = 'article,main,[role="main"]';
 const MAX_NODES = 8192;
 let discourse = createDiscourseContext();
 let elementIds = new WeakMap<Element, string>();
@@ -51,12 +52,16 @@ function ownerSource(owner: Element, budget = {nodes: 0, characters: 0}): string
 
 /** 每次请求核对有界原文快照；不用观察器或计时器，迟到提交再次核对正文身份。 */
 export function preparePageDiscourseContext(owner: Element, origins: readonly string[], languageKey: string, signal?: AbortSignal, onSourceChange?: () => void) {
-    if (!owner.isConnected || owner.closest(EXCLUDED) || owner.closest('[data-fr-translation-owned="true"]')) {
+    const doc = owner.ownerDocument;
+    const root = owner.closest(MATERIAL_ROOT) ?? doc.body;
+    if (!root || !root.contains(owner) || !owner.isConnected || owner.closest(EXCLUDED) || owner.closest('[data-fr-translation-owned="true"]')) {
         return {context: '', commit(_translations: readonly string[]) {}};
     }
-    const doc = owner.ownerDocument;
-    const root = owner.closest('article,main,[role="main"]') ?? doc.body;
-    const materialId = `${getPageTranslationMaterialIdentity(doc.location?.href ?? doc.URL ?? '')}:${root ? id(root) : ''}`;
+    const currentBlockOwner = () => {
+        const block = owner.closest(BLOCK);
+        return block && root.contains(block) ? block : owner;
+    };
+    const materialId = `${getPageTranslationMaterialIdentity(doc.location?.href ?? doc.URL ?? '')}:${id(root)}`;
     const scope = JSON.stringify([materialId, languageKey]);
     if (activeScope !== scope) {
         activeScope = scope;
@@ -65,7 +70,7 @@ export function preparePageDiscourseContext(owner: Element, origins: readonly st
     }
     const capture = () => {
         const blocks: DiscourseBlock[] = [];
-        if (!root || root.closest(EXCLUDED) || !doc.createTreeWalker) return blocks;
+        if (root.closest(EXCLUDED) || !doc.createTreeWalker) return blocks;
         // 已译依据核对完整原文；每次总计最多8192节点/64000字符，无法核对就撤销旧依据。
         const proofBudget = {nodes: 0, characters: 0};
         let changed = false;
@@ -111,11 +116,11 @@ export function preparePageDiscourseContext(owner: Element, origins: readonly st
             if (incomplete) texts.delete(incomplete);
         }
         // 固定开篇锚点之后采集当前候选附近的窗口，深处章节也不会退回文章前缀。
-        const currentOwner = owner.closest(BLOCK) ?? owner;
+        const currentOwner = currentBlockOwner();
         const window: Element[] = [currentOwner];
         // 常见正文每段各包一个布局容器；最多上移8层单子容器，再取邻容器里的正文。
         let anchor = currentOwner;
-        for (let depth = 0; depth < 8 && anchor.parentElement && anchor.parentElement !== root
+        for (let depth = 0; depth < 8 && anchor !== root && anchor.parentElement && anchor.parentElement !== root
             && anchor.parentElement.children.length === 1; depth++) anchor = anchor.parentElement;
         window.push(anchor);
         let sibling = anchor.previousElementSibling;
@@ -125,7 +130,7 @@ export function preparePageDiscourseContext(owner: Element, origins: readonly st
         const localElements = new Set(window);
         for (const element of window) {
             if (visited >= MAX_NODES || characters >= discourseContextLimits.sourceCharacters) break;
-            if (element.closest(EXCLUDED)) continue;
+            if (!root.contains(element) || element.closest(EXCLUDED)) continue;
             const localWalker = doc.createTreeWalker(element, 1 | 4, {
                 acceptNode(node) {
                     return node.nodeType === 1 && ((node as Element).matches(EXCLUDED)
@@ -138,8 +143,9 @@ export function preparePageDiscourseContext(owner: Element, origins: readonly st
             while ((local = localWalker.nextNode()) && visited++ < MAX_NODES
                 && characters < discourseContextLimits.sourceCharacters) {
                 if (signal?.aborted) break;
-                if (local.nodeType !== 3) continue;
-                const block = local.parentElement?.closest(BLOCK) ?? element;
+                if (local.nodeType !== 3 || !root.contains(local)) continue;
+                const closestLocalBlock = local.parentElement?.closest(BLOCK);
+                const block = closestLocalBlock && root.contains(closestLocalBlock) ? closestLocalBlock : element;
                 localElements.add(block);
                 if (texts.has(block)) continue;
                 const old = localTexts.get(block) ?? '';
@@ -188,7 +194,7 @@ export function preparePageDiscourseContext(owner: Element, origins: readonly st
             blocks.push({id: id(element), section: !hasHeading ? unknownSection : localElements.has(element) ? localSection ?? section : section,
                 source: text, position: `block ${id(element)}`});
         }
-        const blockOwner = owner.closest(BLOCK) ?? owner;
+        const blockOwner = currentOwner;
         if (!blocks.some(block => block.id === id(blockOwner))) {
             // 超出扫描预算的段落仍有自身位置；不会无限向后采集或重发整篇。
             blocks.push({id: id(blockOwner), section: `outside-budget:${id(blockOwner)}`,
@@ -198,15 +204,16 @@ export function preparePageDiscourseContext(owner: Element, origins: readonly st
     };
     const state = discourse;
     const blocks = capture();
-    state.replace(materialId, languageKey, blocks, id(owner.closest(BLOCK) ?? owner), String(sourceRevision));
-    const ticket = state.prepare(id(owner.closest(BLOCK) ?? owner), origins, signal);
+    state.replace(materialId, languageKey, blocks, id(currentBlockOwner()), String(sourceRevision));
+    const ticket = state.prepare(id(currentBlockOwner()), origins, signal);
     const capturedOwnerSource = ownerSource(owner);
     return {
         context: ticket.context,
         commit(translations: readonly string[]) {
-            if (signal?.aborted || discourse !== state || activeScope !== scope || !owner.isConnected
+            if (signal?.aborted || discourse !== state || activeScope !== scope || !owner.isConnected || !root.contains(owner)
+                || (owner.closest(MATERIAL_ROOT) ?? doc.body) !== root
                 || capturedOwnerSource === null || ownerSource(owner) !== capturedOwnerSource
-                || `${getPageTranslationMaterialIdentity(doc.location?.href ?? doc.URL ?? '')}:${root ? id(root) : ''}` !== materialId) return;
+                || `${getPageTranslationMaterialIdentity(doc.location?.href ?? doc.URL ?? '')}:${id(root)}` !== materialId) return;
             const currentBlocks = capture();
             translatedSourceCharacters += capturedOwnerSource.length - (translatedSources.get(owner)?.length ?? 0);
             translatedSources.delete(owner);
@@ -218,9 +225,9 @@ export function preparePageDiscourseContext(owner: Element, origins: readonly st
                 translatedSources.delete(oldest); evicted = true;
             }
             if (evicted) sourceRevision++;
-            state.replace(materialId, languageKey, currentBlocks, id(owner.closest(BLOCK) ?? owner), String(sourceRevision));
+            state.replace(materialId, languageKey, currentBlocks, id(currentBlockOwner()), String(sourceRevision));
             // 来源证明预算淘汰会清理旧参考；刚刚完整验证的当前结果可以作为新的首条依据。
-            (evicted ? state.prepare(id(owner.closest(BLOCK) ?? owner), origins, signal) : ticket).commit(translations);
+            (evicted ? state.prepare(id(currentBlockOwner()), origins, signal) : ticket).commit(translations);
         },
     };
 }

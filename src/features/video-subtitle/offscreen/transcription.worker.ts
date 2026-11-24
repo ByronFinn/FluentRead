@@ -2,7 +2,7 @@
  * @file src/features/video-subtitle/offscreen/transcription.worker.ts
  * 文件职责：运行独立的 Whisper ONNX Worker，复用模型 session 并执行受限时长的本地音频推理。
  * 主要内容：配置 WASM/WebGPU 和分模块精度、串行复用模型，每窗检测语言并共享特征与编码，跳过数字静音、恢复裁剪偏移并拒绝异常重复。生成计时器协作停止解码；独立 Offscreen owner 的墙钟超时负责终止 Worker，同线程计时器不保证原生算子中的实时中断。
- * 模块边界：只运行模型与 Worker 消息循环，不访问页面 DOM、后台消息或共享 Offscreen 业务状态。
+ * 模块边界：只运行模型与 Worker 消息循环，入站先经唯一 Worker 协议校验；不访问页面 DOM、后台消息或共享 Offscreen 业务状态。
  */
 import {forceSingleThreadInference, localWasmThreads, paceLocalInference, paceLocalInitialization} from '@/src/shared/onnx/resources';
 import { env, InterruptableStoppingCriteria, pipeline, Tensor } from '@huggingface/transformers';
@@ -12,19 +12,24 @@ import {
   normalizeVideoLocalTranscriptionModel,
   isDegenerateVideoTranscript,
   prepareWhisperAudioWindow,
-  type VideoAiRecognitionMetadata,
   type VideoAiModelDtype,
 } from '@/src/features/video-subtitle/transcription';
 import {
   VIDEO_AI_MODEL_REMOTE_HOST,
   VIDEO_AI_MODEL_REMOTE_PATH_TEMPLATE,
   cacheVideoAiQ8ModelFiles,
+  createVideoAiModelCache,
 } from './modelCache';
+import {VIDEO_AI_MODEL_REVISION} from '@/src/features/video-subtitle/modelFiles';
 import {parseWhisperChunkTimestamps} from './timestampParser';
 import {buildWhisperTranscriptionGenerationOptions, chooseWhisperSourceLanguage, normalizeWhisperSourceLanguage, type WhisperDetectedLanguage} from './transcriptionOptions';
 import {configureOnnxWasmBackend, withCompressedWasmBinary} from '@/src/shared/onnx/wasmBinary';
 import {probeWebGpu} from '@/src/shared/onnx/webgpu';
 import {prepareWhisperEncoderReuse, prepareWhisperProcessorReuse, withWhisperStoppingCriteria, type WhisperAudioProcessor, type WhisperEncoderReuse, type WhisperEncoderReuseModel, type WhisperProcessorReuse} from './whisperEncoderReuse';
+import type {InferenceBackend} from '@/src/core/messaging/inference';
+import type {VideoTranscriptionResult, VideoTranscriptionSegment} from '@/src/core/messaging/video';
+import {readWorkerRequestId} from '@/src/core/messaging/validation';
+import {isVideoWorkerDisposal, parseVideoWorkerRequest, type VideoWorkerRequest as WorkerRequest, type VideoWorkerResponse as WorkerResponse} from '../workerProtocol';
 
 type LocalTranscriber = ((
   audio: Float32Array,
@@ -38,35 +43,12 @@ type LocalTranscriber = ((
   };
 };
 
-type LocalTranscriptionBackend = 'webgpu' | 'wasm';
-
-interface LocalVideoTranscriptionSegment {
-  startMs: number;
-  endMs: number;
-  text: string;
-}
-
-interface WorkerTranscriptionResult extends VideoAiRecognitionMetadata {
+type LocalTranscriptionBackend = InferenceBackend;
+type LocalVideoTranscriptionSegment = VideoTranscriptionSegment;
+interface WorkerTranscriptionResult extends VideoTranscriptionResult {
   text: string;
   segments: LocalVideoTranscriptionSegment[];
   model: string;
-  backend?: LocalTranscriptionBackend;
-  gpuInfo?: string;
-  inferenceMs?: number;
-  audioDurationMs?: number;
-  threads?: number;
-  dtype?: 'q4' | 'q8';
-}
-
-interface WorkerRequest {
-  requestId: number;
-  type: 'prepare' | 'transcribe';
-  model?: unknown;
-  sourceLanguage?: string;
-  languageSessionKey?: string;
-  audio?: Float32Array;
-  /** 主线程 Worker 重建后的 CPU 锁定请求，避免再次探测或创建 GPU session。 */
-  device?: 'wasm';
 }
 
 class WebGpuFallbackError extends Error {
@@ -80,11 +62,11 @@ class WebGpuFallbackError extends Error {
 
 let transcriberPromise: Promise<LocalTranscriber> | null = null;
 let transcriberModelId = '';
-let transcriberBackend: LocalTranscriptionBackend | '' = '';
+let transcriberBackend: LocalTranscriptionBackend | undefined;
 let transcriberGpuInfo = '';
 let transcriberThreads = 1;
-let transcriberDtype: 'q4' | 'q8' | '' = '';
-let transcriberEncoderDtype: VideoAiModelDtype | '' = '';
+let transcriberDtype: 'q4' | 'q8' | undefined;
+let transcriberEncoderDtype: VideoAiModelDtype | undefined;
 let wasmRuntimeThreads: number | null = null;
 let webGpuProbePromise: Promise<{available: boolean; info: string}> | null = null;
 let webGpuProbeInfo = '';
@@ -110,7 +92,21 @@ if (env.backends.onnx.wasm) {
     wasm: extensionUrl('fluent-read-ai/ort-wasm-simd-threaded.asyncify.wasm'),
   });
 }
+}
 
+async function configureModelCache(): Promise<void> {
+  const configured = await createVideoAiModelCache();
+  if (configured.sharedCache) {
+    // CacheStorage 仍作为只读兜底；新增或补齐的文件只写进用户选择的共享目录。
+    env.useCustomCache = true;
+    env.customCache = configured.cache;
+    env.useBrowserCache = false;
+    env.useFSCache = false;
+    return;
+  }
+  env.useCustomCache = false;
+  env.customCache = null;
+  env.useBrowserCache = true;
 }
 
 function extensionUrl(path: string): string {
@@ -166,7 +162,7 @@ async function createWasmTranscriber(modelId: string, model: ReturnType<typeof n
       },
       device: 'wasm',
       dtype: model === 'small' ? {encoder_model: 'fp32', decoder_model_merged: dtype} : dtype,
-      revision: 'master',
+      revision: VIDEO_AI_MODEL_REVISION,
     }) as unknown as Promise<LocalTranscriber>;
     const wasm = env.backends.onnx.wasm;
     const transcriber = await paceLocalInitialization(() => wasm
@@ -183,7 +179,7 @@ async function createWasmTranscriber(modelId: string, model: ReturnType<typeof n
     // Small 的质量档位固定 FP32 encoder/q4 decoder；失败不偷偷下载另一整组精度。
     if (model === 'small') throw q4Error;
     console.warn('[FluentRead] Worker WASM/q4 Whisper 初始化失败，退回 WASM/q8', q4Error);
-    // q8 是真实 fallback；先写入同一 Cache Storage，后续重建 worker 不会再次下载。
+    // q8 是真实 fallback；写入当前选择的缓存，后续重建 worker 不会再次下载。
     await cacheVideoAiQ8ModelFiles(model);
     return create('q8');
   }
@@ -193,6 +189,7 @@ async function createLocalTranscriber(
   modelId: string,
   model: ReturnType<typeof normalizeVideoLocalTranscriptionModel>,
 ): Promise<LocalTranscriber> {
+  await configureModelCache();
   if (await canUseWebGpu()) {
     let gpuTranscriber: LocalTranscriber | null = null;
     try {
@@ -204,7 +201,7 @@ async function createLocalTranscriber(
         },
         device: 'webgpu',
         dtype: model === 'small' ? {encoder_model: 'fp32', decoder_model_merged: 'q4'} : 'q4',
-        revision: 'master',
+        revision: VIDEO_AI_MODEL_REVISION,
       }) as unknown as Promise<LocalTranscriber>;
       const wasm = env.backends.onnx.wasm;
       gpuTranscriber = await paceLocalInitialization(() => wasm
@@ -224,10 +221,10 @@ async function createLocalTranscriber(
       } catch {
         // GPU session 清理失败时仍交给 owner 终止当前 Worker。
       }
-      transcriberBackend = '';
+      transcriberBackend = undefined;
       transcriberGpuInfo = '';
-      transcriberDtype = '';
-      transcriberEncoderDtype = '';
+      transcriberDtype = undefined;
+      transcriberEncoderDtype = undefined;
       console.warn('[FluentRead] Worker WebGPU Whisper 初始化失败，请求 fresh WASM Worker', error);
       throw new WebGpuFallbackError(error);
     }
@@ -262,10 +259,10 @@ async function getLocalTranscriber(model: unknown): Promise<LocalTranscriber> {
   transcriberPromise = createLocalTranscriber(modelId, normalizedModel).catch((error) => {
     transcriberPromise = null;
     transcriberModelId = '';
-    transcriberBackend = '';
+    transcriberBackend = undefined;
     transcriberGpuInfo = '';
-    transcriberDtype = '';
-    transcriberEncoderDtype = '';
+    transcriberDtype = undefined;
+    transcriberEncoderDtype = undefined;
     throw error;
   });
   return transcriberPromise;
@@ -433,14 +430,14 @@ async function transcribeAudioOnce(
     text: cleanTranscriptText(output?.text),
     segments,
     model,
-    backend: transcriberBackend as LocalTranscriptionBackend,
+    backend: transcriberBackend,
     gpuInfo: transcriberGpuInfo || undefined,
     inferenceMs,
     audioDurationMs,
     threads: transcriberBackend === 'wasm' ? transcriberThreads : undefined,
-    dtype: transcriberDtype as 'q4' | 'q8',
-    encoderDtype: transcriberEncoderDtype as VideoAiModelDtype,
-    decoderDtype: transcriberDtype as 'q4' | 'q8',
+    dtype: transcriberDtype,
+    encoderDtype: transcriberEncoderDtype,
+    decoderDtype: transcriberDtype,
     detectedLanguage: languageDetection?.language,
     languageConfidence: languageDetection?.confidence,
     languageDetectionMs: languageDetection?.detectionMs,
@@ -460,9 +457,9 @@ async function transcribeAudio(request: WorkerRequest): Promise<WorkerTranscript
       text: '',
       segments: [],
       model,
-      backend: transcriberBackend || undefined,
+      backend: transcriberBackend,
       threads: transcriberBackend === 'wasm' ? transcriberThreads : undefined,
-      dtype: transcriberDtype || undefined,
+      dtype: transcriberDtype,
       inferenceMs: 0,
       audioDurationMs: prepared.sourceDurationMs,
     };
@@ -495,10 +492,10 @@ async function disposeTranscriber(): Promise<void> {
   const current = transcriberPromise;
   transcriberPromise = null;
   transcriberModelId = '';
-  transcriberBackend = '';
+  transcriberBackend = undefined;
   transcriberGpuInfo = '';
-  transcriberDtype = '';
-  transcriberEncoderDtype = '';
+  transcriberDtype = undefined;
+  transcriberEncoderDtype = undefined;
   transcriberThreads = wasmRuntimeThreads ?? 1;
   try {
     const transcriber = current ? await current : null;
@@ -517,14 +514,19 @@ function enqueueWorkerTask(task: () => Promise<void>): void {
 }
 
 const workerScope = self as typeof self & {
-  onmessage: ((event: MessageEvent<WorkerRequest>) => void) | null;
+  onmessage: ((event: MessageEvent<unknown>) => void) | null;
 };
+function post(response: WorkerResponse): void { workerScope.postMessage(response); }
 
 export function startVideoTranscriptionWorker(): void {
 configureEnvironment();
 workerScope.onmessage = (event) => {
-  const request = event.data;
-  if (!request || typeof request.requestId !== 'number') return;
+  if (isVideoWorkerDisposal(event.data)) return;
+  const requestId = readWorkerRequestId(event.data);
+  if (requestId === undefined) return;
+  let request: WorkerRequest;
+  try { request = parseVideoWorkerRequest(event.data); }
+  catch { post({requestId, success: false, error: '视频 Worker请求消息格式无效'}); return; }
   enqueueWorkerTask(async () => {
     try {
       if (request.device === 'wasm') {
@@ -536,7 +538,7 @@ workerScope.onmessage = (event) => {
       if (request.type === 'prepare') {
         await getLocalTranscriber(request.model);
         // 与转写相同的单消费者归属：成功初始化设置诊断值，后续 dispose 必须排队。
-        workerScope.postMessage({
+        post({
           requestId: request.requestId,
           success: true,
           model: normalizeVideoLocalTranscriptionModel(request.model),
@@ -550,26 +552,21 @@ workerScope.onmessage = (event) => {
         return;
       }
       const result = await transcribeAudio(request);
-      workerScope.postMessage({ requestId: request.requestId, success: true, ...result });
+      post({ requestId: request.requestId, success: true, ...result });
     } catch (error) {
-      const response: {
-        requestId: number;
-        success: false;
-        error: string;
-        retryWithCpu?: true;
-      } = {
+      const response: WorkerResponse = {
         requestId: request.requestId,
         success: false,
         error: error instanceof Error ? error.message : String(error),
       };
       if (error instanceof WebGpuFallbackError || localWasmThreads() > 1) response.retryWithCpu = true;
-      workerScope.postMessage(response);
+      post(response);
     }
   });
 };
 
-self.addEventListener('message', (event: MessageEvent<{ type?: string }>) => {
-  if (event.data?.type === 'dispose') enqueueWorkerTask(disposeTranscriber);
+self.addEventListener('message', (event: MessageEvent<unknown>) => {
+  if (isVideoWorkerDisposal(event.data)) enqueueWorkerTask(disposeTranscriber);
 });
 
 }

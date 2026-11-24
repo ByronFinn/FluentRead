@@ -9,25 +9,34 @@
 type HttpStatus = Pick<Response, 'status' | 'statusText'> & {headers?: Pick<Headers, 'get'>};
 type JsonResponse = Pick<Response, 'json'>;
 import {isExplicitImageInputRejection} from '@/src/core/config/visionProbe';
+import {abortErrorFromSignal, cancelResponseReader} from './runtime';
 
 const MAX_PROVIDER_CODE_LENGTH = 16;
+const MAX_IMAGE_ERROR_BYTES = 32_768;
+const IMAGE_ERROR_READ_TIMEOUT_MS = 1000;
+const MAX_RETRY_AFTER_MS = 7 * 86_400_000;
+
+/** 兼容相对毫秒、相对秒数及 HTTP 日期，拒绝会被 Date.parse 当作日期的畸形数字。 */
+export function readRetryAfterMs(headers: Pick<Headers, 'get'>, now = Date.now()): number | undefined {
+    const milliseconds = headers.get('retry-after-ms')?.trim() ?? '';
+    if (/^\d+(?:\.\d+)?$/u.test(milliseconds) && Number.isFinite(Number(milliseconds))) {
+        return Math.min(Number(milliseconds), MAX_RETRY_AFTER_MS);
+    }
+    const value = headers.get('retry-after')?.trim() ?? '';
+    const duration = /^\d+(?:\.\d+)?$/u.test(value) ? Number(value) * 1000
+        : /[A-Za-z]{3}/u.test(value) ? Math.max(0, Date.parse(value) - now) : NaN;
+    return Number.isFinite(duration) ? Math.min(duration, MAX_RETRY_AFTER_MS) : undefined;
+}
 
 /**
  * 构造不回显第三方响应正文的 HTTP 错误。
  * 正文可能包含原文、译文、provider 诊断或代理回显的凭据，因此只暴露协议状态码。
  */
 export function createHttpStatusError(response: HttpStatus, label = '请求失败'): Error {
-    const retryAfter = response.headers?.get('Retry-After');
-    let retryAfterMs: number | undefined;
-    if (retryAfter?.trim()) {
-        const value = retryAfter.trim();
-        const duration = /^\d+(?:\.\d+)?$/u.test(value)
-            ? Number(value) * 1000 : Date.parse(value) - Date.now();
-        if (Number.isFinite(duration) && duration > 0) retryAfterMs = Math.min(duration, 7 * 86_400_000);
-    }
+    const retryAfterMs = response.headers && readRetryAfterMs(response.headers);
     return Object.assign(new Error(`${label}: ${response.status}`), {
         statusCode: response.status,
-        ...(retryAfterMs === undefined ? {} : {retryAfterMs}),
+        ...(retryAfterMs ? {retryAfterMs} : {}),
     });
 }
 
@@ -35,13 +44,42 @@ export function createHttpStatusError(response: HttpStatus, label = '请求失�
 export async function createImageInputHttpError(response: Response, label = '请求失败'): Promise<Error> {
     const error = createHttpStatusError(response, label);
     if (response.status !== 400 && response.status !== 422) return error;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let cancelTimer: (() => void) | undefined;
     try {
-        const body = await response.clone().json();
-        const detail = body?.error?.message ?? body?.message;
+        // 原始响应仍可能由 SDK 读取；只检查克隆分支，限制未知错误正文的体积和等待时间。
+        const body = response.clone().body;
+        if (!body) return error;
+        reader = body.getReader();
+        const current = reader;
+        const collect = async (): Promise<string | undefined> => {
+            const decoder = new TextDecoder(); let bytes = 0, text = '';
+            while (true) {
+                const part = await current.read();
+                if (part.done) return text + decoder.decode();
+                bytes += part.value.byteLength;
+                if (bytes > MAX_IMAGE_ERROR_BYTES) return undefined;
+                text += decoder.decode(part.value, {stream: true});
+            }
+        };
+        const text = await Promise.race([
+            collect(),
+            new Promise<undefined>(resolve => {
+                const timer = setTimeout(() => resolve(undefined), IMAGE_ERROR_READ_TIMEOUT_MS);
+                cancelTimer = () => clearTimeout(timer);
+            }),
+        ]);
+        if (text === undefined) return error;
+        const parsed = JSON.parse(text);
+        const detail = parsed?.error?.message ?? parsed?.message;
         if (typeof detail === 'string' && detail.length <= 2048 && isExplicitImageInputRejection(response.status, detail)) {
             Object.assign(error, {imageInputUnsupported: true});
         }
-    } catch { /* 非 JSON 或未知错误只保留 HTTP 状态，不能认定模型没有视觉能力。 */ }
+    } catch { /* 非 JSON、过大或无法读取时只保留状态，不能认定模型没有视觉能力。 */ }
+    finally {
+        cancelTimer?.();
+        if (reader) cancelResponseReader(reader);
+    }
     return error;
 }
 
@@ -68,14 +106,17 @@ export function createProviderCodeError(label: string, value: unknown): Error {
 /**
  * 解析第三方 JSON，但不传播 parser 自带的输入预览。
  * V8 的 SyntaxError 可能包含损坏 JSON 的片段，其中可能有原文或代理诊断。
+ * 仅明确传入的 signal 已取消时保留调用方原因；不提前结束或释放不合作的读取。
  */
 export async function readJsonResponse<T = unknown>(
     response: JsonResponse,
     label = '返回的不是有效 JSON',
+    signal?: AbortSignal,
 ): Promise<T> {
     try {
         return await response.json() as T;
     } catch {
+        if (signal?.aborted) throw abortErrorFromSignal(signal);
         throw new Error(label);
     }
 }

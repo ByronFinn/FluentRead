@@ -66,6 +66,123 @@ beforeEach(() => {
 });
 
 describe('划词翻译挂载生命周期', () => {
+    it('先让当前实例复核来源，再恢复被移除或替换 body 的 host，卸载后不再复活', async () => {
+        const {document, window} = parseHTML('<html><body><p>Original article</p></body></html>');
+        const host = document.createElement('fluent-read-selection-translator-ui');
+        document.body.appendChild(host);
+        vi.stubGlobal('MutationObserver', window.MutationObserver);
+        const source = document.querySelector('p')!;
+        const sourceChecks: Array<{sourceConnected: boolean; hostConnected: boolean}> = [];
+        const revalidateSource = vi.fn(() => {
+            sourceChecks.push({sourceConnected: source.isConnected, hostConnected: host.isConnected});
+        });
+        const instance = {revalidateSource};
+        const mountedUi = {...ui(instance), shadowHost: host};
+        mountedUi.remove.mockImplementation(() => host.remove());
+        mocks.createVueShadowUi.mockResolvedValueOnce(mountedUi);
+        mocks.createModalDialogHostController.mockReturnValue({placeForRange: vi.fn(), dispose: vi.fn()});
+        const runtime = await import('@/src/features/selection-translation/content/runtime');
+        try {
+            expect(await runtime.mountSelectionTranslator({} as never)).toBe(instance);
+            expect(revalidateSource).not.toHaveBeenCalled();
+            host.remove();
+            await vi.waitFor(() => expect(host.isConnected).toBe(true));
+            expect(host.parentNode).toBe(document.body);
+            // 来源仍有效时也必须询问当前组件 owner，且在重新接入页面之前执行。
+            expect(sourceChecks).toEqual([{sourceConnected: true, hostConnected: false}]);
+            const replacement = document.createElement('body');
+            replacement.innerHTML = '<p>Next article</p>';
+            document.body.replaceWith(replacement);
+            await vi.waitFor(() => expect(host.parentNode).toBe(replacement));
+            expect(sourceChecks).toEqual([
+                {sourceConnected: true, hostConnected: false},
+                {sourceConnected: false, hostConnected: false},
+            ]);
+            expect(mocks.createVueShadowUi).toHaveBeenCalledOnce();
+            expect(mountedUi.remove).not.toHaveBeenCalled();
+            runtime.unmountSelectionTranslator();
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(host.isConnected).toBe(false);
+            expect(mountedUi.remove).toHaveBeenCalledOnce();
+            expect(revalidateSource).toHaveBeenCalledTimes(2);
+        } finally {
+            runtime.unmountSelectionTranslator();
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it('持续删除只自动恢复两次，新选区允许恢复，禁用或上下文失效后停止恢复', async () => {
+        const {document, window} = parseHTML('<html><body><p>Selected text</p></body></html>');
+        const host = document.createElement('fluent-read-selection-translator-ui');
+        document.body.appendChild(host);
+        vi.stubGlobal('MutationObserver', window.MutationObserver);
+        const context = {isInvalid: false};
+        mocks.createVueShadowUi.mockResolvedValueOnce({...ui(), shadowHost: host});
+        mocks.createModalDialogHostController.mockReturnValue({placeForRange: vi.fn(), dispose: vi.fn()});
+        const runtime = await import('@/src/features/selection-translation/content/runtime');
+        try {
+            await runtime.mountSelectionTranslator(context as never);
+            for (let attempt = 0; attempt < 2; attempt++) {
+                host.remove();
+                await vi.waitFor(() => expect(host.isConnected).toBe(true));
+            }
+            host.remove();
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(host.isConnected).toBe(false);
+            const reportRange = mocks.createVueShadowUi.mock.calls[0][1].props.onSelectionRangeChange;
+            reportRange({startContainer: document.querySelector('p'), endContainer: document.querySelector('p')});
+            expect(host.isConnected).toBe(true);
+            mocks.config.disableSelectionTranslator = true;
+            host.remove();
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(host.isConnected).toBe(false);
+            mocks.config.disableSelectionTranslator = false;
+            context.isInvalid = true;
+            reportRange({startContainer: document.querySelector('p'), endContainer: document.querySelector('p')});
+            expect(host.isConnected).toBe(false);
+            expect(mocks.createVueShadowUi).toHaveBeenCalledOnce();
+        } finally {
+            runtime.unmountSelectionTranslator();
+            vi.unstubAllGlobals();
+        }
+    });
+
+    it('body 暂时缺失时恢复到文档根，观察范围只包含自有 host 祖先的直接子节点', async () => {
+        const {document, window} = parseHTML('<html><head></head><body></body></html>');
+        const host = document.createElement('fluent-read-selection-translator-ui');
+        document.body.appendChild(host);
+        const observations: Array<{target: Node; options: MutationObserverInit}> = [];
+        class TrackedObserver extends window.MutationObserver {
+            observe(target: Node, options: MutationObserverInit) {
+                observations.push({target, options: {...options}});
+                super.observe(target, options);
+            }
+        }
+        vi.stubGlobal('MutationObserver', TrackedObserver);
+        mocks.createVueShadowUi.mockResolvedValueOnce({...ui(), shadowHost: host});
+        mocks.createModalDialogHostController.mockReturnValue({placeForRange: vi.fn(), dispose: vi.fn()});
+        const runtime = await import('@/src/features/selection-translation/content/runtime');
+        try {
+            await runtime.mountSelectionTranslator({} as never);
+            // 浏览器可在 body 被替换的同步步骤之间暂时读到 null；用 getter 保留这一原生边界。
+            const oldBody = document.body;
+            Object.defineProperty(document, 'body', {configurable: true, get: () => null});
+            oldBody.remove();
+            await vi.waitFor(() => expect(host.parentNode).toBe(document.documentElement));
+            expect(observations.every(({options}) => JSON.stringify(options) === '{"childList":true}')).toBe(true);
+            expect(observations.map(({target}) => target)).not.toContain(host);
+            document.documentElement.remove();
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(host.isConnected).toBe(false);
+            const newRoot = document.createElement('html');
+            document.appendChild(newRoot);
+            await vi.waitFor(() => expect(host.parentNode).toBe(newRoot));
+        } finally {
+            runtime.unmountSelectionTranslator();
+            vi.unstubAllGlobals();
+        }
+    });
+
     it('选区仅转发给当前 host，卸载先恢复 modal 所有权再移除界面', async () => {
         const pending = pendingUi();
         const shadowHost = {style: {setProperty: vi.fn()}};
@@ -257,23 +374,63 @@ describe('划词翻译挂载生命周期', () => {
         expect(mountedUi.remove).toHaveBeenCalledOnce();
     });
 
-    it('允许挂载器返回没有 Vue 实例的安全空结果', async () => {
-        const mountedUi = {remove: vi.fn()};
+    it('没有 Vue 实例的挂载句柄仍可恢复自有 host，卸载后停止恢复', async () => {
+        const {document, window} = parseHTML('<html><body></body></html>');
+        const host = document.createElement('fluent-read-selection-translator-ui');
+        document.body.appendChild(host);
+        vi.stubGlobal('MutationObserver', window.MutationObserver);
+        const mountedUi = {remove: vi.fn(() => host.remove()), shadowHost: host};
         mocks.createVueShadowUi.mockResolvedValue(mountedUi);
+        mocks.createModalDialogHostController.mockReturnValue({placeForRange: vi.fn(), dispose: vi.fn()});
         const runtime = await import('@/src/features/selection-translation/content/runtime');
-
-        await expect(runtime.mountSelectionTranslator({} as never)).resolves.toBeNull();
-        runtime.unmountSelectionTranslator();
-        expect(mountedUi.remove).toHaveBeenCalledOnce();
+        try {
+            await expect(runtime.mountSelectionTranslator({} as never)).resolves.toBeNull();
+            host.remove();
+            await vi.waitFor(() => expect(host.isConnected).toBe(true));
+            expect(mocks.createVueShadowUi).toHaveBeenCalledOnce();
+            runtime.unmountSelectionTranslator();
+            await new Promise(resolve => setTimeout(resolve, 0));
+            expect(host.isConnected).toBe(false);
+            expect(mountedUi.remove).toHaveBeenCalledOnce();
+        } finally {
+            runtime.unmountSelectionTranslator();
+            vi.unstubAllGlobals();
+        }
     });
 });
 
 describe('圈选翻译按需挂载生命周期', () => {
+    it('shares an unfinished UI mount across simultaneous context menu activations', async () => {
+        const pending = pendingUi(), beginSelection = vi.fn(() => true);
+        const mountedUi = ui({beginSelection});
+        mocks.createVueShadowUi.mockReturnValueOnce(pending.promise);
+        const runtime = await import('@/src/features/area-translation/public');
+        const {startAreaTranslationFromContextMenu} = await import('@/src/features/area-translation/content/contextMenuBridge');
+        runtime.mountAreaTranslator({} as never);
+        const first = startAreaTranslationFromContextMenu(), second = startAreaTranslationFromContextMenu();
+        expect(mocks.createVueShadowUi).toHaveBeenCalledOnce();
+        pending.resolve(mountedUi);
+        await expect(Promise.all([first, second])).resolves.toEqual([true, true]);
+        expect(beginSelection).toHaveBeenCalledTimes(2);
+        runtime.unmountAreaTranslator();
+        expect(mountedUi.remove).toHaveBeenCalledOnce();
+    });
+    it('reports a rejected lazy mount once and permits a later shortcut to retry', async () => {
+        const failure=new Error('shadow UI creation failed'),error=vi.spyOn(console,'error').mockImplementation(()=>undefined);
+        const beginSelection=vi.fn(()=>true);mocks.createVueShadowUi.mockRejectedValueOnce(failure).mockResolvedValueOnce(ui({beginSelection}));
+        const listen=vi.spyOn(document,'addEventListener'),runtime=await import('@/src/features/area-translation/public');
+        try {
+            runtime.mountAreaTranslator({} as never);const key=listen.mock.calls.find(([type])=>type==='keydown')![1] as (event:KeyboardEvent)=>void;
+            mocks.shouldStartAreaTranslationFromHotkey.mockReturnValue(true);const event={preventDefault:vi.fn()} as unknown as KeyboardEvent;
+            key(event);await vi.waitFor(()=>expect(error).toHaveBeenCalledWith('[FluentRead] 圈选翻译挂载失败',failure));
+            key(event);await vi.waitFor(()=>expect(beginSelection).toHaveBeenCalledOnce());expect(mocks.createVueShadowUi).toHaveBeenCalledTimes(2);
+        } finally {runtime.unmountAreaTranslator();error.mockRestore();listen.mockRestore();}
+    });
     it('可信快捷键由入口启动覆盖层，未匹配手势不创建 UI', async () => {
         const beginSelection = vi.fn().mockReturnValue(true);
         mocks.createVueShadowUi.mockResolvedValue(ui({beginSelection}));
         const addEventListener = vi.spyOn(document, 'addEventListener');
-        const runtime = await import('@/src/features/area-translation/content/runtime');
+        const runtime = await import('@/src/features/area-translation/public');
         runtime.mountAreaTranslator({} as never);
         const onKeydown = addEventListener.mock.calls.find(([type]) => type === 'keydown')?.[1] as (event: KeyboardEvent) => void;
         const event = {preventDefault: vi.fn()} as unknown as KeyboardEvent;
@@ -291,7 +448,7 @@ describe('圈选翻译按需挂载生命周期', () => {
         expect(mocks.createVueShadowUi).toHaveBeenCalledOnce();
     });
     it('空闲页面只注册入口，不创建 Shadow DOM；卸载时清除入口', async () => {
-        const runtime = await import('@/src/features/area-translation/content/runtime');
+        const runtime = await import('@/src/features/area-translation/public');
         const {startAreaTranslationFromContextMenu} = await import('@/src/features/area-translation/content/contextMenuBridge');
 
         expect(runtime.isAreaTranslatorMounted()).toBe(false);
@@ -304,7 +461,7 @@ describe('圈选翻译按需挂载生命周期', () => {
     });
 
     it('没有上下文、总开关关闭或圈选关闭时不注册入口', async () => {
-        const runtime = await import('@/src/features/area-translation/content/runtime');
+        const runtime = await import('@/src/features/area-translation/public');
 
         expect(runtime.mountAreaTranslator()).toBeUndefined();
         expect(runtime.isAreaTranslatorMounted()).toBe(false);
@@ -322,7 +479,7 @@ describe('圈选翻译按需挂载生命周期', () => {
         const beginSelection = vi.fn().mockReturnValue(true);
         const mountedUi = ui({beginSelection});
         mocks.createVueShadowUi.mockResolvedValue(mountedUi);
-        const runtime = await import('@/src/features/area-translation/content/runtime');
+        const runtime = await import('@/src/features/area-translation/public');
         const {startAreaTranslationFromContextMenu} = await import('@/src/features/area-translation/content/contextMenuBridge');
         const context = {name: 'content'} as never;
 
@@ -351,7 +508,7 @@ describe('圈选翻译按需挂载生命周期', () => {
         const nextBegin = vi.fn().mockReturnValue(true);
         const nextUi = ui({beginSelection: nextBegin});
         mocks.createVueShadowUi.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(nextUi);
-        const runtime = await import('@/src/features/area-translation/content/runtime');
+        const runtime = await import('@/src/features/area-translation/public');
         const {startAreaTranslationFromContextMenu} = await import('@/src/features/area-translation/content/contextMenuBridge');
 
         runtime.mountAreaTranslator({} as never);
@@ -372,7 +529,7 @@ describe('圈选翻译按需挂载生命周期', () => {
         const pending = pendingUi();
         const mountedUi = ui({beginSelection: vi.fn().mockReturnValue(true)});
         mocks.createVueShadowUi.mockReturnValue(pending.promise);
-        const runtime = await import('@/src/features/area-translation/content/runtime');
+        const runtime = await import('@/src/features/area-translation/public');
         const {startAreaTranslationFromContextMenu} = await import('@/src/features/area-translation/content/contextMenuBridge');
 
         runtime.mountAreaTranslator({} as never);
@@ -389,7 +546,7 @@ describe('圈选翻译按需挂载生命周期', () => {
     it('挂载器返回没有可启动实例时清除空 UI', async () => {
         const mountedUi = {remove: vi.fn()};
         mocks.createVueShadowUi.mockResolvedValue(mountedUi);
-        const runtime = await import('@/src/features/area-translation/content/runtime');
+        const runtime = await import('@/src/features/area-translation/public');
         const {startAreaTranslationFromContextMenu} = await import('@/src/features/area-translation/content/contextMenuBridge');
 
         runtime.mountAreaTranslator({} as never);
@@ -442,6 +599,29 @@ describe('focused selection dismissal runtime ownership', () => {
             range: {startContainer: selected, endContainer: selected} as unknown as Range,
             setActive: (element: Element | null) => {active = element;}};
     }
+
+    it('repairs a removed modal host in its existing slot and restores it when the dialog disappears', async () => {
+        const dom = focusDom();
+        const actual = await vi.importActual<typeof import('@/src/features/selection-translation/content/modalDialogHost')>(
+            '@/src/features/selection-translation/content/modalDialogHost');
+        mocks.createModalDialogHostController.mockImplementation(actual.createModalDialogHostController);
+        mocks.createVueShadowUi.mockResolvedValueOnce({...ui(), shadowHost: dom.firstHost});
+        const runtime = await import('@/src/features/selection-translation/content/runtime');
+        try {
+            await runtime.mountSelectionTranslator({} as never);
+            mocks.createVueShadowUi.mock.calls[0][1].props.onSelectionRangeChange(dom.range);
+            const slot = dom.firstHost.parentNode;
+            dom.firstHost.remove();
+            await vi.waitFor(() => expect(dom.firstHost.parentNode).toBe(slot));
+            expect(slot?.parentNode).toBe(dom.dialog);
+            dom.dialog.remove();
+            await vi.waitFor(() => expect(dom.firstHost.parentNode).toBe(dom.origin));
+            expect(mocks.createVueShadowUi).toHaveBeenCalledOnce();
+            expect(dom.nativeFocus).not.toHaveBeenCalled();
+        } finally {
+            runtime.unmountSelectionTranslator();
+        }
+    });
 
     it('forwards dismissal only after the current actual modal controller exists', async () => {
         const dom = focusDom();

@@ -1,18 +1,642 @@
 import {parseHTML} from 'linkedom';
 import {describe, expect, it} from 'vitest';
 import {TranslationCandidateCore} from '@/src/core/translation/engine';
+import type {TranslationSiteAdapter} from '@/src/core/translation/types';
 import {extractTranslationText, extractTranslationTextFromNodes} from '@/src/core/translation/text';
 import {compileSiteRulePack, composeSiteAdapters, getSiteAdapterAttributeFilter, getSiteRuleObservedAttributes, resolveSiteRule} from '@/src/core/site-adaptation/compiler';
 import {normalizeSiteAdaptationSettings, parseSiteRulePack, SITE_RULE_LIMITS, validateSelectors} from '@/src/core/site-adaptation/schema';
 import type {SiteRule, SiteRulePack} from '@/src/core/site-adaptation/types';
-import {createTranslationMutationObserverOptions} from '@/src/features/full-page-translation/content/mutationObservation';
-import {createTranslationSourceSnapshot} from '@/src/core/translation/serialization';
+import {asHTMLElement, createMutationRescanSelector, createTranslationMutationObserverOptions} from '@/src/features/full-page-translation/content/mutationObservation';
+import {applyTranslationsToSnapshot, createTranslationSourceSnapshot} from '@/src/core/translation/serialization';
 import {builtinSiteRulePack} from '@/src/core/site-adaptation/catalog';
+import {collectLiveTranslationTextSlots} from '@/src/core/translation/serialization';
 
 const rule = (extra: Partial<SiteRule> = {}): SiteRule => ({
     id: 'example', name: 'Example', match: {hosts: ['example.test']}, ...extra,
 });
 const pack = (rules: SiteRule[] = [rule()]): SiteRulePack => ({version: 1, rules});
+
+describe('Twitch live chat (#1382)', () => {
+    it('discovers English and Japanese messages in an aside and in live updates', () => {
+        const {document} = parseHTML(`<html><body>
+            <nav><a href="/monstercat"><div><div class="side-nav-card__title">
+                <p data-a-target="side-nav-title" id="channel">Monstercat live music stream</p>
+            </div></div></a></nav>
+            <main><p id="intro">This channel broadcasts electronic music.</p></main>
+            <aside><div class="chat-scrollable-area__message-container"><div class="chat-line__message">
+                <button class="chat-line__username-container">Chat author</button>
+                <span data-a-target="chat-line-message-body" id="english">
+                    <span data-a-target="chat-message-text">Thanks for this wonderful stream.</span>
+                </span>
+            </div></div><p>Join the daily music chat</p></aside>
+        </body></html>`);
+        const adapters = compileSiteRulePack(builtinSiteRulePack);
+        const url = new URL('https://www.twitch.tv/monstercat');
+        const core = new TranslationCandidateCore({url, adapters});
+        expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(['intro', 'english']);
+        const chat = document.querySelector('.chat-scrollable-area__message-container')!;
+        chat.insertAdjacentHTML('beforeend', '<div class="chat-line__message"><span id="japanese" data-a-target="chat-message-text">今日も素敵な配信をありがとうございます。</span></div>');
+        const japanese = document.getElementById('japanese')!;
+        expect(core.discover(japanese).map(candidate => candidate.element)).toEqual([japanese]);
+        expect(core.resolve(japanese.firstChild)?.element).toBe(japanese);
+        expect(new TranslationCandidateCore({url, adapters, includeSidebarRegions: true})
+            .discover(document).map(candidate => candidate.element.id)).toContain('channel');
+        expect(new TranslationCandidateCore({url: new URL('https://twitch.tv.example.org/'), adapters})
+            .discover(document).map(candidate => candidate.element.id)).toEqual(['intro']);
+    });
+});
+
+describe('issue #1251: explicit no-translate overrides', () => {
+    const url = new URL('https://example.test/comments');
+    const custom = () => pack([rule({forceTranslate: ['#comments'], content: [{css: ['.post_body p']}], protect: ['.author']})]);
+    function fixture(marker = 'translate="no"') {
+        return parseHTML(`<html><body><main><div id="comments" ${marker}>
+            <div class="post_body"><p id="first">Public readable comment with <code>keep_code()</code> and <span class="author">Private author name</span>.</p>
+            <p id="second">Another independent readable comment.</p>
+            <p id="nested" translate="no">Local protected comment.</p>
+            <textarea id="draft">Unsent private draft</textarea></div></div>
+            <p id="outside" translate="no">Unrelated protected paragraph.</p></main></body></html>`);
+    }
+    it.each(['translate="no"', 'class="notranslate"', 'data-notranslate="true"'])('overrides only the matching %s element without editing host DOM', marker => {
+        const {document} = fixture(marker);
+        const before = document.body.innerHTML;
+        const adapters = compileSiteRulePack(custom());
+        const core = new TranslationCandidateCore({url, adapters});
+        expect([...new TranslationCandidateCore({url}).discover(document)]).toHaveLength(0);
+        const candidates = [...core.discover(document)];
+        expect(candidates.map(c => c.element.id)).toEqual(['first', 'second']);
+        for (const candidate of candidates) {
+            expect(core.resolve(candidate.element.firstChild)?.element).toBe(candidate.element);
+            const options = core.textOptions();
+            const source = collectLiveTranslationTextSlots(candidate.element, core.shouldStayOriginal, undefined, options).map(slot => slot.source).join(' ');
+            expect(source).not.toMatch(/keep_code|Private author|Local protected|Unsent/);
+            expect(createTranslationSourceSnapshot(candidate.element, core.shouldStayOriginal, undefined, options).slots.map(slot => slot.source).join(' ')).toContain('comment');
+        }
+        expect(core.resolve(document.getElementById('nested'))).toBeNull();
+        expect(core.inspect(document.getElementById('outside')!).candidate).toBeNull();
+        expect(document.body.innerHTML).toBe(before);
+        document.getElementById('comments')!.id = 'revoked';
+        expect([...core.discover(document)]).toHaveLength(0);
+        expect(collectLiveTranslationTextSlots(document.getElementById('first')!, core.shouldStayOriginal, undefined, core.textOptions())).toHaveLength(0);
+    });
+    it.each(['contenteditable="true"', 'hidden', 'inert', 'aria-hidden="true"', 'class="fluent-read-loading"', 'class="katex"'])('retains the other protection on the overridden shell: %s', protection => {
+        const {document} = parseHTML(`<html><body><div id="comments" translate="no" ${protection}><div class="post_body"><p>Protected readable text.</p></div></div></body></html>`);
+        const core = new TranslationCandidateCore({url, adapters: compileSiteRulePack(custom())});
+        expect([...core.discover(document)]).toHaveLength(0);
+        expect(core.resolve(document.querySelector('p'))).toBeNull();
+        expect(collectLiveTranslationTextSlots(document.querySelector('p')!, core.shouldStayOriginal, undefined, core.textOptions())).toHaveLength(0);
+    });
+    it('requires an override for each marked ancestor and keeps exclusions authoritative', () => {
+        const {document} = fixture();
+        const innerOnly = pack([rule({forceTranslate: ['.post_body'], content: [{css: ['p']}]})]);
+        expect([...new TranslationCandidateCore({url, adapters: compileSiteRulePack(innerOnly)}).discover(document)]).toHaveLength(0);
+        const excluded = custom(); excluded.rules[0]!.exclude = ['.post_body'];
+        expect([...new TranslationCandidateCore({url, adapters: compileSiteRulePack(excluded)}).discover(document)]).toHaveLength(0);
+    });
+    it('reuses normalized templates, selector diagnostics, scope and disable/replace semantics', () => {
+        const value: SiteRulePack = {version: 1, profiles: {comments: {forceTranslate: ['#comments[data-ready="yes"]']}}, rules: [rule({profile: 'comments', forceTranslate: ['#comments']})]};
+        const parsed = parseSiteRulePack(value);
+        expect(parsed.ok).toBe(true);
+        const settings = normalizeSiteAdaptationSettings({custom: value});
+        expect(settings.custom).toEqual(value);
+        expect(resolveSiteRule(value, value.rules[0]!).forceTranslate).toEqual(['#comments[data-ready="yes"]', '#comments']);
+        expect(getSiteRuleObservedAttributes(resolveSiteRule(value, value.rules[0]!))).toContain('data-ready');
+        const {document} = fixture();
+        const adapters = composeSiteAdapters(value, normalizeSiteAdaptationSettings({}));
+        expect([...new TranslationCandidateCore({url, adapters}).discover(document)]).not.toHaveLength(0);
+        expect([...new TranslationCandidateCore({url, adapters, scope: 'all'}).discover(document)]).toHaveLength(0);
+        value.rules[0]!.allScopes = true;
+        expect([...new TranslationCandidateCore({url, adapters: compileSiteRulePack(value), scope: 'all'}).discover(document)]).not.toHaveLength(0);
+        for (const disabled of [normalizeSiteAdaptationSettings({enabled: false}), normalizeSiteAdaptationSettings({disabledRuleIds: ['example']}), normalizeSiteAdaptationSettings({custom: pack([rule()])})]) {
+            expect([...new TranslationCandidateCore({url, adapters: composeSiteAdapters(value, disabled)}).discover(document)]).toHaveLength(0);
+        }
+        expect(parseSiteRulePack(pack([rule({forceTranslate: []})])).ok).toBe(false);
+        expect(parseSiteRulePack(pack([rule({forceTranslate: 1 as unknown as string[]})])).ok).toBe(false);
+        expect(validateSelectors(pack([rule({forceTranslate: ['[invalid']})]), document)).toContainEqual(expect.objectContaining({path: '$.rules[0].forceTranslate[0]'}));
+        const invalid = new TranslationCandidateCore({url, adapters: compileSiteRulePack(pack([rule({forceTranslate: ['[invalid']})]))});
+        expect([...invalid.discover(document)]).toHaveLength(0);
+    });
+    it('keeps foreign translations protected when an older DOM cannot match :has', () => {
+        const {document} = fixture();
+        const shell = document.getElementById('comments')!;
+        const matches = shell.matches.bind(shell);
+        Object.defineProperty(shell, 'matches', {value: (selector: string) => {
+            if (selector.startsWith(':has(')) throw new Error('Unsupported :has');
+            return matches(selector);
+        }});
+        const foreign = document.createElement('p'); foreign.id = 'foreign';
+        foreign.innerHTML = 'Already translated source.<font class="immersive-translate-target-wrapper">已有外部译文</font>';
+        document.querySelector('.post_body')!.append(foreign);
+        const core = new TranslationCandidateCore({url, adapters: compileSiteRulePack(custom())});
+        expect([...core.discover(document)].map(candidate => candidate.element.id)).toEqual(['first', 'second']);
+        expect(core.resolve(foreign.firstChild)).toBeNull();
+        expect(foreign.innerHTML).toContain('已有外部译文');
+    });
+    it('makes the built-in itch.io nested React comment shell discoverable', () => {
+        const {document} = fixture();
+        document.getElementById('comments')!.id = 'game_comments_react_123_Game-Comments_root';
+        const core = new TranslationCandidateCore({url: new URL('https://milkshakeplusplus.itch.io/mousetraptab/comments'), adapters: composeSiteAdapters(builtinSiteRulePack, normalizeSiteAdaptationSettings({}))});
+        expect([...core.discover(document)].map(c => c.element.id)).toEqual(['first', 'second']);
+    });
+});
+
+describe('mutation rescan readiness', () => {
+    function fixture() {
+        const {document} = parseHTML('<html><body><section id="a"></section><section id="b"></section><section id="c"></section></body></html>');
+        const roots = ['a', 'b', 'c'].map(id => document.getElementById(id)!);
+        const queue = {dirtyRoots: new Set<Node>(roots), broadRescanRoots: new WeakSet<Node>(), broadRescanCooldowns: new WeakMap<Node, number>()};
+        return {document, roots, queue};
+    }
+
+    it('不把缺少渲染契约的节点交给页面状态恢复', () => {
+        const {document, roots: [root]} = fixture();
+        expect(asHTMLElement(root)).toBe(root);
+        expect(asHTMLElement(document.createTextNode('source'))).toBeNull();
+        expect(asHTMLElement({nodeType: 1})).toBeNull();
+        expect(asHTMLElement({nodeType: 1, tagName: 'DIV'})).toBeNull();
+    });
+
+    it('冷却根让就绪兄弟按队列顺序前进，到期后仍能扫描', () => {
+        const {roots: [a, b, c], queue} = fixture();
+        queue.broadRescanRoots.add(a!); queue.broadRescanCooldowns.set(a!, 1000);
+        let clock = 100;
+        const selection = createMutationRescanSelector(queue, () => clock, false);
+        expect(selection.take()).toBe(b); expect(selection.take()).toBe(c); expect(selection.take()).toBeNull();
+        expect([...queue.dirtyRoots]).toEqual([a]); expect(selection.delay()).toBe(16);
+        const waiting = createMutationRescanSelector(queue, () => clock, false);
+        expect(waiting.take()).toBeNull(); expect(waiting.delay()).toBe(900);
+        clock = 1000;
+        expect(createMutationRescanSelector(queue, () => clock, false).take()).toBe(a);
+        expect(queue.dirtyRoots.size).toBe(0);
+    });
+
+    it('所有根冷却时每片只检查一轮，并等待最早期限且至少让出16毫秒', () => {
+        const {roots, queue} = fixture();
+        roots.forEach((root, index) => {queue.broadRescanRoots.add(root); queue.broadRescanCooldowns.set(root, [1100, 400, 700][index]!);});
+        let clock = 100, clockReads = 0;
+        const selection = createMutationRescanSelector(queue, () => {clockReads += 1; return clock;}, false);
+        expect(selection.take()).toBeNull(); expect([...queue.dirtyRoots]).toEqual(roots);
+        expect(selection.delay()).toBe(300);
+        const readsAfterRound = clockReads;
+        expect(selection.take()).toBeNull(); expect(clockReads).toBe(readsAfterRound);
+        clock = 399; expect(selection.delay()).toBe(16);
+    });
+
+    it('冷却根选择也在八毫秒预算后让出，下一片从未检查的根继续', () => {
+        const {roots: [a, b], queue} = fixture();
+        queue.dirtyRoots = new Set([a!, b!]); queue.broadRescanRoots.add(a!); queue.broadRescanCooldowns.set(a!, 1000);
+        let clock = 0;
+        const selection = createMutationRescanSelector(queue, () => clock += 4, false);
+        expect(selection.take()).toBeNull(); expect(selection.shouldYield()).toBe(true); expect(selection.delay()).toBe(16);
+        expect([...queue.dirtyRoots]).toEqual([b, a]);
+        expect(createMutationRescanSelector(queue, () => clock, false).take()).toBe(b);
+    });
+
+    it('删除断连根；父级归并提前清空集合和空集合均安全结束', () => {
+        const {roots: [a, b, c], queue} = fixture(); a!.remove();
+        const selection = createMutationRescanSelector(queue, () => 0, false);
+        expect(selection.take()).toBe(b); expect([...queue.dirtyRoots]).toEqual([c]);
+        queue.dirtyRoots.clear(); expect(selection.take()).toBeNull(); expect(selection.delay()).toBe(16);
+        const empty = createMutationRescanSelector(queue, () => 0, false);
+        expect(empty.take()).toBeNull(); expect(empty.delay()).toBe(16); expect(empty.shouldYield()).toBe(false);
+    });
+
+    it.each([false, true])('发现期间同步加入的新根下一片复查，不继承纯冷却长等待：初始发现=%s', active => {
+        const {roots: [cold, ready, late], queue} = fixture();
+        queue.dirtyRoots = new Set(active ? [cold!] : [cold!, ready!]);
+        queue.broadRescanRoots.add(cold!); queue.broadRescanCooldowns.set(cold!, 1000);
+        const selection = createMutationRescanSelector(queue, () => 100, active);
+        if (!active) expect(selection.take()).toBe(ready);
+        queue.dirtyRoots.add(late!);
+        expect(selection.take()).toBeNull(); expect(selection.delay()).toBe(16);
+        expect(createMutationRescanSelector(queue, () => 116, false).take()).toBe(late);
+    });
+
+    it.each([false, true])('非广域根不使用旧期限，广域根无期限可立即发现：广域=%s', broad => {
+        const {roots: [root], queue} = fixture(); queue.dirtyRoots = new Set([root!]);
+        if (broad) queue.broadRescanRoots.add(root!);
+        else queue.broadRescanCooldowns.set(root!, 1000);
+        expect(createMutationRescanSelector(queue, () => 0, false).take()).toBe(root);
+    });
+});
+
+describe('Kagi News content-bearing buttons', () => {
+    function fixture(scope: 'content' | 'all' = 'content', settings = normalizeSiteAdaptationSettings(undefined), href = 'https://news.kagi.com/world/latest') {
+        const {document} = parseHTML(`<html><body><main>
+            <button id="headline" aria-label="Expand story" style="display:flex"><span id="label" dir="ltr">France deploys troops to free up police for Saturday protests</span></button>
+            <button id="plain-headline" aria-label="Expand story">A story title without an internal label still supports bilingual reading.</button>
+            <button id="search">Search</button><button id="settings">Settings</button><button id="read">Mark as read</button>
+            <p id="body">Expanded story paragraphs remain ordinary readable content.</p>
+        </main><nav><button id="navigation">Choose category</button></nav></body></html>`);
+        const core = new TranslationCandidateCore({url: new URL(href), scope, adapters: composeSiteAdapters(builtinSiteRulePack, settings)});
+        return {document, core, headline: document.getElementById('headline')!, label: document.getElementById('label')!};
+    }
+
+    it.each(['content', 'all'] as const)('keeps headline discovery, hover and label mutation scans on one content owner in %s scope', scope => {
+        const {document, core, headline, label} = fixture(scope);
+        for (const ariaLabel of ['Expand story', 'Collapse story']) {
+            headline.setAttribute('aria-label', ariaLabel);
+            const expected = {element: label, kind: 'content', adapterId: 'kagi-news'};
+            expect(core.discover(document).filter(candidate => candidate.element === label)).toEqual([expect.objectContaining(expected)]);
+            expect(core.resolve(label.firstChild)).toMatchObject(expected);
+            expect(core.discover(label)).toEqual([expect.objectContaining(expected)]);
+            expect(core.discover(document).some(candidate => candidate.element === headline)).toBe(false);
+        }
+        for (const id of ['search', 'settings', 'read']) {
+            const control = document.getElementById(id)!;
+            expect(core.resolve(control.firstChild)).toMatchObject({element: control, kind: 'control'});
+        }
+        expect(core.resolve(document.getElementById('body')!.firstChild)?.kind).toBe('content');
+        const navigation = document.getElementById('navigation')!;
+        expect(core.resolve(navigation.firstChild)?.kind).toBe(scope === 'all' ? 'control' : undefined);
+        const plain = document.getElementById('plain-headline')!;
+        expect(core.resolve(plain.firstChild)).toMatchObject({element: plain, kind: 'content', adapterId: 'kagi-news'});
+        expect(compileSiteRulePack(builtinSiteRulePack).find(adapter => adapter.id === 'kagi-news')?.observedAttributes).toContain('aria-label');
+        // A newly inserted card must obtain the same narrow exception without rebuilding the core.
+        const fresh = document.createElement('button');
+        fresh.setAttribute('aria-label', 'Expand story');
+        fresh.textContent = 'A newly loaded story appears after changing the news category.';
+        document.querySelector('main')!.appendChild(fresh);
+        expect(core.discover(fresh)).toEqual([expect.objectContaining({element: fresh, kind: 'content', adapterId: 'kagi-news'})]);
+        fresh.setAttribute('aria-label', 'Mark as read');
+        expect(core.resolve(fresh.firstChild)).toMatchObject({element: fresh, kind: 'control'});
+    });
+
+    it.each(['https://kagi.com/world/latest', 'https://example.test/world/latest'])('retains ordinary control ownership outside the exact host: %s', href => {
+        const {core, headline, label} = fixture('content', undefined, href);
+        expect(core.resolve(label.firstChild)).toMatchObject({element: headline, kind: 'control'});
+    });
+
+    it.each([
+        {enabled: false},
+        {disabledRuleIds: ['kagi-news']},
+        {custom: pack([rule({id: 'kagi-news', match: {hosts: ['news.kagi.com']}})])},
+    ])('withdraws the content exception when disabled or replaced: %j', overrides => {
+        const settings = {...normalizeSiteAdaptationSettings(undefined), ...overrides};
+        const {core, headline, label} = fixture('content', settings);
+        expect(core.resolve(label.firstChild)).toMatchObject({element: headline, kind: 'control'});
+    });
+
+    it('retains local and custom protection boundaries for explicitly selected headline buttons', () => {
+        for (const attributes of ['translate="no"', 'contenteditable="true"', 'hidden', 'class="notranslate"']) {
+            const {document, core} = fixture();
+            document.querySelector('main')!.innerHTML = `<button id="protected" aria-label="Expand story" ${attributes}>Protected news headline stays original.</button>`;
+            const headline = document.getElementById('protected')!;
+            expect(core.resolve(headline.firstChild), attributes).toBeNull();
+            expect(core.discover(document), attributes).toEqual([]);
+        }
+        const settings = normalizeSiteAdaptationSettings({custom: pack([rule({
+            id: 'private-headline', match: {hosts: ['news.kagi.com']}, protect: ['#headline'],
+        })])});
+        const {core, label} = fixture('content', settings);
+        expect(core.resolve(label.firstChild)).toBeNull();
+    });
+});
+
+describe('Inco blog article summary', () => {
+    function fixture(href = 'https://inco.ai/blog/splash/', disabledRuleIds: string[] = []) {
+        const {document} = parseHTML(`<html lang="en"><body>
+            <header class="nav"><p id="navigation" class="post-dek">Browse the site and manage your account.</p></header>
+            <main id="content"><div class="post-page"><header class="post-head">
+                <a id="back" href="/blog/">Return to all posts</a>
+                <time datetime="2026-09-17">September 17, 2026</time>
+                <h1 id="title" class="post-title">Splash: A local engine built around the model</h1>
+                <p id="summary" class="post-dek">Splash is an open-source <em>inference engine</em> for Apple silicon.</p>
+                <p id="metadata">Published by the Inco editorial team.</p>
+            </header><article class="prose">
+                <p id="body">The engine specializes its kernels for the models it serves.</p>
+                <pre><code>splash serve</code></pre>
+            </article></div></main>
+        </body></html>`);
+        const url = new URL(href);
+        const settings = normalizeSiteAdaptationSettings({disabledRuleIds});
+        const core = new TranslationCandidateCore({url, adapters: composeSiteAdapters(builtinSiteRulePack, settings)});
+        return {document, core, summary: document.getElementById('summary')!};
+    }
+
+    it.each(['https://inco.ai/blog/splash/', 'https://inco.ai/blog/inco-platform-aa/'])(
+        'discovers just the article header summary as additional content on %s', href => {
+            const {document, core, summary} = fixture(href);
+            expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(['title', 'summary', 'body']);
+            expect(core.resolve(summary.querySelector('em')!.firstChild)).toMatchObject({
+                element: summary, kind: 'content', adapterId: 'inco-blog',
+            });
+            for (const id of ['navigation', 'back', 'metadata']) {
+                expect(core.resolve(document.getElementById(id)!.firstChild), id).toBeNull();
+            }
+        },
+    );
+
+    it('rediscovers a replaced summary and respects its local no-translate marker', () => {
+        const {core, summary} = fixture();
+        const replacement = summary.cloneNode(true) as HTMLElement;
+        replacement.querySelector('em')!.textContent = 'local inference engine';
+        summary.replaceWith(replacement);
+        expect(core.discover(replacement.querySelector('em')!).map(candidate => candidate.element)).toEqual([replacement]);
+        expect(core.resolve(replacement.lastChild)?.element).toBe(replacement);
+
+        replacement.setAttribute('translate', 'no');
+        expect(core.discover(replacement)).toEqual([]);
+        expect(core.resolve(replacement.lastChild)).toBeNull();
+    });
+
+    it.each([
+        ['https://inco.ai/blog/', []],
+        ['https://inco.ai/products/splash/', []],
+        ['https://example.test/blog/splash/', []],
+        ['https://inco.ai/blog/splash/', ['inco-blog']],
+    ] as const)('leaves ordinary header filtering on %s with disabled rules %j', (href, disabled) => {
+        const {document, core, summary} = fixture(href, [...disabled]);
+        expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(['title', 'body']);
+        expect(core.resolve(summary.firstChild)).toBeNull();
+    });
+});
+
+describe('Llamaperf Mac benchmark introduction', () => {
+    function fixture(href = 'https://llamaperf.com/mac/m5?utm_source=chatgpt.com', settings = normalizeSiteAdaptationSettings(undefined)) {
+        // The live Next.js page splits sentences and counters with comment nodes inside an article header.
+        const {document} = parseHTML(`<html lang="en"><body>
+            <header><nav><p id="navigation">Browse hardware and submit a benchmark.</p></nav></header>
+            <main id="main-content"><div><header>
+                <h1 id="title">Mac M<!-- -->5<!-- --> LLM benchmarks</h1>
+                <p id="intro">Compare every M<!-- -->5<!-- --> configuration, its memory and the speeds reported by readers.</p>
+                <p id="counts">13<!-- --> configuration<!-- -->s<!-- --> · <!-- -->235<!-- --> report<!-- -->s</p>
+                <div><p id="summary">As of <!-- -->13 Nov 2026<!-- -->, these models have the most reports for each configuration.</p>
+                    <ul><li id="benchmark-card"><a href="/gpu/m5-max-48gb">M5 Max 48GB</a><div>64.2 t/s at 4-bit · 2 runs</div></li></ul>
+                </div>
+                <p id="protected" translate="no">Keep this local paragraph original.</p>
+            </header><section><header><p id="report-metadata">M5 Max 48GB · Ollama · 8192 ctx</p></header></section></div></main>
+            <footer><p id="footer">Manage your account and privacy settings.</p></footer>
+        </body></html>`);
+        const url = new URL(href);
+        const core = new TranslationCandidateCore({url, adapters: composeSiteAdapters(builtinSiteRulePack, settings)});
+        return {document, core, url};
+    }
+
+    it('discovers complete header paragraphs in full and hover modes without selecting benchmark cards or site chrome', () => {
+        const {document, core, url} = fixture();
+        expect(new TranslationCandidateCore({url}).discover(document).map(candidate => candidate.element.id)).toEqual(['title']);
+        expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(['title', 'intro', 'counts', 'summary']);
+        for (const id of ['intro', 'counts', 'summary']) {
+            const paragraph = document.getElementById(id)!;
+            expect(core.resolve(paragraph.lastChild)).toMatchObject({element: paragraph, adapterId: 'llamaperf-mac'});
+            const snapshot = createTranslationSourceSnapshot(paragraph, core.shouldStayOriginal);
+            const rendered = applyTranslationsToSnapshot(snapshot, snapshot.slots.map(slot => slot.source));
+            const restored = document.createElement('p');
+            restored.innerHTML = rendered;
+            expect(restored.textContent).toBe(paragraph.textContent);
+        }
+        for (const id of ['navigation', 'benchmark-card', 'report-metadata', 'protected', 'footer']) {
+            expect(core.resolve(document.getElementById(id)!.firstChild), id).toBeNull();
+        }
+    });
+
+    it('rediscovers a replaced summary while retaining code and local no-translate boundaries', () => {
+        const {document, core} = fixture();
+        const summary = document.getElementById('summary')!;
+        const replacement = summary.cloneNode(true) as HTMLElement;
+        replacement.innerHTML = 'A freshly loaded summary with <code>KEEP_CODE()</code> and <span translate="no">KEEP_LABEL</span> stays readable.';
+        summary.replaceWith(replacement);
+        expect(core.discover(replacement).map(candidate => candidate.element)).toEqual([replacement]);
+        expect(core.resolve(replacement.lastChild)?.element).toBe(replacement);
+        const snapshot = createTranslationSourceSnapshot(replacement, core.shouldStayOriginal);
+        const source = snapshot.slots.map(slot => slot.source).join('');
+        expect(source).toContain('A freshly loaded summary');
+        expect(source).not.toMatch(/KEEP_CODE|KEEP_LABEL/);
+        expect(replacement.querySelector('code')?.textContent).toBe('KEEP_CODE()');
+    });
+
+    it.each(['https://llamaperf.com/mac/m4', 'https://llamaperf.com/mac/m5/'])('applies the shared Mac overview structure on %s', href => {
+        const {document, core} = fixture(href);
+        expect(core.discover(document).map(candidate => candidate.element.id)).toContain('intro');
+    });
+
+    it('preserves the option to translate navigation regions', () => {
+        const {document, url} = fixture();
+        const core = new TranslationCandidateCore({url, adapters: compileSiteRulePack(builtinSiteRulePack), includeSidebarRegions: true});
+        expect(core.discover(document).map(candidate => candidate.element.id)).toContain('navigation');
+    });
+
+    it.each(['https://llamaperf.com/gpu/m5-max-48gb', 'https://llamaperf.com/login', 'https://llamaperf.com.evil.test/mac/m5'])('keeps ordinary header filtering outside Mac overview URLs: %s', href => {
+        const {document, core} = fixture(href);
+        expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(['title']);
+    });
+
+    it.each([{enabled: false}, {disabledRuleIds: ['llamaperf-mac']}])('withdraws the exception through site-adaptation settings: %j', overrides => {
+        const {document, core} = fixture(undefined, {...normalizeSiteAdaptationSettings(undefined), ...overrides});
+        expect(core.resolve(document.getElementById('intro')!.firstChild)).toBeNull();
+    });
+});
+
+describe('JetBrains IntelliJ IDEA release-note paragraphs', () => {
+    function fixture(href = 'https://www.jetbrains.com/idea/whatsnew/', includeSidebarRegions = false) {
+        const {document} = parseHTML(`<html lang="en"><body>
+            <header><nav><p id="navigation">Browse other JetBrains products.</p></nav></header>
+            <main class="whatsnew-page-content"><article class="whatsnew-feature-block">
+                <header>
+                    <div class="whatsnew-feature-block__content">
+                        <h3 id="title">Choose your own agents and models</h3>
+                        <div class="jb-offset-top-16">
+                            <p id="agents">The IDE supports <a href="/acp/">compatible coding agents</a> from several providers.</p>
+                            <p id="subscriptions">Your existing subscription can be used in the terminal.</p>
+                            <p id="lite">Use the <a href="https://junie.jetbrains.com/">free configuration</a> without a subscription.</p>
+                            <p id="protected" translate="no">This paragraph must stay original.</p>
+                        </div>
+                    </div>
+                    <button id="share">Share this feature</button>
+                </header>
+            </article><article><header><p id="metadata">Published by the release team.</p></header></article>
+            <aside><nav><ul><li id="sidebar">Find the terminal improvements in this release.</li></ul></nav></aside>
+            </main>
+        </body></html>`);
+        const adapters = compileSiteRulePack(builtinSiteRulePack);
+        const core = new TranslationCandidateCore({url: new URL(href), adapters, scope: 'content', includeSidebarRegions});
+        return {document, core, agents: document.getElementById('agents')!};
+    }
+
+    it.each(['/idea/whatsnew', '/idea/whatsnew/', '/idea/whatsnew/2026-3/'])('discovers the feature prose and preserves header boundaries on %s', pathname => {
+        const {document, core, agents} = fixture(`https://www.jetbrains.com${pathname}`);
+        const candidates = core.discover(document);
+        expect(candidates.map(candidate => candidate.element.id)).toEqual(['title', 'agents', 'subscriptions', 'lite']);
+        expect(candidates.slice(1).map(candidate => candidate.adapterId)).toEqual(Array(3).fill('jetbrains-idea-whatsnew'));
+        const link = agents.querySelector('a')!;
+        expect(core.resolve(link.firstChild)?.element).toBe(agents);
+        const snapshot = createTranslationSourceSnapshot(agents, core.shouldStayOriginal);
+        expect(snapshot.slots.map(slot => slot.source.trim())).toEqual([
+            'The IDE supports', 'compatible coding agents', 'from several providers.',
+        ]);
+        expect(snapshot.clone.querySelector('a')?.getAttribute('href')).toBe('/acp/');
+
+        const replacement = agents.cloneNode(true) as HTMLElement;
+        agents.replaceWith(replacement);
+        expect(core.discover(replacement.querySelector('a')!).map(candidate => candidate.element)).toEqual([replacement]);
+    });
+
+    it('preserves the option to translate the navigation sidebar', () => {
+        const {document, core} = fixture(undefined, true);
+        const sidebar = document.getElementById('sidebar')!;
+        const candidate = core.discover(document).find(candidate => candidate.element === sidebar);
+        expect(candidate).toBeDefined();
+        expect(candidate?.adapterId).toBeUndefined();
+    });
+
+    it.each(['https://www.jetbrains.com/idea/features/', 'https://example.test/idea/whatsnew/'])('keeps ordinary header filtering on %s', href => {
+        const {document, core, agents} = fixture(href);
+        expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(['title']);
+        expect(core.resolve(agents.firstChild)).toBeNull();
+    });
+});
+
+describe('Englio word-segmented article paragraphs', () => {
+    function fixture(href = 'https://englio.ai/article/example', settings = normalizeSiteAdaptationSettings(undefined)) {
+        const source = Array(140).fill('Readers follow the complete English article while learning new words.').join(' ');
+        const spans = source.split(' ').map((word, index) => `<span data-word-pos="${index}">${word}</span><span> </span>`).join('');
+        const {document} = parseHTML(`<html lang="zh-CN"><body><main>
+            <p data-article-start="0" id="article">${spans}</p>
+        </main></body></html>`);
+        const core = new TranslationCandidateCore({url: new URL(href), adapters: composeSiteAdapters(builtinSiteRulePack, settings)});
+        return {document, core, article: document.getElementById('article')!, source};
+    }
+
+    it('discovers the entire wide paragraph and resolves first and last words to the same owner', () => {
+        const {document, core, article, source} = fixture();
+        expect(article.childElementCount).toBeGreaterThan(2048);
+        expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(['article']);
+        expect(core.inspect(article).candidate?.adapterId).toBe('englio-article');
+        for (const word of [article.firstElementChild!, article.children[article.children.length - 2]!]) {
+            expect(core.resolve(word.firstChild)?.element === article).toBe(true);
+            expect(core.discover(word).map(candidate => candidate.element.id)).toEqual(['article']);
+        }
+        const before = article.innerHTML;
+        const words = Array.from(article.children);
+        const snapshot = createTranslationSourceSnapshot(article);
+        expect(snapshot.slots.map(slot => slot.source).join(' ')).toBe(source);
+        expect(article.innerHTML).toBe(before);
+        expect(Array.from(article.children).every((word, index) => word === words[index])).toBe(true);
+    });
+
+    it('rereads replaced paragraphs and retains local protection within an accepted article', () => {
+        const {document, core, article} = fixture();
+        const fresh = article.cloneNode(true) as HTMLElement;
+        article.replaceWith(fresh);
+        expect(core.discover(fresh).map(candidate => candidate.adapterId)).toEqual(['englio-article']);
+        const protectedWord = fresh.querySelector('[data-word-pos="0"]')!;
+        protectedWord.setAttribute('translate', 'no');
+        expect(core.resolve(protectedWord.firstChild)?.element === fresh).toBe(true);
+        const snapshot = createTranslationSourceSnapshot(fresh);
+        expect(snapshot.slots[0]?.source).toBe('follow');
+        expect(snapshot.clone.textContent?.startsWith('Readers follow')).toBe(true);
+        expect(core.discover(document).some(candidate => candidate.element === fresh)).toBe(true);
+    });
+
+    it.each(['translate="no"', 'contenteditable="true"', 'hidden', 'class="notranslate"'])('does not bypass article protection: %s', attributes => {
+        const {document, core, article} = fixture();
+        const attribute = document.createElement('div');
+        attribute.innerHTML = `<section ${attributes}></section>`;
+        const section = attribute.firstElementChild!;
+        article.replaceWith(section); section.appendChild(article);
+        expect(core.resolve(article.firstElementChild!.firstChild)).toBeNull();
+        expect(core.discover(document)).toEqual([]);
+    });
+
+    it.each(['https://example.test/article/example', 'https://englio.ai.evil.test/article/example', 'https://englio.ai/settings', 'https://englio.ai/articles'])('does not apply the exception outside Englio article URLs: %s', href => {
+        const {document, core, article} = fixture(href);
+        expect(core.resolve(article.firstElementChild!.firstChild)).toBeNull();
+        expect(core.discover(document).some(candidate => candidate.adapterId === 'englio-article')).toBe(false);
+    });
+
+    it.each([{enabled: false}, {disabledRuleIds: ['englio-article']}])('withdraws the exception through site-adaptation settings: %j', overrides => {
+        const {core, article} = fixture(undefined, {...normalizeSiteAdaptationSettings(undefined), ...overrides});
+        expect(core.resolve(article.firstElementChild!.firstChild)).toBeNull();
+    });
+
+    it('requires both native paragraph and word markers', () => {
+        for (const remove of ['data-article-start', 'data-word-pos']) {
+            const {document, core, article} = fixture();
+            if (remove === 'data-article-start') article.removeAttribute(remove);
+            else article.querySelectorAll('[data-word-pos]').forEach(word => word.removeAttribute(remove));
+            expect(core.discover(document).some(candidate => candidate.adapterId === 'englio-article')).toBe(false);
+        }
+    }, 30_000);
+});
+
+describe('OpenAI community reading boundaries', () => {
+    it.each(['content', 'all'] as const)('translates titles and excerpts while keeping the native interface original in %s scope', scope => {
+        // Reduced from the hydrated /hot DOM, including the narrow category and activity cells.
+        const {document} = parseHTML(`<html><body>
+            <header class="d-header"><button id="search">Search the community</button></header>
+            <nav id="d-sidebar" class="sidebar-container"><a id="side-category" href="/c/api/7">API</a><a id="side-tag" href="/tag/chatgpt/16">chatgpt</a></nav>
+            <main><div class="list-controls"><nav><a id="hot" href="/hot">Hot</a></nav><details><summary id="filter">categories</summary></details></div>
+            <table class="topic-list"><thead><tr><th id="heading">Topic</th><th>Activity</th></tr></thead>
+            <tbody><tr class="topic-list-item"><td class="main-link topic-list-data">
+                <span id="title" class="link-top-line" role="heading" aria-level="2"><span class="topic-statuses"><svg></svg></span><a class="title raw-link raw-topic-link" href="/t/example/123">How can readers follow this discussion?</a></span>
+                <div class="link-bottom-line"><a class="badge-category__wrapper" href="/c/api/7"><span class="badge-category"><span class="badge-category__name" id="api">API</span></span></a>
+                    <ul class="discourse-tags"><li><a id="tag" class="discourse-tag simple" href="/tag/rate-limit/77">rate-limit</a></li></ul></div>
+                <a id="excerpt" class="topic-excerpt" href="/t/example/123"><span>Learn to make requests with the API.</span><span class="topic-excerpt-more">read more</span></a>
+            </td><td class="posters"><a id="author" href="/u/fixture">Fixture Reader</a></td>
+                <td class="activity num"><a id="date" class="post-activity" href="/t/example/123/4"><span class="relative-date">Jan 2025</span></a></td>
+            </tr></tbody></table>
+            <div class="cooked"><p id="body">The readable discussion remains available for translation.</p></div></main></body></html>`);
+        const url = new URL('https://community.openai.com/hot');
+        const adapters = compileSiteRulePack(builtinSiteRulePack);
+        const core = new TranslationCandidateCore({url, scope, adapters});
+        for (const id of ['title', 'excerpt']) {
+            const element = document.getElementById(id)!;
+            const candidate = core.resolve(element.querySelector(id === 'title' ? 'a' : 'span')!.firstChild);
+            expect(candidate?.element === element, id).toBe(true);
+            expect(candidate).toMatchObject({adapterId: 'openai-community', kind: 'content'});
+        }
+        for (const id of ['search', 'side-category', 'side-tag', 'hot', 'filter', 'heading', 'api', 'tag', 'author', 'date']) {
+            expect(core.resolve(document.getElementById(id)!.firstChild)?.element.id ?? null, id).toBeNull();
+        }
+        const candidates = core.discover(document);
+        expect(candidates.map(candidate => candidate.element.id)).toEqual(['title', 'excerpt', 'body']);
+        expect(extractTranslationTextFromNodes([document.getElementById('excerpt')!], core.shouldStayOriginal))
+            .toContain('Learn to make requests with the API.');
+
+        const added = document.querySelector('.topic-list-item')!.cloneNode(true) as Element;
+        document.querySelector('tbody')!.appendChild(added);
+        expect(core.discover(added).map(candidate => candidate.element.id)).toEqual(['title', 'excerpt']);
+
+        const adapter = adapters.find(adapter => adapter.id === 'openai-community')!;
+        expect(adapter.matches(new URL('https://community.openai.com.example.org/hot'))).toBe(false);
+        expect(adapter.matches(new URL('https://openai.com/hot'))).toBe(false);
+    });
+
+    it('keeps the no-script category and activity cells original while translating the excerpt', () => {
+        const {document} = parseHTML(`<html><body class="crawler"><main><table class="topic-list"><tbody>
+            <tr class="topic-list-item"><td class="main-link"><span class="link-top-line"><a href="/t/example/123">A public forum discussion</a></span>
+            <div class="link-bottom-line"><a class="badge-wrapper bullet" href="/c/api/7"><span class="badge-category clear-badge"><span class="category-name">API</span></span></a></div>
+            <p class="excerpt">A readable excerpt from the forum discussion.</p></td>
+            <td class="replies">2</td><td class="views">171k</td><td>February 21, 2023</td></tr>
+            </tbody></table></main></body></html>`);
+        const core = new TranslationCandidateCore({url: new URL('https://community.openai.com/hot'), scope: 'all',
+            adapters: compileSiteRulePack(builtinSiteRulePack)});
+        expect(core.discover(document).map(candidate => candidate.element.className)).toEqual(['link-top-line', 'excerpt']);
+        expect(core.resolve(document.querySelector('td:last-child')!.firstChild)).toBeNull();
+    });
+
+    it.each(['content', 'all'] as const)('translates the mobile topic link and preserves its stats in %s scope', scope => {
+        const {document} = parseHTML(`<html class="mobile-view"><body><main><table class="topic-list"><tbody>
+            <tr class="topic-list-item"><td class="topic-list-data"><div class="topic-item-metadata right">
+                <div class="main-link"><a id="title" class="title raw-link raw-topic-link" href="/t/example/123">How can readers follow this discussion?</a></div>
+                <div class="topic-item-stats"><span class="topic-item-stats__category-tags">
+                    <a class="badge-category__wrapper" id="api" href="/c/api/7">API</a>
+                    <a class="discourse-tag" id="tag" href="/tag/chatgpt/16">chatgpt</a></span>
+                    <div class="num activity last"><span class="age activity"><a id="date" href="/t/example/123/4">Jan 2025</a></span></div>
+                </div>
+            </div></td></tr></tbody></table></main></body></html>`);
+        const core = new TranslationCandidateCore({url: new URL('https://community.openai.com/hot'), scope,
+            adapters: compileSiteRulePack(builtinSiteRulePack)});
+        const title = document.getElementById('title')!;
+        expect(core.resolve(title.firstChild)?.kind).toBe('content');
+        expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(['title']);
+        for (const id of ['api', 'tag', 'date']) {
+            expect(core.resolve(document.getElementById(id)!.firstChild)?.element.id ?? null, id).toBeNull();
+        }
+    });
+});
+
 function reject(value: unknown, expectedPath?: string) {
     const parsed = parseSiteRulePack(value);
     expect(parsed.ok).toBe(false);
@@ -494,5 +1118,215 @@ describe('site adaptation compilation', () => {
         for (const id of ['editor', 'native']) expect(core.inspect(document.getElementById(id)!).candidate).toBeNull();
         expect(core.resolve(shadow.querySelector('p')!.firstChild)).toBeNull();
         expect(core.discover(document).map((candidate) => candidate.element.id)).toEqual(['body']);
+    });
+});
+
+describe('Mastodon public application shell discovery', () => {
+    const create = (settings: Partial<ReturnType<typeof normalizeSiteAdaptationSettings>> = {}, url = 'https://mastodon.social/@Mastodon') => {
+        // Reduced from the public production DOM captured on 2026-10-15: the site puts its entire React app in a body-level notranslate shell.
+        const {document} = parseHTML('<html><body><div id="mastodon" class="notranslate app-holder"><main><article><div class="status__content"><div class="status__content__text status__content__text--visible translate"><p id="post">Readable public message with <a class="mention" href="/@alice">@alice</a> and <code>document.querySelector()</code> safely preserved.</p></div></div></article></main></div></body></html>');
+        const configured = {...normalizeSiteAdaptationSettings(undefined), ...settings};
+        const core = new TranslationCandidateCore({url: new URL(url), adapters: composeSiteAdapters(builtinSiteRulePack, configured)});
+        return {document, core};
+    };
+    it('discovers the actual public paragraph and carries narrow source-protection permission into rendering', () => {
+        const {document, core} = create();
+        const candidates = core.discover(document);
+        expect(candidates.map(candidate => candidate.element.id)).toEqual(['post']);
+        expect(candidates[0]).toMatchObject({adapterId: 'mastodon', allowTopLevelApplicationShell: true,
+            applicationShellPolicyId: 'mastodon'});
+        const source = extractTranslationText(candidates[0]!.element, core.shouldStayOriginal, undefined,
+            {allowTopLevelApplicationShell: candidates[0]!.allowTopLevelApplicationShell, protectedElement: candidates[0]!.element});
+        expect(source).toBe('Readable public message with and safely preserved.');
+    });
+    it('revalidates automatic policy without treating a translated owner as fresh source', () => {
+        const {document, core} = create();
+        const post = document.getElementById('post')!;
+        expect(core.isApplicationShellPolicyCurrent(post, 'mastodon')).toBe(true);
+        // Single-text rendering hides its live source inside extension-owned slots. Policy checks
+        // must remain independent from source extraction, which the lifecycle validates separately.
+        post.innerHTML = '<span class="fluent-read-single-slot" data-fr-translation-owned="true" translate="no">已译正文</span>';
+        expect(core.isApplicationShellPolicyCurrent(post, 'mastodon')).toBe(true);
+        expect(core.isApplicationShellPolicyCurrent(post, 'different-policy')).toBe(false);
+        expect(core.isApplicationShellPolicyCurrent(post, '')).toBe(false);
+        post.remove();
+        expect(core.isApplicationShellPolicyCurrent(post, 'mastodon')).toBe(false);
+    });
+    it.each(['id', 'translate', 'data-notranslate', 'app-holder', 'content', 'translate-class', 'other-shell'])
+    ('revokes automatic policy when the current %s boundary changes', mutation => {
+        const {document, core} = create(); const shell = document.getElementById('mastodon')!;
+        const post = document.getElementById('post')!;
+        expect(core.isApplicationShellPolicyCurrent(post, 'mastodon')).toBe(true);
+        if (mutation === 'id') shell.id = 'different-app';
+        if (mutation === 'translate') shell.setAttribute('translate', 'no');
+        if (mutation === 'data-notranslate') shell.setAttribute('data-notranslate', 'true');
+        if (mutation === 'app-holder') shell.classList.remove('app-holder');
+        if (mutation === 'content') document.querySelector('.status__content')!.classList.remove('status__content');
+        if (mutation === 'translate-class') document.querySelector('.translate')!.classList.remove('translate');
+        if (mutation === 'other-shell') {
+            const other = document.createElement('div'); other.className = 'notranslate app-holder';
+            document.body.append(other); other.append(document.querySelector('main')!);
+        }
+        expect(core.isApplicationShellPolicyCurrent(post, 'mastodon')).toBe(false);
+    });
+    it.each([
+        {enabled: false}, {disabledRuleIds: ['mastodon']},
+        {custom: pack([rule({id: 'mastodon', match: {hosts: ['mastodon.social']}, content: [{css: ['p']}]})])},
+        {custom: pack([rule({id: 'prefer-post', priority: 999, match: {hosts: ['mastodon.social']}, content: [{css: ['p']}]})])},
+    ])('revokes a previously discovered policy under current configuration: %j', settings => {
+        const {document, core} = create(); const post = document.getElementById('post')!;
+        expect(core.discover(document)[0]?.applicationShellPolicyId).toBe('mastodon');
+        const {core: changedCore} = create(settings);
+        expect(changedCore.isApplicationShellPolicyCurrent(post, 'mastodon')).toBe(false);
+    });
+    it('keeps manual hover permission distinct from automatic site policy', () => {
+        const {document, core} = create(); const post = document.getElementById('post')!;
+        const manual = core.resolve(post);
+        expect(manual).toMatchObject({element: post, allowTopLevelApplicationShell: true});
+        expect(manual?.applicationShellPolicyId).toBeUndefined();
+        document.getElementById('mastodon')!.id = 'different-app';
+        expect(core.isApplicationShellPolicyCurrent(post, 'mastodon')).toBe(false);
+        const movedManual = core.resolve(post);
+        expect(movedManual).toMatchObject({element: post, allowTopLevelApplicationShell: true});
+        expect(movedManual?.applicationShellPolicyId).toBeUndefined();
+    });
+    it('discovers appended paragraphs and dirty inline roots without nesting or duplicate owners', () => {
+        const {document, core} = create();
+        const container = document.querySelector('.status__content__text')!;
+        container.insertAdjacentHTML('beforeend', '<p id="new">A new public post with <em>fresh readable words</em>.</p>');
+        expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(['post', 'new']);
+        const paragraph = document.getElementById('new')!;
+        for (const root of [container, paragraph, paragraph.querySelector('em')!, paragraph.querySelector('em')!.firstChild!]) {
+            expect(core.discover(root).filter(candidate => candidate.element === paragraph)).toHaveLength(1);
+        }
+        document.getElementById('mastodon')!.classList.remove('notranslate');
+        expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(['post', 'new']);
+    });
+    it('retains local no-translate, mentions, links, code, controls and user-protected descendants', () => {
+        const {document, core} = create({custom: pack([rule({id: 'extra-protection', match: {hosts: ['mastodon.social']}, protect: ['.private-copy']})])});
+        const post = document.getElementById('post')!;
+        post.insertAdjacentHTML('beforeend', '<span class="notranslate">Private inline text</span><span translate="no">Private translation marker</span><a translate="no" href="https://example.test">Private outbound URL</a><span class="hashtag">Private hashtag</span><span class="private-copy">User protected words</span><button>Reply now</button>');
+        const candidate = core.discover(document)[0]!;
+        const protection = {allowTopLevelApplicationShell: candidate.allowTopLevelApplicationShell, protectedElement: post};
+        expect(extractTranslationText(post, core.shouldStayOriginal, undefined, protection)).toBe('Readable public message with and safely preserved.');
+        const snapshot = createTranslationSourceSnapshot(post, core.shouldStayOriginal, undefined, protection, core.shouldOmitFromTranslation);
+        expect(snapshot.slots.map(slot => slot.source).join(' ')).not.toMatch(/Private|User protected|Reply|querySelector|@alice/);
+        for (const attribute of ['class="notranslate"', 'translate="no"', 'data-notranslate="true"', 'contenteditable="true"', 'hidden', 'aria-hidden="true"']) {
+            const wrapper = document.createElement('div'); wrapper.innerHTML = `<div ${attribute}><p id="blocked">Protected public sentence must remain original.</p></div>`;
+            document.querySelector('.status__content__text')!.append(wrapper);
+            expect(core.discover(document).map(item => item.element.id)).toEqual(['post']);
+            wrapper.remove();
+        }
+    });
+    it.each(['form', 'nav', 'aside', 'header', 'footer'])('does not use the app-shell exception within %s', tag => {
+        const {document, core} = create();
+        const status = document.querySelector('.status__content')!;
+        const structural = document.createElement(tag);
+        status.replaceWith(structural); structural.append(status);
+        expect(core.discover(document)).toEqual([]);
+    });
+    it.each([
+        {enabled: false}, {disabledRuleIds: ['mastodon']},
+        {custom: pack([rule({id: 'mastodon', match: {hosts: ['mastodon.social']}, content: [{css: ['p']} ]})])},
+        {custom: pack([rule({id: 'block-post', match: {hosts: ['mastodon.social']}, exclude: ['article']})])},
+        {custom: pack([rule({id: 'protect-post', match: {hosts: ['mastodon.social']}, protect: ['article']})])},
+        {custom: pack([rule({id: 'prefer-post', priority: 999, match: {hosts: ['mastodon.social']}, content: [{css: ['p']}]})])},
+    ])('restores strict protection when disabled, replaced or denied by user rules: %j', settings => {
+        const {document, core} = create(settings);
+        expect(core.discover(document)).toEqual([]);
+    });
+    it('does not grant the exception to an independently compiled user rule pack', () => {
+        const {document} = create();
+        const core = new TranslationCandidateCore({url: new URL('https://mastodon.social/@Mastodon'), adapters: compileSiteRulePack(builtinSiteRulePack)});
+        expect(core.discover(document)).toEqual([]);
+    });
+    it.each(['https://example.test/@Mastodon', 'https://mastodon.online/@Mastodon', 'https://mastodon.social/settings/profile', 'https://mastodon.social/auth/sign_in', 'https://mastodon.social/explore'])('does not extend the verified public route policy to %s', url => {
+        const {document, core} = create({}, url);
+        expect(core.discover(document)).toEqual([]);
+    });
+    it.each(['translate', 'data-notranslate', 'contenteditable', 'hidden', 'inert', 'aria-hidden'])('preserves an additional %s marker on the application shell', attribute => {
+        const {document, core} = create();
+        document.getElementById('mastodon')!.setAttribute(attribute, attribute === 'translate' ? 'no' : 'true');
+        expect(core.discover(document)).toEqual([]);
+    });
+    it('rejects changed shell identity, nested shells, undeclared content and unrelated scan roots', () => {
+        for (const mutation of ['id', 'app-holder', 'nested', 'translate', 'content', 'unrelated']) {
+            const {document, core} = create(); const shell = document.getElementById('mastodon')!;
+            if (mutation === 'id') shell.id = 'different-app';
+            if (mutation === 'app-holder') shell.classList.remove('app-holder');
+            if (mutation === 'nested') {const wrapper = document.createElement('section'); shell.replaceWith(wrapper); wrapper.append(shell);}
+            if (mutation === 'translate') document.querySelector('.translate')!.classList.remove('translate');
+            if (mutation === 'content') document.querySelector('.status__content')!.classList.remove('status__content');
+            const unrelated = document.createElement('span'); document.body.append(unrelated);
+            expect(core.discover(mutation === 'unrelated' ? unrelated : document), mutation).toEqual([]);
+        }
+    });
+    it.each(['translate', 'id'])('rechecks shell %s after a discovery yield and can discover again after it is restored', attribute => {
+        const {document, core} = create();
+        document.querySelector('.status__content__text')!.insertAdjacentHTML('beforeend', '<p id="second">Another readable public paragraph.</p>');
+        const iterator = core.discoverSteps(document); let step;
+        while (!(step = iterator.next()).done && !step.value.candidate) { /* reach first candidate */ }
+        expect(step.value?.candidate?.element.id).toBe('post');
+        const shell = document.getElementById('mastodon')!;
+        shell.setAttribute(attribute, attribute === 'translate' ? 'no' : 'different-app');
+        expect([...iterator].filter(item => item.candidate)).toEqual([]);
+        if (attribute === 'translate') shell.removeAttribute(attribute);
+        else shell.id = 'mastodon';
+        expect(core.discover(document).map(candidate => candidate.element.id)).toEqual(['post', 'second']);
+    });
+});
+
+describe('application shell policy capability boundaries', () => {
+    function fixture() {
+        const {document} = parseHTML('<html><body><div class="notranslate"><p id="post">The explicitly authorized public source remains the only translation owner.</p><p id="other">Unrelated public source cannot borrow another owner permission.</p></div></body></html>');
+        const post = document.getElementById('post')!;
+        const other = document.getElementById('other')!;
+        const adapter: TranslationSiteAdapter = {
+            id: 'verified-public-site', genericCandidatePolicy: 'targets-only', matches: () => true,
+            decide: element => element === post
+                ? {kind: 'force-target', reason: 'verified-public-source'} : {kind: 'pass'},
+        };
+        const core = new TranslationCandidateCore({url: new URL('https://example.test/public'), adapters: [adapter]});
+        return {document, post, other, adapter, core};
+    }
+
+    it('ignores unrelated callback entries and deduplicates repeated explicit owners', () => {
+        const {document, post, other, adapter, core} = fixture();
+        adapter.discoverApplicationShellTargets = function* () { yield other; yield post; yield post; };
+        expect(core.isApplicationShellPolicyCurrent(post, adapter.id)).toBe(true);
+        expect(core.isApplicationShellPolicyCurrent(other, adapter.id)).toBe(false);
+        const candidates = core.discover(document);
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]).toMatchObject({element: post, applicationShellPolicyId: adapter.id,
+            allowTopLevelApplicationShell: true});
+        // When the root ceases to need an exception, normal discovery owns the paragraph.
+        // Supplemental duplicates must neither create a second owner nor grant extra permission.
+        post.parentElement!.classList.remove('notranslate');
+        const ordinary = core.discover(document);
+        expect(ordinary).toHaveLength(1);
+        expect(ordinary[0]?.element).toBe(post);
+        expect(ordinary[0]?.applicationShellPolicyId).toBeUndefined();
+        expect(ordinary[0]?.allowTopLevelApplicationShell).toBeUndefined();
+    });
+
+    it('rejects permission when the adapter redirects the requested owner to another element', () => {
+        const {document, post, other, adapter, core} = fixture();
+        adapter.discoverApplicationShellTargets = function* () { yield post; };
+        adapter.decide = element => element === post
+            ? {kind: 'force-target', target: other, reason: 'redirected-source'} : {kind: 'pass'};
+        expect(core.isApplicationShellPolicyCurrent(post, adapter.id)).toBe(false);
+        expect(core.discover(document)).toEqual([]);
+    });
+
+    it('revokes policy when callback iteration fails instead of falling back to manual permission', () => {
+        const {post, other, adapter, core} = fixture();
+        adapter.discoverApplicationShellTargets = function* () {
+            yield other;
+            throw new Error('The site policy could not inspect its current application boundary');
+        };
+        expect(core.isApplicationShellPolicyCurrent(post, adapter.id)).toBe(false);
+        const manual = core.resolve(post);
+        expect(manual).toMatchObject({element: post, allowTopLevelApplicationShell: true});
+        expect(manual?.applicationShellPolicyId).toBeUndefined();
     });
 });

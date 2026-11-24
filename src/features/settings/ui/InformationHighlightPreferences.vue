@@ -8,7 +8,7 @@
   <div class="information-highlight-preferences" :class="{'is-compact': compact}" data-testid="information-highlight-preferences">
     <div class="highlight-enable">
       <span class="highlight-enable-copy"><strong>{{ t('informationHighlight.hotkey') }}</strong><small>{{ t('informationHighlight.hotkey.description') }}</small></span>
-      <span class="highlight-hotkey-controls"><button type="button" class="highlight-hotkey" :disabled="!context.active.value || !config.informationHighlight.hotkeyEnabled" :aria-label="t('informationHighlight.hotkey')" :onClick="actions.editHotkey" data-information-highlight-hotkey>{{ config.informationHighlight.hotkey || t('informationHighlight.hotkey.none') }}</button>
+      <span class="highlight-hotkey-controls"><button type="button" class="highlight-hotkey" :disabled="!context.active.value" :aria-label="t('informationHighlight.hotkey')" :onClick="actions.editHotkey" data-information-highlight-hotkey>{{ config.informationHighlight.hotkey || t('informationHighlight.hotkey.none') }}</button>
       <ElSwitch :model-value="config.informationHighlight.hotkeyEnabled" :disabled="!context.active.value" :aria-label="t('informationHighlight.hotkey.enabled')" :onUpdate:modelValue="actions.hotkeyEnabled" data-information-highlight-hotkey-enabled /></span>
     </div>
     <div class="highlight-enable">
@@ -58,7 +58,7 @@
 </template>
 <script setup lang="ts">
 import {computed, defineAsyncComponent, ref, watch} from 'vue'
-import {ElOption, ElSwitch} from 'element-plus'
+import {ElMessage, ElOption, ElSwitch} from 'element-plus'
 import UiSelect from '@/src/ui/components/UiSelect.vue'
 import type {Config} from '@/src/core/config/model'
 import type {InformationHighlightMode, InformationHighlightDensity, InformationHighlightColor, InformationHighlightIntensity, InformationHighlightStyle} from '@/src/core/config/informationHighlight'
@@ -68,8 +68,9 @@ import {useUiI18n} from '@/src/ui/i18n'
 import {canonicalizeHotkey, resolveConfiguredHotkey} from '@/src/core/hotkey'
 import {resolveSectionTranslationHotkey} from '@/src/core/config/sectionTranslation'
 import {resolveParagraphCopyHotkey} from '@/src/core/config/paragraphCopy'
+import {resolveReservedClickSelectionHotkey} from '@/src/core/config/clickSelection'
 import {resolveAreaTranslationHotkey} from '@/src/core/config/areaTranslation'
-import {findEnabledQuickTranslationHotkeyConflict} from '@/src/core/config/quickTranslation'
+import {findEnabledQuickTranslationHotkeyConflict, inputBoxTranslationTriggerHotkey} from '@/src/core/config/quickTranslation'
 const CustomHotkeyInput = defineAsyncComponent(() => import('@/src/ui/components/CustomHotkeyInput.vue'))
 const props = withDefaults(defineProps<{config: Config; active?: boolean; compact?: boolean; showMode?: boolean; showDensity?: boolean; showAppearance?: boolean}>(), {active: true, compact: false, showMode: true, showDensity: true, showAppearance: true})
 const {t} = useUiI18n()
@@ -83,15 +84,17 @@ const rampLevels = [0, 2, 3, 5, 7]
 const hotkeyDialog = ref(false)
 const closeHotkey = () => {hotkeyDialog.value = false}
 watch(context.revision, closeHotkey, {flush: 'sync'})
-/** 与已启用功能共用同一组合键时两边都会响应，录制时直接拒绝。 */
-function hotkeyConflict(hotkey: string): string {
+/** 已启用快捷键不能抢占其他动作；停用草稿可编辑，重新启用时重读当前占用。 */
+function hotkeyConflict(hotkey: string, enabled = props.config.informationHighlight.hotkeyEnabled): string {
+  if (!enabled) return ''
   const identity = canonicalizeHotkey(hotkey).toLocaleLowerCase(), config = props.config
   if (!identity) return ''
   const taken = [resolveConfiguredHotkey(config.hotkey, config.customHotkey), resolveConfiguredHotkey(config.floatingBallHotkey, config.customFloatingBallHotkey),
-    config.selectionTranslatorMode === 'disabled' ? '' : resolveConfiguredHotkey(config.selectionTranslatorTrigger, config.customSelectionTranslatorHotkey),
+    config.selectionTranslatorMode === 'disabled' || config.disableSelectionTranslator === true ? '' : resolveConfiguredHotkey(config.selectionTranslatorTrigger, config.customSelectionTranslatorHotkey),
     config.sectionTranslationHotkeyEnabled ? resolveSectionTranslationHotkey(config.sectionTranslationHotkey, config.customSectionTranslationHotkey) : '',
     config.paragraphCopyEnabled ? resolveParagraphCopyHotkey(config.paragraphCopyHotkey, config.customParagraphCopyHotkey) : '',
-    resolveAreaTranslationHotkey(config.selectionAreaHotkey, config.customSelectionAreaHotkey)]
+    config.selectionAreaEnabled ? resolveAreaTranslationHotkey(config.selectionAreaHotkey, config.customSelectionAreaHotkey) : '',
+    inputBoxTranslationTriggerHotkey(config.inputBoxTranslationTrigger), resolveReservedClickSelectionHotkey(config)]
   return taken.some(item => canonicalizeHotkey(item || '').toLocaleLowerCase() === identity) || findEnabledQuickTranslationHotkeyConflict(config.quickTranslationProfiles ?? [], hotkey)
     ? t('informationHighlight.hotkey.conflict') : ''
 }
@@ -103,6 +106,8 @@ const actions = computed(() => {
     props.config.informationHighlight = {...props.config.informationHighlight, hotkey}; closeHotkey()
   }, hotkeyEnabled: (value: unknown) => {
     if (!current()) return
+    const conflict = value === true ? hotkeyConflict(props.config.informationHighlight.hotkey, true) : ''
+    if (conflict) {ElMessage.warning(conflict); return}
     closeHotkey(); props.config.informationHighlight = {...props.config.informationHighlight, hotkeyEnabled: value === true}
   }, enabled: (value: unknown) => {
     if (current()) props.config.informationHighlight = {...props.config.informationHighlight, enabled: value === true}

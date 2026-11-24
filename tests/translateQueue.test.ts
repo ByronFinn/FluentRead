@@ -32,6 +32,197 @@ afterEach(() => {
 });
 
 describe('translation queue', () => {
+  it('rejects a retry that cannot fit its deadline at queue admission', async () => {
+    const task = vi.fn(async () => 'unused');
+    const error = new Error('previous translation failure');
+    await expect(enqueueTranslation(task, undefined, undefined, {delayMs: 200, deadlineAt: Date.now() + 100, error}))
+      .rejects.toBe(error);
+    expect(task).not.toHaveBeenCalled();
+  });
+  it('大页面队列压缩中保留后部取消空槽，其余任务按顺序完成且后续请求仍可执行', async () => {
+    mockConfig.maxConcurrentTranslations = 1;
+    const size = 2300, removed = 2200, caller = new AbortController(), ran: number[] = [];
+    const jobs = Array.from({length: size}, (_, index) => enqueueTranslation(async () => {ran.push(index); return index;}, undefined, index === removed ? caller.signal : undefined));
+    const settled = Promise.allSettled(jobs); caller.abort(); const outcomes = await settled;
+    expect(outcomes[removed]).toMatchObject({status: 'rejected', reason: {name: 'AbortError'}});
+    expect(outcomes.filter(item => item.status === 'fulfilled')).toHaveLength(size - 1);
+    expect(ran).toEqual(Array.from({length: size}, (_, index) => index).filter(index => index !== removed));
+    await expect(enqueueTranslation(async () => 'next')).resolves.toBe('next');
+  });
+  it('立即摘除取消信号对应的等待项，不等其他活动请求结束', async () => {
+    mockConfig.maxConcurrentTranslations = 1;
+    const gate = deferred<void>();
+    const active = enqueueTranslation(() => gate.promise);
+    const controller = new AbortController();
+    const task = vi.fn(async () => 'should not run');
+    let cancellation: unknown;
+    const queued = enqueueTranslation(task, undefined, controller.signal).catch(error => {cancellation = error; return error;});
+    try {
+      controller.abort();
+      await Promise.resolve();
+      expect(cancellation).toMatchObject({name: 'AbortError'});
+      expect(task).not.toHaveBeenCalled();
+    } finally {
+      gate.resolve();
+      await Promise.all([active, queued]);
+    }
+  });
+
+  it('拒绝预先取消且不运行任务，活动请求的取消监听交回任务所有者', async () => {
+    const controller = new AbortController(); controller.abort();
+    const task = vi.fn(async () => 'unused');
+    await expect(enqueueTranslation(task, undefined, controller.signal)).rejects.toMatchObject({name: 'AbortError'});
+    expect(task).not.toHaveBeenCalled();
+
+    const owner = new AbortController();
+    const remove = vi.spyOn(owner.signal, 'removeEventListener');
+    const gate = deferred<string>();
+    const active = enqueueTranslation(async () => gate.promise, undefined, owner.signal);
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+    owner.abort();
+    gate.resolve('owned transport result');
+    await expect(active).resolves.toBe('owned transport result');
+  });
+
+  it.each(['session', 'clear'] as const)('%s 取消等待项时移除其信号监听，迟到abort不会破坏下一代队列', async mode => {
+    mockConfig.maxConcurrentTranslations = 1;
+    const gate = deferred<void>(), owner = new AbortController();
+    const remove = vi.spyOn(owner.signal, 'removeEventListener');
+    const active = enqueueTranslation(() => gate.promise);
+    const session = createTranslationQueueSession();
+    const queued = enqueueTranslation(async () => 'unused', session, owner.signal).catch(error => error);
+    if (mode === 'session') cancelTranslationQueueSession(session);
+    else clearTranslationQueue();
+    await expect(queued).resolves.toBeInstanceOf(TranslationQueueCancelledError);
+    expect(remove).toHaveBeenCalledWith('abort', expect.any(Function));
+    owner.abort();
+    const next = enqueueTranslation(async () => 'next');
+    gate.resolve();
+    await active;
+    await expect(next).resolves.toBe('next');
+  });
+
+  it('单条等待取消立即结束，不取消同会话其他任务或后续入队', async () => {
+    mockConfig.maxConcurrentTranslations = 1;
+    const blocker = deferred<string>();
+    const active = enqueueTranslation(() => blocker.promise);
+    const session = createTranslationQueueSession();
+    const controller = new AbortController();
+    const cancelledTask = vi.fn(async () => 'cancelled');
+    const cancelled = enqueueTranslation(cancelledTask, session, controller.signal);
+    const outcome = cancelled.catch(error => error);
+    const sibling = enqueueTranslation(async () => 'sibling', session);
+    controller.abort();
+    try {
+      await expect(outcome).resolves.toMatchObject({name: 'AbortError', message: '翻译已取消'});
+      expect(cancelledTask).not.toHaveBeenCalled();
+      const later = enqueueTranslation(async () => 'later', session);
+      blocker.resolve('active');
+      await expect(Promise.all([active, sibling, later])).resolves.toEqual(['active', 'sibling', 'later']);
+    } finally {
+      blocker.resolve('active');
+      await Promise.all([active, sibling]);
+    }
+  });
+
+  it('提前取消的信号不注册等待监听，也不执行任务', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const addListener = vi.spyOn(controller.signal, 'addEventListener');
+    const task = vi.fn(async () => 'never');
+    await expect(enqueueTranslation(task, undefined, controller.signal)).rejects.toMatchObject({name: 'AbortError'});
+    expect(task).not.toHaveBeenCalled();
+    expect(addListener).not.toHaveBeenCalled();
+  });
+
+  it.each(['clear', 'session', 'dequeue'] as const)('%s 归还等待所有权时移除取消监听', async lifecycle => {
+    mockConfig.maxConcurrentTranslations = 1;
+    const blocker = deferred<string>();
+    const active = enqueueTranslation(() => blocker.promise);
+    const session = createTranslationQueueSession();
+    const controller = new AbortController();
+    const addListener = vi.spyOn(controller.signal, 'addEventListener');
+    const removeListener = vi.spyOn(controller.signal, 'removeEventListener');
+    const task = vi.fn(async () => {
+      // 出队后任务可以同步取消自己的传输；等待监听不能先拒绝已取得槽位的调用。
+      controller.abort();
+      return 'dequeued';
+    });
+    const pending = enqueueTranslation(task, session, controller.signal);
+    const outcome = pending.catch(error => error);
+    try {
+      expect(addListener).toHaveBeenCalledTimes(1);
+      if (lifecycle === 'clear') clearTranslationQueue();
+      else if (lifecycle === 'session') cancelTranslationQueueSession(session);
+      else blocker.resolve('active');
+      const result = await outcome;
+      if (lifecycle === 'dequeue') expect(result).toBe('dequeued');
+      else {
+        expect(result).toBeInstanceOf(TranslationQueueCancelledError);
+        expect(task).not.toHaveBeenCalled();
+      }
+      expect(removeListener).toHaveBeenCalledTimes(1);
+      expect(removeListener).toHaveBeenCalledWith('abort', addListener.mock.calls[0]![1]);
+      controller.abort();
+      const survivor = enqueueTranslation(async () => 'survivor');
+      blocker.resolve('active');
+      await expect(survivor).resolves.toBe('survivor');
+    } finally {
+      blocker.resolve('active');
+      await active;
+    }
+  });
+
+  it.each(['before-register', 'after-register'] as const)('监听注册边界同步取消 %s 只移除本条等待项一次', async order => {
+    mockConfig.maxConcurrentTranslations = 1;
+    const blocker = deferred<string>();
+    const active = enqueueTranslation(() => blocker.promise);
+    const controller = new AbortController();
+    const register = controller.signal.addEventListener.bind(controller.signal);
+    vi.spyOn(controller.signal, 'addEventListener').mockImplementationOnce((...args) => {
+      if (order === 'before-register') controller.abort();
+      register(...args);
+      if (order === 'after-register') controller.abort();
+    });
+    const task = vi.fn(async () => 'never');
+    const pending = enqueueTranslation(task, undefined, controller.signal);
+    try {
+      await expect(pending).rejects.toMatchObject({name: 'AbortError'});
+      expect(task).not.toHaveBeenCalled();
+      const next = enqueueTranslation(async () => 'next');
+      blocker.resolve('active');
+      await expect(next).resolves.toBe('next');
+    } finally {
+      blocker.resolve('active');
+      await active;
+    }
+  });
+
+  it('活动任务按自身信号取消后仍持有真实 transport lease', async () => {
+    mockConfig.maxConcurrentTranslations = 1;
+    const controller = new AbortController();
+    const transport = deferred<void>();
+    const started: string[] = [];
+    const active = enqueueTranslation(async lease => {
+      started.push('active');
+      lease.holdUntil(transport.promise);
+      return new Promise<never>((_resolve, reject) => controller.signal.addEventListener('abort', () => {
+        reject(Object.assign(new Error('transport caller stopped'), {name: 'AbortError'}));
+      }, {once: true}));
+    }, undefined, controller.signal);
+    const outcome = active.catch(error => error);
+    const next = enqueueTranslation(async () => { started.push('next'); return 'next'; });
+    try {
+      controller.abort();
+      await expect(outcome).resolves.toMatchObject({name: 'AbortError', message: 'transport caller stopped'});
+      expect(started).toEqual(['active']);
+    } finally {
+      transport.resolve();
+      await next;
+    }
+    expect(started).toEqual(['active', 'next']);
+  });
+
   it('保持并发上限，并按 FIFO 顺序启动下一个任务', async () => {
     const controls = Array.from({length: 5}, () => deferred<number>());
     const started: number[] = [];

@@ -1,0 +1,157 @@
+{
+  "version": 1,
+  "frozenAt": "2026-10-25T07:05:53.466382+00:00",
+  "beforeAnyOcr": true,
+  "repositoryCommit": "a97e2d21afbeacee644c301d4827e0b52be08042",
+  "sourceGeneratorSnapshotSha256": "b4ea525e72d30828577720eef5028d2e319e49a2772d051bf09a4112f07f9ac8",
+  "fontFiles": [
+    {
+      "key": "cjk",
+      "path": "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
+      "sha256": "cf8cf2c882e1e344ac2e6207fe172657a30dc2c6e1ee65a9e29a7b582c4d4154"
+    },
+    {
+      "key": "mono",
+      "path": "/System/Library/Fonts/Supplemental/Courier New.ttf",
+      "sha256": "c886ca3172d8ce9189976992d145ec090500a4ff516ecb9d4df56b1a78336247"
+    }
+  ],
+  "pillowVersion": "12.3.0",
+  "size": [
+    1600,
+    1000
+  ],
+  "linePositions": [
+    [
+      145,
+      235
+    ],
+    [
+      145,
+      565
+    ]
+  ],
+  "fill": [
+    34,
+    39,
+    43
+  ],
+  "diagnosticPolicy": {
+    "candidateSelection": "Existing generic geometry/confidence/step budget only; expected source text must never select candidates or replacements.",
+    "confidenceTarget": [
+      0.65,
+      0.95
+    ],
+    "maxViewSteps": 128,
+    "maxCandidateLinesPerPage": 2,
+    "keepAllOutcomes": true,
+    "filterByOcrResult": false,
+    "sourceGeometryOnly": "Lengths and widths checked before OCR; final eligibility is the actual detector/recognizer observation."
+  },
+  "scenes": [
+    {
+      "name": "ja-clear-management-tags",
+      "fontSize": 44,
+      "blurRadius": 0.25,
+      "background": "white-balloons",
+      "sourceLanguage": "ja",
+      "lines": [
+        "管理メモ NOTE OT",
+        "予備の箱 CODE OO"
+      ]
+    },
+    {
+      "name": "ja-soft-instruction-tags",
+      "fontSize": 36,
+      "blurRadius": 0.65,
+      "background": "ruled-memo",
+      "sourceLanguage": "ja",
+      "lines": [
+        "次の作業 NOTE OT",
+        "確認して CHECK IT"
+      ]
+    },
+    {
+      "name": "ja-soft-inventory-tags",
+      "fontSize": 40,
+      "blurRadius": 0.85,
+      "background": "gray-labels",
+      "sourceLanguage": "ja",
+      "lines": [
+        "在庫記録 NOTE OT",
+        "照合記号 O0 I1 Z2 S5 T7 B8"
+      ],
+      "textLanguage": "ja"
+    },
+    {
+      "name": "ja-split-font-reference-tags",
+      "fontSize": 40,
+      "latinFontSize": 42,
+      "blurRadius": 0.55,
+      "background": "white-balloons",
+      "sourceLanguage": "ja",
+      "lines": [
+        "記録カード NOTE OT 保管済み",
+        "照合番号 0O 1I 2Z 5S 7T 8B"
+      ],
+      "runs": [
+        [
+          [
+            "cjk",
+            "記録カード "
+          ],
+          [
+            "mono",
+            "NOTE OT"
+          ],
+          [
+            "cjk",
+            " 保管済み"
+          ]
+        ],
+        [
+          [
+            "cjk",
+            "照合番号 "
+          ],
+          [
+            "mono",
+            "0O 1I 2Z 5S 7T 8B"
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "ja-small-long-preservation-tags",
+      "fontSize": 30,
+      "blurRadius": 0.9,
+      "background": "ruled-memo",
+      "sourceLanguage": "ja",
+      "lines": [
+        "確認メモ NOTE OT 番号は変更しない",
+        "予備のラベル CODE OO CHECK IT"
+      ]
+    },
+    {
+      "name": "ja-paired-true-ot-digit07",
+      "fontSize": 44,
+      "blurRadius": 0.8,
+      "background": "gray-labels",
+      "sourceLanguage": "ja",
+      "lines": [
+        "読書メモ NOTE OT",
+        "読書メモ NOTE 07"
+      ]
+    }
+  ],
+  "preGenerationMetadataCorrection": {
+    "at": "2026-10-25T07:06:18.955289+00:00",
+    "reason": "Existing quality runner supports en/ja/ko/ru/auto; Chinese source runs the same Paddle engine via auto. Source strings, sizes, blur and drawing parameters unchanged. This is before image generation and before any OCR."
+  },
+  "preOcrGlyphCorrection": {
+    "at": "2026-10-25T07:08:47.418282+00:00",
+    "reason": "Visual source-authoring review found missing simplified Chinese glyphs in the preselected font. This rejected input set was never run through OCR. Replace only the third scene source wording with natural Japanese inventory context supported by the same frozen font; keep size, blur, background and positions. No model output, confidence or eligibility was observed.",
+    "rejectedDesign": "design-rejected-missing-glyphs.json",
+    "rejectedInputs": "rejected-pre-ocr-missing-glyphs/"
+  }
+}

@@ -41,7 +41,8 @@ import {resolveConfiguredModel, services, servicesType} from '@/src/core/config/
 import {getMissingCredentialMessage} from '@/src/core/config/validation';
 import {resolveTranslationLanguages} from '@/src/core/translation/languages';
 import {buildPageSummaryPrompt, buildPageSummarySystemPrompt} from '@/src/core/translation/prompts';
-import {translateWithOpenAICompatibleAiSdk, type AiSdkTranslationRequest} from '@/src/providers/translation/ai-sdk/openai-compatible';
+import {translateWithOpenAICompatibleAiSdk as translateWithSdk, type AiSdkTranslationRequest} from '@/src/providers/translation/ai-sdk/openai-compatible';
+import {translateWithOpenAICompatibleAiSdk as translateWithStandalone} from '@/userscript/openaiCompatible';
 import {resolveOpenAICompatibleEndpoint} from '@/src/providers/translation/ai-sdk/endpoints';
 import azureOpenai from '@/src/providers/translation/azure-openai';
 import {normalizeAiSdkError} from '@/src/providers/translation/ai-sdk/errors';
@@ -89,7 +90,7 @@ function deferredResponse() {
   return {promise, resolve, reject};
 }
 
-function ollamaBroker() {
+function ollamaBroker(translateWithOpenAICompatibleAiSdk: typeof translateWithSdk) {
   const current = {
     ...mockConfig,
     service: services.ollama,
@@ -123,7 +124,25 @@ function ollamaBroker() {
   });
 }
 
-describe('Vercel AI SDK OpenAI-compatible transport', () => {
+describe.each([['locked SDK', translateWithSdk], ['standalone HTTP', translateWithStandalone]] as const)('%s OpenAI-compatible transport', (_name, translateWithOpenAICompatibleAiSdk) => {
+  it.each([
+    ['official OpenAI', 'https://api.openai.com/v1/chat/completions', {max_tokens: 96}, {max_completion_tokens: 96}],
+    ['compatible legacy', 'https://gateway.test/v1/chat/completions', {max_tokens: 96}, {max_tokens: 96}],
+    ['compatible explicit', 'https://gateway.test/v1/chat/completions', {max_tokens: null, max_completion_tokens: 32}, {max_completion_tokens: 32}],
+  ])('normalizes final SDK and standalone translation requests for %s', async (_name, endpoint, budget, expected) => {
+    mockConfig.custom = endpoint;
+    mockConfig.model.custom = 'arbitrary-model';
+    mockConfig.customBody.custom = JSON.stringify({...budget, service_tier: 'fast', reasoning_effort: 'none'});
+    const bodies: Record<string, unknown>[] = [];
+    setRuntimeFetch(async (_input, init) => {bodies.push(JSON.parse(String(init?.body)));return successResponse();});
+    await expect(translateWithOpenAICompatibleAiSdk(withProviderSnapshot({origin: 'Hello'}, mockConfig))).resolves.toBe('译文');
+    expect(bodies).toHaveLength(1);
+    for (const body of bodies) {
+      expect(body).toMatchObject({...expected, service_tier: 'fast', reasoning_effort: 'none', stream: false});
+      expect(body).not.toHaveProperty('max_completion_tokens' in expected ? 'max_tokens' : 'max_completion_tokens');
+    }
+  });
+
   beforeEach(() => {
     vi.useRealTimers();
     setRuntimeFetch();
@@ -254,6 +273,49 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
   });
 
 
+  it.each([
+    ['', 'https://cloudgpu.app/v1/chat/completions'],
+    ['https://gateway.example/v1/chat/completions', 'https://gateway.example/v1/chat/completions'],
+  ])('CloudGPU keeps its own credentials and model, including an explicit proxy %s', async (proxy, endpoint) => {
+    mockConfig.service = services.cloudgpu;
+    mockConfig.model = {[services.cloudgpu]: 'deepseek-v4.1-flash', [services.openai]: 'other-model'};
+    mockConfig.token = {[services.cloudgpu]: 'fixture-cloudgpu-only', [services.openai]: 'fixture-openai-only'};
+    mockConfig.proxy = {[services.cloudgpu]: proxy};
+    const fetchMock = vi.fn().mockImplementation(async () => successResponse('已验证服务路由'));
+    setRuntimeFetch(fetchMock);
+
+    await expect(translateWithOpenAICompatibleAiSdk(withProviderSnapshot({origin: 'hello'}, mockConfig)))
+      .resolves.toBe('已验证服务路由');
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(endpoint);
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer fixture-cloudgpu-only');
+    expect(JSON.parse(String(init.body))).toMatchObject({model: 'deepseek-v4.1-flash', stream: false});
+  });
+
+  it.each([
+    {service: services.cheaperinference, model: 'gpt-5.4-mini', endpoint: 'https://api.cheaperinference.com/v1/chat/completions'},
+    {service: services.cheapaimodel, model: 'deepseek-v4-1-flash', endpoint: 'https://api.cheapaimodel.ai/v1/chat/completions'},
+  ].flatMap(provider => ['', 'https://gateway.example/v1/chat/completions'].map(proxy => ({
+    ...provider,
+    proxy,
+  }))))('$service keeps its own credentials and model with proxy "$proxy"', async ({service, model, endpoint, proxy}) => {
+    mockConfig.service = service;
+    mockConfig.model = {[service]: model, [services.openai]: 'other-model'};
+    mockConfig.token = {[service]: `fixture-${service}-only`, [services.openai]: 'fixture-openai-only'};
+    mockConfig.proxy = {[service]: proxy};
+    const fetchMock = vi.fn().mockImplementation(async () => successResponse('已验证服务路由'));
+    setRuntimeFetch(fetchMock);
+
+    await expect(translateWithOpenAICompatibleAiSdk(withProviderSnapshot({origin: 'hello'}, mockConfig)))
+      .resolves.toBe('已验证服务路由');
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(proxy || endpoint);
+    expect(new Headers(init.headers).get('Authorization')).toBe(`Bearer fixture-${service}-only`);
+    expect(JSON.parse(String(init.body))).toMatchObject({model, stream: false});
+  });
+
   it('preserves custom top-level fields while keeping the SDK-owned stream mode', async () => {
     mockConfig.custom = 'http://127.0.0.1:11434/non-standard-generate';
     mockConfig.customBody[services.custom] = JSON.stringify({
@@ -318,13 +380,14 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
   });
 
   it.each([
-    ['https://reader.openai.azure.com', 'https://reader.openai.azure.com/openai/v1/chat/completions'],
-    ['https://reader.services.ai.azure.com/openai/v1/', 'https://reader.services.ai.azure.com/openai/v1/chat/completions'],
-    ['https://reader.openai.azure.com/openai/deployments/reader/chat/completions?api-version=2024-10-21', 'https://reader.openai.azure.com/openai/deployments/reader/chat/completions?api-version=2024-10-21'],
-  ])('Azure provider 使用部署名称与 api-key 请求 %s', async (endpoint, expected) => {
+    ['https://reader.openai.azure.com', 'https://reader.openai.azure.com/openai/v1/chat/completions', 'gpt-6.1-terra', 'max_completion_tokens'],
+    ['https://reader.services.ai.azure.com/openai/v1/', 'https://reader.services.ai.azure.com/openai/v1/chat/completions', 'o4-mini', 'max_completion_tokens'],
+    ['https://reader.openai.azure.com/openai/deployments/reader/chat/completions?api-version=2024-10-21', 'https://reader.openai.azure.com/openai/deployments/reader/chat/completions?api-version=2024-10-21', 'reader-deployment', 'max_tokens'],
+  ])('Azure provider 使用部署名称与 api-key 请求 %s', async (endpoint, expected, model, budgetKey) => {
     mockConfig.azureOpenaiEndpoint = endpoint;
     mockConfig.token[services.azureOpenai] = ' azure-test-key ';
-    mockConfig.model[services.azureOpenai] = 'reader-deployment';
+    mockConfig.model[services.azureOpenai] = model;
+    mockConfig.customBody[services.azureOpenai] = '{"max_tokens":96}';
     const fetchMock = vi.fn().mockResolvedValue(successResponse('Azure 译文'));
     setRuntimeFetch(fetchMock);
 
@@ -334,7 +397,9 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
     expect(url).toBe(expected);
     expect(new Headers(init.headers).get('api-key')).toBe('azure-test-key');
     expect(new Headers(init.headers).has('authorization')).toBe(false);
-    expect(JSON.parse(String(init.body))).toMatchObject({model: 'reader-deployment', stream: false});
+    const body = JSON.parse(String(init.body));
+    expect(body).toMatchObject({model, stream: false, [budgetKey]: 96});
+    expect(body).not.toHaveProperty(budgetKey === 'max_tokens' ? 'max_completion_tokens' : 'max_tokens');
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
@@ -636,7 +701,7 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
       .mockImplementationOnce(() => firstTransport.promise)
       .mockImplementation(() => Promise.resolve(successResponse('第二条译文')));
     setRuntimeFetch(fetchMock);
-    const broker = ollamaBroker();
+    const broker = ollamaBroker(translateWithOpenAICompatibleAiSdk);
     const controller = new AbortController();
     const first = broker.translateWithCache(attachTranslationRequestControl({
       origin: 'The first English paragraph.', requestTimeoutMs: 5_000,
@@ -671,7 +736,7 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
       })
       .mockImplementation(() => Promise.resolve(successResponse('重试译文')));
     setRuntimeFetch(fetchMock);
-    const broker = ollamaBroker();
+    const broker = ollamaBroker(translateWithOpenAICompatibleAiSdk);
     const first = broker.translateWithCache({
       origin: 'A slow English paragraph.', requestTimeoutMs: 1_000,
     }).catch(error => error);
@@ -705,7 +770,7 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
       .mockImplementationOnce(() => firstTransport.promise)
       .mockImplementation(() => Promise.resolve(successResponse('下一条译文')));
     setRuntimeFetch(fetchMock);
-    const broker = ollamaBroker();
+    const broker = ollamaBroker(translateWithOpenAICompatibleAiSdk);
     const controller = new AbortController();
     const first = broker.translateWithCache(attachTranslationRequestControl({
       origin: 'A paragraph with a delayed response body.', requestTimeoutMs: 5_000,
@@ -741,7 +806,7 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
       .mockResolvedValueOnce(new Response(failedBody, {status: 401, headers: {'content-type': 'application/json'}}))
       .mockImplementation(() => Promise.resolve(successResponse('重新配置后的译文')));
     setRuntimeFetch(fetchMock);
-    const broker = ollamaBroker();
+    const broker = ollamaBroker(translateWithOpenAICompatibleAiSdk);
     const failed = broker.translateWithCache({
       origin: 'A paragraph rejected by the local server.', requestTimeoutMs: 5_000,
     });
@@ -768,7 +833,7 @@ describe('Vercel AI SDK OpenAI-compatible transport', () => {
       return transport.promise.finally(() => {active -= 1;});
     });
     setRuntimeFetch(fetchMock);
-    const broker = ollamaBroker();
+    const broker = ollamaBroker(translateWithOpenAICompatibleAiSdk);
     const batch = broker.translateWithCache({
       origin: ['First paragraph in a document.', 'Second paragraph in a document.'],
       requestTimeoutMs: 5_000,

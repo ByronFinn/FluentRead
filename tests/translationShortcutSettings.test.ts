@@ -38,6 +38,30 @@ beforeEach(() => {vi.useFakeTimers(); vi.clearAllMocks(); vi.stubGlobal('navigat
 afterEach(() => {for (const scope of scopes) scope.stop(); vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals();});
 
 describe('快捷键设置草稿生命周期', () => {
+    it.each(groups)('$name 已排队的旧录制定时器在卸载后不能重新打开弹窗',group=>{
+        const {state,scope,config}=mount(),timer=vi.spyOn(globalThis,'setTimeout');
+        state[group.change]('custom');const callback=timer.mock.calls.find(([,delay])=>delay===100)![0] as ()=>void;timer.mockRestore();
+        scope.stop();const before=JSON.stringify(config.value);callback();
+        expect(state[group.visible].value).toBe(false);expect(JSON.stringify(config.value)).toBe(before);expect(vi.getTimerCount()).toBe(0);
+    });
+    it.each(groups)('$name 预设、现有自定义与录制确认均保留点选快捷键', group => {
+        const {state, config} = mount();
+        Object.assign(config.value, {on: false, selectionTranslatorMode: 'bilingual', disableSelectionTranslator: false,
+            selectionClickSelectEnabled: true, selectionClickSelectHotkey: 'Alt+Shift+S'});
+        if(group.name !== 'selection') {state[group.change]('Alt+Shift+S'); expect(config.value[group.mode]).toBe(group.initial);}
+        config.value[group.custom] = 'Alt+Shift+S';state[group.change]('custom');expect(config.value[group.mode]).toBe(group.initial);
+        config.value[group.custom] = '';state[group.open]();state[group.confirm]('Alt+Shift+S');
+        expect(config.value[group.custom]).toBe('');expect(state[group.visible].value).toBe(true);
+        expect(notices.message.warning).toHaveBeenCalled();
+    });
+    it('输入翻译和父级圈选开启校验同样保留点选组合，停用点选后允许设置', () => {
+        const {state, config} = mount();
+        Object.assign(config.value, {selectionTranslatorMode: 'bilingual', disableSelectionTranslator: false,
+            selectionClickSelectEnabled: true, selectionClickSelectHotkey: 'Ctrl+Enter'});
+        config.value.inputBoxTranslationTrigger = 'none';state.handleInputBoxTranslationTriggerChange('ctrl_enter');
+        expect(config.value.inputBoxTranslationTrigger).toBe('none');expect(state.quickTranslationConflictMessage('Ctrl+Enter')).toContain('两点选取');
+        config.value.selectionClickSelectEnabled = false;state.handleInputBoxTranslationTriggerChange('ctrl_enter');expect(config.value.inputBoxTranslationTrigger).toBe('ctrl_enter');
+    });
     it.each(groups)('$name 快速改选不会让迟到弹窗重新打开或取消覆盖新选择', async group => {
         const {state, config} = mount();
         state[group.change]('custom'); state[group.change](group.replacement);

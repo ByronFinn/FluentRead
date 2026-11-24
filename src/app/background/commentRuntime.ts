@@ -7,7 +7,7 @@
 import browser from 'webextension-polyfill';
 import {config, configReady, subscribeConfig} from '@/src/services/config/store';
 import {normalizeCommentPreferences} from '@/src/core/config/comment';
-import {modelUsageRepository} from '@/src/platform/storage/modelUsageRepository';
+import {getModelUsageRepository} from '@/src/platform/storage/modelUsageRepository';
 import {createCommentHandler} from '@/src/features/comment-assistant/background';
 import {createCommentKeepAlive} from '@/src/features/comment-assistant/keepalive';
 import {attachCommentStreamPort} from '@/src/features/comment-assistant/streamPort';
@@ -21,8 +21,9 @@ import type {CommentSender} from '@/src/features/comment-assistant/background';
 export function installCommentBackgroundRuntime(): BackgroundMessageHandler<{sender?: CommentSender}> {
     // 评论与其他 AI 调用共用模型用量仓库，按同一代次写入，避免统计口径分裂。
     const createUsageSink = (): CommentUsageSink => {
-        const generation = modelUsageRepository.captureGeneration();
-        return event => { void modelUsageRepository.recordMany([event], generation).catch(() => undefined); };
+        const repository = getModelUsageRepository();
+        const generation = repository.captureGeneration();
+        return event => { void repository.recordMany([event], generation).catch(() => undefined); };
     };
     const runtime = createCommentRuntime(() => config, createHarnessLanguageModel, createUsageSink);
     const eligibility = (sender: CommentSender) => {

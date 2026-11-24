@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const {isSupportedFacebookPublicPostUrl} = require('./facebook-public-post-preparation.cjs');
 
 const CASES_PATH = path.join(__dirname, '..', '..', 'tests', 'browser-translation-cases.json');
 const CASES = JSON.parse(fs.readFileSync(CASES_PATH, 'utf8'));
@@ -20,6 +21,39 @@ const MATRIX_REQUIREMENTS = Object.freeze({
 function normalizeSelectorList(value, fallback) {
   const raw = Array.isArray(value) ? value : value ? [value] : fallback ? [fallback] : [];
   return [...new Set(raw.map((selector) => String(selector).trim()).filter(Boolean))];
+}
+
+function normalizeDismissiblePromotion(value) {
+  if (value === undefined) return undefined;
+  const fields = ['dialogSelector', 'buttonSelector', 'contentSelector'];
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).some(key => !fields.includes(key) && key !== 'waitForDialogMs') ||
+      fields.some(key => !Object.prototype.hasOwnProperty.call(value, key) ||
+        typeof value[key] !== 'string' || !value[key].trim())) {
+    throw new Error('prepareDismissiblePromotion 必须声明非空字符串 dialogSelector/buttonSelector/contentSelector');
+  }
+  const {waitForDialogMs} = value;
+  if (waitForDialogMs !== undefined && (!Number.isInteger(waitForDialogMs) || waitForDialogMs <= 0 || waitForDialogMs > 15000)) {
+    throw new Error('prepareDismissiblePromotion.waitForDialogMs 必须是 1-15000 的整数');
+  }
+  return {...Object.fromEntries(fields.map(key => [key, value[key].trim()])),
+    ...(waitForDialogMs === undefined ? {} : {waitForDialogMs})};
+}
+
+function normalizeFacebookPublicPostPreparation(value) {
+  if (value === undefined) return undefined;
+  if (value !== true) throw new Error('prepareFacebookPublicPost 必须为 true，且仅用于已核对的公开帖子准备流程');
+  return true;
+}
+
+function normalizeSourcePartition(value) {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).some(key => key !== 'excludeSelectors') || !Array.isArray(value.excludeSelectors) ||
+      value.excludeSelectors.some(selector => typeof selector !== 'string' || !selector.trim())) {
+    throw new Error('sourcePartition 必须仅声明 excludeSelectors selector 数组');
+  }
+  return {excludeSelectors: normalizeSelectorList(value.excludeSelectors)};
 }
 
 function validateMutableForbiddenSelectors(caseName, forbiddenSelectors, dynamicForbiddenSelectors, mutableSelectors) {
@@ -57,11 +91,18 @@ function normalizeHoverTargets(value, options = {}) {
     const sourceIncludes = Object.prototype.hasOwnProperty.call(target || {}, 'sourceIncludes')
       ? normalizeSelectorList(target.sourceIncludes)
       : normalizeSelectorList(matchingRule?.sourceIncludes).slice(0, 1);
+    if (target?.textIncludes !== undefined && (!Array.isArray(target.textIncludes) || !target.textIncludes.length ||
+        target.textIncludes.some(value => typeof value !== 'string' || !value.trim()))) {
+      throw new Error('hover target textIncludes 必须是非空原文 Text 片段数组');
+    }
+    const sourcePartition = normalizeSourcePartition(target?.sourcePartition ?? matchingRule?.sourcePartition);
     return {
       name: String(target?.name || `target-${index + 1}`).trim(),
       selector,
       index: target?.index === undefined ? 0 : Number(target.index),
       sourceIncludes,
+      ...(target?.textIncludes === undefined ? {} : {textIncludes: normalizeSelectorList(target.textIncludes)}),
+      ...(sourcePartition ? {sourcePartition} : {}),
     };
   }).filter((target) => target.name && target.selector && Number.isInteger(target.index) && target.index >= 0);
   const selectors = new Set(normalized.map(({selector}) => selector));
@@ -72,6 +113,7 @@ function normalizeHoverTargets(value, options = {}) {
       selector: rule.selector,
       index: 0,
       sourceIncludes: rule.sourceIncludes.slice(0, 1),
+      ...(rule.sourcePartition ? {sourcePartition: rule.sourcePartition} : {}),
     });
     selectors.add(rule.selector);
   }
@@ -122,6 +164,7 @@ function normalizeCoverageRules(value, legacySelectors = []) {
     trackDynamic: rule?.trackDynamic === true,
     ...(rule?.minTextLength === undefined ? {} : {minTextLength: Number(rule.minTextLength)}),
     sourceIncludes: normalizeSelectorList(rule?.sourceIncludes),
+    ...(rule?.sourcePartition === undefined ? {} : {sourcePartition: normalizeSourcePartition(rule.sourcePartition)}),
   }));
 }
 
@@ -162,6 +205,9 @@ function validateCoverageRules(caseName, rules, options = {}) {
     if (rule.sourceIncludes.some((value) => !value.trim())) {
       errors.push(`${label} sourceIncludes 不得包含空字符串`);
     }
+    if (rule.sourcePartition && rule.trackDynamic) {
+      errors.push(`${label} sourcePartition 固定基线不得启用 trackDynamic`);
+    }
   }
   return errors;
 }
@@ -189,6 +235,12 @@ function normalizeCaseConfig(caseName, caseConfig) {
 
   return {
     selector: caseConfig.hoverSelector || caseConfig.selector || requiredSelectors[0],
+    ...(caseConfig.prepareDismissiblePromotion === undefined ? {} : {
+      prepareDismissiblePromotion: normalizeDismissiblePromotion(caseConfig.prepareDismissiblePromotion),
+    }),
+    ...(caseConfig.prepareFacebookPublicPost === undefined ? {} : {
+      prepareFacebookPublicPost: normalizeFacebookPublicPostPreparation(caseConfig.prepareFacebookPublicPost),
+    }),
     ...(typeof caseConfig.prepareScrollSelector === 'string' && caseConfig.prepareScrollSelector.trim()
       ? {prepareScrollSelector: caseConfig.prepareScrollSelector.trim()} : {}),
     ...(caseConfig.hoverSettleMs !== undefined ? {hoverSettleMs: caseConfig.hoverSettleMs} : {}),
@@ -200,6 +252,7 @@ function normalizeCaseConfig(caseName, caseConfig) {
     mutableForbiddenSelectors,
     fullCoverageSelectors,
     coverageRules,
+    fullPageScope: caseConfig.fullPageScope ?? 'finite-page',
     hoverTargets,
     interactionSelectors: normalizeSelectorList(caseConfig.interactionSelectors),
     interactionScenarios: normalizeInteractionScenarios(caseConfig.interactionScenarios),
@@ -210,6 +263,23 @@ function normalizeCaseConfig(caseName, caseConfig) {
 
 function collectBaseCaseConfigErrors(caseName, caseConfig, normalized = normalizeCaseConfig(caseName, caseConfig)) {
   const errors = [];
+  if (caseConfig.prepareFacebookPublicPost !== undefined) {
+    if (!isSupportedFacebookPublicPostUrl(caseConfig.url)) {
+      errors.push(`${caseName} 的 prepareFacebookPublicPost 仅支持 https://www.facebook.com 的公开 posts URL`);
+    }
+    if (caseConfig.prepareClickText !== undefined || caseConfig.prepareDismissiblePromotion !== undefined) {
+      errors.push(`${caseName} 的 prepareFacebookPublicPost 不得与其他推广关闭动作同时使用`);
+    }
+  }
+  if (caseConfig.prepareDismissiblePromotion !== undefined && caseConfig.prepareClickText !== undefined) {
+    errors.push(`${caseName} 的 prepareDismissiblePromotion 不得与 prepareClickText 同时使用`);
+  }
+  if (!['finite-page', 'initial-corpus'].includes(normalized.fullPageScope)) {
+    errors.push(`${caseName} 的 fullPageScope 必须是 finite-page 或 initial-corpus`);
+  }
+  if (normalized.fullPageScope === 'initial-corpus' && normalized.coverageRules.some(rule => rule.trackDynamic)) {
+    errors.push(`${caseName} 的 initial-corpus 不得启用 trackDynamic，避免把无限新增正文当作有限覆盖集合`);
+  }
   if (caseConfig.prepareScrollSelector !== undefined &&
       (typeof caseConfig.prepareScrollSelector !== 'string' || !caseConfig.prepareScrollSelector.trim())) {
     errors.push(`${caseName} 的 prepareScrollSelector 必须是非空 selector`);
@@ -288,6 +358,8 @@ module.exports = {
   MAX_INTERACTION_CLOSE_ATTEMPTS,
   collectBaseCaseConfigErrors,
   normalizeCaseConfig,
+  normalizeDismissiblePromotion,
+  normalizeFacebookPublicPostPreparation,
   normalizeCoverageRules,
   normalizeHoverTargets,
   normalizeInteractionScenarios,

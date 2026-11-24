@@ -1,25 +1,31 @@
 /**
  * @file src/features/image-translation/services/client.ts
  * 文件职责：封装网页与扩展页面调用图片翻译后台的 runtime 消息，统一支持跨域图片读取与整图翻译两种可取消客户端操作。
- * 主要内容：提供 fetchImageInExtension 与 translateImageInExtension，生成跨页面安全请求标识，固定开始时的取消信号、进度回调与登记端口，清理异常不阻止结束等待；传播超时与本地模型失败原因，订阅当前任务真实阶段和百分比，并在消息断线时按共享截止时间恢复一次。
- * 模块边界：客户端不读取图片像素、不直接访问网络或 Offscreen；跨域 URL 只作为受控消息交给 background，再由 Offscreen 校验和读取，页面 UI 由 content/runtime 决定。
+ * 主要内容：提供 fetchImageInExtension 与 translateImageInExtension，生成跨页面安全请求标识，固定开始时的取消信号、进度回调与登记端口，清理异常不阻止结束等待；校验并传播普通图片保留宿主原图状态和可选分割就绪后重试的标记，传播超时与本地模型失败原因，订阅当前任务真实阶段和百分比，并在消息断线时按共享截止时间恢复一次；语言准备的状态预读有独立短上限，不能阻塞正式下载。
+ * 模块边界：可选漫画可见范围只原样透传，由绘制端按实际图片校验；客户端不读取图片像素、不直接访问网络或 Offscreen；跨域 URL 只作为受控消息交给 background，再由 Offscreen 校验和读取，页面 UI 由 content/runtime 决定。
  */
 import {createImageTranslationFailure} from '../failure';
 import {parseMangaPatchPacket, type MangaPatchPacket} from '../mangaPatchResult';
+import {canRetryImageAfterSegmentationImport} from '../resultReadiness';
 import {getRequiredImageOcrLanguages, normalizeImageOcrLanguageCodes, type ImageOcrStatusResponse} from '../ocrLanguages';
 import {IMAGE_PROGRESS_MESSAGE_TYPE, isImageTranslationStage, normalizeImageProgress, type ImageTranslationStage} from '../progress';
 import type { OcrLine } from '@/src/features/image-translation/core';
+import type {ImageViewport} from '@/src/shared/image/types';
 import {createDownloadCompletionSummary, ocrLanguageDownloadId} from '@/src/core/download/progress';
 import {watchDownloadProgress} from '@/src/platform/storage/downloadProgress';
 
 interface ImageTranslationLine extends OcrLine {
     sourceText?: string;
+    renderSkipped?: true;
+    numericUncertain?: true;
     backgroundColor: string;
 }
 
 interface ImageTranslationResponse {
     success: boolean;
     image?: string;
+    imageUnchanged?: unknown;
+    retryWhenSegmentationReady?: unknown;
     mangaPatches?: unknown;
     lines?: ImageTranslationLine[];
     error?: string;
@@ -34,6 +40,7 @@ interface ImageFetchResponse {
 
 export interface ImageExtensionOperationOptions {
     readonly manga?: boolean;
+    readonly mangaViewport?: ImageViewport;
     readonly requestId?: string;
     readonly signal?: AbortSignal;
     readonly timeoutMs?: number;
@@ -41,6 +48,7 @@ export interface ImageExtensionOperationOptions {
 }
 
 const DEFAULT_IMAGE_OPERATION_TIMEOUT_MS = 180_000;
+const IMAGE_OCR_STATUS_TIMEOUT_MS = 5_000;
 let imageRequestSequence = 0;
 const imageRequestContextNonce = (() => {
     try {
@@ -188,13 +196,14 @@ export async function translateImageInExtension(
     sourceLanguage: string,
     title: string,
     options: ImageExtensionOperationOptions = {},
-): Promise<{ image: string; lines: ImageTranslationLine[]; mangaPatches?: MangaPatchPacket }> {
+): Promise<{ image: string; lines: ImageTranslationLine[]; imageUnchanged?: true; retryWhenSegmentationReady?: true; mangaPatches?: MangaPatchPacket }> {
     const message = {
         type: 'fluentReadImageTranslate',
         image,
         sourceLanguage,
         title,
         ...(options.manga ? {manga: true} : {}),
+        ...(options.mangaViewport !== undefined ? {mangaViewport: options.mangaViewport} : {}),
     };
     const timeoutMs = normalizeImageTimeout(options.timeoutMs);
     if (options.signal?.aborted) throw createImageClientError('图片 OCR 请求已取消', 'AbortError');
@@ -209,10 +218,17 @@ export async function translateImageInExtension(
             const response = await sendCancellableImageOperation<ImageTranslationResponse>(
                 message, {...options, requestId, timeoutMs: remainingMs}, '图片翻译超时',
             );
-            if (!response?.success || (!response.image && !(options.manga && response.mangaPatches !== undefined)) || !Array.isArray(response.lines)) {
+            const unchanged = response?.imageUnchanged === true && !options.manga && response.image === '' && response.mangaPatches === undefined;
+            const retry = canRetryImageAfterSegmentationImport(response, unchanged, options.manga === true);
+            if (!response?.success || (response.imageUnchanged !== undefined && !unchanged)
+                || (response.retryWhenSegmentationReady !== undefined && !retry)
+                || (!response.image && !unchanged && !(options.manga && response.mangaPatches !== undefined)) || !Array.isArray(response.lines)
+                || (unchanged && response.lines.length === 0 && response.success !== true)) {
                 throw createImageTranslationFailure(response?.error || '图片翻译服务不可用', response);
             }
             return {image: response.image || '', lines: response.lines,
+                ...(unchanged ? {imageUnchanged: true as const} : {}),
+                ...(retry ? {retryWhenSegmentationReady: true as const} : {}),
                 ...(options.manga && response.mangaPatches !== undefined ? {mangaPatches: parseMangaPatchPacket(response.mangaPatches)} : {})};
         } catch (error) {
             if (isContextInvalidatedError(error)) throw normalizeTranslationTransportError(error);
@@ -245,14 +261,21 @@ export async function prepareImageOcrLanguages(
     if (onProgress) {
         // 状态只影响进度分母，读取失败仍继续下载；取消必须立即结束等待，迟到回复只被消费。
         const status = await new Promise<ImageOcrStatusResponse | undefined>((resolve, reject) => {
-            const finish = (response: ImageOcrStatusResponse | undefined) => {
+            let settled = false;
+            const cleanup = () => {
+                clearTimeout(timer);
                 signal?.removeEventListener('abort', handleAbort);
-                resolve(response);
             };
-            const handleAbort = () => {
-                signal?.removeEventListener('abort', handleAbort);
-                reject(createImageClientError('图片 OCR 请求已取消', 'AbortError'));
+            const finish = (response: ImageOcrStatusResponse | undefined, aborted = false) => {
+                if (settled) return;
+                settled = true;
+                cleanup();
+                if (aborted) reject(createImageClientError('图片 OCR 请求已取消', 'AbortError'));
+                else resolve(response);
             };
+            const handleAbort = () => finish(undefined, true);
+            const timer = setTimeout(() => finish(undefined), IMAGE_OCR_STATUS_TIMEOUT_MS);
+            // 函数入口已检查取消；至此无 await 或外部回调，统一由监听器结束后续等待。
             signal?.addEventListener('abort', handleAbort, {once: true});
             void (async () => browser.runtime.sendMessage({type: 'fluentReadImageOcrStatus'}))().then(
                 response => finish(response as ImageOcrStatusResponse | undefined),

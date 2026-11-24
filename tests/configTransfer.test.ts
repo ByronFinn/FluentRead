@@ -4,6 +4,7 @@ import {
   isConfigImportValid,
   prepareConfigForExport,
   prepareConfigForImport,
+  getConfigImportCredentialBindings,
 } from '@/src/core/config/transfer'
 import { sanitizeConfigCredentials } from '@/src/core/config/credentials'
 import { Config, normalizeConfig } from '@/src/core/config/model'
@@ -22,6 +23,38 @@ const validConfig = {
 }
 
 describe('configuration transfer helpers', () => {
+  it.each(['merge', 'merge-hydration-safe'] as const)('混合新旧凭据按各服务的自有 API Key 列表优先（%s）', credentialMode => {
+    const current = normalizeConfig({...validConfig, apiKeys: {
+      openai: ['fixture-old-openai'], deepseek: ['fixture-old-deepseek'], claude: ['fixture-kept'],
+    }})
+    for (const apiKeys of [{deepseek: ['fixture-new-deepseek']}, {}, {openai: 'malformed'}]) {
+      for (const token of ['fixture-new-openai', '']) {
+        const prepared = prepareConfigForImport({...validConfig, apiKeys, token: {openai: token}}, current, {credentialMode})
+        expect(prepared.apiKeys.openai, JSON.stringify({apiKeys, token})).toEqual(token ? [token] : [])
+        expect(prepared.token.openai).toBe(token || undefined)
+        expect(prepared.apiKeys.deepseek).toEqual('deepseek' in apiKeys ? ['fixture-new-deepseek'] : ['fixture-old-deepseek'])
+        expect(prepared.apiKeys.claude).toEqual(['fixture-kept'])
+        expect(getConfigImportCredentialBindings(prepared)?.apiKeyServices).toContain('openai')
+      }
+    }
+    for (const rows of [[], ['', 'fixture-api-priority', 'fixture-backup']]) {
+      const prepared = prepareConfigForImport({...validConfig, apiKeys: {openai: rows}, token: {openai: 'fixture-legacy'}}, current, {credentialMode})
+      expect(prepared.apiKeys.openai).toEqual(rows)
+      expect(prepared.token.openai).toBe(rows.find(Boolean))
+    }
+    const inherited = Object.assign(Object.create({openai: ['fixture-inherited']}), {deepseek: ['fixture-new-deepseek']})
+    expect(prepareConfigForImport({...validConfig, apiKeys: inherited, token: {openai: 'fixture-own'}}, current, {credentialMode}).apiKeys.openai)
+      .toEqual(['fixture-own'])
+  })
+  it.each(['merge', 'replace'] as const)('网站规则经%s凭据的真实导入仍保留正文 key 和模板', credentialMode => {
+    const current = normalizeConfig({...validConfig, siteAdaptation: {enabled: false, disabledRuleIds: ['reddit'], custom: {
+      version: 1, profiles: {custom: {mode: 'focus', content: [{css: ['article p'], key: 'article-body'}]}},
+      rules: [{id: 'mine', name: 'My rule', match: {hosts: ['example.com']}, profile: 'custom'}],
+    }}})
+    const exported = prepareConfigForExport(current)
+    expect(prepareConfigForImport(exported, new Config(), {credentialMode}).siteAdaptation).toEqual(current.siteAdaptation)
+    expect(prepareConfigForImport(publicConfigFile(exported), new Config()).siteAdaptation).toEqual(current.siteAdaptation)
+  })
   it('原生合批按服务偏好完整往返，旧导入仍默认开启且错误类型不误关闭', () => {
     const current = normalizeConfig({...validConfig, nativeBatchTranslationEnabled: {google: false, deepL: false}})
     const exported = prepareConfigForExport(current)

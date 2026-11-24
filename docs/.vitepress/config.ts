@@ -1,8 +1,6 @@
 import brandTaglines from '../../src/core/i18n/messages/brand-taglines.json'
 import { defineConfig, type DefaultTheme } from 'vitepress'
 
-const supportUrl = 'https://github.com/FluentRead/FluentRead#support'
-
 const guide = (en = false): DefaultTheme.SidebarItem[] => {
   const p = en ? '/en' : ''
   const item = (zh: string, english: string, path: string) => ({
@@ -46,6 +44,7 @@ const guide = (en = false): DefaultTheme.SidebarItem[] => {
       text: en ? 'Learning & expression' : '学习与表达',
       items: [
         item('学习中心', 'Learning center', '/guide/vocabulary-book'),
+        item('词典与学习卡', 'Dictionaries and study cards', '/guide/dictionaries'),
         item('词性与句法', 'Sentence structure', '/guide/sentence-analysis'),
         item('双语分享卡片', 'Share cards', '/guide/share-cards'),
         item('写作助手', 'Writing assistant', '/guide/writing-assistant'),
@@ -56,6 +55,7 @@ const guide = (en = false): DefaultTheme.SidebarItem[] => {
       collapsed: true,
       items: [
         item('设置概览', 'Settings overview', '/config/'),
+        item('翻译隐私防护', 'Translation privacy', '/config/privacy-protection'),
         item('翻译服务', 'Translation providers', '/config/translation-engines'),
         item('ChatGPT 套餐接入状态', 'ChatGPT plan availability', '/config/chatgpt-plan'),
         item('译文外观与阅读辅助', 'Appearance & reading aids', '/config/appearance'),
@@ -72,9 +72,11 @@ const guide = (en = false): DefaultTheme.SidebarItem[] => {
       text: en ? 'More platforms' : '更多平台',
       collapsed: true,
       items: [
-        item('Chrome 本地翻译', 'Chrome local translation', '/guide/chrome-translator'),
+        item('浏览器内置翻译', 'Built-in browser translation', '/guide/chrome-translator'),
         item('油猴脚本', 'Userscript', '/guide/userscript'),
+        item('移动端与 Safari', 'Mobile & Safari', '/guide/mobile-safari'),
         item('Thunderbird 邮件翻译', 'Thunderbird email translation', '/guide/thunderbird'),
+        item('Zotero 文献翻译', 'Zotero literature translation', '/guide/zotero'),
       ],
     },
     {
@@ -91,7 +93,7 @@ const guide = (en = false): DefaultTheme.SidebarItem[] => {
       items: [
         item('常见问题', 'Troubleshooting', '/guide/faq'),
         item('隐私政策', 'Privacy policy', '/guide/privacy'),
-        { text: en ? 'Support the project' : '支持项目', link: supportUrl },
+        item('赞助与支持', 'Sponsorship & support', '/guide/support'),
       ],
     },
   ]
@@ -173,6 +175,7 @@ export default defineConfig({
   srcExclude: [
     'architecture.md',
     'testing.md',
+    'testing/**',
     'reports/**',
     'maintainers/**',
     'contributing/**',

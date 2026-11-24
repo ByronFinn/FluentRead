@@ -1,0 +1,1047 @@
+{
+  "version": 1,
+  "generator": "scripts/testing/generate-manga-structure-fixtures.py",
+  "designSha256": "04801c1cc084412785d426ba635d6bda286988c3d3fd4f6ca3272dae53393530",
+  "pillowVersion": "12.3.0",
+  "fonts": [
+    {
+      "key": "cjk",
+      "sha256": "cf8cf2c882e1e344ac2e6207fe172657a30dc2c6e1ee65a9e29a7b582c4d4154"
+    },
+    {
+      "key": "bold",
+      "sha256": "d72db21f9242aedd6b917d8549ad5921766b24d5f8d0becfda2ff4c620b3c2e0"
+    },
+    {
+      "key": "regular",
+      "sha256": "525979822591a3447cfc49d943d6f7683508e25543407871c0ed8fed05fd2bd9"
+    }
+  ],
+  "notes": [
+    "Independent five-scene structural stress suite. No OCR/model run before source freeze.",
+    "All original source strings are complete anchors, including small ruby and narrow-card text.",
+    "paragraphGroups preserves explicit source grouping and independent single-card paragraphs; source regions are never split to manufacture groups."
+  ],
+  "fixtures": [
+    {
+      "name": "narrow-inset-card-dialogue",
+      "file": "narrow-inset-card-dialogue.png",
+      "mime": "image/png",
+      "width": 1000,
+      "height": 1200,
+      "sourceLanguage": "ja",
+      "scene": "Detached24px white card inside a >15% curved speech component; entire narrow card source is one unsplit vertical region.",
+      "regions": [
+        {
+          "id": "body-right",
+          "text": "明日は出発",
+          "anchor": "明日は出発",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 651,
+            "y0": 270,
+            "x1": 689,
+            "y1": 515
+          },
+          "vertical": true,
+          "fontKey": "cjk",
+          "fontSize": 40,
+          "paragraphId": "dialogue",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "body-left",
+          "text": "地図を持とう",
+          "anchor": "地図を持とう",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 501,
+            "y0": 270,
+            "x1": 539,
+            "y1": 566
+          },
+          "vertical": true,
+          "fontKey": "cjk",
+          "fontSize": 40,
+          "paragraphId": "dialogue",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "inset-card",
+          "text": "別の案内",
+          "anchor": "別の案内",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 336,
+            "y0": 330,
+            "x1": 354,
+            "y1": 420
+          },
+          "vertical": true,
+          "fontKey": "cjk",
+          "fontSize": 18,
+          "paragraphId": "independent-card",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "caption",
+          "text": "THE GLASS GARDEN",
+          "anchor": "THE GLASS GARDEN",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 230,
+            "y0": 920,
+            "x1": 600,
+            "y1": 946
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 36,
+          "paragraphId": "caption",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 180,
+          "y": 1090,
+          "rgb": [
+            79,
+            130,
+            112
+          ]
+        },
+        {
+          "x": 60,
+          "y": 60,
+          "rgb": [
+            229,
+            236,
+            229
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "expectedSource": [
+        "明日は出発",
+        "地図を持とう",
+        "別の案内",
+        "THE GLASS GARDEN"
+      ],
+      "expectedAnchors": [
+        "明日は出発",
+        "地図を持とう",
+        "別の案内",
+        "THE GLASS GARDEN"
+      ],
+      "anchorOccurrences": {
+        "明日は出発": 1,
+        "地図を持とう": 1,
+        "別の案内": 1,
+        "THE GLASS GARDEN": 1
+      },
+      "paragraphGroups": [
+        [
+          "body-right",
+          "body-left"
+        ],
+        [
+          "inset-card"
+        ],
+        [
+          "caption"
+        ]
+      ],
+      "forbiddenRegions": [
+        {
+          "id": "unlettered-art-1",
+          "bbox": {
+            "x0": 80,
+            "y0": 1030,
+            "x1": 920,
+            "y1": 1150
+          }
+        }
+      ],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "designSha256": "04801c1cc084412785d426ba635d6bda286988c3d3fd4f6ca3272dae53393530",
+        "selectionByOcrResult": false,
+        "main32AndSixConfusablesUnmodified": true
+      },
+      "sha256": "0826a99d3b85a31914d487e8aec9ce8c07105f907bfcadd499c6c5ee3a23b946",
+      "bytes": 32511
+    },
+    {
+      "name": "midband-crossing-detached-cards",
+      "file": "midband-crossing-detached-cards.png",
+      "mime": "image/png",
+      "width": 1200,
+      "height": 1200,
+      "sourceLanguage": "ja",
+      "scene": "Two detached narrow cards cross top/bottom of conservative central ownership band, without touching the enclosing curved outline.",
+      "regions": [
+        {
+          "id": "body-right",
+          "text": "安全を確認",
+          "anchor": "安全を確認",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 540,
+            "y0": 330,
+            "x1": 582,
+            "y1": 576
+          },
+          "vertical": true,
+          "fontKey": "cjk",
+          "fontSize": 42,
+          "paragraphId": "dialogue",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "body-left",
+          "text": "門へ向かう",
+          "anchor": "門へ向かう",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 382,
+            "y0": 330,
+            "x1": 421,
+            "y1": 575
+          },
+          "vertical": true,
+          "fontKey": "cjk",
+          "fontSize": 42,
+          "paragraphId": "dialogue",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "upper-card",
+          "text": "上の注記",
+          "anchor": "上の注記",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 706,
+            "y0": 240,
+            "x1": 724,
+            "y1": 330
+          },
+          "vertical": true,
+          "fontKey": "cjk",
+          "fontSize": 18,
+          "paragraphId": "upper-independent-card",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "lower-card",
+          "text": "下の補記",
+          "anchor": "下の補記",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 806,
+            "y0": 590,
+            "x1": 824,
+            "y1": 680
+          },
+          "vertical": true,
+          "fontKey": "cjk",
+          "fontSize": 18,
+          "paragraphId": "lower-independent-card",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "caption",
+          "text": "TWO NOTES STAY SEPARATE",
+          "anchor": "TWO NOTES STAY SEPARATE",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 160,
+            "y0": 1010,
+            "x1": 662,
+            "y1": 1035
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 34,
+          "paragraphId": "caption",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 600,
+          "y": 935,
+          "rgb": [
+            224,
+            231,
+            240
+          ]
+        },
+        {
+          "x": 60,
+          "y": 60,
+          "rgb": [
+            224,
+            231,
+            240
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "expectedSource": [
+        "安全を確認",
+        "門へ向かう",
+        "上の注記",
+        "下の補記",
+        "TWO NOTES STAY SEPARATE"
+      ],
+      "expectedAnchors": [
+        "安全を確認",
+        "門へ向かう",
+        "上の注記",
+        "下の補記",
+        "TWO NOTES STAY SEPARATE"
+      ],
+      "anchorOccurrences": {
+        "安全を確認": 1,
+        "門へ向かう": 1,
+        "上の注記": 1,
+        "下の補記": 1,
+        "TWO NOTES STAY SEPARATE": 1
+      },
+      "paragraphGroups": [
+        [
+          "body-right",
+          "body-left"
+        ],
+        [
+          "upper-card"
+        ],
+        [
+          "lower-card"
+        ],
+        [
+          "caption"
+        ]
+      ],
+      "forbiddenRegions": [
+        {
+          "id": "unlettered-art-1",
+          "bbox": {
+            "x0": 80,
+            "y0": 900,
+            "x1": 1100,
+            "y1": 970
+          }
+        }
+      ],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "designSha256": "04801c1cc084412785d426ba635d6bda286988c3d3fd4f6ca3272dae53393530",
+        "selectionByOcrResult": false,
+        "main32AndSixConfusablesUnmodified": true
+      },
+      "sha256": "5cf0b982ecc72e93ca292f48df182f207b5aca95899a8a89098c13ca5686911d",
+      "bytes": 37160
+    },
+    {
+      "name": "bound-spread-gutter-caption",
+      "file": "bound-spread-gutter-caption.png",
+      "mime": "image/png",
+      "width": 1600,
+      "height": 1050,
+      "sourceLanguage": "en",
+      "scene": "Bound double spread with a dark curved gutter; complete heading crosses the binding, page-specific dialogue and spine lettering remain separate.",
+      "regions": [
+        {
+          "id": "fold-title",
+          "text": "READ ACROSS THE FOLD",
+          "anchor": "READ ACROSS THE FOLD",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 448,
+            "y0": 140,
+            "x1": 1127,
+            "y1": 181
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 54,
+          "paragraphId": "fold-title",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "left-first",
+          "text": "KEEP THE LEFT PAGE",
+          "anchor": "KEEP THE LEFT PAGE",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 142,
+            "y0": 350,
+            "x1": 550,
+            "y1": 377
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 38,
+          "paragraphId": "left-dialogue",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "left-second",
+          "text": "OPEN BESIDE THE MAP",
+          "anchor": "OPEN BESIDE THE MAP",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 141,
+            "y0": 415,
+            "x1": 578,
+            "y1": 442
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 38,
+          "paragraphId": "left-dialogue",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "right-first",
+          "text": "THE STORY CONTINUES",
+          "anchor": "THE STORY CONTINUES",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 900,
+            "y0": 350,
+            "x1": 1348,
+            "y1": 377
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 38,
+          "paragraphId": "right-dialogue",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "right-second",
+          "text": "ON THE OTHER SIDE",
+          "anchor": "ON THE OTHER SIDE",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 901,
+            "y0": 415,
+            "x1": 1284,
+            "y1": 442
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 38,
+          "paragraphId": "right-dialogue",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "spine",
+          "text": "VOL 08",
+          "anchor": "VOL 08",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 784,
+            "y0": 614,
+            "x1": 801,
+            "y1": 697
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 24,
+          "paragraphId": "spine",
+          "rotationDegrees": 90,
+          "perspectiveTransformed": false
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 350,
+          "y": 800,
+          "rgb": [
+            64,
+            89,
+            91
+          ]
+        },
+        {
+          "x": 1260,
+          "y": 800,
+          "rgb": [
+            74,
+            123,
+            94
+          ]
+        },
+        {
+          "x": 800,
+          "y": 1000,
+          "rgb": [
+            69,
+            60,
+            52
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "expectedSource": [
+        "READ ACROSS THE FOLD",
+        "KEEP THE LEFT PAGE",
+        "OPEN BESIDE THE MAP",
+        "THE STORY CONTINUES",
+        "ON THE OTHER SIDE",
+        "VOL 08"
+      ],
+      "expectedAnchors": [
+        "READ ACROSS THE FOLD",
+        "KEEP THE LEFT PAGE",
+        "OPEN BESIDE THE MAP",
+        "THE STORY CONTINUES",
+        "ON THE OTHER SIDE",
+        "VOL 08"
+      ],
+      "anchorOccurrences": {
+        "READ ACROSS THE FOLD": 1,
+        "KEEP THE LEFT PAGE": 1,
+        "OPEN BESIDE THE MAP": 1,
+        "THE STORY CONTINUES": 1,
+        "ON THE OTHER SIDE": 1,
+        "VOL 08": 1
+      },
+      "paragraphGroups": [
+        [
+          "fold-title"
+        ],
+        [
+          "left-first",
+          "left-second"
+        ],
+        [
+          "right-first",
+          "right-second"
+        ],
+        [
+          "spine"
+        ]
+      ],
+      "forbiddenRegions": [
+        {
+          "id": "unlettered-art-1",
+          "bbox": {
+            "x0": 100,
+            "y0": 650,
+            "x1": 600,
+            "y1": 940
+          }
+        },
+        {
+          "id": "unlettered-art-2",
+          "bbox": {
+            "x0": 1010,
+            "y0": 650,
+            "x1": 1480,
+            "y1": 940
+          }
+        }
+      ],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "designSha256": "04801c1cc084412785d426ba635d6bda286988c3d3fd4f6ca3272dae53393530",
+        "selectionByOcrResult": false,
+        "main32AndSixConfusablesUnmodified": true
+      },
+      "sha256": "7d89524bd73305c0040b2387d81d1359d08b64b89dfcfb414d62c8fee7f2f2eb",
+      "bytes": 42053
+    },
+    {
+      "name": "multisize-margin-callouts",
+      "file": "multisize-margin-callouts.png",
+      "mime": "image/png",
+      "width": 1200,
+      "height": 1400,
+      "sourceLanguage": "ja",
+      "scene": "Large vertical main columns,14px ruby,22px field caption and18px callouts surround a botanical diagram with leader lines.",
+      "regions": [
+        {
+          "id": "title",
+          "text": "GLASSHOUSE OBSERVATION",
+          "anchor": "GLASSHOUSE OBSERVATION",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 81,
+            "y0": 65,
+            "x1": 604,
+            "y1": 91
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 36,
+          "paragraphId": "title",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "main-right",
+          "text": "小さな芽を見よう",
+          "anchor": "小さな芽を見よう",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 661,
+            "y0": 190,
+            "x1": 700,
+            "y1": 555
+          },
+          "vertical": true,
+          "fontKey": "cjk",
+          "fontSize": 40,
+          "paragraphId": "main-dialogue",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "main-left",
+          "text": "光を向けて育てる",
+          "anchor": "光を向けて育てる",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 501,
+            "y0": 190,
+            "x1": 538,
+            "y1": 553
+          },
+          "vertical": true,
+          "fontKey": "cjk",
+          "fontSize": 40,
+          "paragraphId": "main-dialogue",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "ruby-right",
+          "text": "め",
+          "anchor": "め",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 709,
+            "y0": 330,
+            "x1": 721,
+            "y1": 344
+          },
+          "vertical": true,
+          "fontKey": "cjk",
+          "fontSize": 14,
+          "paragraphId": "ruby-right",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "ruby-left",
+          "text": "ひかり",
+          "anchor": "ひかり",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 549,
+            "y0": 190,
+            "x1": 562,
+            "y1": 240
+          },
+          "vertical": true,
+          "fontKey": "cjk",
+          "fontSize": 14,
+          "paragraphId": "ruby-left",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "field-note",
+          "text": "FIELD NOTE 12",
+          "anchor": "FIELD NOTE 12",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 101,
+            "y0": 780,
+            "x1": 260,
+            "y1": 796
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 22,
+          "paragraphId": "field-note",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "leaf-callout",
+          "text": "new leaf",
+          "anchor": "new leaf",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 851,
+            "y0": 900,
+            "x1": 918,
+            "y1": 913
+          },
+          "vertical": false,
+          "fontKey": "regular",
+          "fontSize": 18,
+          "paragraphId": "leaf-callout",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "root-callout",
+          "text": "root tip",
+          "anchor": "root tip",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 821,
+            "y0": 1130,
+            "x1": 875,
+            "y1": 1148
+          },
+          "vertical": false,
+          "fontKey": "regular",
+          "fontSize": 18,
+          "paragraphId": "root-callout",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 600,
+          "y": 1050,
+          "rgb": [
+            53,
+            105,
+            70
+          ]
+        },
+        {
+          "x": 100,
+          "y": 1200,
+          "rgb": [
+            238,
+            234,
+            213
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "expectedSource": [
+        "GLASSHOUSE OBSERVATION",
+        "小さな芽を見よう",
+        "光を向けて育てる",
+        "め",
+        "ひかり",
+        "FIELD NOTE 12",
+        "new leaf",
+        "root tip"
+      ],
+      "expectedAnchors": [
+        "GLASSHOUSE OBSERVATION",
+        "小さな芽を見よう",
+        "光を向けて育てる",
+        "め",
+        "ひかり",
+        "FIELD NOTE 12",
+        "new leaf",
+        "root tip"
+      ],
+      "anchorOccurrences": {
+        "GLASSHOUSE OBSERVATION": 1,
+        "小さな芽を見よう": 1,
+        "光を向けて育てる": 1,
+        "め": 1,
+        "ひかり": 1,
+        "FIELD NOTE 12": 1,
+        "new leaf": 1,
+        "root tip": 1
+      },
+      "paragraphGroups": [
+        [
+          "title"
+        ],
+        [
+          "main-right",
+          "main-left"
+        ],
+        [
+          "ruby-right"
+        ],
+        [
+          "ruby-left"
+        ],
+        [
+          "field-note"
+        ],
+        [
+          "leaf-callout"
+        ],
+        [
+          "root-callout"
+        ]
+      ],
+      "forbiddenRegions": [
+        {
+          "id": "unlettered-art-1",
+          "bbox": {
+            "x0": 420,
+            "y0": 850,
+            "x1": 720,
+            "y1": 1320
+          }
+        },
+        {
+          "id": "unlettered-art-2",
+          "bbox": {
+            "x0": 30,
+            "y0": 1100,
+            "x1": 250,
+            "y1": 1320
+          }
+        }
+      ],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "designSha256": "04801c1cc084412785d426ba635d6bda286988c3d3fd4f6ca3272dae53393530",
+        "selectionByOcrResult": false,
+        "main32AndSixConfusablesUnmodified": true
+      },
+      "sha256": "8196a876fa9b441499d3d72a907d81230e5c6b03131061f5e3af488cdf9cfb4d",
+      "bytes": 46887
+    },
+    {
+      "name": "photographed-perspective-note",
+      "file": "photographed-perspective-note.png",
+      "mime": "image/png",
+      "width": 1600,
+      "height": 1100,
+      "sourceLanguage": "en",
+      "scene": "Whole illustrated paper undergoes one fixed homography on a deterministic wood-like desk with shadow; separate upright sticky note does not share its paragraph.",
+      "regions": [
+        {
+          "id": "paper-title",
+          "text": "CHECK THE SOUTH GATE",
+          "anchor": "CHECK THE SOUTH GATE",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 356,
+            "y0": 210,
+            "x1": 893,
+            "y1": 272
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 42,
+          "paragraphId": "paper-title",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": true
+        },
+        {
+          "id": "paper-first",
+          "text": "THE KEY IS UNDER THE BLUE CUP",
+          "anchor": "THE KEY IS UNDER THE BLUE CUP",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 270,
+            "y0": 405,
+            "x1": 864,
+            "y1": 468
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 34,
+          "paragraphId": "paper-dialogue",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": true
+        },
+        {
+          "id": "paper-second",
+          "text": "PLEASE RETURN BEFORE SUNSET",
+          "anchor": "PLEASE RETURN BEFORE SUNSET",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 278,
+            "y0": 476,
+            "x1": 881,
+            "y1": 541
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 34,
+          "paragraphId": "paper-dialogue",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": true
+        },
+        {
+          "id": "paper-footer",
+          "text": "FIELD SKETCH 09",
+          "anchor": "FIELD SKETCH 09",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 291,
+            "y0": 864,
+            "x1": 490,
+            "y1": 897
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 22,
+          "paragraphId": "paper-footer",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": true
+        },
+        {
+          "id": "sticky-title",
+          "text": "SIDE NOTE",
+          "anchor": "SIDE NOTE",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 1380,
+            "y0": 135,
+            "x1": 1487,
+            "y1": 150
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 20,
+          "paragraphId": "sticky-title",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        },
+        {
+          "id": "sticky-body",
+          "text": "DRY TOOLS",
+          "anchor": "DRY TOOLS",
+          "translation": "受控译文用于结构回归。",
+          "bbox": {
+            "x0": 1376,
+            "y0": 195,
+            "x1": 1491,
+            "y1": 210
+          },
+          "vertical": false,
+          "fontKey": "bold",
+          "fontSize": 20,
+          "paragraphId": "sticky-body",
+          "rotationDegrees": 0,
+          "perspectiveTransformed": false
+        }
+      ],
+      "protectedProbes": [
+        {
+          "x": 40,
+          "y": 40,
+          "rgb": [
+            159,
+            121,
+            87
+          ]
+        },
+        {
+          "x": 1500,
+          "y": 900,
+          "rgb": [
+            128,
+            100,
+            70
+          ]
+        }
+      ],
+      "tileBoundaryCrossings": [],
+      "expectedSource": [
+        "CHECK THE SOUTH GATE",
+        "THE KEY IS UNDER THE BLUE CUP",
+        "PLEASE RETURN BEFORE SUNSET",
+        "FIELD SKETCH 09",
+        "SIDE NOTE",
+        "DRY TOOLS"
+      ],
+      "expectedAnchors": [
+        "CHECK THE SOUTH GATE",
+        "THE KEY IS UNDER THE BLUE CUP",
+        "PLEASE RETURN BEFORE SUNSET",
+        "FIELD SKETCH 09",
+        "SIDE NOTE",
+        "DRY TOOLS"
+      ],
+      "anchorOccurrences": {
+        "CHECK THE SOUTH GATE": 1,
+        "THE KEY IS UNDER THE BLUE CUP": 1,
+        "PLEASE RETURN BEFORE SUNSET": 1,
+        "FIELD SKETCH 09": 1,
+        "SIDE NOTE": 1,
+        "DRY TOOLS": 1
+      },
+      "paragraphGroups": [
+        [
+          "paper-title"
+        ],
+        [
+          "paper-first",
+          "paper-second"
+        ],
+        [
+          "paper-footer"
+        ],
+        [
+          "sticky-title"
+        ],
+        [
+          "sticky-body"
+        ]
+      ],
+      "forbiddenRegions": [
+        {
+          "id": "unlettered-art-1",
+          "bbox": {
+            "x0": 20,
+            "y0": 1020,
+            "x1": 180,
+            "y1": 1080
+          }
+        },
+        {
+          "id": "unlettered-art-2",
+          "bbox": {
+            "x0": 1030,
+            "y0": 600,
+            "x1": 1300,
+            "y1": 810
+          }
+        }
+      ],
+      "provenance": {
+        "originalArtworkAndText": true,
+        "sourceDesignedBeforeAnyOcr": true,
+        "designSha256": "04801c1cc084412785d426ba635d6bda286988c3d3fd4f6ca3272dae53393530",
+        "selectionByOcrResult": false,
+        "main32AndSixConfusablesUnmodified": true
+      },
+      "sha256": "cd39921f84b1b3f5176e823874951daab543061a2b7b5fcd4a8b8dad3e96b9e3",
+      "bytes": 430355
+    }
+  ]
+}

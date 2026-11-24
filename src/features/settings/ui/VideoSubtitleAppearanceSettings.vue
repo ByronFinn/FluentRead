@@ -1,7 +1,7 @@
 <!--
  * @file src/features/settings/ui/VideoSubtitleAppearanceSettings.vue
  * 文件职责：提供视频字幕外观设置，并用同一套 CSS 变量展示隔离的实时预览。
- * 主要内容：左侧在等高预览区内用正常视频比例呈现字幕样式，滚动调整时保持预览可见；右侧选择显示内容、默认关闭的逐字高亮、皮肤并按字号与位置、颜色与布局分组调整字幕，字号允许 80–500% 与整数自定义输入，支持恢复默认并保留所有外观配置。
+ * 主要内容：左侧在等高预览区内用正常视频比例呈现字幕样式，滚动调整时保持预览可见；右侧选择显示内容、双语上下顺序、默认关闭的逐字高亮与读音标注、皮肤并按字号、位置、字体轮廓、背景、颜色与布局分组调整字幕。单语模式禁用顺序并保留选择，仅译文时可显式切回双语查看读音；读音预览只使用明确标记的固定日语示例，DOM 与视觉顺序同步且读音紧随原文；字号允许 80–500% 与整数自定义输入，支持恢复默认。
  * 模块边界：只编辑传入 Config 草稿；保存由 SettingsSections 统一处理，播放器实际应用由 content 层负责。
  -->
 <template>
@@ -10,19 +10,34 @@
       <template #preview>
         <div class="subtitle-preview-scene" :data-position="config.videoSubtitleAppearance.position" :data-auto-bottom="config.videoSubtitleAppearance.autoBottom" data-video-subtitle-preview-scene>
         <div v-if="config.videoSubtitleVisible" class="subtitle-live-preview" :style="previewStyle" data-video-subtitle-preview>
-          <span v-if="config.videoSubtitleDisplayMode !== 'translation-only'" :class="{ 'subtitle-preview-karaoke': config.videoSubtitleAppearance.karaoke }" data-text="Video subtitle preview" data-i18n-ignore>Video subtitle preview</span>
-          <b v-if="config.videoSubtitleDisplayMode !== 'original-only'" :class="{ 'subtitle-preview-karaoke': config.videoSubtitleAppearance.karaoke }" data-text="视频字幕预览" data-i18n-ignore>视频字幕预览</b>
+          <template v-for="line in previewOrder" :key="line">
+            <template v-if="line === 'original' && config.videoSubtitleDisplayMode !== 'translation-only'">
+              <span :class="{ 'subtitle-preview-karaoke': config.videoSubtitleAppearance.karaoke }" :data-text="previewOriginal" :lang="config.videoSubtitleAppearance.readingAnnotation ? 'ja' : 'en'" data-i18n-ignore>{{ previewOriginal }}</span>
+              <small v-if="config.videoSubtitleAppearance.readingAnnotation" class="subtitle-preview-reading" lang="ja-Latn" data-video-subtitle-reading-preview data-i18n-ignore>kyō wa ii tenki desu ne.</small>
+            </template>
+            <b v-if="line === 'translation' && config.videoSubtitleDisplayMode !== 'original-only'" :class="{ 'subtitle-preview-karaoke': config.videoSubtitleAppearance.karaoke }" :data-text="previewTranslation" data-i18n-ignore>{{ previewTranslation }}</b>
+          </template>
         </div>
         <span v-else class="subtitle-preview-hidden">字幕已隐藏</span>
       </div>
         <p class="subtitle-appearance-hint">切换显示内容、皮肤或位置，左侧示例立即更新</p>
+        <p v-if="config.videoSubtitleAppearance.readingAnnotation" class="subtitle-appearance-hint" data-video-subtitle-reading-sample>{{ t('video.readingAnnotation.previewSample') }}</p>
       </template>
       <div class="subtitle-display-preferences">
         <SettingsItem :label="translateControlLabel('显示 FluentRead 字幕').replace('FluentRead', t('common.brand'))" description="临时隐藏字幕时保留翻译设置" :disabled="!config.videoTranslationEnabled">
           <el-switch v-model="config.videoSubtitleVisible" :aria-label="translateControlLabel('显示 FluentRead 视频字幕').replace('FluentRead', t('common.brand'))" :disabled="!config.videoTranslationEnabled" />
         </SettingsItem>
         <SettingsItem label="字幕显示模式" description="选择原文和译文的呈现方式" :disabled="!config.videoTranslationEnabled || !config.videoSubtitleVisible">
-          <SegmentedControl v-model="config.videoSubtitleDisplayMode" :options="displayModeOptions" label="视频字幕显示模式" :disabled="!config.videoTranslationEnabled || !config.videoSubtitleVisible" />
+          <SegmentedControl v-model="config.videoSubtitleDisplayMode" :options="displayModeOptions" data-video-subtitle-display-mode label="视频字幕显示模式" :disabled="!config.videoTranslationEnabled || !config.videoSubtitleVisible" />
+        </SettingsItem>
+        <SettingsItem class="subtitle-order-item" :label="t('video.bilingualOrder')" :description="config.videoSubtitleDisplayMode !== 'bilingual' ? t('video.bilingualOrderHint') : ''" :disabled="!orderAvailable">
+          <SegmentedControl v-model="config.videoSubtitleAppearance.bilingualOrder" :options="bilingualOrderOptions" :label="t('video.bilingualOrder')" compact :disabled="!orderAvailable" data-video-subtitle-order />
+        </SettingsItem>
+        <SettingsItem class="subtitle-reading-item" :label="t('video.readingAnnotation.label')" :help="`${t('video.readingAnnotation.description')} · ${t('video.readingAnnotation.approximation')}`" :disabled="!readingAvailable">
+          <template #description>
+            <small>{{ readingDescription }} <button v-if="readingNeedsOriginal" type="button" class="subtitle-reading-show-original" :disabled="!readingAvailable" data-video-subtitle-reading-show-original @click="showReading">{{ t('settings.translationStyle.switchToBilingual') }}</button></small>
+          </template>
+          <el-switch v-model="config.videoSubtitleAppearance.readingAnnotation" :aria-label="t('video.readingAnnotation.label')" :disabled="!readingAvailable" data-video-subtitle-reading-annotation />
         </SettingsItem>
         <SettingsItem class="subtitle-karaoke-item" label="逐字高亮" description="字幕随播放进度逐字点亮，像 KTV 歌词一样" :disabled="!config.videoTranslationEnabled || !config.videoSubtitleVisible">
           <el-switch v-model="config.videoSubtitleAppearance.karaoke" aria-label="视频字幕逐字高亮" :disabled="!config.videoTranslationEnabled || !config.videoSubtitleVisible" data-video-subtitle-karaoke />
@@ -59,14 +74,23 @@
             <strong>字号与位置</strong>
             <label><span>字号 <b>{{ config.videoSubtitleAppearance.fontScale }}%</b></span><input v-model.number="config.videoSubtitleAppearance.fontScale" type="range" :min="VIDEO_SUBTITLE_FONT_SCALE_RANGE.min" :max="VIDEO_SUBTITLE_FONT_SCALE_RANGE.max" step="10" aria-label="字幕字号" /><input :value="config.videoSubtitleAppearance.fontScale" type="number" :min="VIDEO_SUBTITLE_FONT_SCALE_RANGE.min" :max="VIDEO_SUBTITLE_FONT_SCALE_RANGE.max" step="1" :aria-label="translateControlLabel('字幕字号')" @change="updateFontScale" /></label>
             <label><span>位置</span><UiSelect v-model="config.videoSubtitleAppearance.position" aria-label="字幕位置"><ElOption value="bottom" :label="translateControlLabel('底部')" /><ElOption value="center" :label="translateControlLabel('中部')" /><ElOption value="top" :label="translateControlLabel('顶部')" /></UiSelect></label>
-            <label><span>底部偏移 <b>{{ config.videoSubtitleAppearance.position === 'bottom' && config.videoSubtitleAppearance.autoBottom ? 'X 自动' : `${config.videoSubtitleAppearance.bottomOffset}%` }}</b></span><input v-model.number="config.videoSubtitleAppearance.bottomOffset" type="range" min="0" max="25" step="1" aria-label="字幕底部偏移" @input="config.videoSubtitleAppearance.autoBottom = false" /></label>
-            <label v-if="config.videoSubtitleAppearance.position === 'bottom'"><span>X 字幕自动贴底</span><input v-model="config.videoSubtitleAppearance.autoBottom" type="checkbox" aria-label="X 字幕自动贴底" /></label>
+            <label><span>底部偏移 <b>{{ config.videoSubtitleAppearance.position === 'bottom' && config.videoSubtitleAppearance.autoBottom ? translateControlLabel('自动') : `${config.videoSubtitleAppearance.bottomOffset}%` }}</b></span><input v-model.number="config.videoSubtitleAppearance.bottomOffset" type="range" min="0" max="25" step="1" aria-label="字幕底部偏移" @input="config.videoSubtitleAppearance.autoBottom = false" /></label>
+            <label v-if="config.videoSubtitleAppearance.position === 'bottom'" class="subtitle-auto-bottom-toggle"><span>{{ translateControlLabel('移动端 / X 自动贴底') }}</span><input v-model="config.videoSubtitleAppearance.autoBottom" type="checkbox" :aria-label="translateControlLabel('移动端 / X 自动贴底')" /></label>
           </div>
           <div class="subtitle-appearance-control-group">
             <strong>颜色与布局</strong>
+            <label><span>{{ t('video.appearance.outlineStyle') }}</span><UiSelect v-model="config.videoSubtitleAppearance.outlineStyle" :aria-label="t('video.appearance.outlineStyle')">
+              <ElOption value="skin" :label="t('video.appearance.outlineStyle.skin')" />
+              <ElOption value="stroke" :label="t('video.appearance.outlineStyle.stroke')" />
+              <ElOption value="shadow" :label="t('video.appearance.outlineStyle.shadow')" />
+              <ElOption value="none" :label="t('video.appearance.outlineStyle.none')" />
+            </UiSelect></label>
+            <label><span>{{ t('video.appearance.outlineColor') }}</span><ElColorPicker :model-value="config.videoSubtitleAppearance.outlineColor" :aria-label="t('video.appearance.outlineColor')" :disabled="!customOutlineAvailable" show-alpha color-format="hex" @update:model-value="value => { if (value) config.videoSubtitleAppearance.outlineColor = value }" /></label>
+            <label><span>{{ t('video.appearance.outlineWidth') }} <b>{{ config.videoSubtitleAppearance.outlineWidth }}px</b></span><input v-model.number="config.videoSubtitleAppearance.outlineWidth" type="range" :min="VIDEO_SUBTITLE_OUTLINE_WIDTH_RANGE.min" :max="VIDEO_SUBTITLE_OUTLINE_WIDTH_RANGE.max" :step="VIDEO_SUBTITLE_OUTLINE_WIDTH_RANGE.step" :aria-label="t('video.appearance.outlineWidth')" :disabled="!customOutlineAvailable" /></label>
+            <label class="subtitle-background-toggle"><span>{{ t('video.appearance.backgroundVisible') }}</span><input v-model="config.videoSubtitleAppearance.backgroundVisible" type="checkbox" :aria-label="t('video.appearance.backgroundVisible')" /></label>
             <label><span>原文颜色</span><ElColorPicker :model-value="config.videoSubtitleAppearance.textColor" aria-label="原文颜色" @update:model-value="value => { if (value) config.videoSubtitleAppearance.textColor = value }" /></label>
             <label><span>译文颜色</span><ElColorPicker :model-value="config.videoSubtitleAppearance.translationColor" aria-label="译文颜色" @update:model-value="value => { if (value) config.videoSubtitleAppearance.translationColor = value }" /></label>
-            <label><span>背景透明度 <b>{{ config.videoSubtitleAppearance.backgroundOpacity }}%</b></span><input v-model.number="config.videoSubtitleAppearance.backgroundOpacity" type="range" min="0" max="95" step="1" aria-label="字幕背景透明度" /></label>
+            <label><span>背景透明度 <b>{{ config.videoSubtitleAppearance.backgroundOpacity }}%</b></span><input v-model.number="config.videoSubtitleAppearance.backgroundOpacity" type="range" min="0" max="95" step="1" aria-label="字幕背景透明度" :disabled="!config.videoSubtitleAppearance.backgroundVisible" /></label>
             <label><span>行距 <b>{{ config.videoSubtitleAppearance.lineSpacing.toFixed(2) }}</b></span><input v-model.number="config.videoSubtitleAppearance.lineSpacing" type="range" min="1" max="2" step="0.01" aria-label="字幕行距" /></label>
             <label><span>最大宽度 <b>{{ config.videoSubtitleAppearance.maxWidth }}%</b></span><input v-model.number="config.videoSubtitleAppearance.maxWidth" type="range" min="40" max="100" step="1" aria-label="字幕最大宽度" /></label>
           </div>
@@ -83,12 +107,14 @@ import 'element-plus/es/components/color-picker/style/css';
 import {useUiI18n as useControlI18n} from '@/src/ui/i18n';
 const {t, translateLegacy: translateControlLabel} = useControlI18n();
 
-import {computed} from 'vue';
+import {computed, nextTick} from 'vue';
 import type {CSSProperties} from 'vue';
 import type {Config} from '@/src/core/config/model';
+import {browserCapabilities} from '@/src/platform/browser/capabilities';
 import {
   DEFAULT_VIDEO_SUBTITLE_APPEARANCE,
   VIDEO_SUBTITLE_FONT_SCALE_RANGE,
+  VIDEO_SUBTITLE_OUTLINE_WIDTH_RANGE,
   normalizeVideoSubtitleAppearance,
   getVideoSubtitleAppearanceCssVars,
   VIDEO_SUBTITLE_SKINS,
@@ -102,7 +128,34 @@ const props = defineProps<{config: Config}>();
 // 设置页会整体替换草稿；始终读取最新 prop，避免卡片继续编辑旧配置。
 const config = computed(() => props.config);
 const displayModeOptions = [{value: 'bilingual', label: '双语'}, {value: 'translation-only', label: '仅译文'}, {value: 'original-only', label: '仅原文'}];
+const bilingualOrderOptions = computed(() => [{value: 'original-first', label: t('video.originalFirst')}, {value: 'translation-first', label: t('video.translationFirst')}]);
+const customOutlineAvailable = computed(() => config.value.videoSubtitleAppearance.outlineStyle === 'stroke' || config.value.videoSubtitleAppearance.outlineStyle === 'shadow');
+const subtitlesAvailable = computed(() => config.value.videoTranslationEnabled && config.value.videoSubtitleVisible);
+const orderAvailable = computed(() => subtitlesAvailable.value && config.value.videoSubtitleDisplayMode === 'bilingual');
+const readingAvailable = computed(() => subtitlesAvailable.value && browserCapabilities.extensionDom);
+const readingNeedsOriginal = computed(() => browserCapabilities.extensionDom && config.value.videoSubtitleAppearance.readingAnnotation && config.value.videoSubtitleDisplayMode === 'translation-only');
+const readingDescription = computed(() => t(!browserCapabilities.extensionDom ? 'video.readingAnnotation.unavailable'
+  : config.value.videoSubtitleDisplayMode === 'translation-only' ? 'video.readingAnnotation.originalRequired' : 'video.readingAnnotation.explanation'));
 const previewStyle = computed(() => getVideoSubtitleAppearanceCssVars(config.value.videoSubtitleAppearance) as CSSProperties);
+const previewOrder = computed(() => config.value.videoSubtitleAppearance.bilingualOrder === 'translation-first' ? ['translation', 'original'] : ['original', 'translation']);
+// 固定示例只预览排版；设置页不导入词典、启动 Worker 或发起字幕/翻译请求。
+const previewOriginal = computed(() => config.value.videoSubtitleAppearance.readingAnnotation ? '今日はいい天気ですね。' : 'Video subtitle preview');
+const previewTranslation = computed(() => config.value.videoSubtitleAppearance.readingAnnotation ? t('video.readingAnnotation.previewTranslation') : '视频字幕预览');
+
+async function showReading(event: MouseEvent): Promise<void> {
+  if (!readingAvailable.value || !readingNeedsOriginal.value) return;
+  const button = event.currentTarget as HTMLButtonElement;
+  const focusRoot = button.getRootNode() as Document | ShadowRoot;
+  const controls = button.closest('.subtitle-display-preferences');
+  const keepKeyboardFocus = focusRoot.activeElement === button;
+  config.value.videoSubtitleDisplayMode = 'bilingual';
+  if (!keepKeyboardFocus) return;
+  await nextTick();
+  // 提示按钮随模式消失时，将键盘焦点交给已选中的双语选项；不覆盖其它控件的新焦点。
+  if (controls?.isConnected && (!focusRoot.activeElement || focusRoot.activeElement === button || focusRoot.activeElement === button.ownerDocument.body)) {
+    controls.querySelector<HTMLButtonElement>('[data-video-subtitle-display-mode] [aria-checked="true"]')?.focus();
+  }
+}
 
 function updateFontScale(event: Event): void {
   const input = event.target as HTMLInputElement;
@@ -163,9 +216,10 @@ function skinSwatchStyle(skin: typeof VIDEO_SUBTITLE_SKINS[number]): Record<stri
 .subtitle-preview-scene[data-position="bottom"][data-auto-bottom="true"] .subtitle-live-preview { max-height:calc(100% - 24px); bottom: 12px; }
 .subtitle-preview-scene[data-position="center"] .subtitle-live-preview { top: 50%; transform: translate(-50%, -50%); }
 .subtitle-preview-scene[data-position="top"] .subtitle-live-preview { max-height:calc(100% - var(--fluent-read-video-subtitle-bottom-offset) - 12px); top: var(--fluent-read-video-subtitle-bottom-offset); }
-.subtitle-live-preview > span { color: var(--fluent-read-video-subtitle-text-color); }
+.subtitle-live-preview > span { order:1; color: var(--fluent-read-video-subtitle-text-color); }
 .subtitle-live-preview > span, .subtitle-live-preview > b { paint-order: stroke fill; }
-.subtitle-live-preview b { color: var(--fluent-read-video-subtitle-translation-color); font-weight: 650; }
+.subtitle-live-preview b { order:var(--fluent-read-video-subtitle-translation-order, 3); color: var(--fluent-read-video-subtitle-translation-color); font-weight: 650; }
+.subtitle-live-preview .subtitle-preview-reading { order:2; color:var(--fluent-read-video-subtitle-text-color); font-size:max(12px, .72em); font-weight:400; line-height:1.35; overflow-wrap:anywhere; text-align:center; -webkit-text-stroke:0; }
 .subtitle-appearance-advanced { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 10px; }
 .subtitle-appearance-advanced h3 { margin:0; color:var(--ink); font-size:13px; }
 .subtitle-appearance-hint { margin: 6px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.5; }
@@ -174,6 +228,9 @@ function skinSwatchStyle(skin: typeof VIDEO_SUBTITLE_SKINS[number]): Record<stri
 .subtitle-appearance-control-group > strong { color: var(--ink); font-size: 11px; }
 .subtitle-appearance-controls label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
 .subtitle-appearance-controls label span { display: flex; justify-content: space-between; gap: 8px; }
+.subtitle-appearance-controls .subtitle-auto-bottom-toggle, .subtitle-appearance-controls .subtitle-background-toggle { grid-template-columns: minmax(0, 1fr) auto; align-items: center; min-height: 40px; column-gap: 12px; cursor: pointer; }
+.subtitle-appearance-controls .subtitle-auto-bottom-toggle span, .subtitle-appearance-controls .subtitle-background-toggle span { display: block; min-width: 0; line-height: 1.5; overflow-wrap: anywhere; }
+.subtitle-appearance-controls .subtitle-auto-bottom-toggle input, .subtitle-appearance-controls .subtitle-background-toggle input { width: 18px; height: 18px; margin: 0; accent-color: var(--brand); cursor: inherit; }
 .subtitle-appearance-controls b { color: var(--ink); font-weight: 650; }
 .subtitle-appearance-controls input[type="range"] { width: 100%; accent-color: var(--brand); }
 .subtitle-appearance-controls input[type="number"] { width: 100%; min-height: 30px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 6px; color: var(--ink); background: var(--surface); }
@@ -182,11 +239,18 @@ function skinSwatchStyle(skin: typeof VIDEO_SUBTITLE_SKINS[number]): Record<stri
   .subtitle-skin-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .subtitle-appearance-controls { grid-template-columns: minmax(0, 1fr); }
 }
+.subtitle-reading-show-original { padding:0; border:0; color:var(--brand-strong); background:transparent; cursor:pointer; font:inherit; text-decoration:underline; text-underline-offset:3px; }
+.subtitle-reading-show-original:disabled { cursor:not-allowed; opacity:.55; }
+.subtitle-reading-show-original:focus-visible { outline:2px solid var(--brand); outline-offset:3px; border-radius:2px; }
 .subtitle-display-preferences { margin-bottom:18px; border-bottom:1px solid var(--line); }
 .subtitle-display-preferences :deep(.settings-item) { padding:0 0 16px; grid-template-columns:minmax(0,1fr) auto; gap:12px; }
 .subtitle-display-preferences :deep(.settings-item + .settings-item) { grid-template-columns:minmax(0,1fr); }
 .subtitle-display-preferences :deep(.settings-item-control) { width:100%; }
-.subtitle-display-preferences :deep(.settings-item.subtitle-karaoke-item) { grid-template-columns:minmax(0,1fr) auto; }
+.subtitle-display-preferences :deep(.settings-item.subtitle-karaoke-item), .subtitle-display-preferences :deep(.settings-item.subtitle-reading-item) { grid-template-columns:minmax(0,1fr) auto; }
+.subtitle-display-preferences :deep(.settings-item.subtitle-order-item) { grid-template-columns:minmax(0,1fr) minmax(0,2fr); }
+@media (max-width: 640px) {
+  .subtitle-display-preferences :deep(.settings-item.subtitle-order-item) { grid-template-columns:minmax(0,1fr); gap:8px; }
+}
 /* 预览与播放器同一套观感：未唱到的字变淡，同字高亮层循环扫过。 */
 .subtitle-preview-karaoke { position:relative; --subtitle-preview-karaoke-color:var(--fluent-read-video-subtitle-text-color); color:color-mix(in srgb, var(--subtitle-preview-karaoke-color) 46%, transparent) !important; }
 b.subtitle-preview-karaoke { --subtitle-preview-karaoke-color:var(--fluent-read-video-subtitle-translation-color); }

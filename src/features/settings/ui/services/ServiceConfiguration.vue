@@ -1,12 +1,16 @@
 <!--
  * @file src/features/settings/ui/services/ServiceConfiguration.vue
- * 文件职责：渲染当前翻译服务的详细连接配置：连接字段（密钥、区域、端点等）直接排在服务标题下方、不再单设“连接与密钥”标题，输入下方是添加密钥与密钥使用方式；其后用模型偏好、提示词、请求限制、接口兼容几个页签显示代理、密钥要求、提示词、自定义请求体与请求头、按域名移除来源头等字段，以及服务和模型的独立请求限制；只有一个页签的服务改用小节标题。
- * 主要内容：组件派生字段可见性与连接示例，密钥列表始终展示全部已保存的密钥并区分参与请求与备用的行，密钥要求放在接口兼容页签，提示词可在确认后一键同步到所有 AI 服务；原生支持多文本的服务在请求限制中独立编辑默认开启的合并请求开关，当前模型限额按自定义请求体覆盖后的真实模型显示、读取和保存，保留其他模型限额；将成对密钥 ID 同步到 apiKeys 和兼容 token，区分缺少必填 Key 与允许匿名的连接检查并管理等待超时；免费翻译检查完整目录并逐服务展示结果，Chrome 在点击时准备当前语言对并用进度条显示模型下载比例，通过配置 store 提交修改；隐藏、缓存停用或配置变化取消所属等待，Chrome 状态只在活跃服务订阅，恢复、同步模板和删除共用当前操作所属确认，同步复验来源并按确认时刻重算目标。
- * 模块边界：组合服务交给独立草稿表单编辑，不展示普通服务的模型或凭据页签；无成员禁止连接测试，组合与各成员配置修改使旧测试失效，测试等待不早于逐路预算与整轮上限；本地模型设置只在对应服务首次呈现时异步加载，实例归属与后台下载由子组件维持；ChatGPT 套餐公开构建不渲染配置或确认窗口、不加载登录子模块，并停用全部设置动作，显式开发模式才通过独立子组件连接本机助手，不显示通用凭据或接口覆写；本组件不执行网页正文翻译或保存公开配置中的明文凭据；Chrome 内置翻译仅在当前点击页完成模型自检，其他连接测试经后台消息，字段规则来自 core/config，服务切换由 ServiceCatalog 和 SettingsSections 负责。
+ * 文件职责：渲染当前翻译服务的详细连接配置：连接字段（密钥、区域、端点等）直接排在服务标题下方、不再单设“连接与密钥”标题，输入下方是添加密钥与密钥使用方式；其后用模型偏好、提示词、请求限制、接口兼容几个页签显示代理、密钥要求、提示词、自定义请求体与请求头、按域名移除来源头等字段，以及服务和模型的独立请求限制；只有请求限制页签的服务默认展开表单并允许手动收起，摘要显示沿用全局或自定义，表单始终挂载。
+ * 主要内容：提示 MiMo 官方端点退役编号的请求兼容与新计费规则；Safari 免费连接检查只包含已授权线路，权限读取失败与未授权分别显示可响应语言包的安全状态；组件派生字段可见性与连接示例，密钥列表始终展示全部已保存的密钥并区分参与请求与备用的行，密钥要求放在接口兼容页签，提示词可在确认后一键同步到所有 AI 服务；原生支持多文本的服务在请求限制中独立编辑默认开启的合并请求开关，当前模型限额按自定义请求体覆盖后的真实模型显示、读取和保存，保留其他模型限额；将成对密钥 ID 同步到 apiKeys 和兼容 token，区分缺少必填 Key 与允许匿名的连接检查并管理等待超时；免费翻译检查完整目录中的已授权服务并逐服务展示结果，浏览器内置翻译用一行呈现当前语言对和状态，点击才准备模型；下载时追加进度条，失败时提示下一步，通过配置 store 提交修改；有效修复链接首次进入且未发生用户聚焦时直达连接按钮或当前标题；所有服务可手动停止等待；连接和接口字段的迟到输入只属于原服务、配置及活跃会话；错误只保留共享诊断分类与可操作下一步，禁止展示原始错误详情，手动重试与字段定位保留当前选择；隐藏、缓存停用或配置变化取消所属等待，Chrome 状态只在活跃服务订阅，恢复、同步模板和删除共用当前操作所属确认，同步复验来源并按确认时刻重算目标。
+ * 状态本地化：逐密钥、逐免费服务及独立失败状态保留安全资源 key，在展示时响应语言选择与异步语言包更新，不重新请求服务或翻译供应商原始错误。
+ * 免费线路：连接检查排除已从翻译服务目录移除的线路。
+ * 模块边界：组合服务交给独立草稿表单编辑，不展示普通服务的模型或凭据页签；无成员禁止连接测试，组合与各成员配置修改使旧测试失效，测试等待不早于逐路预算与整轮上限；本地模型设置只在对应服务首次呈现时异步加载，实例归属与后台下载由子组件维持；ChatGPT 套餐公开构建不渲染配置或确认窗口、不加载登录子模块，并停用全部设置动作，显式开发模式才通过独立子组件连接本机助手，不显示通用凭据或接口覆写；本组件不执行网页正文翻译或保存公开配置中的明文凭据；浏览器内置翻译仅在当前点击页完成模型自检，其他连接测试经后台消息，字段规则来自 core/config，服务切换由 ServiceCatalog 和 SettingsSections 负责。
  -->
 <template>
   <template v-if="!publicPlanBlocked">
   <section
+    ref="configurationRoot"
+    tabindex="-1"
     class="settings-section service-connection-section"
     :data-service-configuration-service="service"
     :data-custom-service-configuration="compute.showCustomOpenAI ? 'true' : 'false'"
@@ -19,20 +23,22 @@
     <LocalTranslationModelSettings v-if="service === services.localTranslation" :active="active" :context="config" :config="config" :service="service" />
     <ChatGPTPlanSettings v-if="ChatGPTPlanSettings && service === services.chatgptPlan" :active="active" :config="config" />
 
-    <Teleport v-if="connectionActionTarget && !publicPlanBlocked" :to="connectionActionTarget">
+    <Teleport v-if="connectionActionTarget && !publicPlanBlocked && !browserTranslationUnavailable" :to="connectionActionTarget">
     <section class="service-connection-action">
     <div class="connection-test-inline">
 
         <button
           type="button"
           class="connection-test-button"
+          :class="{ 'is-quiet': chromePreparationCheckOnly && !connectionTestBusy }"
           data-connection-test-button
+          ref="connectionTestButton"
           :disabled="connectionTestDisabled"
           @click="connectionTestBusy ? stopApiKeyChecks() : testConnection()"
         >
-          <svg v-if="connectionTestBusy && usesApiKeyList" class="connection-action-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
+          <svg v-if="connectionTestBusy" class="connection-action-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1" /></svg>
           <svg v-else class="connection-action-icon" :class="{ 'is-spinning': connectionTestBusy }" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7" /></svg>
-          {{ connectionTestBusy ? (usesApiKeyList ? translateLegacy('停止检查') : t('settings.services.keys.checking')) : t('settings.services.keys.checkConnection') }}
+          {{ connectionTestBusy ? translateLegacy('停止检查') : connectionTestActionLabel }}
         </button>
     </div>
 
@@ -56,7 +62,7 @@
       <div class="connection-field" data-mymemory-email>
         <div class="connection-field-label"><strong>联系邮箱（可选）</strong><small>不填写也可以使用</small></div>
         <div class="connection-field-control">
-          <el-input v-model="myMemoryEmailDraft" type="email" aria-label="MyMemory 联系邮箱" placeholder="不填写也可以使用" :aria-invalid="myMemoryEmailInvalid" @change="commitMyMemoryEmail" />
+          <el-input :model-value="myMemoryEmailDraft" :onUpdate:modelValue="fieldActions.myMemoryEmail" type="email" aria-label="MyMemory 联系邮箱" placeholder="不填写也可以使用" :aria-invalid="myMemoryEmailInvalid" :onChange="fieldActions.commitMyMemoryEmail" />
           <small v-if="myMemoryEmailInvalid" class="field-warning" role="status">请输入有效邮箱，或留空</small>
         </div>
       </div>
@@ -67,24 +73,21 @@
       </div>
     </template>
 
-    <div v-if="isChromeConnectionTest" class="chrome-preparation-help" data-chrome-preparation-help>
-      <p class="chrome-preparation-pair" data-chrome-preparation-language-pair>
-        <strong>{{ t('settings.services.chromePreparation.sourceLabel') }}</strong>
-        <span>{{ currentChromePreparationPairLabel || t('settings.services.chromePreparation.invalidPair') }}</span>
+    <p v-if="browserTranslationUnavailable" class="configuration-scope" data-browser-translation-unavailable role="status">{{ translateLegacy(browserTranslationUnavailable) }}</p>
+    <div
+      v-else-if="isChromeConnectionTest"
+      class="chrome-preparation-status"
+      :class="`is-${chromePreparationState}`"
+      :data-availability="chromePreparationState === 'idle' ? chromeLanguagePackAvailability : undefined"
+      data-connection-test-status
+      role="status"
+    >
+      <p class="chrome-preparation-line">
+        <strong data-chrome-preparation-language-pair>{{ currentChromePreparationPairLabel || t('settings.services.chromePreparation.invalidPair') }}</strong>
+        <span v-if="chromePreparationStatusText" class="chrome-preparation-badge">{{ chromePreparationStatusText }}</span>
+        <span v-if="chromePreparationHint" class="chrome-preparation-hint">{{ chromePreparationHint }}</span>
       </p>
-      <p>{{ t('settings.services.chromePreparation.sourceDescription') }}</p>
-      <details>
-        <summary>{{ t('settings.services.chromePreparation.helpSummary') }}</summary>
-        <p>{{ t('settings.services.chromePreparation.helpBody') }}</p>
-        <p>{{ t('settings.services.chromePreparation.helpLimitations') }}</p>
-        <p><code>chrome://on-device-internals</code></p>
-        <p class="chrome-preparation-help-links">
-          <a href="https://developer.chrome.com/docs/ai/translator-api" target="_blank" rel="noreferrer">{{ t('settings.services.chromePreparation.helpApi') }}</a>
-          <a href="https://developer.chrome.com/docs/ai/language-detection" target="_blank" rel="noreferrer">{{ t('settings.services.chromePreparation.helpDetector') }}</a>
-          <a href="https://developer.chrome.com/docs/ai/debug-built-in-model" target="_blank" rel="noreferrer">{{ t('settings.services.chromePreparation.helpDebug') }}</a>
-          <a href="https://chrome.dev/web-ai-demos/translation-language-detection-api-playground/" target="_blank" rel="noreferrer">{{ t('settings.services.chromePreparation.helpDemo') }}</a>
-        </p>
-      </details>
+      <DownloadProgress v-if="chromeDownloadProgress" class="chrome-preparation-progress" detail="none" :progress="chromeDownloadProgress" :label="chromePreparationStatusText" data-chrome-preparation-progress />
     </div>
 
     <template v-if="compute.showCustomOpenAI && customProvider">
@@ -97,7 +100,7 @@
             data-testid="custom-service-edit-name"
             placeholder="请输入服务名称"
             :maxlength="MAX_CUSTOM_OPENAI_PROVIDER_NAME_LENGTH"
-            @update:model-value="updateCustomProvider('name', String($event))"
+            :onUpdate:modelValue="fieldActions.customName"
           />
         </div>
       </div>
@@ -105,12 +108,12 @@
         <div class="connection-field-label"><strong>接口地址</strong><FieldHelp :content="t('settings.services.customEndpointHelp')" /></div>
         <div class="connection-field-control">
           <el-input
-            :model-value="customProvider.endpoint"
+            :model-value="customProvider?.endpoint"
             aria-label="自定义服务接口地址"
             data-testid="custom-service-edit-endpoint"
             placeholder="http://localhost:11434/v1/chat/completions"
             :maxlength="MAX_CUSTOM_OPENAI_PROVIDER_ENDPOINT_LENGTH"
-            @update:model-value="updateCustomProvider('endpoint', String($event))"
+            :onUpdate:modelValue="fieldActions.customEndpoint"
           />
         </div>
       </div>
@@ -121,7 +124,7 @@
         <strong>{{ t('settings.services.deepl.plan') }}</strong>
       </div>
       <div class="connection-field-control">
-        <el-select v-model="config.deeplApiPlan" :aria-label="t('settings.services.deepl.plan')">
+        <el-select :model-value="config.deeplApiPlan" :onUpdate:modelValue="fieldActions.deeplApiPlan" :aria-label="t('settings.services.deepl.plan')">
           <el-option value="free" :label="t('settings.services.deepl.free')" />
           <el-option value="pro" :label="t('settings.services.deepl.pro')" />
         </el-select>
@@ -147,7 +150,7 @@
         </FieldHelp>
       </div>
       <div class="connection-field-control">
-        <el-input v-model="config.proxy[service]" aria-label="Ollama 服务地址" :placeholder="DEFAULT_OLLAMA_ENDPOINT" />
+        <el-input :model-value="config.proxy[service]" :onUpdate:modelValue="fieldActions.proxy" aria-label="Ollama 服务地址" :placeholder="DEFAULT_OLLAMA_ENDPOINT" />
       </div>
     </div>
 
@@ -159,7 +162,7 @@
       <div class="connection-field-control credential-control">
         <el-input
           :model-value="apiKeys[0] || ''"
-          @update:model-value="updateApiKey(0, String($event))"
+          :onUpdate:modelValue="fieldActions.firstApiKey"
           type="password"
           show-password
           :aria-label="compute.showCloudVendor ? compute.cloudCredentialLabels.token : 'API Key'"
@@ -167,7 +170,7 @@
         />
         <div v-if="compute.showAI" class="api-key-requirement">
           <span>{{ compute.requireApiKey ? '此模型需要 API Key' : '允许无 Key 请求' }}</span>
-          <el-switch v-model="compute.requireApiKey" aria-label="当前模型是否需要 API Key" size="small" />
+          <el-switch :model-value="compute.requireApiKey" :onUpdate:modelValue="fieldActions.requireApiKey" aria-label="当前模型是否需要 API Key" size="small" />
         </div>
       </div>
     </div>
@@ -178,7 +181,7 @@
       </div>
       <div class="connection-field-control credential-control">
         <el-input
-          v-model="config.secret[service]"
+          :model-value="config.secret[service]" :onUpdate:modelValue="fieldActions.secret"
           type="password"
           show-password
           :aria-label="compute.cloudCredentialLabels.secret"
@@ -203,7 +206,7 @@
           :model-value="config.serviceRegion[service] || compute.defaultCloudRegion"
           aria-label="云服务区域"
           placeholder="请选择服务区域"
-          @update:model-value="config.serviceRegion[service] = String($event)"
+          :onUpdate:modelValue="fieldActions.serviceRegion"
         >
           <el-option
             v-for="item in compute.cloudRegionOptions"
@@ -220,11 +223,11 @@
     </p>
 
     <div v-if="compute.showMiniMaxRegion" class="provider-account-fields">
-    <div v-if="compute.showMiniMaxRegion" class="connection-field"><div class="connection-field-label"><strong>MiniMax 计费方式</strong><FieldHelp :content="translateLegacy('按量付费和 Token Plan 使用不同的账户权益；请按控制台中 Key 的来源选择')" /></div><div class="connection-field-control"><el-select v-model="config.minimaxBillingPlan" aria-label="MiniMax 计费方式" placeholder="请选择 MiniMax 计费方式">
+    <div v-if="compute.showMiniMaxRegion" class="connection-field"><div class="connection-field-label"><strong>MiniMax 计费方式</strong><FieldHelp :content="translateLegacy('按量付费和 Token Plan 使用不同的账户权益；请按控制台中 Key 的来源选择')" /></div><div class="connection-field-control"><el-select :model-value="config.minimaxBillingPlan" :onUpdate:modelValue="fieldActions.minimaxBillingPlan" aria-label="MiniMax 计费方式" placeholder="请选择 MiniMax 计费方式">
           <el-option class="select-left" v-for="item in options.minimaxBillingPlan" :key="item.value" :label="item.label" :value="item.value" />
         </el-select></div></div>
 
-    <div v-if="compute.showMiniMaxRegion" class="connection-field"><div class="connection-field-label"><strong>MiniMax 区域</strong><FieldHelp :content="translateLegacy('选择与 MiniMax Key 来源一致的 API 区域，Token Plan Key（sk-cp-）与按量付费 Key 不能互换')"><template #content><div>{{ translateLegacy('选择与 MiniMax Key 来源一致的 API 区域，Token Plan Key（sk-cp-）与按量付费 Key 不能互换') }}</div><code data-minimax-endpoint>{{ minimaxEndpoint }}</code></template></FieldHelp></div><div class="connection-field-control"><el-select v-model="config.minimaxRegion" aria-label="MiniMax API 区域" placeholder="请选择 MiniMax API 区域">
+    <div v-if="compute.showMiniMaxRegion" class="connection-field"><div class="connection-field-label"><strong>MiniMax 区域</strong><FieldHelp :content="translateLegacy('选择与 MiniMax Key 来源一致的 API 区域，Token Plan Key（sk-cp-）与按量付费 Key 不能互换')"><template #content><div>{{ translateLegacy('选择与 MiniMax Key 来源一致的 API 区域，Token Plan Key（sk-cp-）与按量付费 Key 不能互换') }}</div><code data-minimax-endpoint>{{ minimaxEndpoint }}</code></template></FieldHelp></div><div class="connection-field-control"><el-select :model-value="config.minimaxRegion" :onUpdate:modelValue="fieldActions.minimaxRegion" aria-label="MiniMax API 区域" placeholder="请选择 MiniMax API 区域">
           <el-option class="select-left" v-for="item in options.minimaxRegion" :key="item.value" :label="item.label" :value="item.value" />
         </el-select></div></div>
     </div>
@@ -234,12 +237,16 @@
       {{ mimoKeyMismatch }}
     </p>
 
+    <p v-if="compute.showMiMoRegion" class="mimo-key-note" data-mimo-retirement-note>
+      {{ translateLegacy('MiMo 旧编号将于北京时间 2026-10-21 10:00 失效。直连官方 API 时，自定义模型及请求体中的 mimo-v2.5 / mimo-v2.5-pro 会分别按 mimo-v2.6-flash / mimo-v2.6-pro 请求并按新模型计费；第三方网关请手动确认型号。') }}
+    </p>
+
     <div v-if="compute.showMiMoRegion" class="provider-account-fields">
-    <div v-if="compute.showMiMoRegion" class="connection-field"><div class="connection-field-label"><strong>小米 MiMo 计费方式</strong><FieldHelp :content="translateLegacy('按量付费和 Token Plan 使用不同的账户权益；请按小米 MiMo 控制台中 Key 的来源选择')" /></div><div class="connection-field-control"><el-select v-model="config.mimoBillingPlan" aria-label="小米 MiMo 计费方式" placeholder="请选择小米 MiMo 计费方式">
+    <div v-if="compute.showMiMoRegion" class="connection-field"><div class="connection-field-label"><strong>小米 MiMo 计费方式</strong><FieldHelp :content="translateLegacy('按量付费和 Token Plan 使用不同的账户权益；请按小米 MiMo 控制台中 Key 的来源选择')" /></div><div class="connection-field-control"><el-select :model-value="config.mimoBillingPlan" :onUpdate:modelValue="fieldActions.mimoBillingPlan" aria-label="小米 MiMo 计费方式" placeholder="请选择小米 MiMo 计费方式">
           <el-option class="select-left" v-for="item in options.mimoBillingPlan" :key="item.value" :label="item.label" :value="item.value" />
         </el-select></div></div>
 
-    <div v-if="compute.showMiMoRegion" class="connection-field"><div class="connection-field-label"><strong>MiMo API 集群</strong><FieldHelp :content="translateLegacy('Token Plan 使用购买页面提供的集群地址，中国、新加坡和欧洲集群的 tp- Key 不能混用；按量付费统一使用 api.xiaomimimo.com')"><template #content><div>{{ translateLegacy('Token Plan 使用购买页面提供的集群地址，中国、新加坡和欧洲集群的 tp- Key 不能混用；按量付费统一使用 api.xiaomimimo.com') }}</div><code data-mimo-endpoint>{{ mimoEndpoint }}</code></template></FieldHelp></div><div class="connection-field-control"><el-select v-model="config.mimoRegion" aria-label="小米 MiMo API 集群" placeholder="请选择小米 MiMo API 集群">
+    <div v-if="compute.showMiMoRegion" class="connection-field"><div class="connection-field-label"><strong>MiMo API 集群</strong><FieldHelp :content="translateLegacy('Token Plan 使用购买页面提供的集群地址，中国、新加坡和欧洲集群的 tp- Key 不能混用；按量付费统一使用 api.xiaomimimo.com')"><template #content><div>{{ translateLegacy('Token Plan 使用购买页面提供的集群地址，中国、新加坡和欧洲集群的 tp- Key 不能混用；按量付费统一使用 api.xiaomimimo.com') }}</div><code data-mimo-endpoint>{{ mimoEndpoint }}</code></template></FieldHelp></div><div class="connection-field-control"><el-select :model-value="config.mimoRegion" :onUpdate:modelValue="fieldActions.mimoRegion" aria-label="小米 MiMo API 集群" placeholder="请选择小米 MiMo API 集群">
           <el-option class="select-left" v-for="item in options.mimoRegion" :key="item.value" :label="item.label" :value="item.value" />
         </el-select></div></div>
     </div>
@@ -250,7 +257,7 @@
         <strong>{{ t('settings.services.azure.endpoint') }}</strong>
       </div>
       <div class="connection-field-control">
-        <el-input v-model="config.azureOpenaiEndpoint" :aria-label="t('settings.services.azure.endpoint')" placeholder="https://your-resource.services.ai.azure.com/openai/v1/" :class="{ 'input-error': config.azureOpenaiEndpoint && !isValidAzureEndpoint(config.azureOpenaiEndpoint) }" />
+        <el-input :model-value="config.azureOpenaiEndpoint" :onUpdate:modelValue="fieldActions.azureOpenaiEndpoint" :aria-label="t('settings.services.azure.endpoint')" placeholder="https://your-resource.services.ai.azure.com/openai/v1/" :class="{ 'input-error': config.azureOpenaiEndpoint && !isValidAzureEndpoint(config.azureOpenaiEndpoint) }" />
         <div v-if="config.azureOpenaiEndpoint && !isValidAzureEndpoint(config.azureOpenaiEndpoint)" class="error-text" role="alert">{{ t('settings.services.azure.endpointError') }}</div>
         <p class="provider-field-help">{{ t('settings.services.azure.endpointHelp') }}</p>
         <p class="provider-field-help">{{ t('settings.services.azure.deploymentHelp') }}</p>
@@ -260,7 +267,7 @@
     <div v-if="compute.showDeepLX" class="connection-field" data-deeplx-endpoint>
       <div class="connection-field-label"><strong>{{ t('settings.services.deeplx.endpoint') }}</strong></div>
       <div class="connection-field-control">
-        <el-input v-model="config.deeplx" :aria-label="t('settings.services.deeplx.endpoint')" :placeholder="t('settings.services.deeplx.defaultRoute')" aria-describedby="deeplx-endpoint-help" />
+        <el-input :model-value="config.deeplx" :onUpdate:modelValue="fieldActions.deeplx" :aria-label="t('settings.services.deeplx.endpoint')" :placeholder="t('settings.services.deeplx.defaultRoute')" aria-describedby="deeplx-endpoint-help" />
         <div id="deeplx-endpoint-help">
           <p class="provider-field-help">{{ t('settings.services.deeplx.endpointHelp') }}</p>
           <p class="provider-field-help">无需密钥的接口可留空；需要验证时填写 Token</p>
@@ -275,16 +282,14 @@
       </div>
     </div>
 
-    <div v-if="compute.showAkSk" class="connection-field"><div class="connection-field-label"><strong>API Key</strong></div><div class="connection-field-control"><el-input v-model="config.ak" aria-label="API Key" placeholder="请输入Access Key" /><p class="provider-field-help">服务商提供的访问密钥</p></div></div>
-    <div v-if="compute.showAkSk" class="connection-field"><div class="connection-field-label"><strong>Secret Key</strong></div><div class="connection-field-control"><el-input v-model="config.sk" aria-label="Secret Key" type="password" placeholder="请输入Secret Key" /><p class="provider-field-help">服务商提供的私密密钥，请妥善保管</p></div></div>
 
-    <div v-if="compute.showYoudao" class="connection-field"><div class="connection-field-label"><strong>App Key</strong></div><div class="connection-field-control"><el-input v-model="config.youdaoAppKey" aria-label="App Key" placeholder="有道 AppKey" /><p class="provider-field-help">有道翻译服务提供的 App Key</p></div></div>
-    <div v-if="compute.showYoudao" class="connection-field"><div class="connection-field-label"><strong>App Secret</strong></div><div class="connection-field-control"><el-input v-model="config.youdaoAppSecret" aria-label="App Secret" type="password" show-password placeholder="有道 AppSecret" /><p class="provider-field-help">有道翻译服务提供的 App Secret</p></div></div>
+    <div v-if="compute.showYoudao" class="connection-field"><div class="connection-field-label"><strong>App Key</strong></div><div class="connection-field-control"><el-input :model-value="config.youdaoAppKey" :onUpdate:modelValue="fieldActions.youdaoAppKey" aria-label="App Key" placeholder="有道 AppKey" /><p class="provider-field-help">有道翻译服务提供的 App Key</p></div></div>
+    <div v-if="compute.showYoudao" class="connection-field"><div class="connection-field-label"><strong>App Secret</strong></div><div class="connection-field-control"><el-input :model-value="config.youdaoAppSecret" :onUpdate:modelValue="fieldActions.youdaoAppSecret" aria-label="App Secret" type="password" show-password placeholder="有道 AppSecret" /><p class="provider-field-help">有道翻译服务提供的 App Secret</p></div></div>
 
-    <div v-if="compute.showTencent" class="connection-field"><div class="connection-field-label"><strong>Secret ID</strong></div><div class="connection-field-control"><el-input v-model="config.tencentSecretId" aria-label="Secret ID" placeholder="腾讯云 SecretId" /><p class="provider-field-help">腾讯云翻译服务提供的 SecretId</p></div></div>
-    <div v-if="compute.showTencent" class="connection-field"><div class="connection-field-label"><strong>Secret Key</strong></div><div class="connection-field-control"><el-input v-model="config.tencentSecretKey" aria-label="Secret Key" type="password" show-password placeholder="腾讯云 SecretKey" /><p class="provider-field-help">腾讯云翻译服务提供的 SecretKey</p></div></div>
+    <div v-if="compute.showTencent" class="connection-field"><div class="connection-field-label"><strong>Secret ID</strong></div><div class="connection-field-control"><el-input :model-value="config.tencentSecretId" :onUpdate:modelValue="fieldActions.tencentSecretId" aria-label="Secret ID" placeholder="腾讯云 SecretId" /><p class="provider-field-help">腾讯云翻译服务提供的 SecretId</p></div></div>
+    <div v-if="compute.showTencent" class="connection-field"><div class="connection-field-label"><strong>Secret Key</strong></div><div class="connection-field-control"><el-input :model-value="config.tencentSecretKey" :onUpdate:modelValue="fieldActions.tencentSecretKey" aria-label="Secret Key" type="password" show-password placeholder="腾讯云 SecretKey" /><p class="provider-field-help">腾讯云翻译服务提供的 SecretKey</p></div></div>
 
-    <div v-if="compute.showNewAPI" class="connection-field"><div class="connection-field-label"><strong>NewAPI接口</strong></div><div class="connection-field-control"><el-input v-model="config.newApiUrl" aria-label="接口地址" placeholder="请输入 New API 接口地址" /><p class="provider-field-help">填写 New API 服务的接口地址</p></div></div>
+    <div v-if="compute.showNewAPI" class="connection-field"><div class="connection-field-label"><strong>NewAPI接口</strong></div><div class="connection-field-control"><el-input :model-value="config.newApiUrl" :onUpdate:modelValue="fieldActions.newApiUrl" aria-label="接口地址" placeholder="请输入 New API 接口地址" /><p class="provider-field-help">填写 New API 服务的接口地址</p></div></div>
 
     <ApiKeyList :active="active" :context="config" :context-key="service"
       v-if="compute.showToken && !compute.showServiceSecret"
@@ -301,8 +306,8 @@
         <div class="credential-usage" data-api-key-rotation-setting role="radiogroup" :aria-label="t('settings.services.keys.usage')">
           <span class="credential-usage-label" aria-hidden="true">{{ t('settings.services.keys.usage') }}</span>
           <div class="credential-modes">
-            <label :class="{'is-selected': apiKeyRotationEnabled}"><input type="radio" :name="`api-key-mode-${service}`" value="rotation" :checked="apiKeyRotationEnabled" @change="setApiKeyRotationEnabled(true)" /><span>{{ t('settings.services.keys.rotate') }}</span></label>
-            <label :class="{'is-selected': !apiKeyRotationEnabled}"><input type="radio" :name="`api-key-mode-${service}`" value="single" :checked="!apiKeyRotationEnabled" @change="setApiKeyRotationEnabled(false)" /><span>{{ t('settings.services.keys.firstOnly') }}</span></label>
+            <label :class="{'is-selected': apiKeyRotationEnabled}"><input type="radio" :name="`api-key-mode-${service}`" value="rotation" :checked="apiKeyRotationEnabled" :onChange="fieldActions.rotateApiKeys" /><span>{{ t('settings.services.keys.rotate') }}</span></label>
+            <label :class="{'is-selected': !apiKeyRotationEnabled}"><input type="radio" :name="`api-key-mode-${service}`" value="single" :checked="!apiKeyRotationEnabled" :onChange="fieldActions.useFirstApiKey" /><span>{{ t('settings.services.keys.firstOnly') }}</span></label>
           </div>
           <FieldHelp :content="t('settings.services.keys.usageHelp')" />
         </div>
@@ -311,7 +316,7 @@
     <p v-if="service === services.deeplx && deepLXRequiresToken && !apiKeyIndexes.length" class="field-warning" data-deeplx-key-required role="status">{{ deepLXTokenHelp }}</p>
 
     <div
-      v-if="connectionTestMessage && (!compute.showToken || compute.showServiceSecret)"
+      v-if="!isChromeConnectionTest && connectionTestMessage && !connectionTestDiagnostic && (!compute.showToken || compute.showServiceSecret)"
       class="connection-test-result"
       :class="`is-${connectionTestState}`"
       data-connection-test-status
@@ -320,19 +325,24 @@
     >
       <strong>{{ connectionTestTitle }}</strong>
       <span>{{ connectionTestMessage }}</span>
-      <DownloadProgress v-if="chromeDownloadProgress" class="chrome-preparation-progress" detail="none" :progress="chromeDownloadProgress" :label="connectionTestMessage" data-chrome-preparation-progress />
-      <details v-if="connectionTestDetails" class="connection-test-details">
-        <summary>{{ t('settings.services.chromePreparation.errorDetailsSummary') }}</summary>
-        <code>{{ connectionTestDetails }}</code>
-      </details>
     </div>
     </section>
 
-    <div v-if="isCompositeService && connectionTestMessage" class="connection-test-result" :class="`is-${connectionTestState}`" data-connection-test-status role="status" aria-live="polite"><strong>{{ connectionTestTitle }}</strong><span>{{ connectionTestMessage }}</span></div>
-    <div v-if="service === services.chatgptPlan && !publicPlanBlocked && connectionTestMessage" class="connection-test-result" :class="`is-${connectionTestState}`" data-connection-test-status role="status" aria-live="polite"><strong>{{ connectionTestTitle }}</strong><span>{{ connectionTestMessage }}</span></div>
+    <div v-if="isCompositeService && connectionTestMessage && !connectionTestDiagnostic" class="connection-test-result" :class="`is-${connectionTestState}`" data-connection-test-status role="status" aria-live="polite"><strong>{{ connectionTestTitle }}</strong><span>{{ connectionTestMessage }}</span></div>
+    <div v-if="service === services.chatgptPlan && !publicPlanBlocked && connectionTestMessage && !connectionTestDiagnostic" class="connection-test-result" :class="`is-${connectionTestState}`" data-connection-test-status role="status" aria-live="polite"><strong>{{ connectionTestTitle }}</strong><span>{{ connectionTestMessage }}</span></div>
 
-    <header v-if="singleSettingsTab" class="configuration-group-heading settings-tabs-heading" data-service-settings-heading><h5>{{ singleSettingsTab }}</h5></header>
-    <el-tabs v-if="settingsTabs.requests && !isCompositeService" v-model="activeSettingsTab" class="service-settings-tabs" :class="{ 'is-single-tab': singleSettingsTab }" data-service-settings-tabs>
+    <div v-if="!isChromeConnectionTest && connectionTestState === 'error' && connectionTestDiagnostic" class="connection-test-result is-error connection-repair" data-connection-repair :data-diagnostic-code="connectionTestDiagnostic.code" role="status" aria-live="polite">
+      <strong>{{ connectionRepairText.title }}</strong>
+      <span>{{ connectionRepairText.detail }}</span>
+      <div class="connection-repair-actions">
+        <button type="button" class="connection-repair-button" data-connection-retry :disabled="connectionTestDisabled || connectionRetryWaiting" @click="testConnection()">{{ t('diagnostics.action.retry') }}</button>
+        <button v-if="connectionTestDiagnostic.actions.includes('services')" type="button" class="connection-repair-button" data-connection-repair-config :disabled="!active" @click="focusConnectionConfiguration">{{ t('diagnostics.action.services') }}</button>
+      </div>
+    </div>
+
+    <ServiceRepairReturn :active="active" :context="config" :context-key="service" @repair-ready="focusInitialRepair" />
+
+    <el-tabs v-if="settingsTabs.requests && !isCompositeService" :model-value="activeSettingsTab" :onUpdate:modelValue="fieldActions.tab" class="service-settings-tabs" :class="{ 'is-single-tab': singleSettingsTab }" data-service-settings-tabs>
     <el-tab-pane v-if="settingsTabs.translation" name="translation" :label="t(SETTINGS_TAB_LABELS.translation)">
       <section id="service-translation-settings" class="service-settings-panel" data-configuration-group="translation">
 
@@ -346,7 +356,7 @@
                 :model-value="selectedModelThinking"
                 :disabled="!effectiveModelLabel"
                 aria-label="当前模型是否启用 Thinking"
-                @update:model-value="$emit('update:model-thinking', Boolean($event))"
+                :onUpdate:modelValue="fieldActions.modelThinking"
               />
             </div>
           </div>
@@ -380,14 +390,14 @@
           </div>
 
           <div class="prompt-template-list" data-testid="prompt-template-list">
-            <PromptTemplateEditor v-model="config.system_role[service]" role="system" :active="active && activeSettingsTab === 'prompts'" :context="config" :context-key="service" />
-            <PromptTemplateEditor v-model="config.user_role[service]" role="user" :active="active && activeSettingsTab === 'prompts'" :context="config" :context-key="service" />
+            <PromptTemplateEditor :model-value="config.system_role[service]" :onUpdate:modelValue="fieldActions.system_role" role="system" :active="active && activeSettingsTab === 'prompts'" :context="config" :context-key="service" />
+            <PromptTemplateEditor :model-value="config.user_role[service]" :onUpdate:modelValue="fieldActions.user_role" role="user" :active="active && activeSettingsTab === 'prompts'" :context="config" :context-key="service" />
           </div>
 
       </section>
     </el-tab-pane>
     <el-tab-pane v-if="settingsTabs.requests" name="requests" :label="t(SETTINGS_TAB_LABELS.requests)">
-      <section id="service-requests-settings" class="service-settings-panel" data-configuration-group="requests">
+      <component :is="singleSettingsTab ? SettingsDisclosure : 'section'" :key="singleSettingsTab ? service : undefined" v-bind="singleSettingsTab ? singleRequestDisclosure : {}" id="service-requests-settings" class="service-settings-panel" :class="{'single-request-settings': singleSettingsTab}" data-configuration-group="requests">
         <FreeTranslationSettings v-if="service === services.freeTranslation" :active="active && activeSettingsTab === 'requests'" :config="config" :advanced="true" />
         <div v-if="showNativeBatchTranslation" class="connection-field" :data-native-batch-service="service">
           <div class="connection-field-label">
@@ -406,13 +416,13 @@
         </div>
         <RequestLimitSettings :active="active && activeSettingsTab === 'requests'" :config="config" :service="service" :model="compute.showModel ? requestLimitModel : undefined" />
 
-      </section>
+      </component>
     </el-tab-pane>
     <el-tab-pane v-if="settingsTabs['custom-request']" name="custom-request" :label="t(SETTINGS_TAB_LABELS['custom-request'])">
       <section id="service-custom-request-settings" class="service-settings-panel" data-configuration-group="custom-request">
-        <div v-if="compute.showDeepseekApiType" class="connection-field"><div class="connection-field-label"><strong>API 格式</strong><FieldHelp :content="translateLegacy('选择 DeepSeek 接口使用的 API 格式')" /></div><div class="connection-field-control"><el-select v-model="config.deepseekApiType" aria-label="API 格式" placeholder="请选择 API 格式"><el-option class="select-left" v-for="item in options.deepseekApiType" :key="item.value" :label="item.label" :value="item.value" /></el-select></div></div>
+        <div v-if="compute.showDeepseekApiType" class="connection-field"><div class="connection-field-label"><strong>API 格式</strong><FieldHelp :content="translateLegacy('选择 DeepSeek 接口使用的 API 格式')" /></div><div class="connection-field-control"><el-select :model-value="config.deepseekApiType" :onUpdate:modelValue="fieldActions.deepseekApiType" aria-label="API 格式" placeholder="请选择 API 格式"><el-option class="select-left" v-for="item in options.deepseekApiType" :key="item.value" :label="item.label" :value="item.value" /></el-select></div></div>
 
-          <div v-if="compute.showAI && compute.showProxy" class="connection-field"><div class="connection-field-label"><strong>代理地址</strong><FieldHelp :content="translateLegacy('可选的代理地址；填写后，当前 AI 服务请求会优先发送到这里')" /></div><div class="connection-field-control"><el-input v-model="config.proxy[service]" aria-label="代理地址" placeholder="默认直连自定义接口" /></div></div>
+          <div v-if="compute.showAI && compute.showProxy" class="connection-field"><div class="connection-field-label"><strong>代理地址</strong><FieldHelp :content="translateLegacy('可选的代理地址；填写后，当前 AI 服务请求会优先发送到这里')" /></div><div class="connection-field-control"><el-input :model-value="config.proxy[service]" :onUpdate:modelValue="fieldActions.proxy" aria-label="代理地址" placeholder="默认直连自定义接口" /></div></div>
 
         <div v-if="compute.showAI && usesApiKeyList" class="connection-field" data-api-key-requirement-row>
           <div class="connection-field-label"><strong>{{ t('settings.services.keys.requirement') }}</strong><FieldHelp :content="t('settings.services.keys.requirementHelp')" /></div>
@@ -421,7 +431,7 @@
               compact class="credential-requirement" data-api-key-auth-policy
               :label="t('settings.services.keys.requirement')" :options="apiKeyRequirementOptions"
               :model-value="compute.requireApiKey ? 'required' : 'optional'"
-              @update:model-value="setApiKeyRequirement"
+              :onUpdate:modelValue="fieldActions.apiKeyRequirement"
             />
           </div>
         </div>
@@ -429,7 +439,7 @@
           <div v-if="customProvider" class="connection-field custom-headers-field" data-testid="custom-service-headers">
             <div class="connection-field-label"><strong>自定义请求头</strong><FieldHelp :content="translateLegacy('填写值为字符串的 JSON 对象，仅用于当前自定义服务，同名请求头会覆盖默认值；留空则不启用')" /></div>
             <div class="connection-field-control">
-              <el-input v-model="config.customHeaders[service]" type="textarea" :rows="3"
+              <el-input :model-value="config.customHeaders[service]" :onUpdate:modelValue="fieldActions.customHeaders" type="textarea" :rows="3"
                 aria-label="自定义请求头" :spellcheck="false" :class="{ 'input-error': !isValidCustomHeaders(config.customHeaders[service]) }"
                 placeholder='{"x-opencode-session": "your-stable-session-id"}' />
               <div v-if="!isValidCustomHeaders(config.customHeaders[service])" class="error-text">请输入有效的请求头 JSON 对象，名称和值必须符合 HTTP 格式</div>
@@ -438,7 +448,7 @@
 
           <RequestHeaderSettings v-if="compute.showAI" :active="active && activeSettingsTab === 'custom-request'" :config="config" />
 
-          <div v-if="compute.showCustomBody" class="connection-field"><div class="connection-field-label"><strong>自定义请求体</strong><FieldHelp :content="translateLegacy('填写要合并到翻译请求中的 JSON 参数对象')" /></div><div class="connection-field-control"><el-input v-model="config.customBody[service]" type="textarea" :rows="3" aria-label="自定义请求体" :class="{ 'input-error': !isValidCustomBody(config.customBody[service]) }" placeholder='例如：{"thinking": {"type": "disabled"}}' />
+          <div v-if="compute.showCustomBody" class="connection-field"><div class="connection-field-label"><strong>自定义请求体</strong><FieldHelp :content="translateLegacy('填写要合并到翻译请求中的 JSON 参数对象')" /></div><div class="connection-field-control"><el-input :model-value="config.customBody[service]" :onUpdate:modelValue="fieldActions.customBody" type="textarea" :rows="3" aria-label="自定义请求体" :class="{ 'input-error': !isValidCustomBody(config.customBody[service]) }" placeholder='例如：{"thinking": {"type": "disabled"}}' />
               <div v-if="!isValidCustomBody(config.customBody[service])" class="error-text">请输入合法的 JSON 对象，否则该配置将被忽略</div></div></div>
 
 
@@ -460,7 +470,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, ref, shallowRef, toRef, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, shallowRef, toRef, watch } from 'vue'
 import type { Config } from '@/src/core/config/model'
 import {getCompositeTranslationProvider, isCompositeTranslationProviderId} from '@/src/core/config/compositeTranslation'
 import type { TranslationParams } from '@/src/core/i18n'
@@ -473,25 +483,31 @@ import {
 } from '@/src/core/config/customOpenAI'
 import { isValidCustomBody } from '@/src/core/config/customBody'
 import { resolveTranslationRequestModel } from '@/src/core/config/requestModel'
+import { getServiceRequestLimitPreference } from '@/src/core/config/requestLimits'
 import { isValidCustomHeaders } from '@/src/core/config/customHeaders'
 import { createApiKeyCheckRevision } from '@/src/core/config/apiKeyCheckIdentity'
-import { normalizeMyMemoryEmail } from '@/src/core/config/freeTranslation'
+import { normalizeFreeTranslationOrder, normalizeMyMemoryEmail } from '@/src/core/config/freeTranslation'
 import { isNativeBatchTranslationService, isNativeTranslationBatchEnabled } from '@/src/core/config/nativeBatch'
 import { requiresDeepLXToken } from '@/src/core/config/deeplx'
 import { getDeepLEndpoint } from '@/src/core/config/deepl'
 import browser from 'webextension-polyfill'
+import { normalizeDiagnostic, diagnoseFailure, type Diagnostic } from '@/src/services/diagnostics'
 import { requestConfigSave, waitForConfigPersistenceQueue } from '@/src/services/config/store'
 import { CONNECTION_TEST_MESSAGE, DEFAULT_OLLAMA_ENDPOINT, getAliyunTranslationEndpoint, getMimoEndpoint, MINIMAX_ENDPOINTS } from '@/src/core/config/constants'
 import { chromeTranslationPreparationStore } from '@/src/platform/browser/chromeTranslationPreparationRequest'
+import { getTranslationServiceUnavailableMessage } from '@/src/services/translation/capabilities'
 import { ElMessage, ElTabs, ElTabPane } from 'element-plus'
 import 'element-plus/es/components/tabs/style/css'
 import FieldHelp from '../components/FieldHelp.vue'
 import SegmentedControl from '../components/SegmentedControl.vue'
+import SettingsDisclosure from '../components/SettingsDisclosure.vue'
 import {
     ChromeTranslationPreparationError,
     getChromeTranslationPreparationLanguageLabel,
     prepareChromeTranslationInPage,
+    readChromeLanguagePackAvailability,
     resolveChromeTranslationPreparationPair,
+    type ChromeLanguagePackAvailability,
     type ChromeTranslationPreparationErrorCode,
     type ChromeTranslationPreparationPair,
     type ChromeTranslationPreparationStatus,
@@ -507,8 +523,12 @@ import ModelVisionSettings from './ModelVisionSettings.vue'
 import RequestLimitSettings from './RequestLimitSettings.vue'
 import RequestHeaderSettings from './RequestHeaderSettings.vue'
 import CompositeTranslationSettings from './CompositeTranslationSettings.vue'
+import ServiceRepairReturn from './ServiceRepairReturn.vue'
+import {createServiceRepairFocus} from './serviceRepairFocus'
 const ChatGPTPlanSettings = chatGPTPlanDevelopmentEnabled ? defineAsyncComponent(() => import('./ChatGPTPlanSettings.vue')) : null
 import { checkAllFreeTranslationProviders, type FreeTranslationChecks } from './freeTranslationChecks'
+import {readFreePoolAccess} from '@/src/platform/browser/freeProviderPermissions'
+import {FREE_TRANSLATION_PROVIDERS} from '@/src/core/config/freeTranslation'
 import { listPromptTemplateSyncTargets, syncPromptTemplates as applyPromptTemplateSync } from './promptTemplateSync'
 import {waitForSettingsTask} from '../../model/taskWait'
 import {useSettingsActionContext} from '../../model/useSettingsActionContext'
@@ -563,7 +583,7 @@ const setNativeBatchTranslationEnabled = computed(() => {
 watch(() => [service.value, Boolean(compute.value.showAI), Boolean(compute.value.showModel)], () => {
   activeSettingsTab.value = compute.value.showAI && compute.value.showModel ? 'translation' : compute.value.showAI ? 'prompts' : 'requests'
 }, {immediate: true})
-// 页签的可见条件与标题只在这里定义一次，模板和“单页签改用小节标题”的判断共用。
+// 页签的可见条件与标题只在这里定义一次；仅请求限制这一页时使用原生折叠容器。
 const SETTINGS_TAB_LABELS = {
   translation: 'settings.organization.model',
   prompts: 'settings.organization.prompts',
@@ -576,11 +596,18 @@ const settingsTabs = computed<Record<keyof typeof SETTINGS_TAB_LABELS, boolean>>
   requests: !publicPlanBlocked.value && service.value !== services.localTranslation && !isCompositeService.value,
   'custom-request': !publicPlanBlocked.value && service.value !== services.chatgptPlan && Boolean(compute.value.showDeepseekApiType || compute.value.showAI || compute.value.showCustomBody || customProvider.value),
 }))
-// 只有一个页签时（机器翻译服务只有“请求限制”）不显示孤立的页签条，改用小节标题。
+// 单一请求页签默认展开并允许收起；多页签继续使用原来的 section，不增加折叠层。
 const singleSettingsTab = computed(() => {
   const visible = (Object.keys(SETTINGS_TAB_LABELS) as Array<keyof typeof SETTINGS_TAB_LABELS>).filter(name => settingsTabs.value[name])
-  return visible.length === 1 ? t(SETTINGS_TAB_LABELS[visible[0]]) : ''
+  return visible.length === 1 && visible[0] === 'requests' ? t(SETTINGS_TAB_LABELS.requests) : ''
 })
+const singleRequestDisclosure = computed(() => ({
+  title: singleSettingsTab.value,
+  defaultOpen: true,
+  status: t(getServiceRequestLimitPreference(config.value.serviceRequestLimits, service.value)?.enabled
+    ? 'settings.requestLimits.custom' : 'settings.requestLimits.followGlobal'),
+  'data-service-request-disclosure': '',
+}))
 const myMemoryEmailDraft = ref(config.value.myMemoryEmail)
 const myMemoryEmailInvalid = computed(() => Boolean(myMemoryEmailDraft.value.trim() && !normalizeMyMemoryEmail(myMemoryEmailDraft.value)))
 watch(() => config.value.myMemoryEmail, value => { myMemoryEmailDraft.value = value })
@@ -589,6 +616,37 @@ function commitMyMemoryEmail(): void {
   if (!active.value || myMemoryEmailInvalid.value) return
   config.value.myMemoryEmail = normalizeMyMemoryEmail(myMemoryEmailDraft.value)
 }
+
+// 第三方控件可能在服务切换、缓存停用或卸载后迟到发出 update；每个绑定捕获当时的编辑上下文。
+const fieldContext = useSettingsActionContext(() => active.value, () => [
+  config.value, service.value, customProvider.value, activeSettingsTab.value,
+  config.value.model[service.value], config.value.customModel[service.value], props.selectedModelThinking, compute.value.requireApiKey,
+])
+const fieldActions = computed(() => {
+  const current = fieldContext.capture()
+  const own = <Args extends unknown[]>(apply: (...args: Args) => void) => (...args: Args) => {if (current()) apply(...args)}
+  const owner = config.value, ownerService = service.value
+  const set = <Key extends keyof Config>(key: Key) => {
+    const before = owner[key]
+    return own((value: Config[Key]) => {if (owner[key] === before) owner[key] = value})
+  }
+  const setService = (key: 'proxy' | 'secret' | 'system_role' | 'user_role' | 'customHeaders' | 'customBody' | 'serviceRegion') => {
+    const fields = owner[key], before = fields[ownerService]
+    return own((value: string) => {if (owner[key] === fields && fields[ownerService] === before) fields[ownerService] = String(value)})
+  }
+  return {
+    deeplApiPlan: set('deeplApiPlan'), minimaxBillingPlan: set('minimaxBillingPlan'), minimaxRegion: set('minimaxRegion'), mimoBillingPlan: set('mimoBillingPlan'), mimoRegion: set('mimoRegion'),
+    azureOpenaiEndpoint: set('azureOpenaiEndpoint'), deeplx: set('deeplx'), youdaoAppKey: set('youdaoAppKey'), youdaoAppSecret: set('youdaoAppSecret'),
+    tencentSecretId: set('tencentSecretId'), tencentSecretKey: set('tencentSecretKey'), newApiUrl: set('newApiUrl'), deepseekApiType: set('deepseekApiType'),
+    proxy: setService('proxy'), secret: setService('secret'), system_role: setService('system_role'), user_role: setService('user_role'),
+    customHeaders: setService('customHeaders'), customBody: setService('customBody'), serviceRegion: setService('serviceRegion'),
+    myMemoryEmail: own((value: string) => {myMemoryEmailDraft.value = value}), commitMyMemoryEmail: own(commitMyMemoryEmail),
+    customName: own((value: string) => updateCustomProvider('name', String(value))), customEndpoint: own((value: string) => updateCustomProvider('endpoint', String(value))),
+    firstApiKey: own((value: string) => updateApiKey(0, String(value))), requireApiKey: own((value: boolean) => {compute.value.requireApiKey = value}),
+    rotateApiKeys: own(() => setApiKeyRotationEnabled(true)), useFirstApiKey: own(() => setApiKeyRotationEnabled(false)), apiKeyRequirement: own(setApiKeyRequirement),
+    modelThinking: own((value: unknown) => emit('update:model-thinking', Boolean(value))), tab: own((value: string | number) => {activeSettingsTab.value = String(value)}),
+  }
+})
 
 const deepLXTokenHelp = computed(() => translateLegacy('DeepLX 地址包含 {{apiKey}} 或 {{token}} 占位符，请填写 API Key；无 Key 地址请移除占位符'))
 const deepLXRequiresToken = computed(() => requiresDeepLXToken(config.value.deeplx, config.value.proxy[services.deeplx]))
@@ -638,7 +696,16 @@ const usableApiKeyCount = computed(() => usableApiKeys.value.length)
 const apiKeyIndexes = computed(() => activeApiKeyIndexes(usableApiKeys.value, apiKeyRotationEnabled.value))
 const standbyApiKeys = computed(() => standbyApiKeyIndexes(usableApiKeys.value, apiKeyRotationEnabled.value))
 const usesApiKeyList = computed(() => compute.value.showToken && !compute.value.showServiceSecret)
-const apiKeyChecks = ref<Record<number, ApiKeyCheckState>>({})
+// 结果只保存本地化描述；在展示边界解析为既有子组件需要的字符串，语言包迟到时无需重新检查服务。
+type LocalizedCheckState = Omit<ApiKeyCheckState, 'error'> & {error?: LocalizedConnectionTestMessage}
+const apiKeyCheckStates = ref<Record<number, LocalizedCheckState>>({})
+const apiKeyChecks = computed<Record<number, ApiKeyCheckState>>(() => Object.fromEntries(
+  Object.entries(apiKeyCheckStates.value).map(([index, state]) => [index, localizeCheckState(state)]),
+))
+function localizeCheckState(state: LocalizedCheckState): ApiKeyCheckState {
+  const {error, ...result} = state
+  return {...result, ...(error ? {error: t(error.key, error.params)} : {})}
+}
 const apiKeySummary = ref<ApiKeySummary | null>(null)
 const apiKeyCheckMode = ref<'single' | 'all'>('all')
 
@@ -673,12 +740,12 @@ function removeApiKey(index: number): void {
 }
 
 function resetApiKeyChecks(): void {
-  apiKeyChecks.value = {}
+  apiKeyCheckStates.value = {}
   apiKeySummary.value = null
 }
 
-function setApiKeyState(index: number, state: ApiKeyCheckState): void {
-  apiKeyChecks.value = {...apiKeyChecks.value, [index]: state}
+function setApiKeyState(index: number, state: LocalizedCheckState): void {
+  apiKeyCheckStates.value = {...apiKeyCheckStates.value, [index]: state}
 }
 
 function updateApiKeySummary(): void {
@@ -758,21 +825,82 @@ const CHROME_PREPARATION_ERROR_KEYS: Readonly<Record<ChromeTranslationPreparatio
   'invalid-detection': 'settings.services.chromePreparation.error.invalidDetection',
   'api-unavailable': 'settings.services.chromePreparation.error.apiUnavailable',
   'user-activation-required': 'settings.services.chromePreparation.error.userActivationRequired',
-  'unsupported-pair': 'settings.services.chromePreparation.error.unsupportedPair',
   'detection-mismatch': 'settings.services.chromePreparation.error.detectionMismatch',
   'invalid-translation': 'settings.services.chromePreparation.error.invalidTranslation',
   'preparation-failed': 'settings.services.chromePreparation.error.failed',
   'model-unavailable': 'settings.services.chromePreparation.error.modelUnavailable',
 }
 const connectionTestBusy = ref(false)
-const connectionTestDisabled = computed(() => !active.value || (isCompositeService.value && !compositeProvider.value?.services.length) || (connectionTestBusy.value
-  ? !usesApiKeyList.value
-  : usesApiKeyList.value && apiKeyIndexes.value.length === 0
-    && (service.value === services.deeplx ? deepLXRequiresToken.value : compute.value.requireApiKey)))
-const freeProviderChecks = ref<FreeTranslationChecks>({})
+const configurationRoot = ref<HTMLElement>()
+const connectionTestButton = ref<HTMLButtonElement>()
+const focusRepairEntry = createServiceRepairFocus(() => nextTick())
+function focusInitialRepair(requestedService: string): void {
+  if (requestedService !== service.value) return
+  void focusRepairEntry(captureServiceActionContext(), () => ({button: connectionTestButton.value,
+    fallback: configurationRoot.value?.closest('.service-detail')?.querySelector<HTMLElement>('h4') || configurationRoot.value}))
+}
+const connectionTestDisabled = computed(() => !active.value || Boolean(browserTranslationUnavailable.value) || (isCompositeService.value && !compositeProvider.value?.services.length) || (!connectionTestBusy.value && (connectionRetryWaiting.value || usesApiKeyList.value && apiKeyIndexes.value.length === 0
+    && (service.value === services.deeplx ? deepLXRequiresToken.value : compute.value.requireApiKey))))
+const freeProviderCheckStates = ref<{[Key in keyof FreeTranslationChecks]: LocalizedCheckState}>({})
+const freeProviderChecks = computed<FreeTranslationChecks>(() => Object.fromEntries(
+  Object.entries(freeProviderCheckStates.value).map(([providerId, state]) => [providerId, localizeCheckState(state)]),
+))
+const freeProviderRetryAt = new Map<string, number>()
 const connectionTestState = ref<ConnectionTestState>('idle')
 const connectionTestMessageState = ref<LocalizedConnectionTestMessage | string | null>(null)
-// Chrome 只回报 0 到 1 的下载比例，不提供字节数；进度条用它的真实比例，文字里已有百分比。
+const connectionTestDiagnostic = shallowRef<Diagnostic | null>(null)
+// t 读取语言包修订号，异步资源到达后会刷新已显示的诊断。
+const connectionRepairText = computed(() => connectionTestDiagnostic.value ? {title: t(connectionTestDiagnostic.value.titleKey), detail: t(connectionTestDiagnostic.value.detailKey)} : {title: '', detail: ''})
+const connectionRetryWaiting = ref(false)
+const MAX_CONNECTION_RETRY_TIMER_MS = 2_147_483_647
+let connectionRetryDeadline = 0
+let connectionRetryTimer: ReturnType<typeof setTimeout> | undefined
+// 浏览器计时器只接受 32 位有符号延时；每段醒来都重新核对完整截止时间，不能把长冷却溢出成即时重试。
+function scheduleConnectionRetryWake(): void {
+  clearTimeout(connectionRetryTimer)
+  connectionRetryTimer = undefined
+  const remaining = connectionRetryDeadline - Date.now()
+  connectionRetryWaiting.value = remaining > 0
+  if (remaining > 0) connectionRetryTimer = setTimeout(scheduleConnectionRetryWake, Math.min(MAX_CONNECTION_RETRY_TIMER_MS, remaining))
+  else connectionRetryDeadline = 0
+}
+function clearConnectionDiagnostic(): void {
+  connectionTestDiagnostic.value = null
+  connectionRetryWaiting.value = false
+  connectionRetryDeadline = 0
+  clearTimeout(connectionRetryTimer)
+  connectionRetryTimer = undefined
+}
+// 原始供应商错误仅用于分类，从不进入组件展示状态、详情或 title 属性。
+function describeConnectionFailure(error: unknown, applyCooldown = true): LocalizedConnectionTestMessage {
+  const diagnostic = normalizeDiagnostic(error) || diagnoseFailure(error, {online: typeof navigator === 'undefined' ? undefined : navigator.onLine,
+    ...(error instanceof ConnectionConfigurationError ? {reason: 'configuration-save' as const} : {})})
+  if (!connectionTestDiagnostic.value) connectionTestDiagnostic.value = diagnostic
+  if (applyCooldown && diagnostic.retryAfterMs) {
+    connectionRetryDeadline = Math.max(connectionRetryDeadline, Date.now() + diagnostic.retryAfterMs)
+    scheduleConnectionRetryWake()
+  }
+  return localizedConnectionTestMessage(diagnostic.titleKey)
+}
+function focusConnectionConfiguration(): void {
+  if (!active.value || !connectionTestDiagnostic.value) return
+  const root = configurationRoot.value
+  const modelFailure = connectionTestDiagnostic.value.code === 'model-configuration'
+  const modelTarget = modelFailure ? root?.closest('.service-detail')?.querySelector<HTMLElement>('[data-testid="model-picker-trigger"]') : undefined
+  const target = modelTarget || root?.querySelector<HTMLElement>('.connection-card input:not([type="hidden"]), .connection-card select, .connection-card textarea, [data-free-translation-settings] input, [data-composite-service-settings] input')
+    || root?.closest('.service-detail')?.querySelector<HTMLElement>('[data-testid="model-picker-trigger"]')
+    || findServiceDirectoryControl(root)
+  target?.focus({preventScroll: true})
+  target?.scrollIntoView({block: 'nearest', inline: 'nearest'})
+}
+function findServiceDirectoryControl(root?: HTMLElement): HTMLElement | undefined {
+  const catalog = root?.closest('.service-catalog')
+  const search = catalog?.querySelector<HTMLElement>('.catalog-search input')
+  return search?.getClientRects().length ? search : catalog?.querySelector<HTMLElement>('.mobile-directory-toggle') || undefined
+}
+class ConnectionConfigurationError extends Error {}
+onBeforeUnmount(clearConnectionDiagnostic)
+// 浏览器回报 0 到 1 的下载比例；文字和进度条共用实际比例。
 const chromeDownloadFraction = ref<number>()
 const chromeDownloadProgress = computed(() => isChromeConnectionTest.value && connectionTestState.value === 'testing' && chromeDownloadFraction.value !== undefined
   ? {loaded: Math.round(chromeDownloadFraction.value * 100), total: 100}
@@ -789,38 +917,80 @@ const standaloneApiKeyCheck = computed<ApiKeyCheckState | undefined>(() => {
   if (connectionTestState.value === 'success') return {status: 'success'}
   return {status: 'error', error: connectionTestMessage.value}
 })
-const connectionTestDetails = computed(() => {
-  const message = connectionTestMessageState.value
-  if (!message || typeof message === 'string' || !message.params?.detail) return ''
-  return String(message.params.detail)
-})
+
 const isChromeConnectionTest = computed(() => service.value === services.chromeTranslator)
-const displayedChromePreparationPair = ref<ChromeTranslationPreparationPair | null>(null)
+const browserTranslationUnavailable = computed(() => isChromeConnectionTest.value
+  ? getTranslationServiceUnavailableMessage(services.chromeTranslator) : null)
+const chromeLanguagePackAvailability = ref<ChromeLanguagePackAvailability>()
+const testedChromePreparationPair = ref<ChromeTranslationPreparationPair | null>(null)
 const currentChromePreparationPair = computed(() => {
+  if (import.meta.env.BROWSER === 'userscript') return null
   try {
+    if (config.value.from.trim().toLowerCase() !== 'auto') {
+      return resolveChromeTranslationPreparationPair(config.value.from, config.value.to)
+    }
     const fallbackPair = resolveChromeTranslationPreparationPair('auto', config.value.to)
-    const configuredFrom = config.value.from.trim().toLowerCase()
-    const pendingSource = configuredFrom === 'auto'
-      && pendingChromePreparation.value?.targetLanguage === fallbackPair.targetLanguage
-      ? pendingChromePreparation.value.sourceLanguage
-      : undefined
-    return resolveChromeTranslationPreparationPair(pendingSource || config.value.from, config.value.to)
+    const pending = pendingChromePreparation.value
+    if (pending?.targetLanguage === fallbackPair.targetLanguage) {
+      return resolveChromeTranslationPreparationPair(pending.sourceLanguage, config.value.to)
+    }
+    // 清除已完成的请求后仍显示刚检查过的语言对，即使此时有其他目标语言的请求。
+    const tested = testedChromePreparationPair.value
+    return tested?.targetLanguage === fallbackPair.targetLanguage ? tested : fallbackPair
   } catch {
     return null
   }
 })
 const currentChromePreparationPairLabel = computed(() => {
-  const pair = displayedChromePreparationPair.value || currentChromePreparationPair.value
+  if (import.meta.env.BROWSER === 'userscript') return ''
+  const pair = (connectionTestBusy.value && testedChromePreparationPair.value) || currentChromePreparationPair.value
   if (!pair) return ''
-  return `${getChromeTranslationPreparationLanguageLabel(pair.sourceLanguage, language.value)}（${pair.sourceLanguage}） → ${getChromeTranslationPreparationLanguageLabel(pair.targetLanguage, language.value)}（${pair.targetLanguage}）`
+  const source = getChromeTranslationPreparationLanguageLabel(pair.sourceLanguage, language.value)
+  const target = getChromeTranslationPreparationLanguageLabel(pair.targetLanguage, language.value)
+  return `${source} → ${target}`
 })
+const chromePreparationState = computed<ConnectionTestState>(() => {
+  const state = connectionTestState.value
+  if (state !== 'success' && state !== 'error') return state
+  const current = currentChromePreparationPair.value
+  const tested = testedChromePreparationPair.value
+  return current?.sourceLanguage === tested?.sourceLanguage && current?.targetLanguage === tested?.targetLanguage
+    ? state : 'idle'
+})
+const chromePreparationStatusText = computed(() => {
+  switch (chromePreparationState.value) {
+    case 'testing': return connectionTestMessage.value
+    case 'success': return t('settings.services.chromePreparation.titleReady')
+    case 'error': return t('settings.services.chromePreparation.titleIncomplete')
+    default: return currentChromePreparationPair.value
+      ? t(`settings.services.chromePreparation.availability.${chromeLanguagePackAvailability.value ?? 'unknown'}`) : ''
+  }
+})
+const chromePreparationHint = computed(() => {
+  if (chromePreparationState.value === 'error') return connectionRepairText.value.detail || connectionTestMessage.value
+  if (chromePreparationState.value !== 'idle') return ''
+  if (chromeLanguagePackAvailability.value === 'downloadable') return t('settings.services.chromePreparation.downloadHint')
+  if (chromeLanguagePackAvailability.value === 'unavailable') return t('settings.services.chromePreparation.unavailableHint')
+  return ''
+})
+const chromePreparationCheckOnly = computed(() => isChromeConnectionTest.value && (
+  chromePreparationState.value === 'success'
+  || chromePreparationState.value === 'idle' && chromeLanguagePackAvailability.value === 'available'
+))
+const connectionTestActionLabel = computed(() => isChromeConnectionTest.value
+  ? t(chromePreparationCheckOnly.value ? 'settings.services.chromePreparation.check' : 'settings.services.chromePreparation.action')
+  : t('settings.services.keys.checkConnection'))
 let connectionTestGeneration = 0
 let activeConnection: AbortController | undefined
 
 function waitForConnectionStep<T>(operation: Promise<T>, timeoutMs: number, timeoutKey: string, signal: AbortSignal): Promise<T> {
-  return waitForSettingsTask(operation, signal, timeoutMs, t(timeoutKey))
+  return waitForSettingsTask(operation, signal, timeoutMs, t(timeoutKey)).catch(error => {
+    if (timeoutKey === 'settings.services.keys.configTimeout' && !signal.aborted) throw new ConnectionConfigurationError()
+    throw error
+  })
 }
 const connectionTestTitle = computed(() => {
+  if (service.value === services.freeTranslation && connectionTestState.value === 'idle') return connectionTestMessage.value
   if (service.value === services.freeTranslation && Object.keys(freeProviderChecks.value).length) {
     const checks = Object.values(freeProviderChecks.value)
     const passed = checks.filter(check => check.status === 'success').length
@@ -829,21 +999,16 @@ const connectionTestTitle = computed(() => {
       ? t('settings.services.keys.progress', {done: passed + failed, total: checks.length})
       : t('settings.services.keys.summary', {passed, failed})
   }
-  if (isChromeConnectionTest.value) {
-    return connectionTestState.value === 'testing'
-      ? t('settings.services.chromePreparation.titlePreparing')
-      : connectionTestState.value === 'success'
-        ? t('settings.services.chromePreparation.titleReady')
-        : t('settings.services.chromePreparation.titleIncomplete')
-  }
   return connectionTestState.value === 'testing'
     ? '检查中'
     : connectionTestState.value === 'success' ? '连接正常' : '连接失败'
 })
 
 function resetConnectionTest(): void {
-  freeProviderChecks.value = {}
-  displayedChromePreparationPair.value = null
+  clearConnectionDiagnostic()
+  freeProviderCheckStates.value = {}
+  freeProviderRetryAt.clear()
+  testedChromePreparationPair.value = null
   chromeDownloadFraction.value = undefined
   connectionTestState.value = 'idle'
   connectionTestMessageState.value = null
@@ -866,36 +1031,23 @@ function localizedConnectionTestMessage(
 }
 
 function formatChromePreparationStatus(status: ChromeTranslationPreparationStatus): LocalizedConnectionTestMessage {
-  const params = {
-    sourceLanguage: status.sourceLanguage,
-    targetLanguage: status.targetLanguage,
-  }
   if (status.phase === 'downloading') {
-    const model = status.model === 'language-detector'
-      ? t('settings.services.chromePreparation.modelDetector')
-      : t('settings.services.chromePreparation.modelTranslator')
-    return localizedConnectionTestMessage(
-      typeof status.loaded === 'number'
-        ? 'settings.services.chromePreparation.statusDownloadingProgress'
-        : 'settings.services.chromePreparation.statusDownloading',
-      {
-        ...params,
-        model,
-        ...(typeof status.loaded === 'number' ? {percentage: Math.round(status.loaded * 100)} : {}),
-      },
-    )
+    return typeof status.loaded === 'number'
+      ? localizedConnectionTestMessage('settings.services.chromePreparation.statusDownloadingProgress', {percentage: Math.round(status.loaded * 100)})
+      : localizedConnectionTestMessage('settings.services.chromePreparation.statusDownloading')
   }
   if (status.phase === 'verifying') {
-    return localizedConnectionTestMessage('settings.services.chromePreparation.statusVerifying', params)
+    return localizedConnectionTestMessage('settings.services.chromePreparation.statusVerifying')
   }
-  return localizedConnectionTestMessage('settings.services.chromePreparation.statusInitializing', params)
+  return localizedConnectionTestMessage('settings.services.chromePreparation.titlePreparing')
 }
 
-function formatChromePreparationError(error: unknown): LocalizedConnectionTestMessage | string {
-  if (error instanceof ChromeTranslationPreparationError) {
-    return localizedConnectionTestMessage(CHROME_PREPARATION_ERROR_KEYS[error.code], error.params)
+function formatChromePreparationError(error: unknown): LocalizedConnectionTestMessage {
+  if (import.meta.env.BROWSER !== 'userscript' && error instanceof ChromeTranslationPreparationError) {
+    const {detail: _privateDetail, ...safeParams} = error.params || {}
+    return localizedConnectionTestMessage(CHROME_PREPARATION_ERROR_KEYS[error.code], safeParams)
   }
-  return error instanceof Error ? error.message : String(error)
+  return describeConnectionFailure(error)
 }
 
 async function runApiKeyCheck(index: number, generation: number, signal: AbortSignal): Promise<boolean> {
@@ -911,15 +1063,15 @@ async function runApiKeyCheck(index: number, generation: number, signal: AbortSi
       service: service.value,
       keyIndex: index,
       keyRevision: createApiKeyCheckRevision(config.value, service.value),
-    }), CONNECTION_RESPONSE_WAIT_TIMEOUT_MS, 'settings.services.keys.responseTimeout', signal) as {success?: boolean; durationMs?: number; error?: string} | undefined
+    }), CONNECTION_RESPONSE_WAIT_TIMEOUT_MS, 'settings.services.keys.responseTimeout', signal) as {success?: boolean; durationMs?: number; error?: string; diagnostic?: unknown} | undefined
     if (generation !== connectionTestGeneration) return false
-    if (!response?.success) throw new Error(response?.error || '连接测试失败')
+    if (!response?.success) throw normalizeDiagnostic(response?.diagnostic) || new Error(response?.error || '连接测试失败')
     setApiKeyState(index, {status: 'success', durationMs: response.durationMs})
     updateApiKeySummary()
     return true
   } catch (error) {
     if (generation !== connectionTestGeneration) return false
-    setApiKeyState(index, {status: 'error', error: error instanceof Error ? error.message : String(error)})
+    setApiKeyState(index, {status: 'error', error: describeConnectionFailure(error)})
     updateApiKeySummary()
     return false
   }
@@ -932,21 +1084,23 @@ function stopApiKeyChecks(): void {
   connectionTestBusy.value = false
   connectionTestState.value = 'idle'
   connectionTestMessageState.value = null
-  apiKeyChecks.value = Object.fromEntries(Object.entries(apiKeyChecks.value).map(([index, state]) => [index,
+  clearConnectionDiagnostic()
+  apiKeyCheckStates.value = Object.fromEntries(Object.entries(apiKeyCheckStates.value).map(([index, state]) => [index,
     state.status === 'checking' || state.status === 'queued' ? {status: 'idle' as const} : state]))
   updateApiKeySummary()
 }
 
 async function testSingleApiKey(index: number): Promise<void> {
   // 备用密钥不参与全量检查，但仍可逐个验证。
-  if (!active.value || connectionTestBusy.value || !usableApiKeys.value.includes(index)) return
+  if (!active.value || connectionTestBusy.value || connectionRetryWaiting.value || !usableApiKeys.value.includes(index)) return
+  clearConnectionDiagnostic()
   apiKeyCheckMode.value = 'single'
   const generation = ++connectionTestGeneration
   const controller = new AbortController()
   activeConnection = controller
   connectionTestBusy.value = true
   connectionTestState.value = 'testing'
-  connectionTestMessageState.value = t('settings.services.keys.checking')
+  connectionTestMessageState.value = localizedConnectionTestMessage('settings.services.keys.checking')
   setApiKeyState(index, {status: 'checking'})
   updateApiKeySummary()
   try {
@@ -957,11 +1111,11 @@ async function testSingleApiKey(index: number): Promise<void> {
     const success = await runApiKeyCheck(index, generation, controller.signal)
     if (generation !== connectionTestGeneration) return
     connectionTestState.value = success ? 'success' : 'error'
-    connectionTestMessageState.value = success ? t('settings.services.keys.passed') : t('settings.services.keys.failed')
+    connectionTestMessageState.value = localizedConnectionTestMessage(success ? 'settings.services.keys.passed' : 'settings.services.keys.failed')
   } catch (error) {
     if (generation === connectionTestGeneration) {
       connectionTestState.value = 'error'
-      connectionTestMessageState.value = error instanceof Error ? error.message : String(error)
+      connectionTestMessageState.value = describeConnectionFailure(error)
       setApiKeyState(index, {status: 'error', error: connectionTestMessageState.value})
       updateApiKeySummary()
     }
@@ -973,32 +1127,34 @@ async function testSingleApiKey(index: number): Promise<void> {
 }
 
 async function testConnection(): Promise<void> {
-  if (!active.value || connectionTestBusy.value || connectionTestDisabled.value) return
+  if (!active.value || connectionTestBusy.value || connectionTestDisabled.value || connectionRetryWaiting.value) return
+  clearConnectionDiagnostic()
   apiKeyCheckMode.value = 'all'
 
   const testedService = service.value
-  if (testedService === services.freeTranslation) freeProviderChecks.value = {}
+  if (testedService === services.freeTranslation) freeProviderCheckStates.value = {}
   const generation = ++connectionTestGeneration
   const controller = new AbortController()
   activeConnection = controller
-  const chromePreparationDeadline = testedService === services.chromeTranslator ? Date.now() + CHROME_PREPARATION_TIMEOUT_MS : undefined
+  const prepareBrowserModel = import.meta.env.BROWSER !== 'userscript' && testedService === services.chromeTranslator
+  const chromePreparationDeadline = prepareBrowserModel ? Date.now() + CHROME_PREPARATION_TIMEOUT_MS : undefined
   const isCurrent = () => active.value && generation === connectionTestGeneration
   let acceptChromePreparationStatus = true
   connectionTestBusy.value = true
   connectionTestState.value = 'testing'
   chromeDownloadFraction.value = undefined
   if (compute.value.showToken) resetApiKeyChecks()
-  connectionTestMessageState.value = testedService === services.chromeTranslator
-    ? localizedConnectionTestMessage('settings.services.chromePreparation.statusStarting')
+  connectionTestMessageState.value = prepareBrowserModel
+    ? localizedConnectionTestMessage('settings.services.chromePreparation.titlePreparing')
     : '正在保存当前配置并请求服务…'
 
   let chromePreparation: Promise<{ok: true; result: Awaited<ReturnType<typeof prepareChromeTranslationInPage>>} | {ok: false; error: unknown}> | undefined
   try {
-    // Chrome 的模型下载要求用户激活；必须在 click handler 的首个 await 前直接调用。
-    if (testedService === services.chromeTranslator) {
+    // 下载模型要求用户激活，在点击回调的首个 await 之前调用。
+    if (prepareBrowserModel) {
       const pair = currentChromePreparationPair.value
-      if (!pair) throw new ChromeTranslationPreparationError('invalid-language-code', 'Chrome 本地翻译语言代码无效', {field: 'from/to'})
-      displayedChromePreparationPair.value = pair
+      if (!pair) throw new ChromeTranslationPreparationError('invalid-language-code', 'Invalid language pair', {field: 'from/to'})
+      testedChromePreparationPair.value = pair
       chromePreparation = prepareChromeTranslationInPage({
         from: pair.sourceLanguage,
         to: pair.targetLanguage,
@@ -1028,37 +1184,89 @@ async function testConnection(): Promise<void> {
       }).catch(() => undefined)
       if (!isCurrent()) return
       connectionTestState.value = 'success'
-      connectionTestMessageState.value = localizedConnectionTestMessage(
-        'settings.services.chromePreparation.success',
-        {
-          sourceLanguage: outcome.result.sourceLanguage,
-          targetLanguage: outcome.result.targetLanguage,
-        },
-      )
+      connectionTestMessageState.value = null
     } else if (testedService === services.freeTranslation) {
+      const removed = new Set(config.value.disabledTranslationServices)
+      const availableProviders = FREE_TRANSLATION_PROVIDERS.map(provider => provider.id).filter(id => !removed.has(id))
+      if (!availableProviders.length) {
+        connectionTestState.value = 'idle'
+        connectionTestMessageState.value = localizedConnectionTestMessage('settings.services.library.empty')
+        return
+      }
+      let access: Awaited<ReturnType<typeof readFreePoolAccess>>
+      try {
+        access = await waitForConnectionStep(readFreePoolAccess(availableProviders, {signal: controller.signal}), CONNECTION_RESPONSE_WAIT_TIMEOUT_MS, 'safari.freePool.error', controller.signal)
+      } catch {
+        if (!isCurrent()) return
+        // 权限读取失败不归咎于供应商；保存安全 key，让迟到语言包仍可更新提示。
+        connectionTestState.value = 'error'
+        connectionTestMessageState.value = localizedConnectionTestMessage('safari.freePool.error')
+        return
+      }
+      if (!isCurrent()) return
+      const granted = new Set<string>(access.grantedIds.filter(id => !removed.has(id)))
+      if (!granted.size) {
+        connectionTestState.value = 'idle'
+        connectionTestMessageState.value = localizedConnectionTestMessage('safari.freePool.permissionState')
+        return
+      }
+      const providerDiagnostics = new Map<string, Diagnostic>()
+      const failProvider = (providerId: string, error: unknown, durationMs?: number) => {
+        const diagnostic = normalizeDiagnostic(error) || diagnoseFailure(error, {online: typeof navigator === 'undefined' ? undefined : navigator.onLine})
+        providerDiagnostics.set(providerId, diagnostic)
+        if (diagnostic.retryAfterMs) freeProviderRetryAt.set(providerId, Date.now() + diagnostic.retryAfterMs)
+        return {success: false, ...(durationMs === undefined ? {} : {durationMs}), error: describeConnectionFailure(diagnostic, false).key}
+      }
       await checkAllFreeTranslationProviders({
-        check: freeProviderId => waitForConnectionStep(browser.runtime.sendMessage({
-          type: CONNECTION_TEST_MESSAGE,
-          service: testedService,
-          freeProviderId,
-        }), CONNECTION_RESPONSE_WAIT_TIMEOUT_MS, 'settings.services.keys.responseTimeout', controller.signal),
-        update: (providerId, state) => { if (isCurrent()) freeProviderChecks.value = {...freeProviderChecks.value, [providerId]: state} },
+        check: async freeProviderId => {
+          if (!granted.has(freeProviderId)) return undefined
+          const remaining = (freeProviderRetryAt.get(freeProviderId) || 0) - Date.now()
+          if (remaining > 0) return failProvider(freeProviderId, {kind: 'rate-limit', retryAfterMs: remaining})
+          freeProviderRetryAt.delete(freeProviderId)
+          try {
+            const response = await waitForConnectionStep(browser.runtime.sendMessage({
+              type: CONNECTION_TEST_MESSAGE,
+              service: testedService,
+              freeProviderId,
+            }), CONNECTION_RESPONSE_WAIT_TIMEOUT_MS, 'settings.services.keys.responseTimeout', controller.signal) as {success?: boolean; durationMs?: number; error?: string; diagnostic?: unknown} | undefined
+            if (!isCurrent()) return undefined
+            return response?.success ? response : failProvider(freeProviderId, normalizeDiagnostic(response?.diagnostic) || response?.error, response?.durationMs)
+          } catch (error) {
+            return isCurrent() ? failProvider(freeProviderId, error) : undefined
+          }
+        },
+        update: (providerId, state) => {
+          if (!isCurrent() || !granted.has(providerId)) return
+          const {error: _untrustedError, ...result} = state
+          // 检查器的异常兜底可能携带原始错误；只用已归类诊断或固定失败 key，不把它翻译或展示。
+          freeProviderCheckStates.value = {...freeProviderCheckStates.value, [providerId]: {...result,
+            ...(state.status === 'error' ? {error: localizedConnectionTestMessage(providerDiagnostics.get(providerId)?.titleKey || 'settings.services.keys.failed')} : {}),
+          }}
+        },
         isCurrent,
-        failureMessage: t('settings.services.keys.failed'),
+        failureMessage: 'settings.services.keys.failed',
       })
       if (!isCurrent()) return
+      const enabledProviders = normalizeFreeTranslationOrder(config.value.freeTranslationOrder).filter(id => !removed.has(id))
+      // 仍检查目录中未加入免费池的线路。只要启用池有成功项，就不放大成整体故障。
+      if (Object.entries(freeProviderChecks.value).some(([id, state]) => enabledProviders.includes(id) && state.status === 'success')) clearConnectionDiagnostic()
+      else connectionTestDiagnostic.value = enabledProviders.map(id => providerDiagnostics.get(id)).find(Boolean) || connectionTestDiagnostic.value
       connectionTestState.value = Object.values(freeProviderChecks.value).every(check => check.status === 'success') ? 'success' : 'error'
-      connectionTestMessageState.value = t('settings.services.keys.summary', {
+      connectionTestMessageState.value = localizedConnectionTestMessage('settings.services.keys.summary', {
         passed: Object.values(freeProviderChecks.value).filter(check => check.status === 'success').length,
         failed: Object.values(freeProviderChecks.value).filter(check => check.status === 'error').length,
       })
     } else if (compute.value.showToken && !compute.value.showServiceSecret && apiKeyIndexes.value.length > 0) {
       const checks = [...apiKeyIndexes.value]
-      apiKeyChecks.value = Object.fromEntries(checks.map(index => [index, {status: 'queued' as const}]))
+      apiKeyCheckStates.value = Object.fromEntries(checks.map(index => [index, {status: 'queued' as const}]))
       let successes = 0
       for (const index of checks) {
         if (!isCurrent()) return
         if (await runApiKeyCheck(index, generation, controller.signal)) successes += 1
+        if (connectionRetryWaiting.value) {
+          apiKeyCheckStates.value = Object.fromEntries(Object.entries(apiKeyCheckStates.value).map(([row, state]) => [row, state.status === 'queued' ? {status: 'idle' as const} : state]))
+          break
+        }
       }
       if (!isCurrent()) return
       const failures = checks.length - successes
@@ -1071,9 +1279,9 @@ async function testConnection(): Promise<void> {
       const response = await waitForConnectionStep(browser.runtime.sendMessage({
         type: CONNECTION_TEST_MESSAGE,
         service: testedService,
-      }), testWaitMs, 'settings.services.keys.responseTimeout', controller.signal) as {success?: boolean; durationMs?: number; error?: string} | undefined
+      }), testWaitMs, 'settings.services.keys.responseTimeout', controller.signal) as {success?: boolean; durationMs?: number; error?: string; diagnostic?: unknown} | undefined
       if (!isCurrent()) return
-      if (!response?.success) throw new Error(response?.error || '连接测试失败')
+      if (!response?.success) throw normalizeDiagnostic(response?.diagnostic) || new Error(response?.error || '连接测试失败')
       connectionTestState.value = 'success'
       connectionTestMessageState.value = `已完成真实翻译请求${typeof response.durationMs === 'number' ? `（${response.durationMs} ms）` : ''}。`
     }
@@ -1162,20 +1370,37 @@ watch(() => active.value ? [config.value, service.value, config.value.from, conf
   config.value.apiKeyRotationEnabled?.[service.value], compute.value.requireApiKey,
   ...(service.value === services.freeTranslation ? [config.value.myMemoryEmail, config.value.freeTranslationTimeoutMs] : [])] : null,
   invalidateConnectionTest, {flush: 'sync'})
-watch(() => active.value && isChromeConnectionTest.value, enabled => {
-  const generation = ++chromePreparationGeneration
-  const revision = ++pendingChromePreparationRevision
-  stopChromePreparationPendingWatch?.();stopChromePreparationPendingWatch = undefined
-  pendingChromePreparation.value = null
-  if (!enabled) return
-  stopChromePreparationPendingWatch = chromeTranslationPreparationStore.subscribe(request => {
-    if (!active.value || !isChromeConnectionTest.value || generation !== chromePreparationGeneration) return
-    pendingChromePreparationRevision++;pendingChromePreparation.value = request
-  })
-  void chromeTranslationPreparationStore.get().then(request => {
-    if (active.value && isChromeConnectionTest.value && generation === chromePreparationGeneration && revision === pendingChromePreparationRevision) pendingChromePreparation.value = request
-  }).catch(() => undefined)
-}, {immediate: true, flush: 'sync'})
+// 扩展专属的模型准备随设置页加载，脚本版构建裁掉这些订阅。
+if (import.meta.env.BROWSER !== 'userscript') {
+  watch(() => active.value && isChromeConnectionTest.value && !browserTranslationUnavailable.value, enabled => {
+    const generation = ++chromePreparationGeneration
+    const revision = ++pendingChromePreparationRevision
+    stopChromePreparationPendingWatch?.();stopChromePreparationPendingWatch = undefined
+    pendingChromePreparation.value = null
+    if (!enabled) return
+    stopChromePreparationPendingWatch = chromeTranslationPreparationStore.subscribe(request => {
+      if (!active.value || !isChromeConnectionTest.value || generation !== chromePreparationGeneration) return
+      pendingChromePreparationRevision++;pendingChromePreparation.value = request
+    })
+    void chromeTranslationPreparationStore.get().then(request => {
+      if (active.value && isChromeConnectionTest.value && generation === chromePreparationGeneration && revision === pendingChromePreparationRevision) pendingChromePreparation.value = request
+    }).catch(() => undefined)
+  }, {immediate: true, flush: 'sync'})
+  watch(
+    () => active.value && isChromeConnectionTest.value && !browserTranslationUnavailable.value && !connectionTestBusy.value
+      ? currentChromePreparationPair.value : null,
+    (pair, _, onCleanup) => {
+      chromeLanguagePackAvailability.value = undefined
+      if (!pair) return
+      let current = true
+      onCleanup(() => { current = false })
+      void readChromeLanguagePackAvailability(pair).then(availability => {
+        if (current) chromeLanguagePackAvailability.value = availability
+      })
+    },
+    {immediate: true},
+  )
+}
 watch(() => pendingServiceAction.value && !isCurrentServiceAction(pendingServiceAction.value), invalid => {if (invalid) closeServiceAction()}, {flush: 'sync'})
 watch(serviceActionOpen, open => {if (!open) pendingServiceAction.value = null}, {flush: 'sync'})
 </script>
@@ -1187,18 +1412,18 @@ watch(serviceActionOpen, open => {if (!open) pendingServiceAction.value = null},
 .configuration-group-heading { margin-bottom: 8px; }
 .configuration-group-heading h5 { margin: 0; color: var(--ink); font-size: 14px; font-weight: 650; line-height: 1.5; }
 .configuration-group-heading p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.connection-field { display: grid; grid-template-columns: 140px minmax(0, 1fr); align-items: start; gap: 16px; padding: 14px 0; }
+.connection-field { display: grid; grid-template-columns: var(--fr-service-label-width, 140px) minmax(0, 1fr); align-items: start; gap: var(--fr-service-column-gap, 16px); padding: var(--fr-settings-row-padding-block, 14px) 0; }
 .connection-field + .connection-field { border-top: 1px solid var(--line, #e4e7ef); }
-.connection-field-label { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; min-height: 38px; }
+.connection-field-label { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; min-height: var(--fr-service-control-height, 40px); }
 .connection-field-label small { flex-basis: 100%; }
 .connection-field-label strong { color: var(--ink); font-size: 13px; font-weight: 550; line-height: 1.5; }
 .connection-field-label small, .provider-field-help, .custom-headers-help, .model-thinking-setting > small, .model-vision-setting > small { color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.connection-field-control { display: flex; flex-direction: column; align-items: stretch; justify-self: start; width: 100%; max-width: 640px; min-width: 0; }
+.connection-field-control { display: flex; flex-direction: column; align-items: stretch; justify-self: start; width: 100%; max-width: var(--fr-service-control-width, 640px); min-width: 0; }
 .connection-field-control :deep(.el-input), .connection-field-control :deep(.el-select), .connection-field-control :deep(.el-textarea) { width: 100% !important; max-width: 640px !important; }
 .connection-field-control :deep(.el-select) { max-width: 360px !important; }
-.service-connection-section :deep(.el-input__wrapper), .service-connection-section :deep(.el-select:not(.fluentread-select) .el-select__wrapper) { min-height: 38px; padding: 0 11px; border-radius: 10px; background: var(--surface, #fff); border-color: var(--line); }
+.service-connection-section :deep(.el-input__wrapper), .service-connection-section :deep(.el-select:not(.fluentread-select) .el-select__wrapper) { min-height: var(--fr-service-control-height, 40px); padding: 0 11px; border-radius: 8px; background: var(--surface, #fff); border-color: var(--line); }
 .service-connection-section :deep(.el-input__inner), .service-connection-section :deep(.el-select__selected-item) { font-size: 13px; }
-.service-connection-section :deep(.el-textarea__inner) { border-radius: 10px; background: var(--surface); font-size: 13px; padding: 10px 12px; }
+.service-connection-section :deep(.el-textarea__inner) { border-radius: 8px; background: var(--surface); font-size: 13px; padding: 10px 12px; }
 .service-connection-section :deep(.el-switch) { --el-switch-on-color: var(--brand, #ef4776); }
 .provider-field-help, .custom-headers-help { display: block; align-self: stretch; margin: 7px 0 0; }
 .provider-field-help code { font-size: 11px; }
@@ -1211,9 +1436,11 @@ watch(serviceActionOpen, open => {if (!open) pendingServiceAction.value = null},
 /* 开关自带 4px 的点击留白：向外抵消，让可见轨道与其他控件左对齐，并保持与输入框相同的行高。 */
 .model-thinking-setting :deep(.el-switch) { flex: none; margin: -3px 0 -3px -4px; }
 .service-settings-tabs { margin-top: 18px; min-width: 0; --el-color-primary: var(--brand-strong); }
-.service-settings-tabs.is-single-tab { margin-top: 0; }
+.service-settings-tabs.is-single-tab { margin-top: 20px; }
 .service-settings-tabs.is-single-tab :deep(.el-tabs__header) { display: none; }
 .service-settings-tabs.is-single-tab .service-settings-panel { padding-top: 0; }
+.single-request-settings { margin-bottom: 0; }
+.single-request-settings :deep(.settings-disclosure-body) { padding: 0 var(--fr-card-padding-inline, 20px) 4px; }
 .service-settings-tabs :deep(.el-tabs__header) { margin: 0; }
 .service-settings-tabs :deep(.el-tabs__item) { height: 44px; padding: 0 18px; color: var(--muted); font-size: 13px; font-weight: 550; }
 .service-settings-tabs :deep(.el-tabs__item.is-active) { color: var(--brand-strong); }
@@ -1240,33 +1467,43 @@ watch(serviceActionOpen, open => {if (!open) pendingServiceAction.value = null},
 .connection-card > :deep(.api-key-list:first-child) { border-top: 0; }
 .connection-card > .configuration-scope { padding: 14px 0 6px; }
 .connection-test-inline { display: flex; align-items: center; justify-content: flex-start; gap: 12px; flex-wrap: wrap; margin: 14px 0; }
-.connection-test-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 7px 12px; border: 1px solid var(--brand-border, #f3c0ce); border-radius: 9px; color: var(--brand-strong, #bd2853); background: var(--brand-soft, #fff0f4); font-size: 12px; font-weight: 600; cursor: pointer; }
+.connection-test-button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-width: 0; max-width: 100%; min-height: 36px; padding: 7px 12px; border: 1px solid var(--brand-border, #f3c0ce); border-radius: 8px; color: var(--brand-strong, #bd2853); background: var(--brand-soft, #fff0f4); font-size: 12px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; cursor: pointer; }
 .connection-test-button:hover:not(:disabled) { border-color: var(--brand); }
+.connection-test-button.is-quiet { border-color: var(--line); color: var(--muted); background: var(--surface); }
+.connection-test-button.is-quiet:hover:not(:disabled) { border-color: var(--brand); color: var(--brand-strong); }
 .connection-test-button:disabled { cursor: wait; opacity: .65; }
 .connection-action-icon { flex: none; }
 .is-spinning { animation: connection-spin 1s linear infinite; }
 @keyframes connection-spin { to { transform: rotate(360deg); } }
-.service-connection-action { position: relative; }
-.service-connection-action .connection-test-button { width: auto; min-width: 116px; white-space: nowrap; }
+.service-connection-action { position: relative; display: flex; width: 100%; min-width: 0; }
+.service-connection-action .connection-test-button { width: 100%; white-space: normal; }
 .header-connection-status { position: absolute; top: calc(100% + 3px); right: 0; color: var(--muted); font-size: 11px; line-height: 17px; white-space: nowrap; }
 .header-connection-status.is-success { color: var(--el-color-success); }
 .header-connection-status.is-error { color: var(--el-color-danger); }
-.service-connection-action .connection-test-inline { margin: 0; justify-content: space-between; }
+.service-connection-action .connection-test-inline { width: 100%; margin: 0; align-items: stretch; }
 .connection-test-result { display: grid; gap: 4px; margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface-soft); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.chrome-preparation-progress { margin-top: 4px; }
+.chrome-preparation-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; margin: 0; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.chrome-preparation-line strong { min-width: 0; font-weight: 650; }
+.chrome-preparation-badge { padding: 2px 8px; border-radius: 6px; color: var(--muted); background: var(--surface-soft); font-size: 12px; font-weight: 600; }
+.chrome-preparation-status.is-success .chrome-preparation-badge,
+.chrome-preparation-status[data-availability='available'] .chrome-preparation-badge { color: var(--el-color-success-dark-2); background: var(--el-color-success-light-9); }
+.chrome-preparation-status.is-error .chrome-preparation-badge,
+.chrome-preparation-status[data-availability='unavailable'] .chrome-preparation-badge { color: var(--el-color-danger-dark-2); background: var(--el-color-danger-light-9); }
+.chrome-preparation-hint { color: var(--muted); font-size: 12px; }
+.chrome-preparation-status.is-error .chrome-preparation-hint { flex-basis: 100%; }
+.chrome-preparation-progress { max-width: 256px; margin-top: 6px; }
 .connection-test-result.is-success { border-color: var(--el-color-success-light-5); color: var(--el-color-success); background: var(--el-color-success-light-9); }
 .connection-test-result.is-error { border-color: var(--el-color-danger-light-5); color: var(--el-color-danger); background: var(--el-color-danger-light-9); }
-.connection-test-details { margin-top: 5px; }
-.connection-test-details code { display: block; margin-top: 7px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.connection-test-details summary { cursor: pointer; }
+.connection-repair-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+.connection-repair-button { min-height: 32px; padding: 4px 10px; border: 1px solid currentColor; border-radius: 7px; color: inherit; background: transparent; font: inherit; cursor: pointer; }
+.connection-repair-button:hover:not(:disabled) { background: var(--surface); }
+.connection-repair-button:disabled { opacity: .6; cursor: default; }
 .field-warning, .error-text, .minimax-key-note.is-warning, .mimo-key-note.is-warning { color: var(--el-color-danger); font-size: 12px; line-height: 1.6; margin-top: 7px; }
 .minimax-key-note, .mimo-key-note { margin: 8px 0; }
 .minimax-endpoint code, .mimo-endpoint code { display: block; color: var(--muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
-.official-translation-help, .chrome-preparation-help { margin: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.official-translation-help p, .chrome-preparation-help p { margin: 0 0 8px; }
-.official-translation-help a, .chrome-preparation-help a { color: var(--brand-strong); }
-.chrome-preparation-help summary { cursor: pointer; color: var(--ink); }
-.chrome-preparation-help-links, .chrome-preparation-pair { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.official-translation-help { margin: 12px 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.official-translation-help p { margin: 0 0 8px; }
+.official-translation-help a { color: var(--brand-strong); }
 .service-maintenance-actions { display: flex; justify-content: flex-end; padding-top: 16px; margin-top: 16px; border-top: 1px solid var(--line); }
 .delete-service-button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 5px 8px; border: 0; border-radius: 6px; color: var(--el-color-danger); background: transparent; font-size: 12px; cursor: pointer; }
 .delete-service-button:hover { background: var(--el-color-danger-light-9); }
@@ -1288,8 +1525,6 @@ button:focus-visible, summary:focus-visible { outline: 2px solid var(--brand); o
 .connection-card { padding: 0; border: 0; border-radius: 0; }
 .configuration-group-heading { margin: 0 0 10px; }
 .configuration-group-heading h5 { font-size: 13px; font-weight: 650; }
-/* 单页签标题：用分隔线和留白与上方连接区分成两个并列小节，下方直接接第一行字段。 */
-.configuration-group-heading.settings-tabs-heading { margin: 20px 0 0; padding-top: 20px; border-top: 1px solid var(--line); }
 .provider-account-fields { min-width: 0; }
 @container (max-width: 520px) { .provider-account-fields { grid-template-columns: 1fr; gap: 8px; } }
 </style>

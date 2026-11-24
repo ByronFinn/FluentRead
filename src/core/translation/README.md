@@ -2,7 +2,7 @@
   @file src/core/translation/README.md
 
   文件职责：记录翻译候选核心的职责、处理管线、适配器决策模型与验证契约，帮助维护者理解 DOM 到候选文本的统一政策。
-  主要内容：说明 dom、registry、engine、text、serialization 的协作顺序、独立文本槽协议与基础 DOM 守卫，解释安全守卫、Shadow DOM、站点适配优先级，以及单元与真实站点回归的覆盖要求。
+  主要内容：说明 dom、registry、engine、text、serialization 的协作顺序、独立文本槽协议与基础 DOM 守卫，解释安全守卫、man7 手册的受信正文边界、内容型按钮的显式站点例外、Shadow DOM、站点适配优先级，以及单元与真实站点回归的覆盖要求。
   模块边界：该文档只描述 core/translation 的维护契约，不充当运行时代码；候选使用 public.ts，纯协议与基础 DOM 判断分别直接使用 slotProtocol.ts、dom.ts，feature 调度和 provider 边界继续受架构测试约束。
 -->
 
@@ -72,18 +72,58 @@ Scribble/Racket code tables marked `table.RktBlk` are protected as code, while
 ordinary tables and prose remain eligible. Code blocks remain protected, except
 for the browser's direct body `pre` in a `text/plain` document, where that element
 is the readable document itself.
+The man7 Linux manual capability additionally prepares verified manual `pre`
+sections as reversible prose paragraphs. Only internally registered nodes can
+cross that PRE boundary; matching a public marker alone grants no permission.
+Terminal sessions and program source remain protected, while prose, list items
+and parameter explanations share the ordinary hover/full translation pipeline.
+Bilingual copies align their first and continuation lines to the original prose,
+including hanging indents in lists and parameter descriptions. Translations share
+the original prose column's right boundary, including short paragraphs and headings,
+and shrink to the available container width. Manual layout line breaks collapse
+so translated text wraps naturally within that column; the explicit long-paragraph
+line-break option still applies. Window and appearance changes remeasure the
+registered prose geometry without requesting another translation. Original PRE
+layout is retained. Manual loading and retry feedback uses an owned block so it
+cannot occupy the next paragraph's first line. Orphan cleanup handles that block
+as one artifact and preserves feedback still held by active state.
+Restoration removes the preparation wrappers and retains original inline nodes,
+links, text and whitespace. This does not enable arbitrary HTML PRE or RFC text.
 Ubuntu HTML manpages preserve command signatures and command labels using the
 manual's section structure. Literal command and argument markup stays original
 inside translated explanations; these rules apply only to Ubuntu's manpage URLs.
 The JSON compiler maps `omit` to metadata omission and `literalLabels` to a
 conservative command-label predicate. Both remain editable through ordinary
-same-ID custom replacement; no parallel site-specific TypeScript registry is kept.
+same-ID custom replacement. Builtin BBC composition additionally protects a
+plain credit-only figcaption only when its entire normalized text equals
+`(Credit: <native credit>)`, using the unique direct image-credit span and caption
+in the same nearest native figure. Descriptive captions, links, controls and
+reading markup remain eligible. Owned copies are ignored only for this read-only
+comparison; they cannot supply missing native metadata. Custom same-ID replacement
+and disabled rules revoke this builtin capability. Its finite attribute filter
+includes the native structure, ownership and semantic attributes it reads.
+Caption edits and complete-figure discovery reread current text. Changes to the
+image-credit span are not directly ignored, but their dirty root can remain that
+span: immediate sibling-caption rescanning is not guaranteed unless the caption
+also changes or its figure is scanned. This capability does not add a separate
+runtime or a general JSON text-predicate field.
+
+Bilingual copies can wrap even when the source inherits `white-space: nowrap`;
+preformatted whitespace and explicit line breaks remain meaningful. In intrinsic
+width contexts such as auto-layout tables, inline blocks and floats, only the
+translation's inline size is contained, so the original text still determines
+the column width. Direct text in a flex/grid content candidate is materialized
+as one reversible source-and-translation item; controls and containers with
+existing element children retain their ordinary ownership boundaries.
+When a translation precedes an inside-list item, its inline block reserves the
+native marker's measured space. The marker stays on the first translated line,
+card styles remain a single box, and the original text continues below it.
 
 Every accepted candidate includes a reason and optional adapter id. This keeps
 hover/full equality and adapter precedence directly testable without starting a
 browser. Open Shadow DOM is traversed through the same policy.
 
-Buttons and elements with `role=button` or `role=menuitem` own their internal
+By default, buttons and elements with `role=button` or `role=menuitem` own their internal
 labels, including labels styled as flex or grid boxes. They use the control text
 slot path in both display modes, keeping a single visible label within the
 original button height and preserving icons, click handlers and restoration.
@@ -93,6 +133,15 @@ only their own labels into control targets or text runs, leaving nested buttons
 with independent ownership.
 A mutation scan starting at an internal label resolves back to the control;
 protected subtrees still retain their original exclusion boundaries.
+
+An explicit site-adaptation `content` target can classify a content-bearing
+button or its internal headline label as `content`. This reuses the ordinary
+bilingual/single rendering and restoration paths without changing generic
+control ownership or bypassing hidden, editable or no-translate guards.
+Kagi News selects the headline label inside its expand/collapse buttons, with a
+non-atomic button fallback for headlines rendered directly as text. Keeping the
+label as the content owner stacks the bilingual text within the site's flex
+button rather than adding a second flex item. Other action buttons remain controls.
 
 ## Verification contract
 

@@ -1,24 +1,27 @@
 /**
  * @file src/features/full-page-translation/content/liveTextTranslation.ts
  * 文件职责：按候选类型、展示模式和识别范围选择文本槽请求，保留异步提交所需的来源与译文快照。
- * 主要内容：精确相同译文和有同目标语言证据的排版回显保留原文且不重复展示；冻结整个请求与回退链路的配置，为正文双语构造文本快照，对可无损拍平的多槽候选重建整段原文并整块请求、整段译文回填首个槽位，为交互控件和仅译文模式构造带前后缀的实时 Text 槽结果，为按钮型 input 构造属性替换结果，统一传递取消、重试、范围与会话参数。
+ * 主要内容：合并当前范围的网站禁译覆盖，精确相同译文和有同目标语言证据的排版回显保留原文且不重复展示；冻结整个请求与回退链路的配置，为正文双语构造文本快照，对可无损拍平的多槽候选重建整段原文并整块请求、整段译文回填首个槽位，为交互控件和仅译文模式构造带前后缀的实时 Text 槽结果，为按钮型 input 构造属性替换结果，统一传递取消、重试、范围与会话参数。
  * 模块边界：本文件不管理 DOM 状态、不决定候选、不监听 mutation；runtime 负责 generation 校验和最终渲染。
  */
 import {
     buildWholeBlockTranslationSource,
     collectLiveTranslationTextSlots,
+    createInlineCodePacket,
     createTranslationSourceSnapshot,
     getCurrentTranslationCore,
     getTranslatableControlValueAttribute,
     normalizeTranslationText,
 } from '@/src/core/translation/public';
-import type {TranslationScope, TranslationTextProtectionOptions} from '@/src/core/translation/public';
+import type {InlineCodePacket, TranslationScope, TranslationTextProtectionOptions} from '@/src/core/translation/public';
 import {hasDistinctTargetTranslation as hasDistinctTranslation} from '@/src/core/translation/targetResult';
+import {isClearlyWrongLanguageResponse, isUnchangedTranslationResponse} from '@/src/core/translation/resultValidation';
 import type {TranslationQueueSession} from '@/src/services/translation/queue';
 import {copyFullPageTranslationConfigSnapshot} from './translationConfigSnapshot';
 import {isPersonalCorrectionEnabled, lookupPersonalCorrection, type PersonalCorrectionSnapshot} from './personalCorrections';
 import {
     translateTextSlots,
+    tryTranslateInlineCodeSentence,
     type FullPageTranslationConfigSnapshot,
     type FullPageTranslationSessionCache,
 } from './translationRequest';
@@ -123,6 +126,7 @@ export async function translateLiveText(
     forceFailedRequest = false,
     scope?: TranslationScope,
 ): Promise<LiveTextTranslationResult> {
+    protectionOptions = getCurrentTranslationCore(scope).textOptions(protectionOptions);
     const parts = collectLiveTranslationTextSlots(
         node,
         getCurrentTranslationCore(scope).shouldStayOriginal,
@@ -171,6 +175,8 @@ export type TranslationResult = (LiveTextTranslationResult | ControlValueTransla
     kind: 'snapshot';
     sources: readonly string[];
     translations: readonly string[];
+    inlineCodePacket?: InlineCodePacket;
+    staleInlineCode?: true;
 }) & {personalCorrection?: PersonalCorrectionSnapshot};
 
 /** 统一冻结候选范围；异步期间其他会话的范围变化不能改变本次请求的文本槽。 */
@@ -185,7 +191,9 @@ export async function createTranslationRequest(
     protectionOptions?: TranslationTextProtectionOptions,
     forceFailedRequest = false,
     scope?: TranslationScope,
+    getIgnoredArtifact?: () => Element | undefined,
 ): Promise<TranslationResult> {
+    protectionOptions = getCurrentTranslationCore(scope).textOptions(protectionOptions);
     snapshot = copyFullPageTranslationConfigSnapshot(snapshot);
     const controlValueAttribute = getTranslatableControlValueAttribute(node);
     if (controlValueAttribute) {
@@ -201,6 +209,7 @@ export async function createTranslationRequest(
     const origins = parts.map((part) => part.source);
     if (origins.length === 0) return {kind: 'snapshot', sources: [], translations: []};
     let source: string | null = null;
+    let inlineCodePacket: InlineCodePacket | null = null;
     if (origins.length > 1 || (import.meta.env.BROWSER !== 'userscript' && isPersonalCorrectionEnabled())) {
         const core = getCurrentTranslationCore(scope);
         const skeleton = createTranslationSourceSnapshot(node, core.shouldStayOriginal, undefined,
@@ -208,6 +217,11 @@ export async function createTranslationRequest(
         source = skeleton.slots.length === origins.length && skeleton.slots.every((slot, index) => slot.source === origins[index])
             ? origins.length === 1 && !skeleton.clone.firstElementChild ? origins[0]!
                 : buildWholeBlockTranslationSource(skeleton, {preserveNewlines: preservesSourceNewlines(node)}) : null;
+        if (!source && skeleton.slots.length === origins.length && skeleton.slots.every((slot, index) => slot.source === origins[index])) {
+            inlineCodePacket = createInlineCodePacket(node, skeleton, core.shouldStayOriginal, {
+                targetLanguage: snapshot.targetLanguage, protectionOptions, getIgnoredArtifact,
+            });
+        }
     }
     const personalCorrection = import.meta.env.BROWSER !== 'userscript' && source
         ? await lookupPersonalCorrection(node, source, snapshot.sourceLanguage, snapshot.targetLanguage, signal) : undefined;
@@ -219,6 +233,17 @@ export async function createTranslationRequest(
         const wholeBlock = await translateSnapshotAsWholeBlock(node, origins, source, snapshot, signal, queueSession,
             fullPageSession, forceFailedRequest);
         if (wholeBlock) return finish(wholeBlock);
+    }
+    if (inlineCodePacket) {
+        const translated = await tryTranslateInlineCodeSentence(inlineCodePacket.source,
+            inlineCodePacket.decode, snapshot, signal, queueSession, inlineCodePacket.isCurrent);
+        if (!inlineCodePacket.isCurrent()) return {kind: 'snapshot', sources: origins, translations: [], staleInlineCode: true};
+        if (translated?.length === origins.length &&
+            !isUnchangedTranslationResponse(origins.join(' '), translated.join(' ')) &&
+            !isClearlyWrongLanguageResponse(origins.join(' '), translated.join(' '), snapshot.targetLanguage) &&
+            translated.some((text, index) => hasDistinctTranslation(origins[index]!, text, snapshot.targetLanguage))) {
+            return {kind: 'snapshot', sources: origins, translations: translated, inlineCodePacket};
+        }
     }
     const translations = await translateTextSlots(origins, snapshot, signal, queueSession,
         fullPageSession, forceFailedRequest,

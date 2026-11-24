@@ -1,7 +1,8 @@
 import {describe, expect, it} from 'vitest';
 import {Config} from '@/src/core/config/model';
+import {services} from '@/src/core/config/catalog';
 import {createGlossaryLibrary} from '@/src/core/glossary';
-import {getVideoTranslationConfigFingerprint, mergeBilingualVideoSubtitleCues, normalizeVideoCaptionText, revealVideoSubtitleTranslation, translateVideoSubtitleCues, selectYoutubeCaptionCue, selectVideoSubtitleCueAtOffset, selectVideoSubtitlePretranslationCues, findProgressiveVideoCaptionCue, findActiveVideoCaptionCue, selectProgressiveVideoCaptionCue} from '@/src/features/video-subtitle/content/subtitleLogic';
+import {getVideoTranslationConfigFingerprint, mergeBilingualVideoSubtitleCues, normalizeVideoCaptionText, revealVideoSubtitleTranslation, translateVideoSubtitleCues, selectYoutubeCaptionCue, selectVideoSubtitleCueAtOffset, VideoSubtitlePretranslationWindow, findProgressiveVideoCaptionCue, findActiveVideoCaptionCue, selectProgressiveVideoCaptionCue} from '@/src/features/video-subtitle/content/subtitleLogic';
 
 describe('video subtitle logic', () => {
   it('组合成员连接或策略更新使字幕缓存失效，无关服务不会改变成员摘要', () => {
@@ -37,6 +38,7 @@ describe('video subtitle logic', () => {
   });
 
   it('预翻译把当前句放在首位，去重后提前八句，不被旧字幕或重复条目占满', () => {
+    const window = new VideoSubtitlePretranslationWindow();
     const current = {startMs: 900, durationMs: 1000, text: ' Current  sentence '};
     const older = {...current, startMs: 700, text: 'Older overlapping sentence'};
     const future = Array.from({length: 10}, (_, i) => ({startMs: 2000 + i * 500, durationMs: 300, text: `Next sentence ${i}`}));
@@ -44,21 +46,43 @@ describe('video subtitle logic', () => {
     const expired = Array.from({length: 8}, (_, i) => ({startMs: 500 + i * 40, durationMs: 20, text: `Expired ${i}`}));
     const cues = [...repeated.reverse(), older, ...expired, current, {...current, startMs: 1100}, {startMs: 1500, durationMs: 100, text: '  '}, {startMs: 1500, durationMs: 0, text: 'Empty cue'}];
     const before = JSON.stringify(cues);
-    expect(selectVideoSubtitlePretranslationCues(cues, 1000, 10_000).map(cue => cue.text.trim())).toEqual(['Current  sentence', ...future.slice(0, 8).map(cue => cue.text)]);
+    expect(window.select(cues, 1000, 10_000).map(cue => cue.text.trim())).toEqual(['Current  sentence', ...future.slice(0, 8).map(cue => cue.text)]);
     expect(JSON.stringify(cues)).toBe(before);
-    expect(selectVideoSubtitlePretranslationCues([{...current, text: ' '}], 1000, 10_000)).toEqual([]);
+    expect(window.select([{...current, text: ' '}], 1000, 10_000)).toEqual([]);
   });
 
   it('预翻译窗口按墙钟与播放速度换算，支持空档、边界和无效输入', () => {
+    const window = new VideoSubtitlePretranslationWindow();
     const near = {startMs: 11_000, durationMs: 1000, text: 'Near cue'};
     const fast = {...near, startMs: 21_000, text: 'Fast cue'};
     const far = {...near, startMs: 21_001, text: 'Outside window'};
-    expect(selectVideoSubtitlePretranslationCues([far, fast, near], 1000, 10_000, 2)).toEqual([near, fast]);
-    for (const rate of [.5, 1, 0, -1, NaN, Infinity]) expect(selectVideoSubtitlePretranslationCues([near, fast], 1000, 10_000, rate)).toEqual([near]);
-    for (const [time, window] of [[NaN, 10_000], [Infinity, 10_000], [0, NaN], [0, Infinity], [0, 0], [0, -1]]) {
-      expect(selectVideoSubtitlePretranslationCues([near], time, window)).toEqual([]);
+    const cues = [far, fast, near];
+    expect(window.select(cues, 1000, 10_000, 2)).toEqual([near, fast]);
+    for (const rate of [.5, 1, 0, -1, NaN, Infinity]) expect(window.select(cues, 1000, 10_000, rate)).toEqual([near]);
+    for (const [time, span] of [[NaN, 10_000], [Infinity, 10_000], [0, NaN], [0, Infinity], [0, 0], [0, -1]]) {
+      expect(window.select([near], time, span)).toEqual([]);
     }
-    expect(selectVideoSubtitlePretranslationCues([], 0, 10_000)).toEqual([]);
+    expect(window.select([], 0, 10_000)).toEqual([]);
+  });
+
+  it('预取窗口跨入新句、重叠句结束、回跳和换轨时更新', () => {
+    const window = new VideoSubtitlePretranslationWindow();
+    const long = {startMs: 0, durationMs: 4000, text: 'Long'};
+    const first = {startMs: 1000, durationMs: 300, text: 'First'};
+    const sameStart = {startMs: 1000, durationMs: 600, text: 'Same start'};
+    const future = {startMs: 2500, durationMs: 500, text: 'Future'};
+    const cues = [future, first, long, sameStart];
+
+    expect(window.select(cues, 900, 1000)).toEqual([long, first, sameStart]);
+    expect(window.select(cues, 1000, 1000)).toEqual([first]);
+    expect(window.select(cues, 1300, 1000)).toEqual([sameStart]);
+    expect(window.select(cues, 1500, 1000)).toEqual([sameStart, future]);
+    expect(window.select(cues, 1600, 1000)).toEqual([long, future]);
+    expect(window.select(cues, 2500, 1000)).toEqual([future]);
+    expect(window.select(cues, 3000, 1000)).toEqual([long]);
+    expect(window.select(cues, 4000, 1000)).toEqual([]);
+    expect(window.select(cues, 1000, 1000)).toEqual([first]);
+    expect(window.select([long, sameStart], 1000, 1000)).toEqual([sameStart]);
   });
 
   it('继承默认的视频指纹随网页服务变更，独立服务不受影响', () => {
@@ -110,6 +134,34 @@ describe('video subtitle logic', () => {
       {startMs: 2400, durationMs: 900, text: 'Missing translation'},
     ]);
     expect(mergeBilingualVideoSubtitleCues(cues, [])).toEqual(cues.map(cue => ({...cue, text: cue.text.trim()})));
+  });
+
+  it('双语导出按毫秒整理重叠、同起点重复和多行字幕', () => {
+    const first = {startMs: 0, durationMs: 1400, text: 'First sentence.'};
+    const second = {startMs: 1000.3, durationMs: 1000, text: 'Second\r\n\r\nsentence.'};
+    const simultaneous = {startMs: 1000.4, durationMs: 800, text: 'Another speaker.'};
+    const short = {startMs: 2400.1, durationMs: 0.1, text: 'Later.'};
+    const cues = [second, first, simultaneous, second, short];
+    const translated = ['第二句。\n补充。', '第一句。', '另一位说话者。', '第二句。\n补充。', '稍后。']
+      .map((text, index) => ({...cues[index], text}));
+
+    expect(mergeBilingualVideoSubtitleCues(cues, translated)).toEqual([
+      {startMs: 0, durationMs: 1000, text: 'First sentence.\n第一句。'},
+      {startMs: 1000, durationMs: 1000, text: 'Second sentence. / Another speaker.\n第二句。 补充。 / 另一位说话者。'},
+      {startMs: 2400, durationMs: 1, text: 'Later.\n稍后。'},
+    ]);
+    expect(cues[1]).toEqual({startMs: 0, durationMs: 1400, text: 'First sentence.'});
+  });
+
+  it('双语导出跳过空白字幕和无效区间', () => {
+    const cues = [
+      {startMs: 0, durationMs: 1000, text: ' \n '},
+      {startMs: -1, durationMs: 1000, text: 'Negative start.'},
+      {startMs: 600, durationMs: 0, text: 'Empty interval.'},
+      {startMs: 900, durationMs: Infinity, text: 'Infinite end.'},
+      {startMs: Number.MAX_SAFE_INTEGER, durationMs: 1000, text: 'Imprecise end.'},
+    ];
+    expect(mergeBilingualVideoSubtitleCues(cues, [])).toEqual([]);
   });
 
   it('渐进字幕优先匹配当前时段，再按完整匹配、长度和开始时间消除歧义', () => {
@@ -241,13 +293,48 @@ describe('video subtitle logic', () => {
     await expect(translateVideoSubtitleCues(cues, async text => `译-${text.trim()}`, {concurrency: 2, onProgress: n => progress.push(n)})).resolves.toEqual([{...cues[0], text: '译-a'}, {...cues[1], text: '译-a'}, {...cues[2], text: '译-b'}]);
     expect(progress).toEqual([0, 1, 2]);
   });
-  it('配置指纹保留免费回退与 Minimax、Mimo、DeepL 计费地区身份', () => {
+  it('实际免费服务的线路顺序和模式变化均改变指纹，其他服务不受影响', () => {
     const config = new Config();
-    const identities = ['free', 'minimax', 'mimo', 'deepl'].map(service => {
-      config.videoService = service as Config['videoService'];
-      return getVideoTranslationConfigFingerprint(config);
-    });
-    expect(new Set(identities).size).toBe(4);
+    config.videoService = services.freeTranslation;
+    config.freeTranslationOrder = ['microsoft', 'google'];
+    config.freeTranslationMode = 'balanced';
+    const initial = getVideoTranslationConfigFingerprint(config);
+    config.freeTranslationOrder = ['google', 'microsoft'];
+    const reordered = getVideoTranslationConfigFingerprint(config);
+    expect(reordered).not.toBe(initial);
+    config.freeTranslationMode = 'sequential';
+    expect(getVideoTranslationConfigFingerprint(config)).not.toBe(reordered);
+
+    config.videoService = services.microsoft;
+    const machine = getVideoTranslationConfigFingerprint(config);
+    config.freeTranslationOrder = ['microsoft'];
+    config.freeTranslationMode = 'balanced';
+    expect(getVideoTranslationConfigFingerprint(config)).toBe(machine);
+  });
+  it('实际 DeepL 服务切换 API 套餐改变指纹，其他服务不受影响', () => {
+    const config = new Config();
+    config.videoService = services.deepL;
+    config.deeplApiPlan = 'free';
+    const free = getVideoTranslationConfigFingerprint(config);
+    config.deeplApiPlan = 'pro';
+    expect(getVideoTranslationConfigFingerprint(config)).not.toBe(free);
+
+    config.videoService = services.microsoft;
+    const machine = getVideoTranslationConfigFingerprint(config);
+    config.deeplApiPlan = 'free';
+    expect(getVideoTranslationConfigFingerprint(config)).toBe(machine);
+  });
+  it.each([services.minimax, services.mimo])('实际 %s 服务的地域与计费方案变化改变指纹', service => {
+    const config = new Config();
+    config.videoService = service;
+    const initial = getVideoTranslationConfigFingerprint(config);
+    if (service === services.minimax) config.minimaxRegion = 'global';
+    else config.mimoRegion = 'sgp';
+    const changedRegion = getVideoTranslationConfigFingerprint(config);
+    expect(changedRegion).not.toBe(initial);
+    if (service === services.minimax) config.minimaxBillingPlan = 'token-plan';
+    else config.mimoBillingPlan = 'token-plan';
+    expect(getVideoTranslationConfigFingerprint(config)).not.toBe(changedRegion);
   });
 
   it('空时间轴直接返回，空白 cue 保留原文', async () => {

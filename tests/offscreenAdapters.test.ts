@@ -9,6 +9,7 @@ import {createAreaTranslationOffscreenAdapter} from '@/src/features/area-transla
 import {createImageTranslationOffscreenAdapter} from '@/src/features/image-translation/background/offscreenAdapter';
 import {createLocalTtsOffscreenAdapter} from '@/src/features/local-tts/background/offscreenAdapter';
 import {createSelectionTtsOffscreenAdapter} from '@/src/features/selection-translation/background/offscreenAdapter';
+import {setRuntimeFetch} from '@/src/platform/http/runtime';
 import {
     OFFSCREEN_CANCEL_IMAGE_OPERATION_MESSAGE_TYPE,
     OFFSCREEN_CANCEL_LOCAL_TTS_MESSAGE_TYPE,
@@ -28,9 +29,23 @@ beforeEach(() => {
     vi.clearAllMocks();
 });
 
+afterEach(() => {
+    setRuntimeFetch();
+});
+
 describe('area translation Offscreen adapter', () => {
     const adapter = createAreaTranslationOffscreenAdapter(client);
     const selection = {left: 1, top: 2, width: 3, height: 4, viewportWidth: 100, viewportHeight: 80};
+
+    it.each([undefined, null, {}])('rejects crop results with non-array OCR lines (%j)', async lines => {
+        send.mockResolvedValueOnce({success: true, image: 'crop', lines});
+        await expect(adapter.cropArea('image', selection)).rejects.toThrow('圈选裁剪失败');
+    });
+    it('returns a valid crop through the legacy call without operation options', async () => {
+        send.mockResolvedValueOnce({success: true, image: 'crop', lines: []});
+        await expect(adapter.cropArea('image', selection)).resolves.toEqual({image: 'crop', lines: []});
+        expect(send).toHaveBeenCalledWith({type: 'FLUENT_READ_AREA_CROP_OFFSCREEN', image: 'image', selection});
+    });
 
     it('sends crop-only request and preserves metadata fields', async () => {
         send.mockResolvedValueOnce({success: true, image: 'crop', lines: [], recognitionMethod: 'vision'});
@@ -97,6 +112,69 @@ describe('area translation Offscreen adapter', () => {
 
 describe('image translation Offscreen adapter', () => {
     const adapter = createImageTranslationOffscreenAdapter(client);
+    it.each(['auto', 'cpu'] as const)('透传后台指定的 %s 偏好并保留取消协议', async inferenceBackend => {
+        const signal = new AbortController().signal;
+        send.mockResolvedValueOnce({success: true, image: 'translated', lines: []});
+        await adapter.translateImage('data:image/png,x', 'en', '', {inferenceBackend, requestId: 'cpu', signal, timeoutMs: 5000});
+        expect(send).toHaveBeenCalledWith(expect.objectContaining({inferenceBackend, requestId: 'cpu'}),
+            {signal, timeoutMs: 5000, cancelMessage: {type: OFFSCREEN_CANCEL_IMAGE_OPERATION_MESSAGE_TYPE, requestId: 'cpu'}});
+    });
+    it('模型状态透传仅含阶段和会话提供程序的诊断快照', async () => {
+        const inference = {preference: 'cpu', cpuFallback: false, stage: 'recognizing', executionProviders: ['wasm']};
+        send.mockResolvedValueOnce({success: true, ready: true, bytes: 123, inpaintingReady: true, inference});
+        expect(await adapter.getMangaModelStatus()).toMatchObject({inference});
+    });
+    it.each([undefined,{x:4,y:5,width:90,height:40},null,0,false])('viewport随既有RPC原样发送，取消和超时选项不增加请求 %#',async mangaViewport=>{
+        send.mockResolvedValueOnce({success:true,image:'translated',lines:[]});const signal=new AbortController().signal;
+        await adapter.translateImage('data:image/png,x','en','Page',{manga:true,requestId:'viewport-adapter',signal,timeoutMs:5000,mangaViewport:mangaViewport as never});
+        expect(send).toHaveBeenCalledOnce();const [message,options]=send.mock.calls[0];
+        expect(Object.hasOwn(message,'mangaViewport')).toBe(mangaViewport!==undefined);expect(message.mangaViewport).toEqual(mangaViewport);
+        expect(options).toEqual({signal,timeoutMs:5000,cancelMessage:{type:OFFSCREEN_CANCEL_IMAGE_OPERATION_MESSAGE_TYPE,requestId:'viewport-adapter'}});
+    });
+    it('accepts the missing-segmentation retry marker on a retained original or a temporary PNG with reading text',async()=>{
+        const lines=[{text:'你好',sourceText:'Hello',renderSkipped:true}];
+        const response={success:true,image:'',imageUnchanged:true,retryWhenSegmentationReady:true,lines};
+        send.mockResolvedValueOnce(response);
+        await expect(adapter.translateImage('source','en','Page')).resolves.toEqual({image:'',imageUnchanged:true,retryWhenSegmentationReady:true,lines});
+        const interim={image:'data:image/png;base64,AA==',retryWhenSegmentationReady:true,lines:[{text:'你好',sourceText:'Hello'}]};
+        send.mockResolvedValueOnce({success:true,...interim});
+        await expect(adapter.translateImage('source','en','Page')).resolves.toEqual(interim);
+        for(const invalid of [
+            {...response,retryWhenSegmentationReady:false},{...response,retryWhenSegmentationReady:'true'},
+            {...response,image:'encoded',imageUnchanged:undefined},{...response,lines:undefined},{...response,lines:[]},{...response,lines:[null,'bad',{}, {renderSkipped:'true'}]},
+        ]){send.mockResolvedValueOnce(invalid);await expect(adapter.translateImage('source','en','Page')).rejects.toThrow();}
+        send.mockResolvedValueOnce(response);await expect(adapter.translateImage('source','en','Page',{manga:true,requestId:'m',signal:new AbortController().signal,timeoutMs:1000})).rejects.toThrow();
+    });
+    it('preserves optional segmentation readiness, accepts older model statuses and rejects malformed optional fields',async()=>{
+        const base={success:true,ready:true,bytes:123,inpaintingReady:true};
+        for(const segmentationReady of [true,false]){
+            send.mockResolvedValueOnce({...base,segmentationReady});
+            await expect(adapter.getMangaModelStatus()).resolves.toEqual({ready:true,bytes:123,inpaintingReady:true,segmentationReady});
+        }
+        send.mockResolvedValueOnce(base);
+        expect(await adapter.getMangaModelStatus()).not.toHaveProperty('segmentationReady');
+        for(const segmentationReady of [null,0,'false',{}]){
+            send.mockResolvedValueOnce({...base,segmentationReady});
+            await expect(adapter.getMangaModelStatus()).rejects.toThrow('漫画识别模型状态读取失败');
+        }
+    });
+    it('普通图的未绘制文字或真正空识别可标记为保留宿主原图，其他消息形态仍拒绝',async()=>{
+        const lines=[{text:'你好',sourceText:'Hello',renderSkipped:true}];
+        send.mockResolvedValueOnce({success:true,image:'',imageUnchanged:true,lines});
+        await expect(adapter.translateImage('source','en','Page')).resolves.toEqual({image:'',imageUnchanged:true,lines});
+        send.mockResolvedValueOnce({success:true,image:'',imageUnchanged:true,lines:[]});
+        await expect(adapter.translateImage('source','en','Page')).resolves.toEqual({image:'',imageUnchanged:true,lines:[]});
+        for (const response of [
+            {success:true,image:'encoded',imageUnchanged:true,lines},
+            {success:true,image:'',imageUnchanged:false,lines},
+            {success:false,image:'',imageUnchanged:true,lines:[]},
+            {success:'false',image:'',imageUnchanged:true,lines:[]},
+            {success:1,image:'',imageUnchanged:true,lines:[]},
+            {success:true,image:'',imageUnchanged:true,lines,mangaPatches:{width:1,height:1,patches:[]}},
+        ]) {send.mockResolvedValueOnce(response);await expect(adapter.translateImage('source','en','Page')).rejects.toThrow();}
+        send.mockResolvedValueOnce({success:true,image:'',imageUnchanged:true,lines:[]});
+        await expect(adapter.translateImage('source','en','Page',{manga:true,requestId:'m',signal:new AbortController().signal,timeoutMs:1000})).rejects.toThrow();
+    });
     it('单图识别选择透传到 Offscreen，不把普通图片变成漫画模式', async () => {
         send.mockResolvedValueOnce({success:true,image:'translated',lines:[]});
         await adapter.translateImage('source','ja','Page',{ocrEngine:'paddle',requestId:'single-paddle',signal:new AbortController().signal,timeoutMs:5000});
@@ -230,6 +308,44 @@ describe('selection TTS Offscreen adapter', () => {
     };
     const adapter = createSelectionTtsOffscreenAdapter(client);
 
+    it('fetches Google audio through the platform transport and preserves its response metadata', async () => {
+        const transport = vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), {
+            status: 200,
+            headers: {'content-type': 'audio/ogg'},
+        }));
+        const controller = new AbortController();
+        setRuntimeFetch(transport);
+
+        await expect(adapter.fetchPageAudio('https://example.test/audio', controller.signal)).resolves.toEqual({
+            audio: new Uint8Array([1, 2, 3]).buffer,
+            contentType: 'audio/ogg',
+        });
+        expect(transport).toHaveBeenCalledWith('https://example.test/audio', {signal: controller.signal});
+    });
+
+    it.each([
+        {statusText: 'Service Unavailable', expected: 'Google TTS failed: 503 Service Unavailable'},
+        {statusText: '', expected: 'Google TTS failed: 503'},
+    ])('reports Google HTTP errors with or without a status label: $statusText', async ({statusText, expected}) => {
+        setRuntimeFetch(async () => new Response('unavailable', {status: 503, statusText}));
+        await expect(adapter.fetchPageAudio('https://example.test/audio', new AbortController().signal)).rejects.toThrow(expected);
+    });
+
+    it('cancels an unread Google error body before reporting the HTTP failure', async () => {
+        const cancel = vi.fn();
+        const body = new ReadableStream<Uint8Array>({cancel});
+        setRuntimeFetch(async () => new Response(body, {status: 503}));
+        await expect(adapter.fetchPageAudio('https://example.test/audio', new AbortController().signal)).rejects.toThrow('Google TTS failed: 503');
+        expect(cancel).toHaveBeenCalledOnce();
+    });
+
+    it('uses the MPEG content type when Google omits the response header', async () => {
+        setRuntimeFetch(async () => new Response(new Uint8Array([7])));
+        await expect(adapter.fetchPageAudio('https://example.test/audio', new AbortController().signal)).resolves.toMatchObject({
+            contentType: 'audio/mpeg',
+        });
+    });
+
     it.each([
         {errorCode: 'selection-tts-permit-invalid', receiverId: 'receiver'},
         {errorCode: 'selection-tts-permit-invalid'},
@@ -344,7 +460,7 @@ describe('selection TTS Offscreen adapter', () => {
     it('forwards text and timings without mutation for both generated audio and legacy URL playback', async () => {
         const timings = [{startChar: 0, endChar: 5, startTime: 0, endTime: 1}];
         for (const payload of [
-            {...route, audioBase64: 'AA==', contentType: 'audio/wav', text: 'Hello', timings},
+            {...route, audioBase64: 'AA==', contentType: 'audio/wav' as const, text: 'Hello', timings},
             {...route, sourceUrl: 'https://example.test/audio', text: 'Hello'},
         ]) {
             preparePermit(); send.mockResolvedValueOnce({success: true});
@@ -364,14 +480,14 @@ describe('local TTS Offscreen adapter', () => {
         send.mockResolvedValueOnce({
             success: true,
             audioBase64: 'UklG',
-            contentType: 'audio/wav',
+            contentType: 'audio/wav' as const,
             voice: 'zf_001',
             backend: 'wasm',
         });
 
         await expect(adapter.synthesize('你好', 'zh-CN', 'zf_001', controller.signal)).resolves.toEqual({
             audio: new Uint8Array([82, 73, 70, 70]).buffer,
-            contentType: 'audio/wav',
+            contentType: 'audio/wav' as const,
             voice: 'zf_001',
             backend: 'wasm',
         });
@@ -396,7 +512,7 @@ describe('local TTS Offscreen adapter', () => {
         await expect(adapter.synthesize('hello', 'en-US', 'af_maple')).rejects.toThrow('local custom');
 
         send.mockResolvedValueOnce({success: true, audioBase64: ''});
-        await expect(adapter.synthesize('hello', 'en-US', 'af_maple')).rejects.toThrow('本地 TTS 合成失败');
+        await expect(adapter.synthesize('hello', 'en-US', 'af_maple')).rejects.toThrow('Offscreen LOCAL_TTS_SYNTHESIZE响应消息格式无效');
     });
 });
 
@@ -442,7 +558,7 @@ describe('TTS metadata across local synthesis, adapters and routed playback', ()
             notifyProgress: (audioRequest, progress) => notify(audioRequest, 'progress', progress),
         });
         const synthesizeLocal = vi.fn(async () => ({
-            audio: new Uint8Array([82, 73, 70, 70]).buffer, contentType: 'audio/wav', voice: 'zf_001', ...(metadata as object),
+            audio: new Uint8Array([82, 73, 70, 70]).buffer, contentType: 'audio/wav' as const, voice: 'zf_001', ...(metadata as object),
         }));
         const offscreen = createOffscreenMessageListener({
             ttsPlayer: player, translate: vi.fn(), fetchImage: vi.fn(), translateImage: vi.fn(), translateArea: vi.fn(), downloadOcrLanguages: vi.fn(),
@@ -472,7 +588,7 @@ describe('TTS metadata across local synthesis, adapters and routed playback', ()
         expect(result.response).toEqual({success: true, transport: 'offscreen', voice: 'zf_001'});
         expect(controller.completeRemoteRequest(request, result.response as {success: boolean; transport: string})).toBe('offscreen');
         expect(messages.find(message => message.type === 'PLAY_SELECTION_TTS')).toEqual({
-            type: 'PLAY_SELECTION_TTS', playbackToken: expect.any(String), audioBase64: 'UklGRg==', contentType: 'audio/wav', text: 'Hello world', tabId: 0, clientRequestId: request.clientRequestId,
+            type: 'PLAY_SELECTION_TTS', playbackToken: expect.any(String), audioBase64: 'UklGRg==', contentType: 'audio/wav' as const, text: 'Hello world', tabId: 0, clientRequestId: request.clientRequestId,
             ...(expectedTimings === undefined ? {} : {timings: expectedTimings}),
         });
         expect(synthesizeLocal).toHaveBeenCalledWith(expect.objectContaining({text: 'Hello world', language: 'en-US', voice: 'zf_001'}), expect.any(AbortSignal));

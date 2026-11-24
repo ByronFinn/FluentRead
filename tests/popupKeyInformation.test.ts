@@ -1,34 +1,30 @@
 /**
  * @file tests/popupKeyInformation.test.ts
  * 文件职责：执行真实 Popup 客户端模板，验证首页默认服务、配置模型与原有抽屉入口。
- * 主要内容：覆盖模型能力、请求体覆盖、自定义接口、外部同步、中英文无障碍名称，以及模块排序、PDF 主入口与迟到标签页查询的模板边界。
+ * 主要内容：覆盖模型能力、请求体覆盖、自定义接口、外部同步、中英文无障碍名称，以及模块排序、PDF 主入口与迟到标签页查询的模板边界；全局字体真值来自配置，页面状态读取失败或关闭后的迟到响应不能覆盖偏好。
  * 模块边界：浏览器、配置存储和展示组件为受控端口；不读取源码私有状态，不将 DOM 测试视为真实几何或在线服务证明。
  */
-import {createRequire} from 'node:module';
-import {readFileSync} from 'node:fs';
-import {resolve} from 'node:path';
+import * as runtime from 'vue';
+import PopupApp from '@/src/app/popup/PopupApp.vue';
 import {parseHTML} from 'linkedom';
-import {createServer, type ViteDevServer} from 'vite';
-import {compileScript, parse} from 'vue/compiler-sfc';
-import ts from 'typescript';
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi} from 'vitest';
-import type {App, Component, Plugin} from 'vue';
+import type {App, Plugin} from 'vue';
 import {Config, normalizeConfig} from '@/src/core/config/model';
 import {customModelString} from '@/src/core/config/catalog';
 import {LOCAL_TRANSLATION_MODEL_IDS} from '@/src/core/config/localTranslation';
 import {translate, translateLegacyText, type UiLanguage} from '@/src/core/i18n';
-import {registerAllUiLanguageBundles} from '@/src/core/i18n/bundles';
+import {registerAllUiLanguageBundles} from './helpers/uiLanguageBundles';
 import type {PopupActiveTab} from '@/src/app/popup/pageActions';
 
-const runtime = createRequire(import.meta.url)('vue') as typeof import('vue');
 const language = runtime.ref<UiLanguage>('zh-CN');
+const bundleRevision = runtime.ref(0);
 const config = new Config();
 const listeners = new Set<(value: Config) => void>();
-const patches = vi.fn(), openOptions = vi.fn(), createTab = vi.fn();
+const patches = vi.fn(), openOptions = vi.fn(), createTab = vi.fn(), runtimeSend = vi.fn();
 const queryTabs = vi.fn<() => Promise<PopupActiveTab[]>>();
 const send = vi.fn<(id: number, message: {type: string; action?: string}) => Promise<unknown>>();
 const tabUpdated = new Set<(id: number, change: {url?: string; status?: string}, tab: PopupActiveTab & {active?: boolean}) => void>();
-let server: ViteDevServer, component: Component, app: App | undefined, document: Document;
+let app: App | undefined, document: Document;
 let window: ReturnType<typeof parseHTML>['window'];
 
 async function settle() {for (let index = 0; index < 12; index++) {await Promise.resolve();await runtime.nextTick();}}
@@ -45,57 +41,42 @@ function summary() {
 }
 function model() {return summary().querySelector('.provider-summary-model');}
 
-beforeAll(async () => {
-  registerAllUiLanguageBundles();
-  vi.stubGlobal('__popupSummaryFixture', {config, language, listeners, patches, openOptions, createTab, queryTabs, send, tabUpdated,
-    t: (key: string, params?: Parameters<typeof translate>[2]) => translate(key, language.value, params),
-    translateLegacy: (text: string) => translateLegacyText(text, language.value)});
-  server = await createServer({root: process.cwd(), configFile: false, appType: 'custom', logLevel: 'silent',
-    resolve: {alias: {'@': process.cwd()}}, ssr: {noExternal: ['webextension-polyfill']}, plugins: [{name: 'popup-summary-client', enforce: 'pre', resolveId(id) {
-      if (/(?:\/|^)Popup(?:App|SiteRule)\.vue$/u.test(id)) return resolve('src/app/popup', id.split('/').at(-1)!) + '.summary.ts';
-      if (id === 'webextension-polyfill') return '\0summary-browser';
-      if (/\/src\/services\/config\/store(?:\.ts)?$/u.test(id)) return '\0summary-config';
-      if (/\/src\/ui\/i18n(?:\.ts)?$/u.test(id)) return '\0summary-i18n';
-      if (/\/src\/ui\/interfaceAppearance(?:\.ts)?$/u.test(id)) return '\0summary-appearance';
-      if (/\/src\/platform\/browser\/capabilities(?:\.ts)?$/u.test(id)) return '\0summary-capabilities';
-      if (id.endsWith('/PopupDrawer') || id.endsWith('/PopupDrawer.ts')) return '\0summary-drawer';
-      if (id.endsWith('/PopupServices.vue')) return '\0summary-services';
-      if (id === '@element-plus/icons-vue') return '\0summary-icons';
-      if (id.endsWith('.vue')) return '\0summary-display';
-      return null;
-    }, load(id) {
-      if (id.endsWith('.vue.summary.ts')) {
-        const componentPath = id.slice(0, -11), file = componentPath.startsWith('/src/') ? resolve(componentPath.slice(1)) : componentPath;
-        const {descriptor, errors} = parse(readFileSync(file, 'utf8'), {filename: file});
-        expect(errors).toEqual([]);
-        descriptor.template!.content = descriptor.template!.content.replace(/<\/?Transition\b/gu, tag => tag.replace('Transition', 'OwnedTransition'));
-        const script = compileScript(descriptor, {id: 'popup-summary-client', inlineTemplate: true});
-        return ts.transpileModule(script.content, {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext}}).outputText;
-      }
-      if (id === '\0summary-browser') return `const f=globalThis.__popupSummaryFixture;const event={addListener:()=>{},removeListener:()=>{}};
-        export default {tabs:{query:f.queryTabs,sendMessage:f.send,create:f.createTab,
-          onUpdated:{addListener:fn=>f.tabUpdated.add(fn),removeListener:fn=>f.tabUpdated.delete(fn)},onActivated:event,onRemoved:event},
-        runtime:{getManifest:()=>({version:'0.0.35'}),getURL:p=>'extension://'+p,sendMessage:async()=>({success:true}),openOptionsPage:f.openOptions}};`;
-      if (id === '\0summary-config') return `const f=globalThis.__popupSummaryFixture;export const config=f.config;
-        export const subscribeConfig=fn=>{f.listeners.add(fn);return()=>f.listeners.delete(fn)};
-        export const requestConfigPatch=async value=>f.patches(value);export const handoffPendingConfigPatches=async()=>{};`;
-      if (id === '\0summary-i18n') return 'export const useUiI18n=()=>globalThis.__popupSummaryFixture;';
-      if (id === '\0summary-appearance') return 'export const applyInterfaceFont=()=>{},applyInterfaceSkin=()=>{};';
-      if (id === '\0summary-capabilities') return "export const browserCapabilities={browser:'chrome',areaTranslation:true,imageTranslation:true};";
-      if (id === '\0summary-icons') return 'export const Setting={render:()=>null};';
-      if (id === '\0summary-drawer') return "import {h} from 'vue';export default {setup(_, {attrs,slots}){return()=>attrs.modelValue||attrs['model-value']?h('div',{class:'drawer-port'},slots.default?.()):null}};";
-      if (id === '\0summary-services') return "import {h} from 'vue';export default {emits:['close'],setup(_, {emit}){return()=>h('button',{class:'service-panel-close',onClick:()=>emit('close')},'Close')}};";
-      if (id === '\0summary-display') return "import {h} from 'vue';export default {setup(_, {attrs,slots}){return()=>h('div',attrs,slots.default?.())}};";
-      return null;
-    }}]});
-  component = (await server.ssrLoadModule('/src/app/popup/PopupApp.vue')).default;
+beforeAll(() => {registerAllUiLanguageBundles();});
+vi.mock('vue', async importOriginal => {
+  const actual = await importOriginal<typeof import('vue')>();
+  return {...actual, Transition: actual.defineComponent({setup: (_, {slots}) => () => slots.default?.()})};
 });
+vi.mock('webextension-polyfill', () => {
+  const event = {addListener() {}, removeListener() {}};
+  return {default: {tabs: {query: () => queryTabs(), sendMessage: (...args: Parameters<typeof send>) => send(...args),
+    create: (...args: unknown[]) => createTab(...args), onUpdated: {addListener: (fn: any) => tabUpdated.add(fn), removeListener: (fn: any) => tabUpdated.delete(fn)},
+    onActivated: event, onRemoved: event}, runtime: {id: 'fixture-extension', onMessage: event, getManifest: () => ({version: '0.0.35'}),
+      getURL: (path: string) => 'extension://' + path, sendMessage: (...args: unknown[]) => runtimeSend(...args), openOptionsPage: () => openOptions()}}};
+});
+vi.mock('@/src/services/config/store', () => ({get config() {return config;}, configReady: Promise.resolve(),
+  subscribeConfig: (fn: (value: Config) => void) => {listeners.add(fn);return () => listeners.delete(fn);},
+  requestConfigPatch: async (value: unknown) => patches(value), handoffPendingConfigPatches: async () => {}}));
+vi.mock('@/src/ui/i18n', () => ({useUiI18n: () => ({language, bundleRevision,
+  t: (key: string, params?: Parameters<typeof translate>[2]) => translate(key, language.value, params),
+  translateLegacy: (text: string) => translateLegacyText(text, language.value)})}));
+vi.mock('@/src/ui/interfaceAppearance', () => ({applyInterfaceFont() {}, applyInterfaceSkin() {}}));
+vi.mock('@/src/platform/browser/capabilities', () => ({browserCapabilities: {browser: 'chrome', areaTranslation: true, imageTranslation: true}}));
+vi.mock('@element-plus/icons-vue', () => ({Setting: {render: () => null}}));
+vi.mock('element-plus/es/components/tooltip/index', () => ({ElTooltip: {inheritAttrs: false,
+  setup(_: unknown, {slots, expose}: any) {expose({onClose() {}, hide() {}});return () => slots.default?.();}}}));
+vi.mock('@/src/app/popup/PopupDrawer', () => ({__esModule: true, default: {setup(_: unknown, {attrs, slots}: any) {
+  return () => attrs.modelValue || attrs['model-value'] ? runtime.h('div', {class: 'drawer-port'}, slots.default?.()) : null;}}}));
+vi.mock('@/src/app/popup/PopupServices.vue', () => ({__esModule: true, default: {emits: ['close'], setup(_: unknown, {emit}: any) {
+  return () => runtime.h('button', {class: 'service-panel-close', onClick: () => emit('close')}, 'Close');}}}));
 
 beforeEach(() => {
-  vi.clearAllMocks();listeners.clear();tabUpdated.clear();language.value = 'zh-CN';
+  vi.clearAllMocks();listeners.clear();tabUpdated.clear();language.value = 'zh-CN';bundleRevision.value = 0;
+  runtimeSend.mockReset().mockResolvedValue({success: true});
   queryTabs.mockReset().mockResolvedValue([{id: 7, windowId: 3, url: 'https://example.test/a'}]);
-  send.mockReset().mockImplementation(async (_id, message) => message.type === 'getFullPageTranslationState'
-    ? {isTranslated: false} : {status: 'success', isTranslated: message.action === 'fullPage'});
+  send.mockReset().mockImplementation(async (_id, message) => {
+    return message.type === 'getFullPageTranslationState'
+      ? {isTranslated: false} : {status: 'success', isTranslated: message.action === 'fullPage'};
+  });
   Object.assign(config, normalizeConfig({...new Config(), uiLanguageSetupCompleted: true, on: true,
     service: 'openai', model: {...new Config().model, openai: 'saved-model'}, token: {openai: 'test-only-key'}}));
   const dom = parseHTML('<html><body><div id="app"></div></body></html>');
@@ -107,7 +88,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {app?.unmount();app = undefined;await settle();});
-afterAll(async () => {await server?.close();vi.unstubAllGlobals();});
+afterAll(() => {vi.unstubAllGlobals();});
 
 async function mount(plugin?: Plugin) {
   const renderer = runtime.createRenderer<Node, HTMLElement>({
@@ -130,15 +111,22 @@ async function mount(plugin?: Plugin) {
       parent.insertBefore(template.content, anchor || null);return [first, last];
     },
   });
-  app = renderer.createApp(component);
+  app = renderer.createApp(PopupApp);
   if (plugin) app.use(plugin);
-  app.component('OwnedTransition', runtime.defineComponent({setup: (_, {slots}) => () => slots.default?.()}));
   app.config.warnHandler = () => undefined;
   app.mount(document.getElementById('app')!);
   await settle();
 }
 
 describe('Popup 首页关键信息', () => {
+  it('无论是否已有翻译记录，首页都不占用一行展示首次提示', async () => {
+    config.count = 0;const before = {service: config.service, from: config.from, to: config.to, model: config.model.openai};
+    await mount();expect(document.querySelector('[data-testid="first-translation-hint"]')).toBeNull();
+    publish(next => {next.count = 20});await settle();
+    expect(document.querySelector('[data-testid="first-translation-hint"]')).toBeNull();
+    expect({service: config.service, from: config.from, to: config.to, model: config.model.openai}).toEqual(before);
+    expect(patches).not.toHaveBeenCalled();
+  });
   it.each([['zh-CN', '打开 PDF 阅读器'], ['en-US', 'Open PDF reader']] as const)('%s PDF 主入口保留服务摘要并只打开携带原文地址的阅读器', async (locale, label) => {
     language.value = locale;
     queryTabs.mockResolvedValue([{id: 7, windowId: 3, url: 'https://example.test/docs/research.pdf?edition=2#page=5'}]);
@@ -170,9 +158,12 @@ describe('Popup 首页关键信息', () => {
   ] as const)('%s PDF 导航回普通页恢复紧凑主按钮与快捷键，旧 PDF 查询晚到不改写模板或创建阅读器', async (platform, shortcut, longShortcut) => {
     vi.stubGlobal('navigator', {languages: ['en-US'], platform});
     language.value = 'en-US';
+    config.browserDefaultTranslationFont = true;
     queryTabs.mockResolvedValue([{id: 7, windowId: 3, url: 'https://example.test/first.pdf'}]);
     await mount();
     expect(document.querySelector('.translate-label')?.textContent).toBe('Open PDF reader');
+    expect(document.querySelector('[data-testid="page-font-entry"]')).toBeNull();
+    expect(config.browserDefaultTranslationFont).toBe(true);
     expect(tabUpdated.size).toBe(1);
 
     let resolveOld!: (tabs: PopupActiveTab[]) => void;
@@ -196,19 +187,76 @@ describe('Popup 首页关键信息', () => {
     expect(button.querySelector('.translate-label')?.textContent).toBe(`Translate (${shortcut})`);
     expect(document.querySelector('[data-testid="section-translation"]')).not.toBeNull();
     expect(createTab).not.toHaveBeenCalled();
-    expect(send.mock.calls).toEqual([[7, {type: 'getFullPageTranslationState'}]]);
+    const articleReads = [[7, {type: 'getFullPageTranslationState'}, {frameId: 0}]];
+    expect(send.mock.calls).toEqual(articleReads);
+    const font = document.querySelector('[data-testid="page-font-entry"]')!;
+    expect(font.getAttribute('aria-pressed')).toBe('true');
+    expect(font.getAttribute('data-font-state')).toBe('browser-default');
+    expect(font.querySelector('svg')?.getAttribute('data-font-style')).toBe('sans');
+    expect(config.browserDefaultTranslationFont).toBe(true);
 
     button.dispatchEvent(new window.Event('click'));await settle();
     expect(createTab).not.toHaveBeenCalled();
-    expect(send.mock.calls).toEqual([[7, {type: 'getFullPageTranslationState'}], [7, {type: 'contextMenuTranslate', action: 'fullPage'}]]);
+    expect(send.mock.calls).toEqual([...articleReads, [7, {type: 'contextMenuTranslate', action: 'fullPage'}, {frameId: 0}]]);
     expect(button.getAttribute('aria-pressed')).toBe('true');
     expect(button.querySelector('.translate-label')?.textContent).toBe(`Restore (${shortcut})`);
     expect(button.getAttribute('title')).toBe(`Restore this page · ${shortcut}`);
-    publish(next => {next.floatingBallHotkey = 'custom';next.customFloatingBallHotkey = 'Control+Alt+Shift+ArrowRight';});await settle();
+    publish(next => {next.floatingBallHotkey = 'custom';next.customFloatingBallHotkey = 'Control+Alt+Shift+ArrowRight';next.browserDefaultTranslationFont = false;});await settle();
     expect(button.querySelector('.translate-label')?.textContent).toBe('Restore');
     expect(button.getAttribute('title')).toBe(`Restore this page · ${longShortcut}`);
     expect(button.querySelector('kbd, .translate-hotkey')).toBeNull();
+    expect(font.getAttribute('aria-pressed')).toBe('false');
+    expect(font.getAttribute('data-font-state')).toBe('host');
+    expect(font.querySelector('svg')?.getAttribute('data-font-style')).toBe('serif');
+    expect(send.mock.calls).toEqual([...articleReads, [7, {type: 'contextMenuTranslate', action: 'fullPage'}, {frameId: 0}]]);
     expect(model()?.textContent).toBe('saved-model');expect(patches).not.toHaveBeenCalled();
+  });
+
+  it('当前网页状态读取失败仍按全局配置显示字体，外部偏好更新不依赖页内字体查询', async () => {
+    config.browserDefaultTranslationFont = true;
+    send.mockRejectedValueOnce(new Error('The content frame was removed'));
+    await mount();
+    const font = document.querySelector('[data-testid="page-font-entry"]')!;
+    const main = document.querySelector('[data-testid="page-translation"]')!;
+    expect(main.getAttribute('aria-pressed')).toBe('false');
+    expect(font.getAttribute('aria-pressed')).toBe('true');
+    expect(font.getAttribute('data-font-state')).toBe('browser-default');
+    expect(font.hasAttribute('disabled')).toBe(false);
+    publish(next => {next.browserDefaultTranslationFont = false;});await settle();
+    expect(font.getAttribute('aria-pressed')).toBe('false');
+    expect(font.getAttribute('data-font-state')).toBe('host');
+    expect(font.getAttribute('aria-description')).toBeNull();
+    expect(document.querySelector('[data-testid="page-font-error"]')).toBeNull();
+    expect(send.mock.calls).toEqual([[7, {type: 'getFullPageTranslationState'}, {frameId: 0}]]);
+    expect(patches).not.toHaveBeenCalled();
+  });
+
+  it('读取网页状态期间快速关闭后迟到回复不改字体或翻译状态，恢复弹窗仍读取已保存的全局偏好', async () => {
+    config.browserDefaultTranslationFont = true;
+    let resolveState!: (value: unknown) => void;
+    send.mockImplementationOnce(() => new Promise(resolve => {resolveState = resolve;}));
+    await mount();
+    const font = document.querySelector('[data-testid="page-font-entry"]')!;
+    const main = document.querySelector('[data-testid="page-translation"]')!;
+    expect(font.getAttribute('aria-pressed')).toBe('true');
+    window.dispatchEvent(new window.Event('pagehide'));await settle();
+    resolveState({isTranslated: true});await settle();
+    expect(main.getAttribute('aria-pressed')).toBe('false');
+    expect(font.getAttribute('aria-pressed')).toBe('true');
+    expect(font.hasAttribute('disabled')).toBe(true);
+    expect(config.browserDefaultTranslationFont).toBe(true);
+    expect(patches).toHaveBeenCalledOnce();
+    expect(patches).toHaveBeenLastCalledWith(expect.objectContaining({browserDefaultTranslationFont: true}));
+    window.dispatchEvent(new window.Event('pageshow'));await settle();
+    const reopenedFont = document.querySelector('[data-testid="page-font-entry"]')!;
+    expect(reopenedFont.getAttribute('aria-pressed')).toBe('true');
+    expect(reopenedFont.getAttribute('data-font-state')).toBe('browser-default');
+    expect(reopenedFont.hasAttribute('disabled')).toBe(false);
+    expect(send.mock.calls).toEqual([
+      [7, {type: 'getFullPageTranslationState'}, {frameId: 0}],
+      [7, {type: 'getFullPageTranslationState'}, {frameId: 0}],
+    ]);
+    expect(patches).toHaveBeenCalledOnce();
   });
 
   it('首页直接显示网页默认服务和配置模型，完整信息进入无障碍名称', async () => {
@@ -222,7 +270,6 @@ describe('Popup 首页关键信息', () => {
       .toEqual(['page-translation', 'section-translation']);
     expect(summary().querySelector('strong')?.textContent).toBe('OpenAI');
     expect(model()?.textContent).toBe('saved-model');
-    expect(model()?.getAttribute('title')).toBe('配置模型：saved-model');
     expect(summary().getAttribute('aria-label')).toBe('按功能选择服务 · 网页默认服务 · OpenAI · 配置模型：saved-model');
     expect(summary().getAttribute('aria-haspopup')).toBe('dialog');
     expect(patches).not.toHaveBeenCalled();
@@ -234,7 +281,7 @@ describe('Popup 首页关键信息', () => {
     const before = JSON.stringify(config);
     await mount();
     expect(model()?.textContent).toBe('custom/active');
-    expect(summary().getAttribute('title')).toContain('custom/active');
+    expect(summary().getAttribute('aria-label')).toContain('配置模型：custom/active');
     expect(summary().textContent).not.toContain('body-override');
     expect(summary().textContent).not.toContain('当前模型');
     expect(JSON.stringify(config)).toBe(before);expect(patches).not.toHaveBeenCalled();
@@ -276,19 +323,18 @@ describe('Popup 首页关键信息', () => {
   it('英文摘要和外部语言同步使用现有配置模型文案', async () => {
     language.value = 'en-US';await mount();
     expect(model()?.textContent).toBe('saved-model');
-    expect(model()?.getAttribute('title')).toBe('Configured model: saved-model');
     expect(summary().getAttribute('aria-label')).toBe('Services by feature · Default page service · OpenAI · Configured model: saved-model');
-    language.value = 'zh-CN';await settle();expect(model()?.getAttribute('title')).toBe('配置模型：saved-model');
+    language.value = 'zh-CN';await settle();expect(summary().getAttribute('aria-label')).toContain('配置模型：saved-model');
   });
 
-  it('多个功能服务只占默认图标及唯一额外服务计数，不混淆网页默认服务', async () => {
+  it('多个功能服务仍只展示网页默认服务，其余分配保留在完整提示中', async () => {
     config.hoverTranslationService = 'deepseek';config.selectionTranslationService = 'google';config.documentService = 'google';
     config.quickTranslationProfiles = [];
     await mount();
-    expect(summary().querySelectorAll('.provider-avatar')).toHaveLength(2);
-    expect(summary().querySelector('.provider-overflow')?.textContent).toBe('+2');
+    expect(summary().querySelectorAll('.provider-avatar')).toHaveLength(1);
+    expect(summary().querySelector('.provider-overflow')).toBeNull();
     expect(summary().querySelector('strong')?.textContent).toBe('OpenAI');
-    expect(summary().getAttribute('title')).toContain('DeepSeek');
+    expect(summary().getAttribute('aria-description')).toContain('DeepSeek');
     expect(model()?.textContent).toBe('saved-model');
   });
 
@@ -299,7 +345,6 @@ describe('Popup 首页关键信息', () => {
     config.model['custom:private'] = saved;
     await mount();
     expect(summary().querySelector('strong')?.textContent).toBe(name);expect(model()?.textContent).toBe(saved);
-    expect(model()?.getAttribute('title')).toBe(`配置模型：${saved}`);
     expect(summary().getAttribute('aria-label')).toContain(`${name} · 配置模型：${saved}`);
   });
 
@@ -325,13 +370,12 @@ describe('Popup 首页关键信息', () => {
     vi.doMock('webextension-polyfill', () => ({default: {runtime: {sendMessage: vi.fn()}}}));
     vi.doMock('@/src/platform/i18n/uiLanguageBundles', () => ({ensureUiLanguageBundle: async () => true}));
     try {
-      const {createUiI18nPlugin} = await import('@/src/ui/i18n');
+      const {createUiI18nPlugin} = await vi.importActual<typeof import('@/src/ui/i18n')>('@/src/ui/i18n');
       await mount(createUiI18nPlugin({documentRoot: document.body}));
       // 固定旧中文按钮确实被 observer 转换，不能靠 scanner 没执行掩盖正文污染。
       await vi.waitFor(() => expect(document.querySelector('.settings-button > span')?.textContent).toBe('Settings'));
       expect(model()?.textContent).toBe('文');
       expect(summary().querySelector('strong')?.textContent).toBe('文');
-      expect(model()?.getAttribute('title')).toBe('Configured model: 文');
       expect(summary().getAttribute('aria-label')).toContain(' · 文 · Configured model: 文');
       expect(JSON.stringify(config)).toBe(before);expect(patches).not.toHaveBeenCalled();
     } finally {
@@ -345,7 +389,7 @@ describe('Popup 首页关键信息', () => {
     const warning = document.querySelector('.credential-warning[role="alert"]');expect(warning).not.toBeNull();
     expect(warning?.textContent).toContain('配置提醒');
     warning!.querySelector('button')!.dispatchEvent(new window.Event('click'));await settle();
-    expect(createTab).toHaveBeenCalledWith({url: 'extension://options.html#settings-services'});
+    expect(createTab).toHaveBeenCalledWith({url: 'extension://options.html?service=openai&returnTabId=7#settings-services'});
   });
 
   it('摘要沿用同一个服务抽屉入口，浏览不会改配置', async () => {
@@ -374,3 +418,18 @@ describe('Popup 首页关键信息', () => {
     expect(document.querySelectorAll('[data-testid="page-translation"]')).toHaveLength(1);
   });
 });
+
+vi.mock('@/src/app/popup/PopupLanguageSelect.vue', () => ({default: {setup(_: unknown, {attrs, slots}: any) {return () => runtime.h('div', attrs, slots.default?.());}}}));
+
+vi.mock('@/src/features/self-help/ui/DiagnosticNotice.vue', () => ({default: {setup(_: unknown, {attrs, slots}: any) {return () => runtime.h('div', attrs, slots.default?.());}}}));
+
+vi.mock('@/src/ui/components/ServiceIcon.vue', () => ({default: {setup(_: unknown, {attrs, slots}: any) {return () => runtime.h('div', attrs, slots.default?.());}}}));
+
+vi.mock('@/src/ui/components/UiLanguageOnboarding.vue', () => ({default: {setup(_: unknown, {attrs, slots}: any) {return () => runtime.h('div', attrs, slots.default?.());}}}));
+
+it('keeps only the font and display mode controls in the translation tools row', async () => {
+  await mount();
+  const buttons = [...document.querySelectorAll('.translation-tools button')];
+  expect(buttons.map(button => button.getAttribute('data-testid'))).toEqual(['page-font-entry', 'popup-display-mode']);
+  expect(buttons.every(button => !button.hasAttribute('title'))).toBe(true);
+})

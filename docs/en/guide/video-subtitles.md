@@ -1,136 +1,127 @@
 # Video & meeting translation
 
-Follow YouTube and X videos or Google Meet, Teams and Zoom web meetings with bilingual captions, using accessible captions provided by the platform.
-
-## Sentence learning
-
-Choose the book-icon **Start sentence learning** button in the FluentRead menu of a YouTube or X player. The optional panel groups original timed captions into sentences, with surrounding context and a translation requested for the whole original sentence. Missing punctuation and long captions are labelled as fragments. Enable original captions if no timeline is available. X local AI captions must finish generating before learning is available.
-
-Previous, Replay, and Next stay below the scrolling content in both compact and comfortable layouts. Previous/Next seek without starting playback. Replay plays from the original start. Loop sentence repeats its original interval; Pause at end stops at its end. Selecting either mode does not start playback or jump back to an expired pinned sentence. Assistance starts if playback is within the selected sentence; otherwise, Replay starts it from the original sentence start. Off releases only playback assistance while preserving the current paused or playing state. Manual seeking cancels control; pauses and playback speed remain authoritative. Closing learning or captions, changing videos, and unloading clean up controls. Enlarging or moving the same video into a different fullscreen container preserves the sentence, drafts, and assistance. When expanded, the header and lower controls stay fixed while the body scrolls. Collapsing leaves only the title and current-sentence preview; save controls are hidden until expanded. Fullscreen uses the same panel and media element. Picture-in-picture retains the original player's controls.
-
-With focus in the current player, arrows change sentence, R toggles looping, and Q toggles end pause. Escape exits fullscreen first; outside fullscreen it closes learning. Text fields keep normal input. Explain is optional, reuses the existing selection explanation service and allowed context scope, and runs only on request. Translations and explanations appear as reading cards; Edit opens an editor and pins the sentence. Sentence changes preserve drafts within the current panel session, and Return to current sentence resumes following playback. The footer contains only Explain and Save sentence. Save to the existing learning center with the title, neighboring captions, reliable source, and start/end times; an explanation is not required. A learning-center link appears in the saved confirmation within the body. Repeated saves merge the same sentence, retaining distinct source intervals as contexts. While translation is loading, wait or enter your own translation before saving.
-
-The default compact layout puts the original and translation first. Drag the title to move the panel; its position is remembered for the current page session and remains inside player bounds after resizing or fullscreen changes. The title-bar **Customize learning panel** button opens **Interface center → Video sentence learning**, with a preview on the left and controls on the right for layout, background opacity, text size, width, and default corner. These preferences are saved without interrupting learning or requesting translation again.
-
-Learning-center sources show a time range and open a new page. YouTube links include a timestamp; X links are restored to the segment start and paused by FluentRead in the matching post player, so the extension must be enabled. Returning to the source does not automatically reopen learning or restore a previous loop. Missing reliable URLs have an explicit recovery hint. A deleted or restricted video may no longer open; saved text and title remain available. Privacy-safe vocabulary exports omit source addresses and times with private context.
-
-Aggregation uses original caption boundaries and timing. Unpunctuated groups are bounded by approximately 20 seconds, 420 characters, 24 cues, or a silence gap. A single caption with multiple sentences or long text keeps its complete source interval; no internal timestamps are invented. Translation order and subtitle display offsets never replace original audio timing.
+Read original captions and translations in YouTube, X, Bilibili, Udemy, edX, Disney+, and Google Meet, Teams, or Zoom web meetings. Bilibili and X also offer local AI transcription.
 
 <GuideVisual kind="video" en />
 
 ## A video with subtitles
 
-1. Make sure video subtitle translation is enabled.
-2. Open a YouTube or X video and find the FluentRead icon just before the fullscreen button. On X, it stays between picture-in-picture and fullscreen when controls reappear or fullscreen changes.
-3. Choose bilingual, translation-only, or original-only display.
+1. Enable **Video subtitle translation** in the extension menu or settings, and turn on the video's native captions.
+2. In YouTube or X, click the FluentRead icon near the fullscreen button.
+3. Choose **Bilingual / Translated / Original**. Other supported platforms provide display controls near their captions.
 
-FluentRead uses subtitle tracks or subtitle text provided by the page. It cannot guarantee translations where no subtitles are available. The subtitle translation service follows the webpage service by default; you can select a separate service in video translation settings.
+The service follows webpage translation by default; choose a separate one in **Video translation settings**. Selecting **Off** in the player disables video translation and removes its button. Re-enable it from the extension menu or settings.
 
-<details class="guide-details">
-<summary>Caption timing and pretranslation</summary>
+Translation depends on the selected service's response. Opening a video or seeking to an untranslated section can cause a delay. Retry a failed translation without repeating transcription: recognized source captions and their timeline remain available.
 
-When a YouTube or X subtitle timeline is available, FluentRead prioritizes the current caption and pretranslates up to eight distinct upcoming texts. The window normally covers the next 10 seconds for machine translation or 30 seconds for AI services, and expands for faster playback. Native tracks start prefetching as soon as they load. Repeated entries and expired captions do not consume upcoming slots, and seeking updates the prefetch window.
+## Meeting captions and human subtitles
 
-The subtitle menu also works in YouTube fullscreen. Prefetched originals and translations appear together in the same update. Previous translations clear when captions change, disappear, or you seek. At startup, after seeking to an untranslated position, or while the service is still responding, the original remains available; the translation is added only while its caption is still current.
+Meetings use web clients, including Zoom's `/wc/` client. The platform, host, or account must allow captions. Browser extensions do not control desktop meeting apps.
 
-On X, bilingual lines always appear together. A caption without a ready translation waits for the matching result while playback continues; expired results are discarded. Original-only mode displays immediately. If translation fails, the current original remains available and the menu offers a retry.
+Two options under **Video translation settings → General** are on by default:
 
-When X provides a readable native subtitle track, incoming subtitle fragments preserve the current captions and completed translations, avoiding flicker from repeated source changes near the start of playback.
+- **Automatically enable bilingual meeting captions** attempts to enable captions supplied by Google Meet, Teams, and Zoom. Enable native captions manually if it fails. Disabling translation or hiding FluentRead captions restores the native display.
+- **Prefer human subtitles** uses readable target-language human captions on YouTube, Udemy, and Disney+. Missing or inaccessible portions fall back to translating source captions.
 
-For YouTube rolling captions, FluentRead matches the newly appearing sentence and playback time to prefetched translations without waiting for the previous line to scroll away. When no subtitle timeline is available, it also submits text during continuous updates. Translation speed still depends on the selected service.
+FluentRead does not start meeting recording or transcription, or generate captions for meetings that provide none. Udemy and Disney+ availability also depends on account, region, and player restrictions.
 
-To correct captions that are late or early, open **Subtitle timing** in the FluentRead menu on the playback page and click **0.5 s earlier / 0.5 s later**. Negative values advance subtitles; positive values delay them, up to ±10 seconds. **Reset timing** returns to zero. The setting is saved for subsequent videos and moves both subtitle lines together. Playback position and downloaded subtitle timestamps stay unchanged. The menu indicates when timing adjustment is unavailable.
+## Display and download
 
-</details>
+Adjust size, background, position, width, and bilingual order in video appearance settings. Its example only previews styling; it reads no video and sends no requests.
+
+If captions are early or late, open **Subtitle timing** in the player menu (under **Subtitle options** on X). Adjust by **0.5 seconds**, up to **±10 seconds**, or reset to zero. The saved offset applies to later videos and moves both lines together. It does not change playback or exported timestamps. Timing needs an available subtitle timeline.
+
+Click **Download subtitles** in the menu header, then choose **Original / Translated / Bilingual** to save SRT. Each bilingual cue puts the original on the first line and the translation on the second. Identical lines appear once. The bilingual export uses a single timeline. An overlapping cue ends when the next one starts, and cues that start together share one entry.
+
+Translated or bilingual exports first show how much text still needs translation and its time span:
+
+- **Translate missing text and export complete subtitles** requests missing translations only after confirmation. Usage follows your selected service.
+- **Export available results only** skips untranslated cues, adds `partial` to the filename, and reports how many were skipped.
+
+Close the menu or press Esc to cancel while translating missing text; completed translations remain reusable. Changing the video or translation settings requires a new preview. X AI subtitles become exportable only after complete recognition succeeds.
 
 <details class="guide-details">
 <summary>An X video without subtitles</summary>
 
 ## An X video without subtitles
 
-The desktop Chrome / Edge extension can try local AI transcription:
+The desktop Chrome, Edge, and Firefox extensions use Whisper in the browser by default to transcribe X videos.
 
-1. Choose a speech model when generating subtitles or use **Subtitle options → Recognition model** in the player. Small is recommended for multiple languages, with an initial download of about 590 MB. Tiny (about 100 MB) and Base (about 150 MB) remain available for lighter devices. The model card in video settings shows a progress bar, percentage and downloaded size. Extra runtime files may be needed later.
-2. Return to the X player and choose to generate AI subtitles.
-3. Audio reading and recognition progress appear in the player menu. You can stop the job. Completed sentences appear while later windows are still being recognized, and translations are fetched near the playback position. The full timeline is cached and can be exported as SRT only after recognition succeeds; a later recognition failure clears the incomplete preview. Original-only mode does not request translations.
+1. Open the X player's FluentRead menu and choose to generate AI subtitles.
+2. For Whisper in the browser, select and confirm a model download on first use. **Small** is recommended (about 590 MB). **Tiny** (about 100 MB) and **Base** (about 150 MB) use less storage.
+3. Wait while the extension reads and transcribes the audio. You can stop at any time. Stable sentences appear early, and the timeline is cached and becomes exportable after recognition succeeds.
 
-All three models support multiple languages. **Spoken language → Auto** detects the language again for every speech window, so later speech is not locked to the opening language. You can still specify a known single language. Existing model choices and downloads are preserved. Base and Small allow more decoding capacity for text and timestamps; Tiny keeps a shorter budget to limit poor long output. Repeated decoding output is retried once with stronger repetition controls; if it remains corrupt, the job reports an error rather than displaying or caching it.
+All Whisper models support multiple languages. Use **Auto** when the language is unknown or changes, or specify a known single language. Whisper in the browser uses available GPU acceleration and falls back to CPU. FluentRead sends recognized text to your translation service according to the display mode. Original-only mode displays the transcript locally.
 
-The model selector keeps the current model selected. Cancel or press Escape to return without changing existing subtitles. Confirm to save the choice and recognize the video again; cached models do not need another download. Model selection is disabled during recognition or downloading. Completed sentences can appear as a preview while recognition continues, and export becomes available when the complete transcript is ready.
+The limit is **20 minutes per video**. Speed depends on the video and device. Some media formats or restricted videos cannot be read; try opening the post or refreshing. Quiet speech, music, accents, and specialist terms can affect accuracy.
 
-Model status checks the complete file list in the local cache. If the browser removes some files, the download action becomes available again; confirming it reuses the remaining files and downloads the missing ones. A cache read failure is shown separately. Reopen settings or return to the page to check again.
+Use **Subtitle options → Recognition model / Regenerate this video** to change models or recognize again. Existing captions remain until confirmation; cancel preserves them. Stop an active download or recognition before switching models. Regeneration does not require clearing other videos' caches.
 
-Audio recognition runs locally; recognized subtitle text still goes to your translation service. Model downloads require a network connection. Processing depends on video length and your computer. Videos up to 20 minutes are supported; some formats or restricted media cannot be read.
+Manage Whisper models under **Video translation settings → Local AI subtitles**. The first download requires a connection. Retry failed downloads to reuse complete files and fill missing ones. Clearing browser caches can require downloading again. A recognition failure removes incomplete previews, while a translation failure preserves the recognized source.
 
-Choose a recognition model and manage its downloaded files in **Video translation settings → Local AI subtitles**. Compact model cards show size, readiness and actual download progress. Help icons explain device requirements and subtitle cache rules. Downloads handle connection failures automatically, so settings and player menus show progress without requiring a source selection. Retry a failed download to reuse complete cached files. The first download needs an internet connection; speech models are downloaded separately from the extension package.
+Browsers that support the File System Access API can also enable **Share models across browsers**. Select and authorize the same folder in each browser; models are stored in its `FluentRead/whisper` subfolder. Existing models can be moved there. Disconnecting does not delete shared files. Browser-local extension caches remain available.
 
-Moving the pointer away and back, rebuilding playback controls, temporarily hiding the video, or attaching its thumbnail preserves the AI timeline and pending model request. A completed model download still starts recognition when the same video gains media metadata. A different media identity clears the previous video’s state.
+### Use Local Qwen3 ASR
 
-You can generate subtitles directly from the Home feed. FluentRead recovers loaded audio manifests for the current media without mixing other preloaded posts. It prefers the master playlist’s audio rendition and checks the initialization segment for an audio track before downloading media segments. Reading or decoding failures try alternate audio renditions and a lower bitrate complete MP4 belonging to the same video. Candidates come from loaded media and video metadata; the extension extracts only media URLs and bitrates. It requires a confirmed media identity before using metadata candidates. If audio remains unavailable, the menu suggests opening the post or refreshing the page and retrying. Switching videos clears the previous video’s error, progress and model prompt.
+If you have vLLM with support for this model, run the command below to start a local service. It must serve the fixed model `Qwen/Qwen3-ASR-1.7B` at `POST /v1/audio/transcriptions` without credentials. [vLLM model recipe](https://github.com/vllm-project/recipes/blob/main/models/Qwen/Qwen3-ASR-1.7B.yaml)
 
-Recognition skips digital silence and keeps quiet speech and short spoken tails. Long pauses do not cause the whole speech track to be skipped. Full recognition preserves recognized short phrases and continuations across windows. Trimming long silent edges preserves the original subtitle timing. Long videos prepare audio incrementally, retaining one active window and one waiting window; stopping releases the waiting audio. This does not filter all music or noise, or guarantee accuracy across accents, languages and specialist vocabulary.
+```sh
+vllm serve Qwen/Qwen3-ASR-1.7B --host 127.0.0.1 --port 8000
+```
 
-</details>
+In **Video translation settings → Local AI subtitles → Recognition method**, choose **Local Qwen3 ASR**, enter `http://127.0.0.1:8000`, and save. The address must use `127.0.0.1` or `[::1]`. Once the service is running, select **Generate AI subtitles** on an X video with a readable audio track. This sends the audio to your local service.
 
-<details class="guide-details">
-<summary>Display and download</summary>
-
-## Display and download
-
-Adjust subtitle size, background, position, and width in video appearance settings. X subtitles stay within the video picture, with long lines wrapping inside portrait videos. Their position updates when the player resizes or enters fullscreen, and they try to avoid visible playback controls.
-
-Use the menu to show or hide subtitles and download them. Completed X transcripts are cached locally for a limited time, so reopening the same video usually avoids another transcription. The cached timeline is restored immediately, and bilingual lines appear together as each current translation becomes ready. The cache count refreshes when you return to video settings. Use re-recognition or clear the video cache to start fresh.
+FluentRead estimates caption timing from audio windows. Stopping cancels the extension's request, and the server may continue processing audio it already received. If the service fails, retry or switch back to **Whisper in the browser** in settings.
 
 </details>
 
 <details class="guide-details">
-<summary>Missing or inaccurate subtitles</summary>
+<summary>Reading annotations and word highlighting</summary>
+
+## Reading annotations
+
+In the browser extension, enable **Video appearance → Reading annotations** or its header icon in the YouTube/X menu. It is off by default and unavailable in the userscript. Supported readings include Japanese romaji, Korean romanization, Chinese pinyin, and Latin transliteration for Russian, Greek, Arabic, Hindi, and Thai.
+
+Readings follow the original text and stay hidden in translation-only or hidden-caption modes. Enabling them does not change display mode. Japanese first needs about **17.8 MB** of dictionary data, Hindi about **0.5 MB**. Verified data is cached locally for offline reuse; retry failed downloads in the menu. Captions are not sent to a reading service, and originals and translations can display while data is prepared.
+
+Readings are aids, and names, alternate pronunciations, and sound changes can be wrong. Check the audio. Annotations do not change source captions or exports.
 
 ### Word-by-word highlight
 
-To make subtitles follow the video like karaoke lyrics, turn on **Word-by-word highlight** in video appearance settings (off by default). The current sentence starts dimmed and lights up from start to end as the video plays. The original and the translation advance together, and the highlight stays in the right place after pausing, seeking, changing speed, or adjusting subtitle timing. It uses the skin and colors you already picked.
-
-Subtitles only carry start and end times for whole sentences, so the pace within a sentence is estimated from its length. It can drift slightly from the actual speech when the speaker's pace varies. It currently applies to FluentRead subtitles on YouTube and X.
-
-## Missing or inaccurate subtitles
-
-Check that subtitles are enabled and the video has a native track. For X AI subtitles, confirm the model download and use Auto when the spoken language is unknown or changes during the video.
-
-An empty transcription is a speech recognition result, separate from a translation failure. Try Small if you are using Tiny or Base. If Small is already selected, check for clear speech and retry. Use Auto when the spoken language is unknown. Audio without speech usually produces no readable subtitles.
-
-Recognition can mishear names or background audio, and translations can be wrong. Check important details against the original subtitles and audio.
-
-Open **Subtitle options → Regenerate this video** to bypass its saved subtitles without clearing other videos or downloading an already installed model again. Existing subtitles remain available until model confirmation. Translation failures keep the recognized original and timeline; use **Retry** to recover without repeating speech recognition.
+Enable **Word-by-word highlight** in video appearance settings (off by default) to light up YouTube and X captions as they play. Timing is estimated from the whole cue's duration and text length, so it may differ from actual pronunciation.
 
 </details>
 
 <details class="guide-details">
-<summary>Supported platforms and default options</summary>
+<summary>Sentence learning</summary>
 
-FluentRead also reads captions in Udemy and Disney+ videos and in Teams, Zoom and Google Meet web meetings.
+## Sentence learning
 
-Under **Video translation settings → General**, two options are enabled by default and saved automatically:
+Choose **Start sentence learning** in the subtitle menu on YouTube, X, Bilibili, Udemy, or edX. The browser extension can replay and save sentences once a complete subtitle track is available. Its downloads menu exports original, translated, or bilingual **SRT, WebVTT, and Markdown**. It asks before translating any missing captions. Long or unpunctuated captions may appear as fragments.
 
-- **Automatically enable bilingual meeting captions** attempts to enable available platform captions. You can disable this option and enable native captions yourself. Turning off video translation or hiding FluentRead captions restores the native display.
-- **Prefer human subtitles** uses readable human subtitle tracks in the target language on YouTube, Udemy and Disney+. Missing tracks, inaccessible tracks and gaps fall back to translating the original captions. The source track is preserved.
+On Coursera lecture pages that expose a readable WebVTT track, enable **Bilingual** or **Original only** in the FluentRead player menu. The complete track is then available for replay, saving and download. Coursera manages access to the lecture.
 
-Meeting support applies to browser web clients, including Zoom's `/wc/` client. The platform, host or account must permit captions. FluentRead does not enable recording or transcription and cannot provide speech captions when the platform supplies none. Teams caption activation follows its meeting More actions and Language and speech menus when available; enable captions manually if controls have changed.
+The learning panel splits existing captions into sentences using local rules. Each sentence keeps its source text and original caption timing. Sentences from the same caption can share a playback range, so moving between them keeps your current position.
 
-Udemy and Disney+ support uses displayed captions and available subtitle tracks. Their caption panel supports bilingual, translation only, original only, off and translation retry, including fullscreen. Track availability can depend on the player, account, region and content restrictions. This feature does not bypass access restrictions or generate audio captions for videos without subtitles.
+- **Previous / Next** select the adjacent sentence. Moving to a different source passage seeks to its start and preserves the current play or pause state.
+- **Replay source passage** plays from the start of the passage. **Loop source passage / Pause at passage end** follow the original caption timing. If the playhead is outside the range, use Replay to start. Manual seeking ends playback assistance and preserves your playback speed.
+- **Explain** is optional and calls your selection AI explanation service only when requested. It can use neighboring captions if context is allowed.
+- **Edit** changes the translation or explanation and pins the sentence. Drafts survive sentence changes during this panel session; return to the current sentence to follow playback again.
+- **Save sentence** keeps the source, confirmed translation, explanation, context, and time in the Learning Center. No explanation is required. Wait for a pending translation or enter your own before saving.
 
-Read original subtitles and translations together on YouTube and X, or show just one language.
+With focus in the player, arrows change sentence, R toggles looping, and Q toggles pause at passage end. Text fields keep normal typing; an open subtitle menu takes keyboard priority. Drag the panel title to move it or use its style button to change layout and size. Closing learning or captions, or switching videos, stops playback assistance.
 
-The open subtitle menu stays available when X hides its playback controls. Switches, display modes, and AI subtitle status update as you use them. Click outside, use the close button, or press Esc to close it. Arrow keys move focus inside the menu without seeking the video.
-
-The compact X menu puts display modes first. **Subtitle options** contains timing, downloads, and regeneration; use the back arrow or Esc to return. The source line shows native captions, saved local subtitles, or AI subtitles. Native captions appear as **Loaded subtitles · N cues**. The count changes as the player loads captions and represents the currently loaded cues, rather than the video's final total. When none are detected, it explains how to proceed and disables empty downloads. Native captions take priority over automatically restored AI subtitles; explicitly generated AI captions keep their own timeline.
+Learning Center sources reopen the video near its original time; X positioning needs the extension enabled. Saved text remains if a video is deleted or restricted. Subtitle offsets and bilingual order do not change the original times used for saving and looping. Vocabulary exports that omit private context also omit video URLs and times.
 
 </details>
 
+## Missing or inaccurate subtitles
+
+Enable platform captions and wait for them to load. Ordinary translation cannot start without captions; on X, try local AI generation instead.
+
+An empty transcription means recognition found no readable speech. Check the audio and source language, or try Small instead of Tiny/Base. For a translation failure, retry or change translation services. Check important information against source captions and audio.
+
 ## Related guides
 
-- [All guides](/en/docs/)
+- [Data & privacy](/en/guide/privacy)
 - [Troubleshooting](/en/guide/faq)
-
-## Settings preview
-
-Video appearance settings show a live sample on the left, with visibility, bilingual or single-language display, skins, size and position on the right. Both work areas have equal width and height on desktop. The compact preview card keeps a 16:9 video frame visible while you scroll through the controls. Narrow screens show the preview above the settings. Fine-tuning controls are directly visible. Hiding subtitles preserves your appearance and translation preferences. The example reads no video and sends no translation requests. X local recognition and model downloads remain in their own section.

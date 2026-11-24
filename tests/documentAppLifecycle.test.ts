@@ -1,19 +1,24 @@
+import {getFixtureRootNode} from './helpers/vueDomFixture';
 import {afterEach, beforeEach, describe, expect, it, vi, type MockInstance} from 'vitest';
+import {asArrayBufferBytes} from '@/src/shared/function/arrayBufferBytes';
 import {readFileSync} from 'node:fs';
+import JSZip from 'jszip';
+import openstaxListCallout from './fixtures/pdf-openstax-page24-callout.json';
 import {createRenderer, h, markRaw, nextTick, ref} from 'vue';
 import {IDBFactory} from 'fake-indexeddb';
 import {parseHTML} from 'linkedom';
 import {Config} from '@/src/core/config/model';
-import {getDocumentMimeType, parseDocument, type PdfDocumentPage} from '@/src/features/document-translation/core/document';
+import {getDocumentMimeType, parseDocument, type ParsedDocument, type PdfDocumentPage} from '@/src/features/document-translation/core/document';
 import * as binaryService from '@/src/features/document-translation/services/binary';
 import {createDocumentHistory, documentHistoryId} from '@/src/features/document-translation/services/history';
 import {acquirePdfDocument} from '@/src/features/document-translation/ui/pdfPreview';
-import {createDocumentDownload as createRuntimeDownload} from '@/src/app/document-translation/runtime';
+import {createDocumentDownload as createRuntimeDownload, translateDocumentSegments as translateWithDefaultService} from '@/src/app/document-translation/runtime';
 import DocumentApp from '@/src/app/document-translation/DocumentApp.vue';
-import {getDocumentDownloadCopy} from '@/src/app/document-translation/downloadCopy';
+import {getDocumentDownloadCopy, getDocumentDownloadErrorCopy} from '@/src/app/document-translation/downloadCopy';
+import PdfSourceEditor from '@/src/app/document-translation/PdfSourceEditor.vue';
 import DocumentSegmentEditor from '@/src/app/document-translation/DocumentSegmentEditor.vue';
 
-const ports = vi.hoisted(() => ({tasks: [] as any[], zoomBindings: [] as any[], renderPending: undefined as any, pagePending: undefined as any, pageProvider: undefined as undefined | ((pageNumber: number, page: any) => Promise<any>), pageCount: 1, fetchPdf: vi.fn(), i18n: vi.fn(), sendMessage: vi.fn(), translate: vi.fn(), batch: vi.fn(), recognize: vi.fn(), createRecognizer: vi.fn(), actualRecognize: undefined as any, actualCreateRecognizer: undefined as any, unsubscribe: vi.fn(), observer: undefined as any, config: undefined as any}));
+const ports = vi.hoisted(() => ({privateContext: false, tasks: [] as any[], zoomBindings: [] as any[], renderPending: undefined as any, pagePending: undefined as any, pageProvider: undefined as undefined | ((pageNumber: number, page: any) => Promise<any>), pageCount: 1, fetchPdf: vi.fn(), sourcePreview: vi.fn(), i18n: vi.fn(), sendMessage: vi.fn(), translate: vi.fn(), batch: vi.fn(), recognize: vi.fn(), createRecognizer: vi.fn(), actualRecognize: undefined as any, actualCreateRecognizer: undefined as any, unsubscribe: vi.fn(), observer: undefined as any, config: undefined as any}));
 vi.mock('@/src/features/document-translation/services/pdfOcr', async () => {
     const actual = await vi.importActual<typeof import('@/src/features/document-translation/services/pdfOcr')>('@/src/features/document-translation/services/pdfOcr');
     ports.actualRecognize = actual.recognizePdfDocument;
@@ -24,25 +29,34 @@ vi.mock('@/src/app/document-translation/runtime', async () => {
     ports.actualCreateRecognizer = actual.createPdfPageRecognizer;
     return {...actual, createPdfPageRecognizer: ports.createRecognizer};
 });
+vi.mock('@/src/features/document-translation/ui/pdfSourcePreview', () => ({createPdfSourcePreview: ports.sourcePreview}));
 vi.mock('@/src/features/document-translation/ui/documentZoom', () => ({installDocumentZoomGestures: (target: HTMLElement, options: unknown) => {
     const dispose = vi.fn(); ports.zoomBindings.push({target, options, dispose}); return dispose;
 }}));
 vi.mock('@/src/features/document-translation/services/pdfSource', async () => ({...await vi.importActual<typeof import('@/src/features/document-translation/services/pdfSource')>('@/src/features/document-translation/services/pdfSource'), fetchOnlinePdf: ports.fetchPdf}));
-vi.mock('@/src/features/document-translation/ui/PdfReader.vue', () => ({default: {props: ['document', 'translations', 'mode', 'sourceUrl'], setup: () => () => h('div', {'data-document-reader': 'pdf'})}}));
+vi.mock('@/src/features/document-translation/ui/PdfReader.vue', () => ({default: {props: ['document', 'translations', 'mode', 'sourceUrl', 'presentation'], emits: ['update:presentation', 'page-change'], setup: (_props: any, {emit}: any) => () => h('div', {'data-document-reader': 'pdf'}, [
+    h('button', {'data-pdf-port': 'presentation', onClick: () => emit('update:presentation', 'readable')}, 'Reading presentation'),
+    h('button', {'data-pdf-port': 'page', onClick: () => emit('page-change', 2)}, 'Second PDF page'),
+])}}));
 vi.mock('@/src/app/document-translation/selectionRuntime', () => ({mountDocumentSelectionTranslation: () => ({dispose: () => {}})}));
-vi.mock('webextension-polyfill', () => ({default: {runtime: {sendMessage: ports.sendMessage, getURL: (path: string) => `chrome-extension://fixture/${path}`}, tabs: {create: vi.fn()}}}));
+vi.mock('webextension-polyfill', () => ({default: {runtime: {sendMessage: ports.sendMessage, getURL: (path: string) => `chrome-extension://fixture/${path}`}, tabs: {create: vi.fn()}, extension: {get inIncognitoContext() {return ports.privateContext;}}}}));
 vi.mock('@/src/services/config/store', async () => {
     const {Config} = await import('@/src/core/config/model');
     const config = new Config(); ports.config = config;
     return {config, configReady: Promise.resolve(), subscribeConfig: (observer: any) => {ports.observer = observer; return ports.unsubscribe;}, requestConfigPatch: (patch: any, send: any) => send({patch})};
 });
-vi.mock('@/src/services/translation/client', () => ({translateText: ports.translate, translateTextBatch: ports.batch}));
+vi.mock('@/src/services/translation/client', async original => ({...await original<typeof import('@/src/services/translation/client')>(), translateText: ports.translate, translateTextBatch: ports.batch}));
 vi.mock('@/src/ui/i18n', () => ({createUiI18nPlugin: (options: unknown) => options, useUiI18n: () => ({language: ref('zh-CN'), t: (key: string, values?: unknown) => {ports.i18n(key, values); return key;}, translateLegacy: (text: string) => text})}));
-vi.mock('@/src/ui/components/UiSelect.vue', () => ({default: {props: ['modelValue'], setup: (_props: any, {slots}: any) => () => h('select', slots.default?.())}}));
+vi.mock('@/src/ui/components/UiSelect.vue', () => ({default: {
+    props: ['modelValue'], emits: ['update:modelValue'],
+    setup: (props: any, {slots, emit}: any) => () => h('select', {value: props.modelValue,
+        onChange: (event: any) => emit('update:modelValue', event.target.value)}, slots.default?.()),
+}}));
 vi.mock('@/src/ui/components/GlossaryLibrarySelect.vue', () => ({default: {setup: () => () => h('div')}}));
 vi.mock('element-plus/es/components/select/style/css', () => ({}));
 vi.mock('element-plus', () => ({ElOption: {props: ['label', 'value'], setup: (props: any) => () => h('option', {value: props.value}, props.label)}}));
-vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({GlobalWorkerOptions: {}, getDocument: (options: any) => {
+vi.mock('@/src/features/document-translation/ui/pdfScanPreview', () => ({readPdfScanGraphics: async () => [], cropPdfScanRegions: () => []}));
+vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({GlobalWorkerOptions: {}, OPS: {constructPath: 1, fill: 2}, getDocument: (options: any) => {
     const task = {role: options.disableFontFace ? 'parse' : 'preview', destroy: vi.fn(async () => {}), page: {
         getViewport: ({scale}: {scale: number}) => ({width: 100 * scale, height: 100 * scale, transform: [1, 0, 0, 1, 0, 0]}),
         getTextContent: async () => ({items: [{str: 'Original', transform: [1, 0, 0, 12, 5, 20], width: 50, height: 12, fontName: 'body'}], styles: {}}), cleanup: vi.fn(),
@@ -54,7 +68,7 @@ vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({GlobalWorkerOptions: {}, getD
 }}));
 
 type HostNode = EventTarget & {type: string; props: Record<string, any>; children: HostNode[]; parent?: HostNode; text?: string; showModal: () => void; close: () => void; style: Record<string, string>};
-const node = (type: string): HostNode => Object.assign(new EventTarget(), {type, tagName: type.toUpperCase(), props: {}, children: [] as HostNode[], style: {}, showModal: vi.fn(), close: vi.fn(), getAttribute: (_name: string) => undefined});
+const node = (type: string): HostNode => Object.assign(new EventTarget(), {type, tagName: type.toUpperCase(), props: {}, children: [] as HostNode[], style: {}, showModal: vi.fn(), close: vi.fn(), getRootNode: getFixtureRootNode<HostNode>, getAttribute: (_name: string) => undefined});
 const renderer = createRenderer<HostNode, HostNode>({
     createElement: node, createText: value => Object.assign(node('#text'), {text: value}), createComment: value => Object.assign(node('#comment'), {text: value}),
     setText: (element, text) => {element.text = text;}, setElementText: (element, text) => {element.text = text; element.children = [];},
@@ -78,7 +92,30 @@ const walkHost = (entry: HostNode): HostNode[] => [entry, ...entry.children.flat
 const hostText = (entry: HostNode): string => (entry.text || '') + entry.children.map(hostText).join('');
 const windowTimers = new Set<ReturnType<typeof setTimeout>>();
 
+async function loadMixedPdfWithCorrection(): Promise<ParsedDocument> {
+    await state.loadFiles([file('mixed-partial-correction.pdf')]);
+    const original = state.parsedDocument;
+    const nativePage = original.binary.pages[0];
+    const nativeBlock = nativePage.blocks.find((block: any) => block.segmentIndex >= 0);
+    const mixed = markRaw({...original,
+        segments: [{id: 0, source: 'Native alpha paragraph.'}, {id: 1, source: 'Native beta paragraph.'}],
+        binary: {...original.binary, pages: [
+            {...nativePage, pageNumber: 1, scanned: true, segmentIndexes: [], blocks: []},
+            {...nativePage, pageNumber: 2, scanned: false, segmentIndexes: [0, 1], blocks: [
+                {...nativeBlock, segmentIndex: 0}, {...nativeBlock, segmentIndex: 1, y: nativeBlock.y + 30},
+            ]},
+        ]},
+    });
+    state.parsedDocument = mixed;
+    state.documentQueue[0].document = mixed;
+    state.editSegment(0, 'Human correction');
+    await flush();
+    return mixed;
+}
+
 beforeEach(async () => {
+    ports.sourcePreview.mockReset().mockResolvedValue(new Uint8Array([1, 2]));
+    ports.privateContext = false;
     ports.tasks = []; ports.zoomBindings = []; ports.renderPending = undefined; ports.pagePending = undefined; ports.pageProvider = undefined; ports.pageCount = 1;
     ports.fetchPdf.mockReset().mockResolvedValue(file('online.pdf')); ports.i18n.mockClear();
     ports.sendMessage.mockReset().mockResolvedValue(undefined); ports.translate.mockReset().mockResolvedValue('translated'); ports.unsubscribe.mockReset();
@@ -103,6 +140,1037 @@ beforeEach(async () => {
 afterEach(async () => {ports.pagePending?.resolve(ports.tasks.find(value => value.role === 'preview')?.page); ports.renderPending?.resolve(); app?.unmount(); await flush(); await vi.dynamicImportSettled(); windowTimers.forEach(timer => clearTimeout(timer)); windowTimers.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals();});
 
 describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
+    it('saves confirmed glossary terms and retries only matching paragraphs while retaining previous edits', async () => {
+        state.config.from = 'en';
+        state.config.to = 'zh-Hans';
+        state.config.documentService = 'microsoft';
+        ports.sendMessage.mockImplementation(async (message: {patch?: Partial<Config>}) => {
+            if (message.patch) {
+                Object.assign(ports.config, message.patch);
+                ports.observer(ports.config);
+            }
+        });
+        const selected = 'This article defines retrieval-augmented generation (RAG).';
+        const unrelated = 'This article contains an unrelated passage.';
+        await state.loadFiles([file('glossary.txt', `${selected}\n\n${unrelated}`)]);
+        await state.startTranslation(); await flush();
+        state.editSegment(0, 'Old edit in the matched paragraph.');
+        state.editSegment(1, 'Independent human edit.');
+        await state.extractGlossaryCandidates(); await flush();
+        expect(state.glossaryChoices).toHaveLength(2);
+        expect(state.glossaryChoices.every((choice: {selected: boolean}) => !choice.selected)).toBe(true);
+        expect(state.glossaryChoices.find((choice: {source: string}) => choice.source === 'RAG')).toMatchObject({evidence: selected});
+        const acronym = state.glossaryChoices.find((choice: {source: string}) => choice.source === 'RAG');
+        Object.assign(acronym, {target: '检索增强生成', selected: true});
+        ports.batch.mockClear().mockRejectedValueOnce(Object.assign(new Error('Provider refused this request'), {retryable: false}));
+        await state.applyGlossaryChoices();
+        await vi.waitFor(() => expect(state.runState).toBe('failed')); await flush();
+        expect(ports.config.glossaryLibraries[0].entries).toEqual([expect.objectContaining({source: 'RAG', target: '检索增强生成'})]);
+        expect(state.pendingGlossaryRetranslation.pending).toEqual(new Set([0]));
+        expect(state.translatedSegments).toEqual(['Old edit in the matched paragraph.', 'Independent human edit.']);
+        expect(ports.batch).toHaveBeenLastCalledWith([selected], 'glossary.txt', expect.objectContaining({useCache: false}));
+        ports.batch.mockClear();
+        state.resumeGlossaryRetranslation();
+        await vi.waitFor(() => expect(state.pendingGlossaryRetranslation).toBeNull()); await flush();
+        expect(ports.batch).toHaveBeenCalledExactlyOnceWith([selected], 'glossary.txt', expect.objectContaining({useCache: false}));
+        expect(state.translatedSegments).toEqual([`译 ${selected}`, 'Independent human edit.']);
+        expect(state.settingsChanged).toBe(false);
+    });
+
+    it('respects selected spreadsheet columns when reviewing and reapplying glossary terms', async () => {
+        state.config.from = 'en';
+        state.config.to = 'zh-Hans';
+        state.config.documentService = 'microsoft';
+        ports.sendMessage.mockImplementation(async (message: {patch?: Partial<Config>}) => {
+            if (message.patch) {
+                Object.assign(ports.config, message.patch);
+                ports.observer(ports.config);
+            }
+        });
+        const selected = 'This article defines retrieval-augmented generation (RAG).';
+        const excluded = 'RAG supports the Private Body Pattern (PBP).';
+        await state.loadFiles([file('glossary.csv', `Title,Notes\n${selected},${excluded}\n`)]);
+        await state.startTranslation(); await flush();
+        const excludedId = state.parsedDocument.segments.find((segment: {source: string}) => segment.source === excluded).id;
+        state.editSegment(excludedId, 'Human correction in the other column.');
+        state.updateDelimitedColumns([0]); await flush();
+        await state.extractGlossaryCandidates(); await flush();
+        expect(state.glossaryChoices.map((choice: {source: string}) => choice.source)).toEqual(['retrieval-augmented generation', 'RAG']);
+        const acronym = state.glossaryChoices.find((choice: {source: string}) => choice.source === 'RAG');
+        Object.assign(acronym, {target: '检索增强生成', selected: true});
+        ports.batch.mockClear();
+        await state.applyGlossaryChoices();
+        await vi.waitFor(() => {
+            expect(ports.batch).toHaveBeenCalledExactlyOnceWith([selected], 'glossary.csv', expect.objectContaining({useCache: false}));
+            expect(state.translating).toBe(false);
+        });
+        expect(state.translatedSegments[excludedId]).toBe('Human correction in the other column.');
+        expect(state.pendingGlossaryRetranslation).toBeNull();
+        expect(state.settingsChanged).toBe(true);
+        state.updateDelimitedColumns([1]); await flush();
+        expect(state.pendingGlossaryRetranslation.pending).toEqual(new Set([excludedId]));
+        ports.batch.mockClear();
+        state.resumeGlossaryRetranslation();
+        await vi.waitFor(() => expect(state.settingsChanged).toBe(false));
+        expect(ports.batch).toHaveBeenCalledExactlyOnceWith([excluded], 'glossary.csv', expect.objectContaining({useCache: false}));
+        expect(state.translatedSegments[excludedId]).toBe(`译 ${excluded}`);
+    });
+
+    it('translates a recovered source through the configured default service when no document override is supplied',async()=>{
+        ports.config.service='microsoft';const onSegment=vi.fn();
+        await translateWithDefaultService([{id:0,source:'Recognized source.'}],{fileName:'scanned.pdf',batchTranslation:false,onSegment});
+        expect(onSegment).toHaveBeenCalledWith({id:0,translation:'translated'});
+        expect(ports.translate).toHaveBeenCalledWith('Recognized source.',expect.any(String),expect.objectContaining({serviceOverride:'microsoft'}));
+    });
+    async function loadRecognizedPdf() {
+        await state.loadFiles([file('correct-source.pdf')]);
+        const original = state.parsedDocument;
+        state.parsedDocument = markRaw({...original, binary: {...original.binary, pages: original.binary.pages.map((p: any) => ({...p, scanned: false, ocrRecognized: true, ocrReviewRegions: [{x:p.blocks[0].x,y:p.blocks[0].y,width:1,height:1}]}))}});
+        await flush(); return state.parsedDocument;
+    }
+
+    it('runs the actual source editor events and discards a late preview when the selected region changes',async()=>{
+        const original=await loadRecognizedPdf(),first=original.binary.pages[0].blocks[0];
+        const model={...original,binary:{...original.binary,pages:[{...original.binary.pages[0],blocks:[
+            {...first,sourceCorrection:{source:'Original',lines:first.lines,reviewRegions:[]}},
+            {...first,segmentIndex:-1,source:'123',lines:[{...first.lines[0],text:'123'}]},
+        ]}]}};
+        const pending=deferred<Uint8Array>();ports.sourcePreview.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(new Uint8Array([2]));
+        const apply=vi.fn(),restore=vi.fn(),close=vi.fn(),host=node('root');
+        const child=renderer.createApp(PdfSourceEditor,{document:model,pageNumber:1,blockIndex:0,disabled:false,onApply:apply,onRestore:restore,onClose:close});
+        child.mount(host);const editor=(child as any)._instance.setupState;
+        try {
+            await flush();const signal=ports.sourcePreview.mock.calls.at(-1)![3];
+            editor.lines=['Corrected text'];await flush();expect(walkHost(host).find(n=>n.type==='select')!.props.disabled).toBe(true);
+            walkHost(host).find(n=>n.type==='button'&&hostText(n)==='document.sourceEdit.save')!.props.onClick();expect(apply).toHaveBeenCalledWith(0,['Corrected text']);
+            walkHost(host).find(n=>n.type==='button'&&hostText(n)==='document.sourceEdit.restore')!.props.onClick();expect(restore).toHaveBeenCalledWith(0);
+            editor.lines=['Original'];editor.selected=1;await flush();expect(signal.aborted).toBe(true);expect(editor.lines).toEqual(['123']);
+            const count=createUrl.mock.calls.length;pending.resolve(new Uint8Array([9]));await flush();expect(createUrl.mock.calls).toHaveLength(count);
+            walkHost(host).find(n=>n.type==='button'&&hostText(n)==='document.sourceEdit.cancel')!.props.onClick();expect(close).toHaveBeenCalledOnce();
+        }finally{child.unmount();await flush();}
+        expect(revokeUrl).toHaveBeenCalled();
+    });
+    it('renders source-only retained revisions and offers source correction only on eligible OCR passages',async()=>{
+        const document=await loadRecognizedPdf(),host=node('root'),edit=vi.fn();
+        const current=ref(document), translations=ref<string[]>([]);const revisions=[{source:'Old source correction',translation:'',kind:'source' as const,pageNumber:1,blockNumber:1},{source:'Old raw',translation:'Old translated'}];
+        const child=renderer.createApp({setup:()=>()=>h(DocumentSegmentEditor,{document:current.value,translations:translations.value,retainedRevisions:revisions,disabled:false,'onSource-edit':edit})});child.mount(host);
+        try {
+            await flush();const button=walkHost(host).find(n=>n.type==='button'&&hostText(n)==='document.sourceEdit.open')!;button.props.onClick();expect(edit).toHaveBeenCalledWith(0);
+            translations.value=[document.segments[0].source];await flush();expect(walkHost(host).some(n=>n.type==='textarea')).toBe(false);
+            walkHost(host).find(n=>n.type==='button'&&hostText(n)==='校订译文')!.props.onClick();await flush();expect(walkHost(host).some(n=>n.type==='textarea')).toBe(true);
+            const details=walkHost(host).find(n=>n.type==='details')!;details.props.onToggle({target:{open:true}});await flush();
+            expect(hostText(details)).toContain('document.sourceEdit.sourceRevision');expect(hostText(details)).toContain('document.sourceEdit.location');
+            expect(walkHost(details).filter(n=>n.type==='p'&&n.props.class==='document-translation')).toHaveLength(1);
+            current.value={...document,binary:{...document.binary,pages:[{...document.binary.pages[0],ocrRecognized:false,ocrReviewRegions:undefined}]}};await flush();
+            expect(walkHost(host).some(n=>n.type==='button'&&hostText(n)==='document.sourceEdit.open')).toBe(false);
+        }finally{child.unmount();}
+    });
+    it('opens the line editor, saves and undoes source corrections without losing original bytes or old translations', async () => {
+        const original=await loadRecognizedPdf();state.editSegment(0,'Manual translation');
+        state.openSourceEditor(0);await vi.dynamicImportSettled();await flush();
+        expect(state.sourceEditTarget.document).toBe(original);expect(ports.sourcePreview).toHaveBeenCalledWith(original,1,0,expect.any(AbortSignal));
+        const modal=walkHost(root).find(n=>n.props.class==='pdf-source-editor')!;
+        expect(modal.showModal).toHaveBeenCalledOnce();expect(hostText(modal)).toContain('document.sourceEdit.save');
+        state.applySourceEdit(0,['Corrected original']);await flush();
+        expect(state.parsedDocument.segments[0].source).toBe('Corrected original');expect(state.translatedSegments[0]).toBe('');
+        expect(state.sourceEditTarget).toBeNull();expect(state.parsedDocument.binary.bytes).toBe(original.binary.bytes);
+        expect(state.activeTask.retainedRevisions[0]).toMatchObject({source:'Original',translation:'Manual translation',pageNumber:1});
+        expect(revokeUrl).toHaveBeenCalled();
+        state.openSourceEditor();await flush();state.restoreSourceEdit(0);await flush();
+        expect(state.parsedDocument.segments[0].source).toBe('Original');expect(state.activeTask.retainedRevisions.at(-1)).toMatchObject({source:'Corrected original',translation:'',kind:'source'});
+        expect(state.parsedDocument.binary.pages[0].ocrReviewRegions).toHaveLength(1);
+    });
+    it('cancels source previews and rejects stale source-editor submissions on file switches', async () => {
+        const original=await loadRecognizedPdf();await state.loadFiles([file('another.txt')]);state.selectDocument(state.documentQueue[0]);await flush();
+        const gate=deferred<Uint8Array>();ports.sourcePreview.mockReturnValueOnce(gate.promise);
+        state.openSourceEditor();await vi.dynamicImportSettled();await flush();
+        const count=createUrl.mock.calls.length, signal=ports.sourcePreview.mock.calls.at(-1)![3];
+        state.selectDocument(state.documentQueue[1]);await flush();
+        expect(state.sourceEditTarget).toBeNull();expect(signal.aborted).toBe(true);
+        state.applySourceEdit(0,['late write']);gate.resolve(new Uint8Array([9]));await flush();
+        expect(state.documentQueue[0].document).toBe(original);expect(createUrl.mock.calls).toHaveLength(count);
+    });
+    it('explicitly re-recognizes one completed page without provider credentials or automatic translation and retains matching edits', async () => {
+        await loadRecognizedPdf();state.openSourceEditor(0);state.applySourceEdit(0,['Corrected original']);state.editSegment(0,'Human translation');
+        const original=state.parsedDocument, b=original.binary.pages[0].blocks[0];
+        const next={...original,segments:[{...original.segments[0],source:'Fresh reading'}],binary:{...original.binary,pages:[{...original.binary.pages[0],blocks:[{...b,source:'Fresh reading',sourceCorrection:undefined,lines:[{...b.lines[0],text:'Fresh reading'}]}]}]}};
+        state.config.documentService='openai';state.config.openaiKey='';
+        ports.recognize.mockResolvedValueOnce(next);await state.rerecognizePdfPage();await flush();
+        expect(ports.recognize).toHaveBeenCalledWith(original,expect.any(Function),expect.objectContaining({pageIndexes:[0],startPage:0}));
+        expect(state.parsedDocument.segments[0].source).toBe('Corrected original');expect(state.translatedSegments).toEqual(['Human translation']);
+        expect(state.confirmedTranslationIds).toEqual([0]);expect(state.parsedDocument.binary.pages[0].blocks[0].sourceCorrection.source).toBe('Fresh reading');
+        expect(ports.translate).not.toHaveBeenCalled();expect(ports.batch).not.toHaveBeenCalled();expect(state.translating).toBe(false);
+    });
+    it.each(['pause','switch','unmount'] as const)('ignores a late explicit re-recognition after %s', async action => {
+        const original=await loadRecognizedPdf();await state.loadFiles([file('another.txt')]);state.selectDocument(state.documentQueue[0]);await flush();
+        const gate=deferred<any>();ports.recognize.mockReturnValueOnce(gate.promise);
+        const owner=state.documentQueue[0];const running=state.rerecognizePdfPage();await flush();const controls=ports.recognize.mock.calls.at(-1)![2];
+        if(action==='pause')state.pauseTranslation();else if(action==='switch')state.selectDocument(state.documentQueue[1]);else{app.unmount();app=undefined;}
+        expect(controls.signal.aborted).toBe(true);gate.resolve({...original,segments:[{id:0,source:'late'}]});await running;await flush();
+        expect(owner.document).toBe(original);expect(state.errorMessage).toBe('');
+    });
+    it('retains the original page after empty, mismatched or failed re-recognition',async()=>{
+        const original=await loadRecognizedPdf();state.editSegment(0,'Kept');
+        ports.recognize.mockResolvedValueOnce(original);await state.rerecognizePdfPage();expect(state.errorMessage).toBe('document.pdfReading.ocrEmpty');
+        ports.recognize.mockResolvedValueOnce({...original,binary:{...original.binary,bytes:new Uint8Array([99])}});await state.rerecognizePdfPage();expect(state.errorMessage).toBe('document.sourceEdit.applyFailed');
+        ports.recognize.mockRejectedValueOnce(new Error('read failed'));await state.rerecognizePdfPage();expect(state.errorMessage).toBe('read failed');
+        expect(state.parsedDocument).toBe(original);expect(state.translatedSegments).toEqual(['Kept']);expect(state.translating).toBe(false);
+    });
+
+    it('removes disabled services from document choices, retains the saved selection and blocks translation until re-enabled', async () => {
+        state.config.documentService = 'openai'; state.config.disabledTranslationServices = ['openai']; await flush();
+        expect(state.serviceOptions.some((item: {value: string}) => item.value === 'openai')).toBe(false);
+        expect(state.effectiveDocumentService).toBe('openai');
+        expect(state.documentServiceUnavailableMessage).toBe('settings.services.library.serviceDisabledMessage');
+        state.config.disabledTranslationServices = []; await flush();
+        expect(state.serviceOptions.some((item: {value: string}) => item.value === 'openai')).toBe(true);
+        expect(state.documentServiceUnavailableMessage).toBeNull();
+    });
+    it('keeps user-defined names for disabled custom and composite document selections', async () => {
+        state.config.customOpenAIProviders = [{id: 'custom:closed', name: 'Saved local service', endpoint: 'https://fixture.invalid/v1', models: ['fixture']}];
+        state.config.compositeTranslationProviders = [{id: 'composite:closed', name: 'Saved group', strategy: 'sequential', services: ['google', 'microsoft'], timeoutMs: 12000}];
+        for (const [service, name] of [['custom:closed', 'Saved local service'], ['composite:closed', 'Saved group']]) {
+            state.config.documentService = service; state.config.disabledTranslationServices = [service]; await flush();
+            expect(state.unavailableDocumentServiceLabel).toBe(name);
+            expect(state.effectiveDocumentService).toBe(service);
+            expect(state.serviceOptions.some((item: {value: string}) => item.value === service)).toBe(false);
+        }
+    });
+    it('offers original-page navigation only for persisted OCR review regions without rewriting source or corrections', async () => {
+        await state.loadFiles([file('review.pdf'), file('clean.pdf')]);
+        const [review, clean] = state.documentQueue, document = state.parsedDocument;
+        state.parsedDocument = markRaw({...document, binary: {...document.binary, pages: document.binary.pages.map((page: PdfDocumentPage) => ({...page, ocrReviewRegions: [{x: 10, y: 10, width: 5, height: 5}]}))}});
+        state.editSegment(0, 'Kept correction'); state.previewMode = 'translated'; await flush();
+        const notices = () => walkHost(root).filter(entry => entry.props['data-testid'] === 'document-pdf-ocr-review');
+        expect(notices()).toHaveLength(1); expect(hostText(notices()[0])).toContain('document.pdfReading.reviewOriginal');
+        const resumePage = vi.fn(async () => {}); Object.assign(state.materialPdfReader, {resumePage});
+        await state.reviewPdfOcrSource();
+        expect(resumePage).toHaveBeenCalledWith(1); expect(state.previewMode).toBe('source'); expect(state.readerTab).toBe('read');
+        expect(state.translatedSegments[0]).toBe('Kept correction'); expect(state.parsedDocument.segments).toBe(document.segments);
+        state.selectDocument(clean); await flush(); expect(notices()).toHaveLength(0);
+        await state.reviewPdfOcrSource(); expect(resumePage).toHaveBeenCalledOnce();
+        state.selectDocument(review); await flush(); expect(notices()).toHaveLength(1);
+        Object.assign(state.materialPdfReader, {resumePage});
+        const pending = state.reviewPdfOcrSource(); state.selectDocument(clean); await pending;
+        expect(resumePage).toHaveBeenCalledOnce();
+    });
+
+    it('shows one localized nonmodal notice for actual PDF extracted controls without changing source, geometry or corrections', async () => {
+        ports.pageProvider = async (_pageNumber, page) => ({...page, getTextContent: async () => ({items: [
+            {str: 'Known \u0003 source \u007f text.', transform: [12, 0, 0, 12, 5, 50], width: 80, height: 12, fontName: 'body'},
+        ], styles: {body: {ascent: .8, descent: -.2, fontFamily: 'serif'}}})});
+        await state.loadFiles([file('source-controls.pdf')]); await flush();
+        const document = state.parsedDocument, before = structuredClone({segments: document.segments, pages: document.binary.pages});
+        expect(document.segments[0].source).toBe('Known \u0003 source \u007f text.');
+        const notices = () => walkHost(root).filter(entry => entry.props['data-testid'] === 'document-pdf-source-warning');
+        expect(notices()).toHaveLength(1); expect(notices()[0].type).toBe('p'); expect(notices()[0].props.role).toBe('status');
+        expect(hostText(notices()[0])).toBe('document.pdfReading.sourceCharacterWarning');
+        state.editSegment(0, 'Reviewed correction'); state.pdfPresentation = 'readable'; await flush();
+        expect(notices()).toHaveLength(1); expect(state.translatedSegments[0]).toBe('Reviewed correction');
+        expect({segments: document.segments, pages: document.binary.pages}).toEqual(before);
+        expect(ports.recognize).not.toHaveBeenCalled(); expect(ports.translate).not.toHaveBeenCalled(); expect(ports.batch).not.toHaveBeenCalled();
+    });
+
+    it.each(['\u0000', '\u0008', '\u000b', '\u000c', '\u000e', '\u001f'])('notices protected PDF source controls outside the active segment: %j', async control => {
+        await state.loadFiles([file('protected-source.pdf')]);
+        const original = state.parsedDocument, source = `Original ${control} glyph`;
+        state.parsedDocument = markRaw({...original, binary: {...original.binary, pages: original.binary.pages.map((page: PdfDocumentPage) => ({...page,
+            blocks: [...page.blocks, {...page.blocks[0], source, segmentIndex: -1, kind: 'formula', preserveSource: true}],
+        }))}});
+        await flush();
+        expect(walkHost(root).filter(entry => entry.props['data-testid'] === 'document-pdf-source-warning')).toHaveLength(1);
+        expect(state.parsedDocument.binary.pages[0].blocks.at(-1).source).toBe(source);
+    });
+
+    it('clears the PDF source notice on document switches, ignores translated controls and does not warn for ordinary whitespace or non-PDF sources', async () => {
+        await state.loadFiles([file('affected.pdf'), file('clean.pdf'), file('notes.txt', 'Notes \u0003 text.')]);
+        const [affected, clean, notes] = state.documentQueue;
+        // Older PDF snapshots can omit the optional block.source; the active segment still owns its original text.
+        for (const [task, source] of [[affected, 'Original \u0003 text.'], [clean, 'Known\tLatin\nעברית\r中文 😀\u00a0\u200d\u0301']] as const) {
+            const document = task.document;
+            task.document = markRaw({...document, segments: document.segments.map((segment: {id: number; source: string}) => ({...segment, source})),
+                binary: {...document.binary, pages: document.binary.pages.map((page: PdfDocumentPage) => ({...page, blocks: page.blocks.map(block => ({...block, source: undefined}))}))}});
+        }
+        const notices = () => walkHost(root).filter(entry => entry.props['data-testid'] === 'document-pdf-source-warning');
+        state.selectDocument(affected); await flush(); expect(notices()).toHaveLength(1);
+        state.selectDocument(clean); state.editSegment(0, 'Target \u0003 \u007f text.'); await flush(); expect(notices()).toHaveLength(0);
+        expect(state.translatedSegments[0]).toBe('Target \u0003 \u007f text.');
+        state.selectDocument(notes); await flush(); expect(state.parsedDocument.format).toBe('txt'); expect(notices()).toHaveLength(0);
+        state.selectDocument(affected); await flush(); expect(notices()).toHaveLength(1);
+        expect(state.parsedDocument.segments[0].source).toBe('Original \u0003 text.');
+        state.selectDocument(clean); await flush(); expect(notices()).toHaveLength(0); expect(state.translatedSegments[0]).toBe('Target \u0003 \u007f text.');
+        expect(ports.recognize).not.toHaveBeenCalled(); expect(ports.translate).not.toHaveBeenCalled(); expect(ports.batch).not.toHaveBeenCalled();
+    });
+
+    it('keeps the last confirmed list on read or mutation failure and retries without losing stored data', async () => {
+        const factory = new IDBFactory(), history = createDocumentHistory(factory);
+        const bytes = new TextEncoder().encode('Source.'), id = await documentHistoryId(bytes);
+        await history.save({id, name: 'kept.txt', format: 'txt', size: bytes.length, total: 1, completed: 1,
+            updatedAt: 1, bytes, mimeType: 'text/plain', translations: ['Kept'], fingerprint: ''});
+        app.unmount();vi.stubGlobal('indexedDB', factory);root = node('root');app = renderer.createApp(DocumentApp);app.mount(root);state = app._instance.setupState;
+        await vi.waitFor(() => expect(state.historyEntries).toHaveLength(1));
+        vi.spyOn(state.history, 'listChecked').mockResolvedValueOnce({status: 'unavailable'});
+        await state.refreshHistory();await flush();
+        expect(state.historyEntries).toHaveLength(1);expect(state.historyError).toBe('document.historyListUnavailable');
+        expect(walkHost(root).some(entry => entry.props['data-testid'] === 'document-history-list-error')).toBe(true);
+        await state.refreshHistory();expect(state.historyError).toBe('');
+        vi.spyOn(state.history, 'removeChecked').mockResolvedValueOnce({status: 'unavailable'});
+        await state.removeHistory(state.historyEntries[0]);await flush();
+        expect(state.historyError).toBe('document.historyChangeUnavailable');expect(state.historyEntries).toHaveLength(1);
+        expect((await history.load(id))?.translations).toEqual(['Kept']);
+        await state.refreshHistory();expect(state.historyError).toBe('');
+        vi.spyOn(state.history, 'clear').mockResolvedValueOnce(false);
+        await state.clearHistory();expect(state.historyError).toBe('document.historyChangeUnavailable');
+        expect((await history.load(id))?.translations).toEqual(['Kept']);
+        await state.refreshHistory();await state.clearHistory();expect(state.historyEntries).toHaveLength(0);
+    });
+    it('warns and preserves a record changed in another tab before stale-list deletion', async () => {
+        const factory = new IDBFactory(), other = createDocumentHistory(factory);
+        const bytes = new TextEncoder().encode('Source.'), id = await documentHistoryId(bytes);
+        await other.save({id, name: 'race.txt', format: 'txt', size: bytes.length, total: 1, completed: 1,
+            updatedAt: 1, bytes, mimeType: 'text/plain', translations: ['Before'], fingerprint: ''});
+        app.unmount();vi.stubGlobal('indexedDB', factory);root = node('root');app = renderer.createApp(DocumentApp);app.mount(root);state = app._instance.setupState;
+        await vi.waitFor(() => expect(state.historyEntries).toHaveLength(1));
+        const fresh = await other.loadChecked(id);if (fresh.status !== 'ok' || !fresh.record) throw new Error('expected record');
+        expect((await other.saveChecked({...fresh.record, translations: ['Other tab']}, fresh.version)).status).toBe('saved');
+        await state.removeHistory(state.historyEntries[0]);await flush();
+        expect(state.historyError).toBe('document.historyRemoveConflict');
+        expect(hostText(walkHost(root).find(entry => entry.props['data-testid'] === 'document-history-list-error')!)).toContain('document.historyRemoveConflict');
+        expect((await other.load(id))?.translations).toEqual(['Other tab']);
+        await state.refreshHistory();await state.removeHistory(state.historyEntries[0]);expect(await other.load(id)).toBeNull();
+    });
+    it('ignores a stale list response after a newer successful refresh', async () => {
+        const first = deferred<{status: 'ok'; entries: []} | {status: 'unavailable'}>();
+        vi.spyOn(state.history, 'listChecked').mockReturnValueOnce(first.promise).mockResolvedValueOnce({status: 'ok', entries: []});
+        const pending = state.refreshHistory();await state.refreshHistory();first.resolve({status: 'unavailable'});await pending;
+        expect(state.historyError).toBe('');expect(state.historyLoading).toBe(false);
+    });
+    it('preserves both document edits and warns the stale tab after concurrent history writes', async () => {
+        const factory = new IDBFactory(), history = createDocumentHistory(factory);
+        const bytes = new TextEncoder().encode('Source.'), id = await documentHistoryId(bytes), parsed = parseDocument('race.txt', 'Source.');
+        await history.save({id, name: 'race.txt', format: 'txt', size: bytes.length, total: 1, completed: 1,
+            updatedAt: 1, bytes, mimeType: 'text/plain', translations: ['Original correction'], fingerprint: '', parsed, parsedVersion: 26});
+        app.unmount();vi.stubGlobal('indexedDB', factory);
+        root = node('root');app = renderer.createApp(DocumentApp);app.mount(root);state = app._instance.setupState;
+        const secondRoot = node('root'), secondApp = renderer.createApp(DocumentApp);secondApp.mount(secondRoot);
+        const other = (secondApp._instance as any).setupState;
+        try {
+            const input = new File([bytes], 'race.txt', {type: 'text/plain'});
+            await Promise.all([state.loadFiles([input]), other.loadFiles([input])]);await flush();
+            state.editSegment(0, 'First tab edit');state.persistHistory();
+            await vi.waitFor(async () => expect((await history.load(id))?.translations).toEqual(['First tab edit']));
+            other.editSegment(0, 'Second tab edit');other.persistHistory();
+            await vi.waitFor(() => expect(other.activeTask.historyConflict).toBe(true));await flush();
+            expect((await history.load(id))?.translations).toEqual(['First tab edit']);
+            expect(other.translatedSegments).toEqual(['Second tab edit']);
+            const notice = walkHost(secondRoot).find(entry => entry.props['data-testid'] === 'document-history-unavailable');
+            expect(hostText(notice!)).toContain('document.historyConflict');
+            await other.retryDocumentHistory();await flush();
+            expect(other.documentQueue).toHaveLength(2);
+            expect(other.documentQueue[0].translations).toEqual(['Second tab edit']);
+            expect(other.documentQueue[1].translations).toEqual(['First tab edit']);
+        } finally {secondApp.unmount();}
+    });
+    it('keeps edits and old history separate when a failed read is retried', async () => {
+        const factory = new IDBFactory(), history = createDocumentHistory(factory);
+        const bytes = new TextEncoder().encode('Source.'), id = await documentHistoryId(bytes);
+        const parsed = parseDocument('retry.txt', 'Source.');
+        await history.save({id, name: 'retry.txt', format: 'txt', size: bytes.length, total: 1, completed: 1,
+            updatedAt: 1, bytes, mimeType: 'text/plain', translations: ['Previous correction'], fingerprint: '', parsed, parsedVersion: 26});
+        const session = new Map<string, string>();
+        app.unmount();vi.stubGlobal('indexedDB', factory);
+        vi.stubGlobal('sessionStorage', {getItem: (key: string) => session.get(key) ?? null, setItem: (key: string, value: string) => session.set(key, value), removeItem: (key: string) => session.delete(key)});
+        root = node('root');app = renderer.createApp(DocumentApp);app.mount(root);state = app._instance.setupState;await flush();
+        vi.spyOn(state.history, 'loadChecked').mockResolvedValueOnce({status: 'unavailable'});
+        await state.loadFiles([new File([bytes], 'retry.txt', {type: 'text/plain'})]);await flush();
+        expect(state.documentQueue[0].historyReadUnavailable).toBe(true);
+        expect(session.has('fluentread.document.open')).toBe(false);
+        const warning = walkHost(root).find(entry => entry.props['data-testid'] === 'document-history-unavailable');
+        expect(warning?.parent?.props['data-testid']).toBe('document-task-notices');
+        expect(walkHost(root).some(entry => entry.type === 'button' && hostText(entry).includes('document.historyRetry'))).toBe(true);
+        expect(state.documentMaterialSelection()).toBeUndefined();
+        state.editSegment(0, 'New correction');state.persistHistory();await flush();
+        expect((await history.load(id))?.translations).toEqual(['Previous correction']);
+        await state.retryDocumentHistory();await flush();
+        expect(state.documentQueue).toHaveLength(2);
+        expect(state.documentQueue[0].translations).toEqual(['New correction']);
+        expect(state.documentQueue[1].translations).toEqual(['Previous correction']);
+        expect(state.activeDocumentId).toBe(state.documentQueue[1].id);
+        expect(session.get('fluentread.document.open')).toBe(id);
+        expect((await history.load(id))?.translations).toEqual(['Previous correction']);
+    });
+    it('consumes online URL input and PDF child navigation events without requesting translation', async () => {
+        const input = walkHost(root).find(entry => entry.props.id === 'online-pdf-url')! as any;
+        input.value = 'https://example.test/paper.pdf'; input.dispatchEvent(new Event('input'));
+        expect(state.onlinePdfUrl).toBe('https://example.test/paper.pdf');
+        await walkHost(root).find(entry => entry.props.class === 'online-pdf-form')!.props.onSubmit({preventDefault() {}}); await flush();
+        expect(state.parsedDocument.format).toBe('pdf');
+        walkHost(root).find(entry => entry.type === 'select' && entry.props['aria-label'] === '目标语言')!.props.onChange({target: {value: 'en'}});
+        expect(state.config.to).toBe('en');
+        walkHost(root).find(entry => entry.props['data-pdf-port'] === 'presentation')!.props.onClick();
+        walkHost(root).find(entry => entry.props['data-pdf-port'] === 'page')!.props.onClick(); await flush();
+        expect(state.pdfPresentation).toBe('readable'); expect(state.pdfPage).toBe(2); expect(ports.translate).not.toHaveBeenCalled();
+    });
+
+    it('expires only the completed download notice while keeping the downloaded correction', async () => {
+        await state.loadFiles([file('notice.txt')]); state.editSegment(0, 'Reviewed'); await flush();
+        vi.useFakeTimers();
+        try {const pending = state.downloadDocument();
+            for (let attempt = 0; attempt < 20 && !state.downloadNotice; attempt++) {await vi.advanceTimersByTimeAsync(50); await flush();}
+            await pending; expect(state.downloadNotice).toContain('已生成下载文件');
+            await vi.advanceTimersByTimeAsync(5000); expect(state.downloadNotice).toBe(''); expect(state.translatedSegments).toEqual(['Reviewed']);
+        } finally {vi.useRealTimers();}
+    });
+
+    it('shows missing-model feedback for incomplete and removed custom services instead of launching', async () => {
+        await state.loadFiles([file('models.txt')]);
+        state.config.customOpenAIProviders = [{id: 'custom:empty', name: 'Empty', endpoint: 'https://model.invalid/v1', models: []}];
+        state.config.documentService = 'custom:empty'; await flush();
+        expect(state.selectedDocumentModel).toBe(''); expect(state.credentialWarning).toContain('这个自定义服务尚未保存模型');
+        state.config.customOpenAIProviders[0].models = ['first-model']; await flush(); expect(state.selectedDocumentModel).toBe('first-model');
+        state.config.documentModel['custom:empty'] = 'saved-model'; await flush(); expect(state.selectedDocumentModel).toBe('saved-model');
+        state.config.documentService = 'custom:removed'; await flush(); expect(state.credentialWarning).toContain('文档翻译模型尚未配置');
+        await state.startTranslation(); expect(ports.translate).not.toHaveBeenCalled();
+    });
+
+    it.each([new Error('material disconnected'), 'material disconnected'])('reports material recovery failure %s without leaving a restoring shell', async cause => {
+        ports.sendMessage.mockRejectedValueOnce(cause); state.restoring = true;
+        await state.restoreMaterialDocument('unreachable');
+        expect(state.importError).toContain(cause instanceof Error ? cause.message : '恢复材料失败'); expect(state.restoring).toBe(false);
+    });
+
+    it('opens a bundled sample through its control, toggles focus and sidebar, and follows native fullscreen and theme events', async () => {
+        const sample = walkHost(root).find(entry => entry.props.class === 'sample-buttons')!.children.find(entry => entry.type === 'button')!;
+        await sample.props.onClick(); await flush(); expect(state.parsedDocument).toBeTruthy(); expect(state.parsedDocument.segments.length).toBeGreaterThan(0);
+        win.document.documentElement = {requestFullscreen: vi.fn().mockResolvedValue(undefined)};
+        win.document.exitFullscreen = vi.fn().mockResolvedValue(undefined);
+        const button = (css: string) => walkHost(root).find(entry => entry.type === 'button' && String(entry.props.class).split(' ').includes(css))!;
+        button('focus-toggle').props.onClick(); await flush(); expect(state.focusMode).toBe(true); expect(win.document.documentElement.requestFullscreen).toHaveBeenCalledOnce();
+        win.document.fullscreenElement = {}; button('focus-exit').props.onClick(); await flush(); expect(state.focusMode).toBe(false); expect(win.document.exitFullscreen).toHaveBeenCalledOnce();
+        state.setFocusMode(true); state.leaveFocusOnEscape({key: 'a'}); expect(state.focusMode).toBe(true);
+        state.leaveFocusOnEscape({key: 'Escape'}); expect(state.focusMode).toBe(false);
+        state.setFocusMode(true); state.leaveFocusWithFullscreen(); expect(state.focusMode).toBe(true);
+        win.document.fullscreenElement = null; state.leaveFocusWithFullscreen(); expect(state.focusMode).toBe(false);
+        win.document.documentElement.requestFullscreen.mockImplementationOnce(() => {throw new Error('fullscreen blocked');});
+        state.setFocusMode(true); expect(state.focusMode).toBe(true); state.setFocusMode(false);
+        const before = state.sidebarOpen; button('sidebar-toggle').props.onClick(); await flush(); expect(state.sidebarOpen).toBe(!before);
+        state.colorSchemeMedia.matches = true; state.colorSchemeMedia.dispatchEvent(new Event('change')); await flush(); expect(state.isDark).toBe(true);
+    });
+
+    it('removes and reopens actual IndexedDB history through rendered controls, then clears the retained list', async () => {
+        const factory = new IDBFactory(), history = createDocumentHistory(factory);
+        for (const [index, name] of ['first.txt', 'second.txt'].entries()) {
+            const bytes = new TextEncoder().encode(`Original ${index}`), parsed = parseDocument(name, new TextDecoder().decode(bytes));
+            await history.save({id: await documentHistoryId(bytes), name, format: parsed.format, size: bytes.length, total: 1, completed: 0, updatedAt: index + 1, bytes, mimeType: 'text/plain', translations: [], fingerprint: '', parsed, parsedVersion: 26});
+        }
+        app.unmount(); vi.stubGlobal('indexedDB', factory); root = node('root'); app = renderer.createApp(DocumentApp); app.mount(root); state = app._instance.setupState;
+        await vi.waitFor(() => expect(state.historyEntries).toHaveLength(2)); await flush();
+        await walkHost(root).find(entry => entry.props.class === 'history-remove')!.props.onClick(); await flush(); expect(state.historyEntries).toHaveLength(1);
+        await walkHost(root).find(entry => entry.props.class === 'history-open')!.props.onClick(); await flush(); expect(state.parsedDocument.fileName).toBe('first.txt');
+        await state.persistHistory(); state.resetDocument(); await flush(); await state.refreshHistory(); await flush();
+        const entry = state.historyEntries[0];
+        ports.sendMessage.mockImplementation(async (message: any) => message.type === 'fluentReadMaterials' ? {success: true, data: {id: 'history-material', kind: 'document', source: {kind: 'document', fingerprint: entry.id}, locator: {kind: 'document', page: 1, quote: 'Original 0'}}} : undefined);
+        await state.restoreMaterialDocument('history-material'); await flush(); expect(state.documentMaterialId).toBe('history-material');
+        state.resetDocument(); await flush(); await state.refreshHistory(); await flush();
+        await walkHost(root).find(entry => entry.type === 'button' && hostText(entry) === '清空记录')!.props.onClick(); await flush();
+        expect(state.historyEntries).toEqual([]); expect(await history.list()).toEqual([]);
+    });
+
+    it('does not show a mixed-PDF history entry as complete while scan pages are still pending', () => {
+        const entry = {id: 'mixed', name: 'mixed.pdf', format: 'pdf', size: 1, total: 1, completed: 1, pendingOcrPages: 2, updatedAt: 1};
+        expect(state.historyStatus(entry)).toContain('document.pdfReading.scanned');
+        expect(state.historyStatus(entry)).not.toContain('翻译完成');
+        expect(state.historyStatus({...entry, pendingOcrPages: undefined})).toContain('翻译完成');
+    });
+
+    it('renders actual Word table cells and part headings, navigates their outline and preserves source and correction', async () => {
+        const zip = await JSZip.loadAsync(readFileSync('tests/fixtures/document-translation/sample.docx'));
+        const paragraph = (text: string, heading = false) => `<w:p>${heading ? '<w:pPr><w:pStyle w:val="Heading1"/></w:pPr>' : ''}<w:r><w:t>${text}</w:t></w:r></w:p>`;
+        zip.file('word/document.xml', `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${paragraph('Main heading', true)}<w:tbl><w:tr><w:tc>${paragraph('Left table cell')}</w:tc><w:tc>${paragraph('Right table cell')}</w:tc></w:tr></w:tbl></w:body></w:document>`);
+        zip.file('word/header1.xml', `<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${paragraph('Header heading', true)}${paragraph('Header body')}</w:hdr>`);
+        const bytes = await zip.generateAsync({type: 'uint8array'}); await state.loadFiles([new File([asArrayBufferBytes(bytes)], 'tables.docx')]); await flush();
+        const table = walkHost(root).find(entry => entry.type === 'table' && entry.props.class === 'docx-table')!;
+        expect(hostText(table)).toContain('Left table cell'); expect(hostText(table)).toContain('Right table cell');
+        state.editSegment(1, 'Reviewed left cell'); state.previewMode = 'bilingual'; await flush(); expect(hostText(table)).toContain('Reviewed left cell');
+        const tabs = walkHost(root).filter(entry => entry.props.role === 'tab'); tabs[1].props.onClick(); await flush(); expect(state.activeSidebarTab).toBe('outline');
+        const languages = walkHost(root).find(entry => entry.props.class === 'document-outline-language')!;
+        languages.children.filter(entry => entry.type === 'button')[1].props.onClick(); await flush(); expect(state.richOutlineLanguage).toBe('translated');
+        languages.children.filter(entry => entry.type === 'button')[0].props.onClick(); await flush();
+        const toolbar = walkHost(root).find(entry => entry.props['aria-label'] === 'Word 文档部分')!;
+        toolbar.children.filter(entry => entry.type === 'button')[1].props.onClick(); await flush(); expect(state.docxPartIndex).toBe(1);
+        const target = walkHost(root).find(entry => entry.type === 'button' && hostText(entry) === 'Main heading')!;
+        await target.props.onClick(); await flush(); expect(state.docxPartIndex).toBe(0); expect(state.readerPage).toBe(1);
+        tabs[0].props.onClick(); await flush(); expect(state.activeSidebarTab).toBe('files');
+    });
+
+    it('previews per-chapter EPUB segment coverage and hides stale counts during translation', async () => {
+        const bytes = new Uint8Array(readFileSync('tests/fixtures/document-translation/sample.epub'));
+        await state.loadFiles([new File([asArrayBufferBytes(bytes)], 'coverage.epub', {type: getDocumentMimeType('epub')})]); await flush();
+        const chapters = state.epubChapters as Array<{segmentOffset: number; segmentCount: number}>;
+        state.sidebarTab = 'outline'; await flush();
+        const rows = () => walkHost(root).filter(entry => entry.type === 'button' && String(entry.props.class).split(' ').includes('document-outline-item') && String(entry.props.class).split(' ').includes('chapter'));
+        const counts = () => rows().map(row => row.children.find(child => child.props.class === 'document-outline-progress')?.text);
+        expect(chapters.length).toBeGreaterThan(0);
+        expect(counts()).toEqual(chapters.map(chapter => `0/${chapter.segmentCount}`));
+        expect(ports.i18n).toHaveBeenCalledWith('document.progressSegments', {completed: 0, total: chapters[0].segmentCount});
+        expect(rows()[0].props['aria-label']).toContain('document.progressSegments');
+
+        state.editSegment(chapters[0].segmentOffset, 'Reviewed chapter heading'); await flush();
+        expect(counts()[0]).toBe(`1/${chapters[0].segmentCount}`);
+
+        state.documentBatchTranslation = false;
+        const pending = deferred<string>(); ports.translate.mockReturnValueOnce(pending.promise);
+        const running = state.startTranslation();
+        await vi.waitFor(() => expect(ports.translate).toHaveBeenCalled()); await flush();
+        expect(rows().every(row => row.children.find(child => child.props.class === 'document-outline-progress')?.props.hidden)).toBe(true);
+        pending.resolve('First pending translation'); await running; await flush();
+        expect(counts()).toEqual(chapters.map(chapter => `${chapter.segmentCount}/${chapter.segmentCount}`));
+    });
+
+    it('native JSON reading accepts background pointer focus while retaining interactive controls and gesture scale', async () => {
+        await state.loadFiles([file('reader.json', '["Original sentence"]')]); await flush();
+        const {document} = parseHTML('<html><body><div><span>Text</span><button>Control</button></div></body></html>');
+        const focus = vi.fn(); state.readingContent.focus = focus;
+        const background = {composedPath: () => [document.querySelector('span')!], isTrusted: true, type: 'pointerdown'};
+        state.materialReadingPointerDown(background); expect(focus).toHaveBeenCalledWith({preventScroll: true});
+        state.materialReadingPointerDown({composedPath: () => [document.querySelector('button')!], isTrusted: true, type: 'pointerdown'}); expect(focus).toHaveBeenCalledOnce();
+        state.readingContent.ownerDocument = document; state.bindReaderZoomGestures();
+        expect(ports.zoomBindings.at(-1)!.options.getScale()).toBe(1);
+        state.readerTab = 'edit'; state.materialReadingPointerDown(background); expect(focus).toHaveBeenCalledOnce();
+    });
+
+    const taskButton = (label: string) => {
+        const taskbar = walkHost(root).find(entry => entry.props['aria-label'] === '当前文档与翻译任务');
+        const button = taskbar && walkHost(taskbar).find(entry => entry.type === 'button' && hostText(entry) === label);
+        expect(button, `missing document toolbar action: ${label}`).toBeDefined();
+        return button!;
+    };
+    const restartConfirmation = () => walkHost(root).find(entry => entry.type === 'dialog' && entry.props['aria-labelledby'] === 'confirm-document-heading')!;
+    const confirmButton = (label: string) => walkHost(restartConfirmation()).find(entry => entry.type === 'button' && hostText(entry) === label)!;
+    const primaryTaskAction = () => walkHost(root).find(entry => entry.props.class === 'toolbar-primary-actions')?.props['data-primary-action'];
+
+    it.each([true, false])('sets the initial sidebar from narrow viewport %s and preserves the choice across resize', async narrow => {
+        app.unmount();
+        const viewport = Object.assign(new EventTarget(), {matches: narrow});
+        win.matchMedia = (query: string) => query === '(max-width: 760px)' ? viewport : Object.assign(new EventTarget(), {matches: false});
+        root = node('root'); app = renderer.createApp(DocumentApp); app.mount(root); state = app._instance.setupState;
+        await flush(); await state.loadFiles([file('reading.txt')]); await flush();
+        const toggle = () => walkHost(root).find(entry => String(entry.props.class).split(' ').includes('sidebar-toggle'))!;
+        expect(state.sidebarOpen).toBe(!narrow);
+        expect(toggle().props['aria-expanded']).toBe(!narrow);
+        viewport.matches = !narrow; viewport.dispatchEvent(new Event('change')); win.dispatchEvent(new Event('resize')); await flush();
+        expect(state.sidebarOpen).toBe(!narrow);
+        toggle().props.onClick(); await flush();
+        expect(state.sidebarOpen).toBe(narrow);
+        viewport.matches = narrow; viewport.dispatchEvent(new Event('change')); win.dispatchEvent(new Event('resize')); await flush();
+        expect(toggle().props['aria-expanded']).toBe(narrow);
+    });
+
+    it.each(['multiple-files', 'failed-import'] as const)('opens a narrow sidebar for %s even after it was initially collapsed', async reason => {
+        app.unmount();
+        win.matchMedia = (query: string) => Object.assign(new EventTarget(), {matches: query === '(max-width: 760px)'});
+        root = node('root'); app = renderer.createApp(DocumentApp); app.mount(root); state = app._instance.setupState;
+        await flush(); expect(state.sidebarOpen).toBe(false);
+        if (reason === 'multiple-files') {
+            await state.loadFiles([file('first.txt')]); await flush(); expect(state.sidebarOpen).toBe(false);
+            await state.loadFiles([file('second.txt')]);
+            expect(state.documentQueue).toHaveLength(2);
+        } else {
+            vi.spyOn(binaryService, 'parseDocumentFile').mockRejectedValueOnce(new Error('Cannot read this document'));
+            await state.loadFiles([file('failed.txt')]);
+            expect(state.documentQueue).toHaveLength(1);
+            expect(state.documentQueue[0].error).toContain('Cannot read this document');
+        }
+        await flush();
+        expect(state.sidebarOpen).toBe(true);
+        expect(state.sidebarTab).toBe('files');
+    });
+
+    it('prioritizes actionable toolbar notices without duplicating task warnings or hiding independent reading feedback', async () => {
+        await state.loadFiles([file('notices.pdf')]); await flush();
+        await taskButton('开始翻译').props.onClick();
+        await vi.waitFor(() => expect(state.translationComplete).toBe(true)); await flush();
+        state.config.to = 'fr';
+        state.downloadNotice = '原文位置已变化或无法唯一匹配，请核对阅读位置。';
+        await flush();
+        const notices = () => walkHost(root).find(entry => entry.props['data-testid'] === 'document-task-notices')!;
+        const taskNotices = () => notices().children.filter(entry => entry.type !== '#comment' && entry.type !== '#text' && entry.props.class !== 'taskbar-toast');
+        expect(taskNotices()).toHaveLength(1);
+        expect(hostText(notices())).toContain('设置已更改');
+
+        state.errorMessage = '503 service temporarily unavailable'; state.runState = 'failed'; await flush();
+        expect(taskNotices()).toHaveLength(1);
+        expect(taskNotices()[0].props['data-testid']).toBe('document-translation-recovery');
+        expect(hostText(notices())).not.toContain('设置已更改');
+        expect(hostText(notices())).toContain('原文位置已变化或无法唯一匹配');
+        expect(walkHost(notices()).some(entry => entry.type === 'button' && entry.props.class === 'recovery-service')).toBe(true);
+
+        state.configSaveError = '设置未能保存，请重新调整后再试。'; await flush();
+        expect(taskNotices()).toHaveLength(1);
+        expect(hostText(taskNotices()[0])).toContain(state.configSaveError);
+        expect(hostText(taskNotices()[0])).toContain('调整设置');
+        expect(hostText(taskNotices()[0])).not.toContain(state.errorMessage);
+
+        state.configSaveError = ''; state.runState = 'ready'; state.retryNotice = '503 retry pending'; await flush();
+        expect(taskNotices()).toHaveLength(1);
+        expect(taskNotices()[0].props.role).toBe('status');
+        expect(hostText(taskNotices()[0])).toContain('503 retry pending');
+        expect(hostText(taskNotices()[0])).not.toContain('503 service temporarily unavailable');
+
+        state.errorMessage = ''; state.retryNotice = ''; await flush();
+        expect(taskNotices()).toHaveLength(1);
+        expect(hostText(taskNotices()[0])).toContain('设置已更改');
+        expect(state.translatedSegments).toEqual(['译 Original']);
+        expect(ports.batch).toHaveBeenCalledOnce();
+        expect(taskButton('下载').props.disabled).toBe(false);
+    });
+
+    it.each(['credentials', 'config-save', 'translation-failure'] as const)('keeps import cancellation independent of an existing %s notice and preserves the reviewed document', async condition => {
+        await state.loadFiles([file('reviewed.txt')]);
+        state.editSegment(0, 'Keep this correction');
+        const reviewed = state.parsedDocument;
+        if (condition === 'credentials') {
+            state.config.documentService = 'openai';
+            state.config.token.openai = '';
+            await flush();
+            expect(state.credentialWarning).toBeTruthy();
+        } else if (condition === 'config-save') {
+            state.configSaveError = '设置未能保存，请重新调整后再试。';
+        } else {
+            state.errorMessage = '503 service temporarily unavailable';
+            state.runState = 'failed';
+        }
+        await flush();
+        const notices = () => walkHost(root).find(entry => entry.props['data-testid'] === 'document-task-notices')!;
+        const originalAlert = hostText(walkHost(notices()).find(entry => entry.props.role === 'alert')!);
+        const parsing = deferred<ParsedDocument>();
+        const parser = vi.spyOn(binaryService, 'parseDocumentFile').mockReturnValueOnce(parsing.promise);
+        const importing = state.loadFiles([file('pending.txt')]);
+        await flush();
+        expect(state.openingFile).toBe(true);
+        expect(walkHost(notices()).some(entry => entry.props.class === 'document-import-progress')).toBe(true);
+        expect(hostText(notices())).toContain(originalAlert);
+        taskButton('document.pdfReading.cancelImport').props.onClick();
+        expect(parser.mock.calls[0][1]!.signal!.aborted).toBe(true);
+        expect(state.openingFile).toBe(false);
+        parsing.resolve(parseDocument('pending.txt', 'Late source'));
+        await importing; await flush();
+        expect(state.parsedDocument).toBe(reviewed);
+        expect(state.translatedSegments).toEqual(['Keep this correction']);
+        expect(state.documentQueue.map((item: any) => item.name)).toEqual(['reviewed.txt']);
+        expect(walkHost(notices()).some(entry => entry.props.class === 'document-import-progress')).toBe(false);
+        expect(hostText(notices())).toContain(originalAlert);
+    });
+
+    it.each(['</HEAD>', '</Head >', '</head>'])('HTML 阅读器在合法的 %s 结束标签前插入暗色主题', async closing => {
+        state.isDark = true;
+        await state.loadFiles([file('theme.html', `<HTML><HEAD><TITLE>Source</TITLE>${closing}<BODY><P>Original paragraph</P></BODY></HTML>`)]);
+        await flush();
+        const frame = walkHost(root).find(entry => entry.type === 'iframe');
+        expect(frame?.props.srcdoc).toContain('color-scheme: dark');
+        expect(frame?.props.srcdoc).toContain('Original paragraph');
+        expect(frame?.props.sandbox).toBe('allow-same-origin');
+    });
+
+    it('keeps PDF retranslation and download available after completion, preserving the result until restart is confirmed', async () => {
+        await state.loadFiles([file('repeat.pdf')]); await flush();
+        expect(primaryTaskAction()).toBe('translate');
+        await taskButton('开始翻译').props.onClick();
+        await vi.waitFor(() => expect(state.translationComplete).toBe(true)); await flush();
+        expect(primaryTaskAction()).toBe('download');
+        expect(ports.batch).toHaveBeenCalledOnce();
+        expect(ports.batch.mock.calls[0][2].useCache).toBeUndefined();
+        state.editSegment(0, '人工校订保留到确认'); await flush();
+        expect(taskButton('下载').props.disabled).toBe(false);
+        expect(taskButton('重新翻译').props.disabled).toBe(false);
+
+        await taskButton('重新翻译').props.onClick(); await flush();
+        expect(restartConfirmation().showModal).toHaveBeenCalledOnce();
+        expect(hostText(restartConfirmation())).toContain('重新翻译会替换现有译文和人工校订');
+        expect(ports.batch).toHaveBeenCalledOnce();
+        expect(state.translatedSegments).toEqual(['人工校订保留到确认']);
+        await confirmButton('返回文档').props.onClick(); await flush();
+        restartConfirmation().props.onClose(new Event('close')); await flush();
+        expect(restartConfirmation().close).toHaveBeenCalledOnce();
+        expect(state.pendingAction).toBeNull();
+        expect(ports.batch).toHaveBeenCalledOnce();
+        expect(state.translatedSegments).toEqual(['人工校订保留到确认']);
+        expect(taskButton('重新翻译').props.disabled).toBe(false);
+        expect(primaryTaskAction()).toBe('download');
+
+        const previousTarget = state.config.to;
+        state.config.to = 'fr'; await flush();
+        expect(primaryTaskAction()).toBe('translate');
+        expect(taskButton('按新设置翻译').props.disabled).toBe(false);
+        await taskButton('按新设置翻译').props.onClick(); await flush();
+        await confirmButton('返回文档').props.onClick();
+        restartConfirmation().props.onClose(new Event('close')); await flush();
+        expect(ports.batch).toHaveBeenCalledOnce();
+        expect(state.translatedSegments).toEqual(['人工校订保留到确认']);
+        state.config.to = previousTarget; await flush();
+        expect(primaryTaskAction()).toBe('download');
+
+        ports.batch.mockResolvedValueOnce(['第二次译文']);
+        await taskButton('重新翻译').props.onClick(); await flush();
+        await confirmButton('重新翻译').props.onClick();
+        await vi.waitFor(() => expect(state.translationComplete).toBe(true)); await flush();
+        expect(ports.batch).toHaveBeenCalledTimes(2);
+        expect(ports.batch.mock.calls[1]).toEqual([['Original'], 'repeat.pdf', expect.objectContaining({useCache: false})]);
+        expect(state.translatedSegments).toEqual(['第二次译文']);
+        expect(state.confirmedTranslationIds).toEqual([]);
+        expect(taskButton('重新翻译').props.disabled).toBe(false);
+        expect(taskButton('下载').props.disabled).toBe(false);
+    });
+
+    it.each(['service', 'model'])('retranslates a completed PDF with the new %s through the toolbar confirmation', async change => {
+        Object.assign(state.config, {documentService: 'openai', enableAIContext: false,
+            token: {openai: 'fixture-key', deepseek: 'fixture-key'}, documentModel: {openai: 'gpt-5-mini', deepseek: 'deepseek-chat'}});
+        await state.loadFiles([file('switch.pdf')]); await flush();
+        await taskButton('开始翻译').props.onClick();
+        await vi.waitFor(() => expect(state.translationComplete).toBe(true)); await flush();
+        expect(primaryTaskAction()).toBe('download');
+        expect(ports.batch).toHaveBeenCalledOnce();
+        const field = walkHost(root).find(entry => entry.type === 'select' && entry.props['aria-label'] === (change === 'service' ? '翻译服务' : '模型'))!;
+        field.props.onChange({target: {value: change === 'service' ? 'deepseek' : 'gpt-5'}}); await flush();
+        // 服务和模型切换允许未完成任务续译；已完成任务仍必须保留完整重译入口。
+        expect(state.settingsChanged).toBe(false);
+        expect(primaryTaskAction()).toBe('translate');
+        expect(taskButton('重新翻译').props.disabled).toBe(false);
+        await taskButton('重新翻译').props.onClick(); await flush();
+        expect(ports.batch).toHaveBeenCalledOnce();
+        await confirmButton('重新翻译').props.onClick();
+        await vi.waitFor(() => expect(state.translationComplete).toBe(true)); await flush();
+        expect(ports.batch).toHaveBeenCalledTimes(2);
+        expect(ports.batch.mock.calls[1][2]).toMatchObject({
+            serviceOverride: change === 'service' ? 'deepseek' : 'openai',
+            modelOverride: change === 'service' ? 'deepseek-chat' : 'gpt-5', useCache: false,
+        });
+        expect(taskButton('重新翻译').props.disabled).toBe(false);
+        expect(taskButton('下载').props.disabled).toBe(false);
+        expect(primaryTaskAction()).toBe('download');
+    });
+
+    it.each([
+        ['service', 'resolve'], ['service', 'reject'], ['model', 'resolve'], ['model', 'reject'],
+        ['inherited-service', 'resolve'], ['inherited-service', 'reject'],
+    ] as const)('pauses an in-flight PDF after an external %s change, resumes missing text and ignores the old %s', async (change, settlement) => {
+        const initial = JSON.parse(JSON.stringify(ports.config));
+        Object.assign(initial, {service: 'bilibili', documentService: change === 'inherited-service' ? '' : change === 'model' ? 'openai' : 'bilibili', enableAIContext: false});
+        initial.documentModel.openai = 'document-before';
+        initial.token.openai = 'fixture-only-token';
+        Object.assign(ports.config, initial); ports.observer(initial); await flush();
+        ports.pageCount = 2;
+        ports.pageProvider = async (pageNumber, page) => ({...page, getTextContent: async () => {
+            const content = await page.getTextContent();
+            return {...content, items: content.items.map((item: any) => ({...item, str: `Original ${pageNumber}`}))};
+        }});
+        await state.loadFiles([file('external-switch.pdf')]); await flush();
+        expect(state.parsedDocument.segments).toHaveLength(2);
+        state.editSegment(0, '保留人工校订');
+        const old = deferred<string | string[]>();
+        const oldPort = change === 'model' ? ports.batch : ports.translate;
+        oldPort.mockReturnValueOnce(old.promise);
+        const running = state.startTranslation();
+        await vi.waitFor(() => expect(oldPort).toHaveBeenCalledOnce()); await flush();
+        const oldOptions = oldPort.mock.calls[0][2];
+        expect(oldOptions.signal.aborted).toBe(false);
+        expect(oldOptions.serviceOverride).toBe(change === 'model' ? 'openai' : 'bilibili');
+
+        const external = JSON.parse(JSON.stringify(initial));
+        if (change === 'model') external.documentModel.openai = 'document-after';
+        else if (change === 'inherited-service') external.service = 'microsoft';
+        else external.documentService = 'microsoft';
+        Object.assign(ports.config, external); ports.observer(external);
+        expect(oldOptions.signal.aborted).toBe(true);
+        await flush();
+        expect(state.translating).toBe(false);
+        expect(state.runState).toBe('paused');
+        expect(state.statusLabel).toBe('已暂停');
+        expect(taskButton('继续翻译').props.disabled).toBe(false);
+        expect(primaryTaskAction()).toBe('translate');
+        expect(state.translatedSegments[0]).toBe('保留人工校订');
+        expect(state.confirmedTranslationIds).toEqual([0]);
+        expect(state.settingsChanged).toBe(false);
+
+        ports.batch.mockResolvedValueOnce(['切换后完成的译文']);
+        await taskButton('继续翻译').props.onClick();
+        await vi.waitFor(() => expect(state.translationComplete).toBe(true)); await flush();
+        expect(ports.batch).toHaveBeenCalledTimes(change === 'model' ? 2 : 1);
+        const resumed = ports.batch.mock.calls[change === 'model' ? 1 : 0];
+        expect(resumed[0]).toEqual(['Original 2']);
+        expect(resumed[2]).toMatchObject({
+            serviceOverride: change === 'model' ? 'openai' : 'microsoft',
+            modelOverride: change === 'model' ? 'document-after' : '',
+        });
+        expect(state.translatedSegments).toEqual(['保留人工校订', '切换后完成的译文']);
+        if (settlement === 'resolve') old.resolve(change === 'model' ? ['旧服务迟到译文'] : '旧服务迟到译文');
+        else old.reject(new Error('旧服务迟到 504 错误'));
+        await running; await flush();
+        expect(state.translationComplete).toBe(true);
+        expect(state.translatedSegments).toEqual(['保留人工校订', '切换后完成的译文']);
+        expect(state.confirmedTranslationIds).toEqual([0]);
+        expect(state.errorMessage).toBe('');
+        expect(ports.batch).toHaveBeenCalledTimes(change === 'model' ? 2 : 1);
+        expect(ports.translate).toHaveBeenCalledTimes(change === 'model' ? 0 : 1);
+    });
+
+    it('persists a confirmed PDF history restart even when its first request fails, without restoring the replaced result', async () => {
+        const parsed = await binaryService.parseDocumentFile(file('history-repeat.pdf'));
+        if (parsed.binary?.kind !== 'pdf') throw new Error('expected PDF');
+        const bytes = parsed.binary.bytes, id = await documentHistoryId(bytes);
+        const factory = new IDBFactory(), history = createDocumentHistory(factory);
+        await history.save({id, name: parsed.fileName, format: 'pdf', size: bytes.length, total: parsed.segments.length,
+            completed: parsed.segments.length, updatedAt: 1, bytes, mimeType: 'application/pdf', translations: ['历史完整译文'],
+            fingerprint: state.currentFingerprint, parsed, parsedVersion: 26});
+        app.unmount(); vi.stubGlobal('indexedDB', factory);
+        root = node('root'); app = renderer.createApp(DocumentApp); app.mount(root); state = app._instance.setupState;
+        await flush(); await state.openHistory({id}); await flush();
+        expect(state.translationComplete).toBe(true);
+        expect(state.translatedSegments).toEqual(['历史完整译文']);
+        expect(taskButton('下载').props.disabled).toBe(false);
+        expect(taskButton('重新翻译').props.disabled).toBe(false);
+        expect(ports.batch).not.toHaveBeenCalled();
+        const restoredRevision = state.editRevision;
+
+        ports.batch.mockRejectedValueOnce(Object.assign(new Error('HTTP 400 invalid model'), {retryable: false}));
+        await taskButton('重新翻译').props.onClick(); await flush();
+        expect(state.translatedSegments).toEqual(['历史完整译文']);
+        await confirmButton('重新翻译').props.onClick();
+        await vi.waitFor(() => expect(state.runState).toBe('failed')); await flush();
+        expect(ports.batch).toHaveBeenCalledOnce();
+        expect(ports.batch.mock.calls[0][2].useCache).toBe(false);
+        expect(state.translatedSegments).toEqual([]);
+        expect(state.editRevision).toBeGreaterThan(restoredRevision);
+        await vi.waitFor(async () => {
+            expect(await history.load(id)).toMatchObject({completed: 0, translations: [], bypassCache: true});
+        });
+        state.resetDocument(); await flush();
+        await state.openHistory({id}); await flush();
+        expect(state.translationComplete).toBe(false);
+        expect(state.translatedSegments.some((value: string) => value.trim())).toBe(false);
+        expect(taskButton('开始翻译').props.disabled).toBe(false);
+        expect(ports.batch).toHaveBeenCalledOnce();
+        await taskButton('开始翻译').props.onClick();
+        await vi.waitFor(() => expect(state.translationComplete).toBe(true)); await flush();
+        expect(ports.batch).toHaveBeenCalledTimes(2);
+        expect(ports.batch.mock.calls[1][2].useCache).toBe(false);
+    });
+
+    it('keeps bypassing cached PDF translations when a confirmed restart is paused and continued', async () => {
+        await state.loadFiles([file('pause-repeat.pdf')]); await flush();
+        await taskButton('开始翻译').props.onClick();
+        await vi.waitFor(() => expect(state.translationComplete).toBe(true)); await flush();
+        expect(ports.batch.mock.calls[0][2].useCache).toBeUndefined();
+        const pending = deferred<string[]>(); ports.batch.mockReturnValueOnce(pending.promise);
+        await taskButton('重新翻译').props.onClick(); await flush();
+        await confirmButton('重新翻译').props.onClick();
+        await vi.waitFor(() => expect(ports.batch).toHaveBeenCalledTimes(2)); await flush();
+        expect(ports.batch.mock.calls[1][2].useCache).toBe(false);
+        await taskButton('暂停翻译').props.onClick(); await flush();
+        expect(ports.batch.mock.calls[1][2].signal.aborted).toBe(true);
+        pending.resolve(['迟到译文']); await flush();
+        expect(state.translatedSegments).toEqual([]);
+
+        ports.batch.mockResolvedValueOnce(['继续后重新生成的译文']);
+        await taskButton('继续翻译').props.onClick();
+        await vi.waitFor(() => expect(state.translationComplete).toBe(true)); await flush();
+        expect(ports.batch).toHaveBeenCalledTimes(3);
+        expect(ports.batch.mock.calls[2][2].useCache).toBe(false);
+        expect(state.translatedSegments).toEqual(['继续后重新生成的译文']);
+    });
+
+    it('reuses the reading priority identity until rich-text scroll crosses a segment or document length changes', async () => {
+        await state.loadFiles([file('priority.txt', Array.from({length: 10}, (_, index) => `Paragraph ${index}`).join('\n\n'))]); await flush();
+        const scroller = {scrollHeight: 1_000, scrollTop: 0};
+        state.richFrame = {contentDocument: {scrollingElement: scroller}};
+        const initial = state.readingPriorityKey();
+        expect(initial).toMatchObject({start: 0, total: 10, pages: null});
+        expect(state.readingPriorityKey()).toBe(initial);
+        scroller.scrollTop = 20; expect(state.readingPriorityKey()).toBe(initial);
+        scroller.scrollTop = 150;
+        const moved = state.readingPriorityKey();
+        expect(moved).not.toBe(initial); expect(moved.start).toBe(1);
+        expect(state.prioritizeReadingPosition(state.parsedDocument.segments)[0].id).toBe(1);
+        expect(state.readingPriorityKey()).toBe(moved);
+        const parsed = state.parsedDocument;
+        state.parsedDocument = markRaw({...parsed, segments: [...parsed.segments, {id: 10, source: 'Additional paragraph'}]});
+        const expanded = state.readingPriorityKey();
+        expect(expanded).not.toBe(moved); expect(expanded.total).toBe(11);
+        state.richFrame = null;
+    });
+
+    it('includes PDF page selection and page-to-segment mapping in the reading priority identity', async () => {
+        ports.pageCount = 3;
+        await state.loadFiles([file('priority.pdf')]); await flush();
+        const initial = state.readingPriorityKey();
+        expect(initial.pages.count).toBe(3); expect(state.readingPriorityKey()).toBe(initial);
+        state.pdfPage = 2;
+        const moved = state.readingPriorityKey();
+        expect(moved).not.toBe(initial); expect(moved.start).toBe(1);
+        const parsed = state.parsedDocument;
+        expect(state.prioritizeReadingPosition(parsed.segments)[0].id).toBe(parsed.binary.pages[1].segmentIndexes[0]);
+        state.parsedDocument = markRaw({...parsed, binary: {...parsed.binary, pages: [...parsed.binary.pages].reverse()}});
+        const remapped = state.readingPriorityKey();
+        expect(remapped).not.toBe(moved); expect(remapped.pages).not.toBe(moved.pages);
+        expect(state.readingPriorityKey()).toBe(remapped);
+    });
+
+    it('derives keyed priority from native DOCX parts, EPUB chapters, and paginated reader anchors', async () => {
+        await state.loadFiles([new File([asArrayBufferBytes(readFileSync('tests/fixtures/document-translation/sample.docx'))], 'priority.docx', {type: getDocumentMimeType('docx')})]); await flush();
+        const body = state.readingPriorityKey();
+        state.docxPartIndex = 1; await flush();
+        const part = state.readingPriorityKey();
+        expect(part).not.toBe(body); expect(part.start).toBe(state.currentDocxPart.paragraphSegments[0].segmentIndex);
+        expect(state.readingPriorityKey()).toBe(part);
+        await state.loadFiles([new File([asArrayBufferBytes(readFileSync('tests/fixtures/document-translation/sample.epub'))], 'priority.epub', {type: getDocumentMimeType('epub')})]); await flush();
+        const chapter = state.readingPriorityKey();
+        state.epubChapterIndex = 1; await flush();
+        expect(state.readingPriorityKey()).not.toBe(chapter);
+        expect(state.readingPriorityKey().start).toBe(state.currentEpubChapter.segmentOffset);
+        await state.loadFiles([file('priority.json', JSON.stringify(Array.from({length: 90}, (_, index) => `Visible sentence ${index}`)))]); await flush();
+        const firstPage = state.readingPriorityKey();
+        state.readerPage = 2;
+        const secondPage = state.readingPriorityKey();
+        expect(secondPage).not.toBe(firstPage); expect(secondPage.start).toBe(80);
+        expect(state.prioritizeReadingPosition(state.parsedDocument.segments)[0].id).toBe(80);
+        expect(state.readingPriorityKey()).toBe(secondPage);
+    });
+
+    it('independent material entry renders and saves while vocabulary and reading AI are both off', async () => {
+        state.config.vocabularyBookEnabled = false; state.config.harness.enabled = false; state.config.on = true;
+        await state.loadFiles([file('same-title.txt', 'Original learning paragraph')]); await flush();
+        state.documentQueue[0].historyId = 'a'.repeat(32);
+        ports.sendMessage.mockImplementation(async (message: any) => message.type === 'fluentReadMaterials'
+            ? {success: true, data: message.action === 'generation' ? 3 : {id: 'document-material'}} : undefined);
+        await flush();
+        const button = walkHost(root).find(entry => entry.type === 'button' && hostText(entry) === '加入学习材料');
+        expect(button).toBeDefined(); expect(button!.props.disabled).toBe(false);
+        await button!.props.onClick(); await flush();
+        const capture = ports.sendMessage.mock.calls.find(([message]) => message.type === 'fluentReadMaterials' && message.action === 'capture')?.[0];
+        expect(capture.input).toMatchObject({source: {kind: 'document', fingerprint: 'a'.repeat(32), title: 'same-title.txt'}, locator: {kind: 'document', page: 1, quote: 'Original learning paragraph'}, generation: 3});
+        expect(capture.input.capturedAt).toEqual(expect.any(Number)); expect(state.documentMaterialId).toBe('document-material');
+        expect(capture.input.reference).toBeUndefined();
+        expect(hostText(button!)).toBe('更新学习位置'); expect(state.config.vocabularyBookEnabled).toBe(false); expect(state.config.harness.enabled).toBe(false);
+    });
+    it.each(['off', 'private'])('independent material entry remains restricted when global context is %s', async mode => {
+        if (mode === 'private') {
+            app.unmount(); ports.privateContext = true; root = node('root'); app = renderer.createApp(DocumentApp); app.mount(root); state = (app._instance as any).setupState; await flush();
+        } else state.config.on = false;
+        await state.loadFiles([file('restricted.txt', 'Private material')]); await flush(); state.documentQueue[0].historyId = 'restricted-fingerprint'; await flush();
+        expect(walkHost(root).some(entry => entry.type === 'button' && hostText(entry) === '加入学习材料')).toBe(false);
+        await state.saveDocumentMaterial();
+        expect(ports.sendMessage.mock.calls.some(([message]) => message.type === 'fluentReadMaterials')).toBe(false);
+    });
+    it('keeps missing local materials recoverable and clears the restoring shell when an old session exists', async () => {
+        app.unmount();vi.stubGlobal('indexedDB', new IDBFactory());root = node('root');app = renderer.createApp(DocumentApp);app.mount(root);state = app._instance.setupState;await flush();
+        ports.sendMessage.mockImplementation(async (message: any) => message.type === 'fluentReadMaterials' ? {success: true, data: {id: 'missing-material', kind: 'document', source: {kind: 'document', fingerprint: 'b'.repeat(32)}, locator: {kind: 'document', page: 2}}} : undefined);
+        state.restoring = true; await state.restoreMaterialDocument('missing-material'); await flush();
+        expect(state.restoring).toBe(false); expect(state.importError).toContain('请选择原文件');
+        await state.loadFiles([file('same-title.txt', 'Different file')]); await flush();
+        state.documentQueue[0].historyId = 'c'.repeat(32); await state.applyMaterialResume();
+        expect(state.importError).toContain('内容指纹不一致'); expect(state.documentMaterialId).toBe('');
+        state.documentQueue[0].historyId = 'b'.repeat(32); await state.applyMaterialResume(); await flush();
+        expect(state.documentMaterialId).toBe('missing-material');
+    });
+    it('reports unavailable material history without claiming the record was removed', async () => {
+        ports.sendMessage.mockImplementation(async (message: any) => message.type === 'fluentReadMaterials' ? {success: true, data: {id: 'unavailable', kind: 'document', source: {kind: 'document', fingerprint: 'b'.repeat(32)}, locator: {kind: 'document', page: 2}}} : undefined);
+        await state.restoreMaterialDocument('unavailable');await flush();
+        expect(state.importError).toBe('document.historyOpenUnavailable');
+        expect(state.importError).not.toContain('已移除');
+    });
+    it('cancels pending material saves when the document changes and preserves the newly active file', async () => {
+        await state.loadFiles([file('first.txt'), file('second.txt')]); await flush();
+        state.documentQueue[0].historyId = 'first-file'; state.documentQueue[1].historyId = 'second-file';
+        const pending = deferred<{success: boolean; data: number}>();
+        ports.sendMessage.mockImplementation(async (message: any) => message.type === 'fluentReadMaterials' && message.action === 'generation' ? pending.promise : undefined);
+        const save = state.saveDocumentMaterial(); state.selectDocument(state.documentQueue[1]); await flush();
+        pending.resolve({success: true, data: 3}); await save; await flush();
+        expect(ports.sendMessage.mock.calls.some(([message]) => message.type === 'fluentReadMaterials' && message.action === 'capture')).toBe(false);
+        expect(state.documentMaterialId).toBe(''); expect(state.parsedDocument.fileName).toBe('second.txt');
+    });
+    it('material section mapping captures and restores the second DOCX part on its second reader page', async () => {
+        const zip = await JSZip.loadAsync(readFileSync('tests/fixtures/document-translation/sample.docx'));
+        zip.file('word/header1.xml', `<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${Array.from({length: 85}, (_, index) => `<w:p><w:r><w:t>Second part unique paragraph ${index + 1}.</w:t></w:r></w:p>`).join('')}</w:hdr>`);
+        const bytes = await zip.generateAsync({type: 'uint8array'});
+        const fingerprint = await documentHistoryId(bytes); expect(fingerprint).toMatch(/^[a-f\d]{32}$/u);
+        await state.loadFiles([new File([asArrayBufferBytes(bytes)], 'material-sections.docx', {type: getDocumentMimeType('docx')})]); await flush();
+        state.documentQueue[0].historyId = fingerprint;
+        expect(state.docxParts[1].path).toBe('word/header1.xml');
+        state.docxPartIndex = 1; await flush(); state.readerPage = 2; await flush();
+        const position = state.documentMaterialSelection();
+        expect(position.locator).toMatchObject({kind: 'document', fingerprint, section: 'docx:1', page: 2, quote: 'Second part unique paragraph 81.'});
+        expect(walkHost(root).find(entry => entry.props['data-fluentread-material-fingerprint'] === fingerprint)?.props['data-fluentread-material-section']).toBe('docx:1');
+        ports.sendMessage.mockImplementation(async (message: any) => message.type === 'fluentReadMaterials'
+            ? {success: true, data: message.action === 'generation' ? 3 : {id: 'docx-section-material', kind: 'document', ...position}} : undefined);
+        await state.saveDocumentMaterial();
+        expect(ports.sendMessage.mock.calls.find(([message]) => message.type === 'fluentReadMaterials' && message.action === 'capture')?.[0].input.locator).toMatchObject({section: 'docx:1', page: 2, quote: 'Second part unique paragraph 81.'});
+        state.docxPartIndex = 0; await flush(); expect(state.readerPage).toBe(1);
+        await state.restoreMaterialDocument('docx-section-material'); await state.applyMaterialResume(); await flush();
+        expect(state.docxPartIndex).toBe(1); expect(state.currentDocxPart.path).toBe('word/header1.xml'); expect(state.readerPage).toBe(2);
+        expect(state.documentMaterialSelection().locator).toMatchObject(position.locator);
+        const parsed = state.parsedDocument;
+        const reorderedParts = [...parsed.binary.parts]; [reorderedParts[1], reorderedParts[2]] = [reorderedParts[2], reorderedParts[1]];
+        state.parsedDocument = markRaw({...parsed, binary: {...parsed.binary, parts: reorderedParts}}); await flush();
+        await state.restoreMaterialDocument('docx-section-material'); await state.applyMaterialResume(); await flush();
+        expect(state.docxPartIndex).toBe(2); expect(state.currentDocxPart.path).toBe('word/header1.xml'); expect(state.readerPage).toBe(2);
+        state.parsedDocument = markRaw({...parsed, segments: parsed.segments.map((segment: any, index: number) => index === 0 ? {...segment, source: position.locator.quote} : segment)}); await flush();
+        await state.restoreMaterialDocument('docx-section-material'); await state.applyMaterialResume(); await flush();
+        expect(state.docxPartIndex).toBe(1); expect(state.readerPage).toBe(2); expect(state.downloadNotice).toBe('');
+        // 相同文字出现在另一原生位置不影响精确引用；真正原段落变化才保留待修复定位。
+        const originalIndex = parsed.binary.parts[1].paragraphSegments[80].segmentIndex;
+        state.parsedDocument = markRaw({...parsed, segments: parsed.segments.map((segment: any, index: number) => index === originalIndex ? {...segment, source: 'Reparsed original differs'} : segment)}); await flush();
+        await state.restoreMaterialDocument('docx-section-material'); await state.applyMaterialResume(); await flush();
+        expect(state.downloadNotice).toContain('原文位置已变化或无法唯一匹配');
+    });
+    it('material section mapping captures and restores the second EPUB chapter with its real segment offset', async () => {
+        const bytes = new Uint8Array(readFileSync('tests/fixtures/document-translation/sample.epub'));
+        const fingerprint = await documentHistoryId(bytes); expect(fingerprint).toMatch(/^[a-f\d]{32}$/u);
+        await state.loadFiles([new File([bytes], 'material-chapters.epub', {type: getDocumentMimeType('epub')})]); await flush();
+        state.documentQueue[0].historyId = fingerprint;
+        expect(state.epubChapters).toHaveLength(2);
+        const second = state.epubChapters[1]; const firstQuote = state.parsedDocument.segments[state.epubChapters[0].segmentOffset].source;
+        const secondQuote = state.parsedDocument.segments[second.segmentOffset].source;
+        expect(second.segmentOffset).toBeGreaterThan(0); expect(secondQuote).not.toBe(firstQuote);
+        state.epubChapterIndex = 1; await flush();
+        const position = state.documentMaterialSelection();
+        expect(position.locator).toMatchObject({kind: 'document', fingerprint, section: 'epub:1', page: 1, quote: secondQuote});
+        expect(walkHost(root).find(entry => entry.props['data-fluentread-material-fingerprint'] === fingerprint)?.props['data-fluentread-material-section']).toBe('epub:1');
+        ports.sendMessage.mockImplementation(async (message: any) => message.type === 'fluentReadMaterials'
+            ? {success: true, data: message.action === 'generation' ? 3 : {id: 'epub-section-material', kind: 'document', ...position}} : undefined);
+        await state.saveDocumentMaterial();
+        expect(ports.sendMessage.mock.calls.find(([message]) => message.type === 'fluentReadMaterials' && message.action === 'capture')?.[0].input.locator).toMatchObject({section: 'epub:1', page: 1, quote: secondQuote});
+        state.epubChapterIndex = 0; await flush(); expect(state.currentEpubChapter.path).not.toBe(second.path);
+        await state.restoreMaterialDocument('epub-section-material'); await state.applyMaterialResume(); await flush();
+        expect(state.epubChapterIndex).toBe(1); expect(state.currentEpubChapter.path).toBe(second.path); expect(state.readerPage).toBe(1);
+        expect(state.documentMaterialSelection().locator).toMatchObject(position.locator);
+        const parsed = state.parsedDocument;
+        state.parsedDocument = markRaw({...parsed, binary: {...parsed.binary, chapters: [...parsed.binary.chapters].reverse()}}); await flush();
+        await state.restoreMaterialDocument('epub-section-material'); await state.applyMaterialResume(); await flush();
+        expect(state.epubChapterIndex).toBe(0); expect(state.currentEpubChapter.path).toBe(second.path); expect(state.readerPage).toBe(1);
+    });
+    it('material resume ownership retains pending position when activation invalidates the early apply', async () => {
+        await state.loadFiles([file('first.txt'), file('second.srt', Array.from({length: 81}, (_, index) => `${index + 1}\n00:00:01,000 --> 00:00:02,000\nCaption ${index + 1}.`).join('\n\n'))]); await flush();
+        state.documentQueue[0].historyId = 'd'.repeat(32); state.documentQueue[1].historyId = 'e'.repeat(32);
+        ports.sendMessage.mockImplementation(async (message: any) => message.type === 'fluentReadMaterials' ? {success: true, data: {id: 'resume-second', kind: 'document', source: {kind: 'document', fingerprint: 'e'.repeat(32)}, locator: {kind: 'document', page: 2}}} : undefined);
+        await state.restoreMaterialDocument('resume-second');
+        state.selectDocument(state.documentQueue[1]);
+        // 故意在 activeDocumentId 的 pre watcher 更新代次之前调用，复现生产历史恢复中的两次 apply。
+        await state.applyMaterialResume(); await flush();
+        expect(state.parsedDocument.fileName).toBe('second.srt'); expect(state.readerPage).toBe(2); expect(state.documentMaterialId).toBe('resume-second');
+    });
+    it('material resume ownership waits for the asynchronous PDF public ref before consuming the saved page', async () => {
+        ports.pageCount = 3;
+        await state.loadFiles([file('async-reader.pdf')]); await flush(); state.documentQueue[0].historyId = 'f'.repeat(32);
+        ports.sendMessage.mockImplementation(async (message: any) => message.type === 'fluentReadMaterials' ? {success: true, data: {id: 'async-reader-material', kind: 'document', source: {kind: 'document', fingerprint: 'f'.repeat(32)}, locator: {kind: 'document', page: 2}}} : undefined);
+        // 生产公共出口 defineAsyncComponent 先挂占位节点；chunk 到达前不存在 resumePage。
+        state.materialPdfReader = null;
+        await state.restoreMaterialDocument('async-reader-material'); await state.applyMaterialResume(); await flush();
+        expect(state.documentMaterialId).toBe(''); expect(state.pdfPage).toBe(1);
+        const resumePage = vi.fn(async (page: number) => {state.pdfPage = page;});
+        state.materialPdfReader = {resumePage}; await flush();
+        expect(resumePage).toHaveBeenCalledOnce(); expect(resumePage).toHaveBeenCalledWith(2);
+        expect(state.documentMaterialId).toBe('async-reader-material'); expect(state.pdfPage).toBe(2);
+    });
     it('uses each queued task as the immediate source of truth for edits and switches', async () => {
         await state.loadFiles([file('first.txt'), file('second.txt')]); await flush();
         const first = state.documentQueue[0];
@@ -247,6 +1315,57 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         state.config.token.openai = 'changed-member-credential'; await flush();
         expect(state.settingsChanged).toBe(true);
     });
+    it('shows the actual batch context and scoped glossary hits while keeping the AI context override document-local', async () => {
+        Object.assign(state.config, {from: 'en', to: 'zh-CN', documentService: 'openai', enableAIContext: false,
+            glossaryEnabled: true, documentGlossaryIds: ['book-terms'], glossaryLibraries: [{id: 'book-terms', name: 'Book terms', enabled: true,
+                sourceLanguage: 'en', targetLanguage: 'zh-CN', domains: [], entries: [
+                    {id: 'helios-engine', source: 'Helios engine', target: 'Helios 引擎', caseSensitive: false},
+                ]}], token: {openai: 'fixture-document-key'}});
+        state.config.documentModel.openai = 'gpt-4.1-mini';
+        await state.loadFiles([file('context.txt', 'The Helios engine is compact.\n\nThe Helios engine runs locally.')]); await flush();
+        expect(state.parsedDocument.segments).toHaveLength(2);
+        state.editSegment(0, 'Helios 引擎（已确认）');
+        state.documentAIContextPreference = true;
+        expect(state.config.enableAIContext).toBe(false);
+        ports.translate.mockImplementation(async (source: string) => `译 ${source}`);
+        await state.startTranslation(); await flush();
+
+        expect(ports.translate).toHaveBeenCalledOnce();
+        const requestOptions = ports.translate.mock.calls[0][2];
+        expect(requestOptions).toMatchObject({enableAIContext: true, glossaryIds: ['book-terms'], glossaryContext: 'document'});
+        const sentContext = JSON.parse(requestOptions.discourseContext);
+        expect(sentContext.evidence).toEqual(expect.arrayContaining([expect.objectContaining({kind: 'user_confirmed', translation: 'Helios 引擎（已确认）'})]));
+        expect(state.requestEvidence).toMatchObject({segmentCount: 1, contextEnabled: true, glossaryOccurrences: 1, glossaryTermCount: 1, glossaryLibraryCount: 1});
+        expect(state.requestEvidence.positions).toContain('段落 2');
+        expect(state.requestEvidence.contextItems).toEqual(expect.arrayContaining([expect.objectContaining({kind: 'user_confirmed', translation: 'Helios 引擎（已确认）'})]));
+        expect(state.requestEvidence.glossaryTerms).toEqual([{library: 'Book terms', source: 'Helios engine', target: 'Helios 引擎', occurrences: 1}]);
+        const evidence = walkHost(root).find(entry => entry.props['data-testid'] === 'document-request-evidence')!;
+        expect(hostText(evidence)).toContain('Helios engine → Helios 引擎');
+        expect(hostText(evidence)).toContain('Book terms');
+        expect(state.config.enableAIContext).toBe(false);
+
+        await state.loadFiles([file('next.txt', 'A different document.')]); await flush();
+        expect(state.documentAIContextOverride).toBeNull();
+        expect(state.requestEvidence).toBeNull();
+    });
+    it('reports when document context is off without changing the global preference', async () => {
+        Object.assign(state.config, {from: 'en', to: 'zh-CN', documentService: 'openai', enableAIContext: true,
+            token: {openai: 'fixture-document-key'}});
+        state.config.documentModel.openai = 'gpt-4.1-mini';
+        await state.loadFiles([file('no-context.txt', 'A single paragraph.')]); await flush();
+        state.documentAIContextPreference = false;
+        state.documentBatchTranslation = false;
+        expect(state.config.enableAIContext).toBe(true);
+        await state.startTranslation(); await flush();
+
+        expect(ports.translate).toHaveBeenCalledOnce();
+        expect(ports.translate.mock.calls[0][2]).toMatchObject({enableAIContext: false});
+        expect(ports.translate.mock.calls[0][2].discourseContext).toBeUndefined();
+        expect(state.requestEvidence).toMatchObject({contextEnabled: false, contextItems: []});
+        const evidence = walkHost(root).find(entry => entry.props['data-testid'] === 'document-request-evidence')!;
+        expect(hostText(evidence)).toContain('document.requestEvidence.contextDisabled');
+        expect(state.config.enableAIContext).toBe(true);
+    });
     it.each([
         ['google', 'composite:first'], ['composite:first', 'google'], ['composite:first', 'composite:second'],
     ])('resumes unfinished segments from %s to %s without discarding manual revisions', async (before, after) => {
@@ -282,6 +1401,8 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
             const copy = getDocumentDownloadCopy(language);
             expect(Object.keys(copy)).toEqual(Object.keys(getDocumentDownloadCopy('zh-CN')));
             expect(Object.values(copy).every(value => value.trim())).toBe(true);
+            expect(getDocumentDownloadErrorCopy(language, 'Input document is encrypted.')).toBe(copy.protectedFailed);
+            expect(getDocumentDownloadErrorCopy(language, 'encoding failed')).toBe(copy.failed);
         }
         expect(getDocumentDownloadCopy('unsupported-language')).toBe(getDocumentDownloadCopy('zh-CN'));
         expect(getDocumentDownloadCopy(undefined)).toBe(getDocumentDownloadCopy('zh-CN'));
@@ -290,12 +1411,12 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(hostText(root)).toContain('下载原文');
         state.language = 'en-US'; await flush();
         expect(hostText(root)).toContain('Download original');
-        expect(hostText(root)).toContain('Keeps the original file without translation or edits.');
+        expect(walkHost(root).find(entry => entry.props.class === 'download-original')!.props.title).toBe('Keeps the original file without translation or edits.');
     });
     it.each(['pdf', 'epub', 'docx', 'html', 'md', 'txt', 'json', 'srt', 'vtt', 'ass', 'ssa', 'lrc'])('downloads the exact original %s file before translation without another read or export', async extension => {
-        const bytes = readFileSync(`examples/document-translation/sample.${extension}`);
+        const bytes = readFileSync(`tests/fixtures/document-translation/sample.${extension}`);
         const name = `sample.${extension}`;
-        const input = new File([bytes], name, {type: getDocumentMimeType(extension === 'md' ? 'markdown' : extension as any)});
+        const input = new File([asArrayBufferBytes(bytes)], name, {type: getDocumentMimeType(extension === 'md' ? 'markdown' : extension as any)});
         const read = vi.spyOn(input, 'arrayBuffer');
         const encode = vi.spyOn(binaryService, 'createDocumentDownload');
         await state.loadFiles([input]); await flush();
@@ -351,7 +1472,7 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         const factory = new IDBFactory();
         const history = createDocumentHistory(factory);
         await history.save({id, name: 'history.txt', format: parsed.format, size: bytes.length, total: parsed.segments.length,
-            completed: 0, updatedAt: 1, bytes, mimeType, translations: [], fingerprint: '', parsed, parsedVersion: 16});
+            completed: 0, updatedAt: 1, bytes, mimeType, translations: [], fingerprint: '', parsed, parsedVersion: 26});
         app.unmount();
         vi.stubGlobal('indexedDB', factory);
         root = node('root'); app = renderer.createApp(DocumentApp); app.mount(root); state = (app._instance as any).setupState;
@@ -422,7 +1543,6 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(revokeUrl).toHaveBeenCalledWith(url);
         expect(state.originalDownloadSource).toBeNull();
         expect(state.originalDownloadError).toBe('');
-        expect(state.originalDownloadNotice).toBe('');
         const replacement = new File(['Replacement'], 'second.txt');
         await state.loadFiles([replacement]);
         state.downloadOriginalDocument();
@@ -517,7 +1637,7 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         }
         await vi.waitFor(async () => {
             const saved = await history.load(id);
-            expect(saved?.parsedVersion).toBe(16);
+            expect(saved?.parsedVersion).toBe(26);
             expect(saved?.translations).toEqual(expectedTranslations);
             expect((saved?.parsed as any).segments.map((segment: any) => segment.source)).toEqual(expectedSources);
             expect(saved?.parsed).not.toHaveProperty('segmentOrigins');
@@ -534,7 +1654,274 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(ports.batch).not.toHaveBeenCalled();
     });
 
-    it('reparses version 15 native PDF glyph bounds while preserving revisions and progress, then reuses the refreshed snapshot', async () => {
+    it('reparses a version 20 overpainted source, preserves independent corrections and reuses the version 26 snapshot', async () => {
+        const items = [
+            {str: 'Results', transform: [10, 0, 0, 10, 45, 50], width: 35, height: 10, fontName: 'body', dir: 'ltr', hasEOL: false},
+            {str: 'Results', transform: [10.5, 0, 0, 10.5, 45, 50], width: 35, height: 10.5, fontName: 'body', dir: 'ltr', hasEOL: true},
+            {str: 'Stable paragraph.', transform: [10, 0, 0, 10, 5, 85], width: 80, height: 10, fontName: 'body', dir: 'ltr', hasEOL: true},
+        ], originalItems = structuredClone(items);
+        ports.pageProvider = async (_pageNumber, page) => ({...page, getTextContent: async () => ({items,
+            styles: {body: {ascent: .8, descent: -.2, fontFamily: 'sans-serif'}}})});
+        const bytes = new TextEncoder().encode('%PDF-fixture'), id = await documentHistoryId(bytes);
+        const oldBlock = (segmentIndex: number, source: string, x: number, y: number, width: number, fontSize = 10): PdfDocumentPage['blocks'][number] => ({
+            segmentIndex, x, y, width, height: fontSize, fontSize, lineHeight: fontSize, lineCount: 1,
+            fontFamily: 'sans-serif', fontWeight: 400, textAlign: 'left', kind: 'text', lines: [{text: source, x, y, width, height: fontSize}],
+        });
+        // 固定旧20版快照：10/10.5字号的分桶错过同位重描，旧join产生ResultsResults；不从新解析构造旧原文。
+        const old: ParsedDocument = {fileName: 'overpaint.pdf', format: 'pdf', label: 'PDF', parts: [],
+            segments: [{id: 0, source: 'ResultsResults', contextLabel: '第 1 页', role: 'paragraph'}, {id: 1, source: 'Stable paragraph.', role: 'paragraph'}],
+            binary: {kind: 'pdf', bytes, pages: [{pageNumber: 1, width: 100, height: 100, segmentIndexes: [0, 1],
+                blocks: [oldBlock(0, 'ResultsResults', 45, 41.6, 35, 10.5), oldBlock(1, 'Stable paragraph.', 5, 77, 80)]}]}};
+        const translations = ['Old duplicate correction', 'Stable correction'], factory = new IDBFactory(), history = createDocumentHistory(factory);
+        await history.save({id, name: old.fileName, format: 'pdf', size: bytes.length, total: 2, completed: 2, updatedAt: 1,
+            bytes, mimeType: 'application/pdf', translations, fingerprint: '', parsed: old, parsedVersion: 20});
+        app.unmount(); vi.stubGlobal('indexedDB', factory);
+        vi.stubGlobal('File', class extends Blob {name: string; constructor(parts: BlobPart[], name: string, options?: BlobPropertyBag) {super(parts, options); this.name = name;}});
+        root = node('root'); app = renderer.createApp(DocumentApp); app.mount(root); state = (app._instance as any).setupState;
+        await flush(); const parse = vi.spyOn(binaryService, 'parseDocumentFile');
+        await state.openHistory({id}); await flush();
+        expect(parse).toHaveBeenCalledOnce(); expect(new Uint8Array(await parse.mock.calls[0][0].arrayBuffer())).toEqual(bytes);
+        expect(state.parsedDocument.segments.map((segment: {source: string}) => segment.source)).toEqual(['Results', 'Stable paragraph.']);
+        expect(state.translatedSegments).toEqual(['', 'Stable correction']);
+        const retained = [{source: 'ResultsResults', translation: translations[0], contextLabel: '第 1 页'}];
+        expect(state.documentQueue[0].retainedRevisions).toEqual(retained); expect(items).toEqual(originalItems);
+        state.editSegment(0, 'Current correction'); state.persistHistory();
+        await vi.waitFor(async () => {
+            const saved = await history.load(id);
+            expect(saved?.parsedVersion).toBe(26); expect(saved?.translations).toEqual(['Current correction', 'Stable correction']);
+            expect(saved?.retainedRevisions).toEqual(retained); expect(saved?.bytes).toEqual(bytes);
+        });
+        const blocks = structuredClone(state.parsedDocument.binary.pages[0].blocks);
+        state.resetDocument(); await flush(); await state.openHistory({id}); await flush();
+        expect(parse).toHaveBeenCalledOnce(); expect(state.translatedSegments).toEqual(['Current correction', 'Stable correction']);
+        expect(state.parsedDocument.binary.pages[0].blocks).toEqual(blocks); expect(state.documentQueue[0].retainedRevisions).toEqual(retained);
+        expect(ports.recognize).not.toHaveBeenCalled(); expect(ports.translate).not.toHaveBeenCalled(); expect(ports.batch).not.toHaveBeenCalled();
+    });
+
+    it('recovers two OpenStax callout headings from version 23 while retaining five existing corrections and reusing version 26', async () => {
+        const {atoms, graphics, width, height} = openstaxListCallout, {OPS} = await import('pdfjs-dist/legacy/build/pdf.mjs');
+        // Controlled PDF.js inverse of the licensed canonical fixture, including both real vector frames.
+        // This is not a whole-page PDF snapshot: each saved atom has independent metrics to retain its original bbox.
+        const items = atoms.map((atom, index) => ({str: atom.text, transform: [atom.fontSize, 0, 0, atom.fontSize, atom.x, height - atom.baseline],
+            width: atom.width, height: atom.fontSize, fontName: `source-${index}`}));
+        const styles = Object.fromEntries(atoms.map((atom, index) => [`source-${index}`, {fontFamily: atom.fontFamily,
+            ascent: (atom.baseline - atom.y) / atom.fontSize, descent: (atom.baseline - atom.y - atom.height) / atom.fontSize}]));
+        const operators = {fnArray: graphics.flatMap(() => [OPS.constructPath, OPS.fill]),
+            argsArray: graphics.flatMap(box => [[[], [], [box.x, height - box.y - box.height, box.x + box.width, height - box.y]], null])};
+        const received = structuredClone({items, styles, operators}), gate = deferred<void>(); let pauseParse = false;
+        ports.pageProvider = async (_pageNumber, page) => {
+            if (pauseParse) await gate.promise;
+            return {...page, getViewport: ({scale}: {scale: number}) => ({width: width * scale, height: height * scale, transform: [scale, 0, 0, -scale, 0, height * scale]}),
+                getTextContent: async () => ({items, styles}), getOperatorList: async () => operators};
+        };
+        const intro = atoms[2].text, bullets = [4, 6, 8].map(index => atoms[index].text), stable = atoms.slice(9).map(atom => atom.text).join(' ');
+        const keptSources = [intro, ...bullets, stable], expected = [atoms[0].text, atoms[1].text, ...keptSources];
+        const bytes = new TextEncoder().encode('%PDF-fixture'), name = 'openstax-callout.pdf', id = await documentHistoryId(bytes);
+        // Fixed old23 ownership from the pre-fix page24 ledger: two figure labels, five already-translatable sources.
+        // The subset's old source/owners are declared independently of the new parser result.
+        const ownership: Array<[number, number[]]> = [[-1, [0]], [0, [2]], [1, [4]], [2, [6]], [3, [8]], [-1, [1]], [4, [9, 10]]];
+        const oldBlocks = ownership.map<PdfDocumentPage['blocks'][number]>(([segmentIndex, indexes]) => {
+            const runs = indexes.map(index => atoms[index]);
+            const first = runs[0], bottom = Math.max(...runs.map(run => run.y + run.height));
+            return {segmentIndex, source: runs.map(run => run.text).join(' '), x: first.x, y: first.y,
+                width: Math.max(...runs.map(run => run.x + run.width)) - first.x, height: bottom - first.y,
+                fontSize: first.fontSize, lineHeight: first.fontSize, lineCount: runs.length, fontFamily: first.fontFamily,
+                fontWeight: 400, textAlign: 'left', kind: segmentIndex < 0 ? 'figure-label' : 'text', preserveSource: segmentIndex < 0,
+                lines: runs.map(run => ({...run, runs: [{...run}]}))};
+        });
+        const old: ParsedDocument = {fileName: name, format: 'pdf', label: 'PDF', parts: [], segments: keptSources.map((source, id) => ({id, source, role: 'paragraph'})),
+            binary: {kind: 'pdf', bytes, pages: [{pageNumber: 1, width, height, segmentIndexes: [0, 1, 2, 3, 4], blocks: oldBlocks,
+                preservedRegions: [{id: 'figure-1', kind: 'figure', x: 72, y: 497.8533515624997, width: 468, height: 122.22564843750024,
+                    source: `${atoms[0].text} ${atoms[1].text}`}]}]}};
+        const previous = keptSources.map((_, index) => `Independent correction ${index}`), retained = [{source: 'Earlier source.', translation: 'Earlier correction.'}];
+        const factory = new IDBFactory(), history = createDocumentHistory(factory);
+        await history.save({id, name, format: 'pdf', size: bytes.length, total: 5, completed: 5, updatedAt: 1, bytes,
+            mimeType: 'application/pdf', translations: previous, retainedRevisions: retained, fingerprint: '', parsed: old, parsedVersion: 23});
+        app.unmount(); vi.stubGlobal('indexedDB', factory);
+        vi.stubGlobal('File', class extends Blob {name: string; constructor(parts: BlobPart[], name: string, options?: BlobPropertyBag) {super(parts, options); this.name = name;}});
+        root = node('root'); app = renderer.createApp(DocumentApp); app.mount(root); state = (app._instance as any).setupState; await flush();
+        pauseParse = true; const parse = vi.spyOn(binaryService, 'parseDocumentFile'), opening = state.openHistory({id});
+        try {
+            await vi.waitFor(() => expect(parse).toHaveBeenCalledOnce());
+            expect(new Uint8Array(await parse.mock.calls[0][0].arrayBuffer())).toEqual(bytes);
+            expect(await history.load(id)).toMatchObject({parsedVersion: 23, translations: previous});
+        } finally {gate.resolve(undefined);}
+        await opening; await flush();
+        expect(state.parsedDocument.segments.map((segment: {source: string}) => segment.source)).toEqual(expected);
+        expect(state.translatedSegments).toEqual(['', '', ...previous]); expect(state.documentQueue[0].retainedRevisions).toEqual(retained);
+        const page = state.parsedDocument.binary.pages[0];
+        expect(page.preservedRegions).toEqual([]);
+        for (const title of expected.slice(0, 2)) expect(page.blocks.find((block: {source?: string}) => block.source === title)).toMatchObject({kind: 'heading', preserveSource: false});
+        expect(page.blocks.some((block: {kind: string}) => block.kind === 'figure-label')).toBe(false);
+        const actualRuns = page.blocks.flatMap((block: any) => block.lines.flatMap((line: any) => line.runs));
+        expect(actualRuns).toHaveLength(8);
+        for (const run of actualRuns) {
+            const original = atoms.find(atom => atom.text === run.text)!;
+            expect(run.x).toBeCloseTo(original.x, 10); expect(run.y).toBeCloseTo(original.y, 10);
+            expect(run.width).toBeCloseTo(original.width, 10); expect(run.height).toBeCloseTo(original.height, 10);
+        }
+        expect({items, styles, operators}).toEqual(received);
+        state.editSegment(0, 'Units and Standards (confirmed)'); state.editSegment(1, 'Learning Objectives (confirmed)'); state.persistHistory();
+        const edited = ['Units and Standards (confirmed)', 'Learning Objectives (confirmed)', ...previous];
+        await vi.waitFor(async () => {
+            expect(await history.load(id)).toMatchObject({parsedVersion: 26, translations: edited, retainedRevisions: retained, bytes,
+                parsed: {binary: {pages: [{preservedRegions: []}]}}});
+        });
+        const blocks = structuredClone(page.blocks);
+        state.resetDocument(); await flush(); await state.openHistory({id}); await flush();
+        expect(parse).toHaveBeenCalledOnce(); expect(state.translatedSegments).toEqual(edited);
+        expect(state.parsedDocument.binary.pages[0]).toMatchObject({blocks, preservedRegions: []}); expect(state.parsedDocument.binary.bytes).toEqual(bytes);
+        expect(state.documentQueue[0].retainedRevisions).toEqual(retained);
+        expect(ports.recognize).not.toHaveBeenCalled(); expect(ports.createRecognizer).not.toHaveBeenCalled();
+        expect(ports.translate).not.toHaveBeenCalled(); expect(ports.batch).not.toHaveBeenCalled();
+    });
+
+    it.each(['table', 'formula'] as const)('reparses a controlled version 22 %s tracked-Abstract cache, keeps corrections off the inserted heading and reuses version 26 after manual editing', async previousKind => {
+        const title = 'a b s t r a c t';
+        const body = 'This ordinary abstract paragraph explains the study and its main result.';
+        const stable = 'Another independently translated paragraph remains available for review.';
+        const gate = deferred<void>();
+        let pauseParse = false;
+        // Actual Smith-Levy p1 heading geometry and old table cell; body strings are self-authored. Formula is a compatibility snapshot, not the current-paper baseline.
+        ports.pageProvider = async (_pageNumber, page) => {
+            if (pauseParse) await gate.promise;
+            return {...page,
+                getViewport: ({scale}: {scale: number}) => ({width: 544.252 * scale, height: 742.677 * scale, transform: [scale, 0, 0, scale, 0, 0]}),
+                getTextContent: async () => ({items: [
+                    {str: title, transform: [8.9663, 0, 0, 8.9663, 200.1259, 270.085], width: 65.24148869, height: 8.9663, fontName: 'heading'},
+                    {str: body, transform: [7.1731, 0, 0, 7.1731, 200.0125, 289.7574], width: 307.3733, height: 7.1731, fontName: 'body'},
+                    {str: stable, transform: [7.1731, 0, 0, 7.1731, 200.0125, 360], width: 307.3733, height: 7.1731, fontName: 'body'},
+                ], styles: {heading: {ascent: .566, descent: -.2, fontFamily: 'serif'}, body: {ascent: .789, descent: -.2, fontFamily: 'serif'}}}),
+            };
+        };
+        const fresh = await binaryService.parseDocumentFile(file('smith-levy-tracked-title.pdf'));
+        if (fresh.binary?.kind !== 'pdf') throw new Error('expected PDF');
+        expect(fresh.segments.map(segment => segment.source)).toEqual([title, body, stable]);
+        const old = structuredClone(fresh);
+        if (old.binary?.kind !== 'pdf') throw new Error('expected PDF');
+        old.segments = old.segments.slice(1).map((segment, id) => ({...segment, id}));
+        old.binary.pages[0].segmentIndexes = [0, 1];
+        const cellBounds = {x: 41.159, y: 249.12925, width: 466.30000000000007, height: 32.04675000000003};
+        old.binary.pages[0].blocks = old.binary.pages[0].blocks.map(block => block.segmentIndex === 0
+            ? {...block, segmentIndex: -1, kind: previousKind, preserveSource: true, fontWeight: 400, ...(previousKind === 'table' ? {cellBounds} : {})}
+            : {...block, segmentIndex: block.segmentIndex - 1});
+        if (previousKind === 'table') old.binary.pages[0].preservedRegions = [{id: 'table-1', kind: 'table', ...cellBounds, source: title}];
+        expect(old.binary.pages[0].blocks[0]).toMatchObject({source: title, segmentIndex: -1, kind: previousKind, preserveSource: true,
+            ...(previousKind === 'table' ? {cellBounds} : {})});
+        const bytes = fresh.binary.bytes, id = await documentHistoryId(bytes), factory = new IDBFactory(), history = createDocumentHistory(factory);
+        const previous = ['旧摘要正文人工校订', '其他段落人工校订'];
+        const retained = [{source: 'Previously retained source.', translation: '既有独立校订'}];
+        await history.save({id, name: 'smith-levy-tracked-title.pdf', format: 'pdf', size: bytes.length, total: 2, completed: 2, updatedAt: 1,
+            bytes, mimeType: 'application/pdf', translations: previous, retainedRevisions: retained, fingerprint: '', parsed: old, parsedVersion: 22});
+        app.unmount(); vi.stubGlobal('indexedDB', factory);
+        vi.stubGlobal('File', class extends Blob {name: string; constructor(parts: BlobPart[], name: string, options?: BlobPropertyBag) {super(parts, options); this.name = name;}});
+        root = node('root'); app = renderer.createApp(DocumentApp); app.mount(root); state = (app._instance as any).setupState;
+        await flush();
+        pauseParse = true;
+        const parse = vi.spyOn(binaryService, 'parseDocumentFile');
+        const opening = state.openHistory({id});
+        try {
+            await vi.waitFor(() => expect(parse).toHaveBeenCalledOnce());
+            expect(new Uint8Array(await parse.mock.calls[0][0].arrayBuffer())).toEqual(bytes);
+            expect((await history.load(id))?.parsedVersion).toBe(22);
+            expect((await history.load(id))?.translations).toEqual(previous);
+        } finally {gate.resolve(undefined);}
+        await opening; await flush();
+        expect(state.parsedDocument.segments.map((segment: {source: string}) => segment.source)).toEqual([title, body, stable]);
+        expect(state.parsedDocument.binary.pages[0].blocks[0]).toMatchObject({segmentIndex: 0, kind: 'heading', preserveSource: false});
+        expect(state.translatedSegments).toEqual(['', ...previous]);
+        expect(state.completedSegments).toBe(2); expect(state.progress).toBe(66); expect(state.translationComplete).toBe(false);
+        expect(state.documentQueue[0].retainedRevisions).toEqual(retained);
+        await vi.waitFor(async () => {
+            const saved = await history.load(id);
+            expect(saved?.parsedVersion).toBe(26); expect(saved?.translations).toEqual(['', ...previous]);
+            expect(saved?.total).toBe(3); expect(saved?.completed).toBe(2);
+        });
+        state.editSegment(0, '摘要（人工确认）'); state.editSegment(1, '迁移后摘要正文人工校订'); state.persistHistory();
+        const edited = ['摘要（人工确认）', '迁移后摘要正文人工校订', previous[1]];
+        await vi.waitFor(async () => {
+            const saved = await history.load(id);
+            expect(saved?.parsedVersion).toBe(26); expect(saved?.translations).toEqual(edited);
+            expect(saved?.completed).toBe(3); expect(saved?.retainedRevisions).toEqual(retained);
+        });
+        state.resetDocument(); await flush(); await state.openHistory({id}); await flush();
+        expect(parse).toHaveBeenCalledOnce();
+        expect(state.translatedSegments).toEqual(edited); expect(state.completedSegments).toBe(3); expect(state.progress).toBe(100);
+        expect(state.documentQueue[0].retainedRevisions).toEqual(retained);
+        expect(state.parsedDocument.binary.pages[0].blocks).toEqual(fresh.binary.pages[0].blocks);
+        expect(ports.recognize).not.toHaveBeenCalled(); expect(ports.createRecognizer).not.toHaveBeenCalled();
+        expect(ports.translate).not.toHaveBeenCalled(); expect(ports.batch).not.toHaveBeenCalled();
+    });
+
+    it.each(['separate', 'merged'] as const)('recovers %s prose hidden beside a formula in version 21, retains every correction and reuses version 26', async mode => {
+        const kept = 'The previously translated paragraph remains available.';
+        const recovered = 'The next paragraph introduces a displayed equation.';
+        ports.pageProvider = async (_pageNumber, page) => ({...page, getTextContent: async () => ({
+            items: [
+                {str: kept, transform: [12, 0, 0, 12, 5, 20], width: 80, height: 12, fontName: 'body'},
+                {str: recovered, transform: [12, 0, 0, 12, 5, 60], width: 80, height: 12, fontName: 'body'},
+            ], styles: {body: {ascent: .8, descent: -.2, fontFamily: 'serif'}},
+        })});
+        const fresh = await binaryService.parseDocumentFile(file('formula-neighbor.pdf'));
+        if (fresh.binary?.kind !== 'pdf') throw new Error('expected PDF');
+        expect(fresh.segments.map(segment => segment.source)).toEqual([kept, recovered]);
+        const previousBody = 'The previous paragraph continues here.';
+        if (mode === 'merged') {
+            const block = fresh.binary.pages[0].blocks[1], line = block.lines![0];
+            const first = {...line, text: previousBody, runs: line.runs?.map(run => ({...run, text: previousBody}))};
+            const second = {...line, y: line.y + 14, baseline: line.baseline! + 14,
+                runs: line.runs?.map(run => ({...run, y: run.y + 14, baseline: run.baseline! + 14}))};
+            fresh.segments[1].source = previousBody + ' ' + recovered;
+            fresh.binary.pages[0].blocks[1] = {...block, source: fresh.segments[1].source, height: block.height + 14, lines: [first, second], lineCount: 2};
+        }
+        const old = structuredClone(fresh);
+        if (old.binary?.kind !== 'pdf') throw new Error('expected PDF');
+        if (mode === 'separate') {
+            old.segments = [old.segments[0]];
+            old.binary.pages[0].segmentIndexes = [0];
+            old.binary.pages[0].blocks[1] = {...old.binary.pages[0].blocks[1], segmentIndex: -1, kind: 'formula', preserveSource: true};
+        } else {
+            old.segments[1].source = previousBody;
+            const block = old.binary.pages[0].blocks[1], [first, second] = block.lines!;
+            old.binary.pages[0].blocks[1] = {...block, source: previousBody, height: first.height, lines: [first], lineCount: 1};
+            old.binary.pages[0].blocks.push({...block, source: recovered, segmentIndex: -1, y: second.y, height: second.height,
+                lines: [second], lineCount: 1, kind: 'formula', preserveSource: true});
+        }
+        const bytes = fresh.binary.bytes, id = await documentHistoryId(bytes), factory = new IDBFactory(), history = createDocumentHistory(factory);
+        const correction = '保留已有人工校订';
+        const retained = {source: previousBody, translation: '保留合段前的校订'};
+        const priorTranslations = mode === 'merged' ? [correction, retained.translation] : [correction];
+        await history.save({id, name: 'formula-neighbor.pdf', format: 'pdf', size: bytes.length, total: old.segments.length, completed: old.segments.length,
+            updatedAt: 1, bytes, mimeType: 'application/pdf', translations: priorTranslations, fingerprint: '', parsed: old, parsedVersion: 21});
+        app.unmount(); vi.stubGlobal('indexedDB', factory);
+        vi.stubGlobal('File', class extends Blob {name: string; constructor(parts: BlobPart[], name: string, options?: BlobPropertyBag) {super(parts, options); this.name = name;}});
+        root = node('root'); app = renderer.createApp(DocumentApp); app.mount(root); state = (app._instance as any).setupState;
+        await flush();
+        const pending = deferred<typeof fresh>(), parse = vi.spyOn(binaryService, 'parseDocumentFile').mockReturnValueOnce(pending.promise);
+        const opening = state.openHistory({id});
+        await vi.waitFor(() => expect(parse).toHaveBeenCalledOnce());
+        expect(new Uint8Array(await parse.mock.calls[0][0].arrayBuffer())).toEqual(bytes);
+        expect((await history.load(id))?.parsedVersion).toBe(21);
+        expect((await history.load(id))?.translations).toEqual(priorTranslations);
+        pending.resolve(fresh); await opening; await flush();
+        expect(state.parsedDocument.segments.map((segment: {source: string}) => segment.source)).toEqual(fresh.segments.map(segment => segment.source));
+        expect(state.translatedSegments).toEqual([correction, '']);
+        expect(state.completedSegments).toBe(1); expect(state.progress).toBe(50);
+        expect(state.documentQueue[0].retainedRevisions).toEqual(mode === 'merged' ? [retained] : []);
+        await vi.waitFor(async () => {
+            const saved = await history.load(id);
+            expect(saved?.parsedVersion).toBe(26); expect(saved?.translations).toEqual([correction, '']);
+            expect(saved?.total).toBe(2); expect(saved?.completed).toBe(1);
+            expect(saved?.retainedRevisions).toEqual(mode === 'merged' ? [retained] : []);
+        });
+        state.resetDocument(); await flush(); await state.openHistory({id}); await flush();
+        expect(parse).toHaveBeenCalledOnce(); expect(state.translatedSegments).toEqual([correction, '']);
+        expect(state.parsedDocument.binary.pages[0].blocks).toEqual(fresh.binary.pages[0].blocks);
+        expect(state.documentQueue[0].retainedRevisions).toEqual(mode === 'merged' ? [retained] : []);
+        expect(ports.recognize).not.toHaveBeenCalled(); expect(ports.translate).not.toHaveBeenCalled(); expect(ports.batch).not.toHaveBeenCalled();
+    });
+
+    it.each([15, 17, 19, 23])('reparses version %i native PDF glyph bounds while preserving revisions and progress, then reuses the refreshed snapshot', async obsoleteVersion => {
         ports.pageProvider = async (_pageNumber, page) => ({...page, getTextContent: async () => ({
             items: [
                 {str: 'A full native paragraph with text.', transform: [12, 0, 0, 12, 5, 20], width: 80, height: 12, fontName: 'body'},
@@ -557,7 +1944,7 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         const translations = ['保留第一段人工校订', ''];
         const factory = new IDBFactory(), history = createDocumentHistory(factory);
         await history.save({id, name: 'native-metrics.pdf', format: 'pdf', size: bytes.length, total: 2, completed: 1,
-            updatedAt: 1, bytes, mimeType: 'application/pdf', translations, fingerprint: '', parsed: old, parsedVersion: 15});
+            updatedAt: 1, bytes, mimeType: 'application/pdf', translations, fingerprint: '', parsed: old, parsedVersion: obsoleteVersion});
         app.unmount();
         vi.stubGlobal('indexedDB', factory);
         vi.stubGlobal('File', class extends Blob {name: string; constructor(parts: BlobPart[], name: string, options?: BlobPropertyBag) {super(parts, options); this.name = name;}});
@@ -569,7 +1956,7 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         await vi.waitFor(() => expect(parse).toHaveBeenCalledOnce());
         expect(parse.mock.calls[0][0].name).toBe('native-metrics.pdf');
         expect(new Uint8Array(await parse.mock.calls[0][0].arrayBuffer())).toEqual(bytes);
-        expect((await history.load(id))?.parsedVersion).toBe(15);
+        expect((await history.load(id))?.parsedVersion).toBe(obsoleteVersion);
         expect((await history.load(id))?.translations).toEqual(translations);
         parsing.resolve(fresh); await opening; await flush();
         expect(state.translatedSegments).toEqual(translations);
@@ -579,7 +1966,7 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
             .toBeLessThan(old.binary.pages[0].blocks[0].lines![0].runs![0].y);
         await vi.waitFor(async () => {
             const saved = await history.load(id);
-            expect(saved?.parsedVersion).toBe(16);
+            expect(saved?.parsedVersion).toBe(26);
             expect(saved?.completed).toBe(1); expect(saved?.total).toBe(2);
             expect(saved?.translations).toEqual(translations);
             expect((saved?.parsed as typeof fresh).binary).toEqual(fresh.binary);
@@ -621,13 +2008,14 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(state.translatedSegments).toEqual(['保留正文校订']);
         expect(state.completedSegments).toBe(1); expect(state.progress).toBe(100);
         expect(state.documentQueue[0].retainedRevisions).toEqual([previousRetained, conditionRetained]);
+        taskButton('校订译文').props.onClick(); await flush();
         const retained = walkHost(root).find(entry => entry.type === 'details' && entry.props.class === 'editor-retained')!;
         expect(retained).toBeDefined(); expect(retained.props.open).toBe(false);
         expect(hostText(retained)).toContain('document.retainedRevisions.title');
         expect(hostText(retained)).not.toContain(conditionRetained.translation);
         await vi.waitFor(async () => {
             const saved = await history.load(id);
-            expect(saved?.parsedVersion).toBe(16);
+            expect(saved?.parsedVersion).toBe(26);
             expect(saved?.translations).toEqual(['保留正文校订']);
             expect(saved?.retainedRevisions).toEqual([previousRetained, conditionRetained]);
             expect(saved?.completed).toBe(1); expect(saved?.total).toBe(1);
@@ -694,6 +2082,15 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         } finally {reader.release();}
     });
 
+
+    it('avoids allocating an export worker for an orphaned legacy translation and preserves the export error',async()=>{
+        await state.loadFiles([file('legacy-source.pdf')]);
+        const document={...state.parsedDocument,segments:[]};
+        vi.spyOn(binaryService,'createDocumentDownload').mockRejectedValueOnce(new Error('legacy source cannot be exported'));
+        await expect(createRuntimeDownload(document,['Old translation'],'translated')).rejects.toThrow('legacy source cannot be exported');
+        await flush();const worker=ports.tasks.find(task=>task.role==='preview');
+        expect(worker).toBeUndefined();
+    });
     it.each(['unchanged', 'custom-layout', 'custom-readable', 'custom-text-readable'] as const)('does not preload a browser PDF worker for %s output', async kind => {
         await state.loadFiles([file('custom.pdf')]);
         const document = state.parsedDocument;
@@ -713,7 +2110,35 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(ports.tasks.filter(task => task.role === 'preview')).toHaveLength(0);
     });
 
-    it.each(['layout', 'readable'] as const)('downloads the selected %s PDF presentation with matching dialog guidance', async presentation => {
+    it('chooses the PDF export layout in the dialog without changing the reading presentation', async () => {
+        await state.loadFiles([file('independent-layout.pdf')]); state.editSegment(0, '完整校订');
+        state.openDownload(); await flush();
+        expect(walkHost(root).filter(entry => entry.props.class === 'download-version')).toHaveLength(2);
+        const choice = walkHost(root).find(entry => entry.props.role === 'radio' && hostText(entry) === getDocumentDownloadCopy('zh-CN').layoutReadable)!;
+        choice.props.onClick(); await flush();
+        expect(state.pdfPresentation).toBe('layout'); expect(state.downloadPdfPresentation).toBe('readable');
+        const encode = vi.spyOn(binaryService, 'createDocumentDownload').mockResolvedValueOnce({data: new Uint8Array([1]), fileName: 'result.pdf', mimeType: 'application/pdf'});
+        await state.downloadDocument(); await flush();
+        expect(encode).toHaveBeenCalledWith(state.parsedDocument, ['完整校订'], 'bilingual', expect.objectContaining({pdfPresentation: 'readable'}));
+        walkHost(root).find(entry => entry.type === 'dialog' && entry.props['aria-labelledby'] === 'download-document-heading')!.props.onClose();
+        state.openDownload(); await flush(); expect(state.downloadPdfPresentation).toBe('layout');
+    });
+
+    it('presents a localized actionable download failure with technical details collapsed and original download still available', async () => {
+        await state.loadFiles([file('protected.pdf')]); state.editSegment(0, '保留校订'); state.openDownload();
+        state.downloadError = 'Input document to PDFDocument.load is encrypted.'; await flush();
+        const failure = walkHost(root).find(entry => entry.props.class === 'download-failure')!;
+        const alert = walkHost(failure).find(entry => entry.props.role === 'alert')!;
+        expect(hostText(alert)).toBe(getDocumentDownloadCopy('zh-CN').failedTitle + getDocumentDownloadCopy('zh-CN').protectedFailed);
+        const details = walkHost(failure).find(entry => entry.type === 'details')!;
+        expect(details.props.open).toBeUndefined(); expect(hostText(details)).toContain(state.downloadError);
+        expect(walkHost(root).find(entry => entry.type === 'button' && hostText(entry) === '下载原文')!.props.disabled).toBe(false);
+        expect(state.translatedSegments).toEqual(['保留校订']);
+        state.language = 'en-US'; await flush();
+        expect(hostText(alert)).toBe(getDocumentDownloadCopy('en-US').failedTitle + getDocumentDownloadCopy('en-US').protectedFailed);
+    });
+
+    it.each(['layout', 'readable'] as const)('downloads the selected %s PDF presentation after choosing a version', async presentation => {
         await state.loadFiles([file('presentation.pdf')]);
         state.editSegment(0, '可复制的实际校订文字');
         if (presentation === 'readable') state.pdfPresentation = presentation;
@@ -721,18 +2146,12 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         const walk = (entry: HostNode): HostNode[] => [entry, ...entry.children.flatMap(walk)];
         const text = (entry: HostNode): string => (entry.text || '') + entry.children.map(text).join('');
         const dialog = walk(root).find(entry => entry.type === 'dialog' && entry.props['aria-labelledby'] === 'download-document-heading')!;
-        const summary = walk(dialog).find(entry => entry.props.class === 'pdf-export-summary')!;
-        expect(summary.props['data-pdf-export-presentation']).toBe(presentation);
-        expect(text(dialog)).toContain(presentation === 'readable' ? 'document.pdfReading.exportReadableHint' : 'document.pdfReading.exportHint');
-        if (presentation === 'readable') {
-            expect(text(dialog)).toContain('document.pdfReading.exportReadableBilingualHint');
-            expect(text(summary)).toContain('document.pdfReading.exportReadablePageHint');
-            expect(text(dialog)).not.toContain('document.pdfReading.exportPageCount');
-            expect(text(dialog)).not.toContain('document.pdfReading.exportHint');
-            expect(walk(summary).some(entry => String(entry.props.class).includes('pdf-export-page-pair'))).toBe(false);
-        } else expect(text(summary)).toContain('document.pdfReading.exportPageCount');
+        const selected = walk(dialog).find(entry => entry.props.role === 'radio' && entry.props['aria-checked'] === true)!;
+        expect(text(selected)).toBe(getDocumentDownloadCopy('zh-CN')[presentation === 'layout' ? 'layoutOriginal' : 'layoutReadable']);
+        expect(walk(dialog).some(entry => entry.type === 'pre')).toBe(false);
+        expect(text(dialog)).not.toContain('presentation.pdf');
         const download = vi.spyOn(binaryService, 'createDocumentDownload').mockResolvedValueOnce({data: new Uint8Array([1]), fileName: 'presentation.pdf', mimeType: 'application/pdf'});
-        await state.downloadDocument(); await flush();
+        await state.requestDownload('bilingual'); await flush();
         expect(download).toHaveBeenCalledWith(state.parsedDocument, ['可复制的实际校订文字'], 'bilingual', expect.objectContaining({pdfPresentation: presentation}));
     });
 
@@ -744,6 +2163,99 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         await state.downloadBatch(); await flush();
         expect(download).toHaveBeenCalledTimes(2);
         expect(download.mock.calls.every(([, , , options]) => options?.pdfPresentation === 'layout')).toBe(true);
+    });
+
+    it('preserves a partial human correction through actual mixed-PDF OCR segment insertion without asking to restart', async () => {
+        await loadMixedPdfWithCorrection();
+        expect(state.translationComplete).toBe(false);
+        expect(state.settingsChanged).toBe(false);
+        ports.createRecognizer.mockReturnValue(async () => [{text: 'Scanned opening paragraph.', x: 5, y: 5, width: 90, height: 12}]);
+        state.requestTranslation();
+        expect(state.pendingAction).toBeNull();
+        await vi.waitFor(() => expect(state.translating).toBe(false));
+        expect(state.parsedDocument.segments.map((segment: any) => segment.source)).toEqual([
+            'Scanned opening paragraph.', 'Native alpha paragraph.', 'Native beta paragraph.',
+        ]);
+        expect(state.translatedSegments).toEqual(['译 Scanned opening paragraph.', 'Human correction', '译 Native beta paragraph.']);
+        expect(state.confirmedTranslationIds).toEqual([1]);
+        expect(ports.batch.mock.calls.flatMap(([sources]: any) => sources)).not.toContain('Native alpha paragraph.');
+    });
+
+    it.each(['pause', 'failure'] as const)('saves a real OCR checkpoint before %s and resumes only the remaining page', async outcome => {
+        const source = await loadMixedPdfWithCorrection();
+        const scan = (source.binary as any).pages[0];
+        const extended = markRaw({...source, binary: {...source.binary!, pages: [...(source.binary as any).pages, {...scan, pageNumber: 3}]}}) as ParsedDocument;
+        state.parsedDocument = extended;
+        const gate = deferred<any[]>();
+        const recognize = vi.fn(async ({pageNumber}: {pageNumber: number}) => pageNumber === 3 ? gate.promise
+            : [{text: 'First scanned paragraph.', x: 5, y: 5, width: 90, height: 12}]);
+        ports.createRecognizer.mockReturnValue(recognize);
+        const running = state.startTranslation();
+        await vi.waitFor(() => expect(recognize).toHaveBeenCalledTimes(2));
+        const checkpoint = state.parsedDocument;
+        expect(checkpoint).not.toBe(extended);
+        expect(checkpoint.binary.pages.map((page: PdfDocumentPage) => Boolean(page.scanned))).toEqual([false, false, true]);
+        expect(state.translatedSegments).toEqual(['', 'Human correction', '']);
+        expect(state.confirmedTranslationIds).toEqual([1]);
+        if (outcome === 'pause') {state.pauseTranslation(); gate.resolve([{text: 'Late page', x: 5, y: 5, width: 90, height: 12}]);}
+        else gate.reject(new Error('Last page temporarily unavailable'));
+        await running; await flush();
+        expect(state.parsedDocument).toBe(checkpoint);
+        expect(state.documentQueue[0].document).toBe(checkpoint);
+        const retry = vi.fn(async (_input: unknown) => [{text: 'Final scanned paragraph.', x: 5, y: 5, width: 90, height: 12}]);
+        ports.createRecognizer.mockReturnValue(retry);
+        await state.startTranslation(); await flush();
+        expect(retry).toHaveBeenCalledOnce();
+        expect(retry.mock.calls[0][0]).toMatchObject({pageNumber: 3});
+        expect(state.translatedSegments).toEqual(['译 First scanned paragraph.', 'Human correction', '译 Native beta paragraph.', '译 Final scanned paragraph.']);
+        expect(state.translationComplete).toBe(true);
+    });
+
+    it.each(['pause', 'failure'] as const)('retains native corrections after mixed-PDF OCR %s and resumes them on retry', async outcome => {
+        const source = await loadMixedPdfWithCorrection();
+        const pending = deferred<ParsedDocument>();
+        ports.recognize.mockReturnValueOnce(pending.promise);
+        const running = state.startTranslation();
+        await vi.waitFor(() => expect(ports.recognize).toHaveBeenCalledOnce());
+        if (outcome === 'pause') {
+            state.pauseTranslation();
+            pending.resolve(await ports.actualRecognize(source, async () => [{text: 'Scanned opening paragraph.', x: 5, y: 5, width: 90, height: 12}]));
+        } else pending.reject(new Error('OCR unavailable'));
+        await running; await flush();
+        expect(state.parsedDocument).toBe(source);
+        expect(state.translatedSegments).toEqual(['Human correction']);
+        expect(state.confirmedTranslationIds).toEqual([0]);
+        expect(ports.batch).not.toHaveBeenCalled();
+        ports.createRecognizer.mockReturnValue(async () => [{text: 'Scanned opening paragraph.', x: 5, y: 5, width: 90, height: 12}]);
+        await state.startTranslation(); await flush();
+        expect(state.translatedSegments).toEqual(['译 Scanned opening paragraph.', 'Human correction', '译 Native beta paragraph.']);
+        expect(state.confirmedTranslationIds).toEqual([1]);
+    });
+
+    it('keeps the native correction when the inserted scan has no recognized text', async () => {
+        await loadMixedPdfWithCorrection();
+        ports.createRecognizer.mockReturnValue(async () => []);
+        await state.startTranslation(); await flush();
+        expect(state.translatedSegments).toEqual(['Human correction', '译 Native beta paragraph.']);
+        expect(state.confirmedTranslationIds).toEqual([0]);
+        expect(state.needsOcr).toBe(true);
+        expect(state.translationComplete).toBe(false);
+        expect(state.batchCompletedCount).toBe(0);
+        expect(state.progress).toBe(99);
+        expect(state.runState).toBe('failed');
+        expect(state.errorMessage).toBe('document.pdfReading.ocrIncomplete');
+    });
+
+    it('continues OCR without clearing corrections when every native segment is already translated', async () => {
+        await loadMixedPdfWithCorrection();
+        state.editSegment(1, 'Second human correction');
+        ports.createRecognizer.mockReturnValue(async () => [{text: 'Scanned opening paragraph.', x: 5, y: 5, width: 90, height: 12}]);
+        state.requestTranslation();
+        expect(state.pendingAction).toBeNull();
+        expect(state.translatedSegments).toEqual(['Human correction', 'Second human correction']);
+        await vi.waitFor(() => expect(state.translating).toBe(false));
+        expect(state.translatedSegments).toEqual(['译 Scanned opening paragraph.', 'Human correction', 'Second human correction']);
+        expect(state.confirmedTranslationIds).toEqual([1, 2]);
     });
 
     it.each(['pause', 'switch', 'reset'] as const)('clears an in-flight OCR status on %s and ignores progress from the abandoned request', async action => {
@@ -782,6 +2294,60 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(ports.batch).not.toHaveBeenCalled(); expect(ports.translate).not.toHaveBeenCalled();
     });
 
+    it.each(['resolve', 'reject'] as const)('cancels OCR when the external PDF service changes and retries without committing the old %s', async settlement => {
+        const initial = JSON.parse(JSON.stringify(ports.config));
+        Object.assign(initial, {documentService: 'bilibili', enableAIContext: false});
+        Object.assign(ports.config, initial); ports.observer(initial); await flush();
+        await state.loadFiles([file('ocr-service-switch.pdf')]);
+        const original = state.parsedDocument;
+        const scanned = markRaw({...original, segments: [], binary: {...original.binary,
+            pages: original.binary.pages.map((page: PdfDocumentPage) => ({...page, scanned: true, segmentIndexes: [], blocks: []})),
+        }});
+        state.parsedDocument = scanned; state.documentQueue[0].document = scanned;
+        const old = deferred<any>(), next = deferred<any>();
+        ports.recognize.mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise);
+        const running = state.startTranslation();
+        await vi.waitFor(() => expect(ports.recognize).toHaveBeenCalledOnce());
+        const oldControls = ports.recognize.mock.calls[0][2];
+        oldControls.onProgress({completed: 1, total: 3}); await flush();
+        expect(state.recognitionProgress).toBeTruthy();
+
+        const external = {...initial, documentService: 'microsoft'};
+        Object.assign(ports.config, external); ports.observer(external);
+        expect(oldControls.signal.aborted).toBe(true);
+        await flush();
+        expect(state.runState).toBe('paused');
+        expect(state.recognitionProgress).toBe('');
+        expect(state.needsOcr).toBe(true);
+        expect(state.parsedDocument).toBe(scanned);
+        expect(taskButton('继续翻译').props.disabled).toBe(false);
+        taskButton('继续翻译').props.onClick();
+        await vi.waitFor(() => expect(ports.recognize).toHaveBeenCalledTimes(2));
+        const nextControls = ports.recognize.mock.calls[1][2];
+        nextControls.onProgress({completed: 1, total: 2}); await flush();
+        const nextProgress = state.recognitionProgress;
+        oldControls.onProgress({completed: 3, total: 3});
+        if (settlement === 'resolve') old.resolve({...scanned, segments: [{id: 0, source: 'Old OCR result'}]});
+        else old.reject(new Error('Old OCR failure'));
+        await running; await flush();
+        expect(state.translating).toBe(true);
+        expect(nextControls.signal.aborted).toBe(false);
+        expect(state.recognitionProgress).toBe(nextProgress);
+        expect(state.parsedDocument).toBe(scanned);
+        expect(state.errorMessage).toBe('');
+        expect(ports.batch).not.toHaveBeenCalled(); expect(ports.translate).not.toHaveBeenCalled();
+
+        next.resolve({...scanned, segments: [{id: 0, source: 'New OCR result'}], binary: {...scanned.binary,
+            pages: scanned.binary.pages.map((page: PdfDocumentPage) => ({...page, scanned: false, segmentIndexes: [0]})),
+        }});
+        await vi.waitFor(() => expect(state.translationComplete).toBe(true)); await flush();
+        expect(ports.batch).toHaveBeenCalledOnce();
+        expect(ports.batch).toHaveBeenCalledWith(['New OCR result'], 'ocr-service-switch.pdf', expect.objectContaining({serviceOverride: 'microsoft'}));
+        expect(state.translatedSegments).toEqual(['译 New OCR result']);
+        expect(state.recognitionProgress).toBe('');
+        expect(state.errorMessage).toBe('');
+    });
+
     it('shows an OCR failure and a retry action instead of the static scanned-document status', async () => {
         await state.loadFiles([file('scanned.pdf')]);
         const original = state.parsedDocument;
@@ -799,7 +2365,7 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(state.needsOcr).toBe(true);
     });
 
-    it('keeps an empty OCR result readable and shows its failure without requesting translation or repeating OCR', async () => {
+    it('keeps an empty OCR result readable and allows retry after correcting the scan or source language', async () => {
         await state.loadFiles([file('scanned.pdf')]);
         const original = state.parsedDocument;
         const scanned = markRaw({...original, segments: [], binary: {...original.binary,
@@ -807,9 +2373,9 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         }});
         state.parsedDocument = scanned;
         const recognized = {...scanned, binary: {...scanned.binary,
-            pages: scanned.binary.pages.map((page: PdfDocumentPage) => ({...page, scanned: false})),
+            pages: scanned.binary.pages.map((page: PdfDocumentPage) => ({...page, scanned: true})),
         }};
-        ports.recognize.mockResolvedValueOnce(recognized);
+        ports.recognize.mockResolvedValue(recognized);
 
         await state.startTranslation(); await flush();
 
@@ -820,7 +2386,7 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(state.parsedDocument).toBe(recognized);
         expect(state.documentQueue[0].document).toBe(recognized);
         expect(state.parsedDocument.binary.bytes).toBe(original.binary.bytes);
-        expect(state.needsOcr).toBe(false);
+        expect(state.needsOcr).toBe(true);
         expect(state.translating).toBe(false);
         expect(state.recognitionProgress).toBe('');
         expect(state.batchCompletedCount).toBe(0);
@@ -828,7 +2394,7 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(walkHost(recovery).find(entry => entry.props.class === 'recovery-error-detail')!.text).toBe('document.pdfReading.ocrEmpty');
         expect(walkHost(root).some(entry => entry.props['data-document-reader'] === 'pdf')).toBe(true);
         await state.startTranslation(); await flush();
-        expect(ports.recognize).toHaveBeenCalledOnce();
+        expect(ports.recognize).toHaveBeenCalledTimes(2);
         expect(ports.batch).not.toHaveBeenCalled();
         expect(ports.translate).not.toHaveBeenCalled();
         expect(state.runState).toBe('failed');
@@ -882,7 +2448,7 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(walk(root).some(entry => entry.text === `document.changeDocument.${available ? 'historyHint' : 'downloadHint'}`)).toBe(true);
     });
 
-    it.each([false, true])('keeps the task language, service, model, document batch and AI context snapshot across delayed scanned-PDF OCR with context=%s', async enableAIContext => {
+    it.each([false, true])('keeps the task language, document batch and AI context snapshot across delayed scanned-PDF OCR with context=%s', async enableAIContext => {
         const initial = JSON.parse(JSON.stringify(ports.config));
         Object.assign(initial, {from: 'en', to: 'zh-CN', documentService: 'openai', enableAIMultiSegment: false, enableAIContext});
         initial.documentModel.openai = 'document-before';
@@ -912,12 +2478,11 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(ports.translate).not.toHaveBeenCalled();
 
         const external = JSON.parse(JSON.stringify(initial));
-        Object.assign(external, {from: 'fr', to: 'de', documentService: 'google', enableAIMultiSegment: true, enableAIContext: !enableAIContext});
-        external.documentModel.openai = 'document-after';
+        Object.assign(external, {from: 'fr', to: 'de', enableAIMultiSegment: true, enableAIContext: !enableAIContext});
         Object.assign(ports.config, external);
         const sharedAfterUpdate = JSON.stringify(ports.config);
         ports.observer(external); await flush();
-        expect(state.config.from).toBe('fr'); expect(state.config.documentService).toBe('google');
+        expect(state.config.from).toBe('fr'); expect(state.config.documentService).toBe('openai');
         expect(state.translating).toBe(true);
         expect(state.taskFingerprint).toBe(fingerprint);
 
@@ -945,7 +2510,7 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(state.translatedSegments).toEqual(sources.map(source => `译 ${source}`));
         expect(state.taskFingerprint).toBe(fingerprint);
         expect(state.settingsChanged).toBe(true);
-        expect(state.config.documentModel.openai).toBe('document-after');
+        expect(state.config.documentModel.openai).toBe('document-before');
         expect(JSON.stringify(ports.config)).toBe(sharedAfterUpdate);
         expect(ports.sendMessage).not.toHaveBeenCalled();
     });
@@ -1187,6 +2752,63 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(state.openingFile).toBe(false);
     });
 
+    it.each(['reset', 'switch'] as const)('invalidates a pending parser on %s without allowing its late task into the current queue', async action => {
+        await state.loadFiles([file('first.txt'), file('second.txt')]);state.editSegment(0, 'First correction');
+        const first = state.documentQueue[0], second = state.documentQueue[1];
+        const parsing = deferred<ParsedDocument>();
+        const read = vi.spyOn(binaryService, 'parseDocumentFile').mockReturnValueOnce(parsing.promise);
+        const running = state.loadFiles([file('late.txt')]);const signal = read.mock.calls[0][1]!.signal!;
+        if (action === 'reset') {state.resetDocument();await state.loadFiles([file('replacement.txt')]);}
+        else state.selectDocument(second);
+        state.editSegment(0, 'Current correction');const current = state.parsedDocument;
+        const count = state.documentQueue.length;
+        parsing.resolve(parseDocument('late.txt', 'Late source.'));await running;await flush();
+        expect(signal.aborted).toBe(true);expect(state.documentQueue).toHaveLength(count);
+        expect(state.parsedDocument).toBe(current);expect(state.translatedSegments).toEqual(['Current correction']);
+        expect(first.translations).toEqual(['First correction']);expect(first.downloaded).toBe(0);
+        expect(state.documentQueue.some((item: {name: string}) => item.name === 'late.txt')).toBe(false);
+    });
+
+    it.each(['switch', 'unmount'] as const)('revokes a captured OCR session directly on %s without committing its late result or failure', async action => {
+        await state.loadFiles([file('scanned.pdf'), file('other.txt')]);
+        const original = state.parsedDocument;
+        const scanned = markRaw({...original, segments: [], binary: {...original.binary,
+            pages: original.binary.pages.map((page: PdfDocumentPage) => ({...page, scanned: true, segmentIndexes: [], blocks: []})),
+        }});
+        state.parsedDocument = scanned;
+        const recognizing = deferred<typeof scanned>();ports.recognize.mockReturnValueOnce(recognizing.promise);
+        const running = state.startTranslation();await flush();const controls = ports.recognize.mock.calls[0][2];
+        if (action === 'switch') {state.selectDocument(state.documentQueue[1]);state.editSegment(0, 'Other correction');}
+        else {app.unmount();app = null;}
+        const current = state.parsedDocument;
+        controls.onProgress({completed: 99, total: 100});
+        if (action === 'switch') recognizing.resolve({...scanned, segments: [{id: 0, source: 'late OCR'}]});
+        else recognizing.reject(new Error('late OCR failure'));
+        await running;await flush();
+        expect(controls.signal.aborted).toBe(true);expect(state.parsedDocument).toBe(current);
+        expect(state.recognitionProgress).toBe('');expect(state.errorMessage).toBe('');
+        expect(ports.translate).not.toHaveBeenCalled();expect(ports.batch).not.toHaveBeenCalled();
+        if (action === 'switch') expect(state.translatedSegments).toEqual(['Other correction']);
+    });
+
+    it.each(['switch', 'reset', 'unmount'] as const)('revokes pending export on %s before late encoding can download or ACK another task', async action => {
+        await state.loadFiles([file('first.txt'), file('second.txt')]);state.editSegment(0, 'First correction');
+        const first = state.documentQueue[0];
+        const encoding = deferred<binaryService.DocumentDownload>();
+        const encode = vi.spyOn(binaryService, 'createDocumentDownload').mockReturnValueOnce(encoding.promise);
+        const running = state.downloadDocument();const controls = encode.mock.calls[0][3]!;
+        if (action === 'switch') {state.selectDocument(state.documentQueue[1]);state.editSegment(0, 'Current correction');}
+        else if (action === 'reset') {state.resetDocument();await state.loadFiles([file('replacement.txt')]);state.editSegment(0, 'Current correction');}
+        else {app.unmount();app = null;}
+        const current = state.parsedDocument, progress = state.downloadProgress;
+        controls.onArchiveProgress!(99);controls.onPdfProgress!({phase: 'saving', completedPages: 1, totalPages: 1});
+        encoding.resolve({data: 'old export', fileName: 'old.txt', mimeType: 'text/plain'});await running;await flush();
+        expect(controls.signal!.aborted).toBe(true);expect(createUrl).not.toHaveBeenCalled();
+        expect(state.parsedDocument).toBe(current);expect(state.downloadProgress).toBe(progress);
+        expect(first.translations).toEqual(['First correction']);expect(first.downloaded).toBe(0);
+        if (action !== 'unmount') {expect(state.translatedSegments).toEqual(['Current correction']);expect(state.downloadedRevision).toBe(0);}
+    });
+
     it('ignores late config save responses and releases pending download URLs and timer on pagehide', async () => {
         await state.loadFiles([file('first.txt')]);
         const save = deferred<void>(); ports.sendMessage.mockReturnValueOnce(save.promise);
@@ -1205,6 +2827,31 @@ describe('documentbinaryAudit actual DocumentApp SFC ownership', () => {
         expect(state.documentQueue).toHaveLength(0);
     });
 
+    it('defers the editor until requested, preserves its search across reading, and releases it when switching documents', async () => {
+        await state.loadFiles([file('one.txt', 'Original one\nAnother line'), file('two.txt', 'Second document')]); await flush();
+        const editor = () => walkHost(root).find(entry => entry.props.class === 'segment-editor');
+        expect(editor()).toBeUndefined();
+        expect(walkHost(root).filter(entry => entry.type === 'textarea')).toHaveLength(0);
+        taskButton('校订译文').props.onClick(); await flush();
+        const originalEditor = editor()!;
+        expect(originalEditor).toBeDefined();
+        const search = walkHost(originalEditor).find(entry => entry.type === 'input' && entry.props.type === 'search')!;
+        search.props['onUpdate:modelValue']('Another'); await flush();
+        expect(walkHost(originalEditor).filter(entry => entry.props.class === 'segment-edit-row')).toHaveLength(1);
+        taskButton('阅读').props.onClick(); await flush();
+        expect(editor()).toBe(originalEditor);
+        taskButton('校订译文').props.onClick(); await flush();
+        expect(editor()).toBe(originalEditor);
+        expect(walkHost(originalEditor).filter(entry => entry.props.class === 'segment-edit-row')).toHaveLength(1);
+        expect(hostText(originalEditor)).toContain('Another line');
+        state.selectDocument(state.documentQueue[1]); await flush();
+        expect(editor()).toBeUndefined();
+        expect(state.readerTab).toBe('read');
+        taskButton('校订译文').props.onClick(); await flush();
+        expect(editor()).not.toBe(originalEditor);
+        expect(walkHost(editor()!).filter(entry => entry.props.class === 'segment-edit-row')).toHaveLength(1);
+        expect(hostText(editor()!)).toContain('Second document');
+    });
     it('clears canceled confirmation metadata and renders the real editor update consumer', async () => {
         await state.loadFiles([file('first.txt')]);
         state.editSegment(0, '校订');
@@ -1269,17 +2916,32 @@ it('documentbinaryAudit selecting the active PDF preserves its task and reviewed
 });
 
 it('documentbinaryAudit mounts the actual page assembly with its app, document theme and i18n plugin', async () => {
-    const mount = vi.fn(); const use = vi.fn();
+    const captureDocumentMaterialSelection = vi.fn(() => undefined), markDocumentSelection = vi.fn(() => true);
+    const mount = vi.fn(() => ({captureDocumentMaterialSelection, markDocumentSelection}));
+    const use = vi.fn();
     const onUnmount = vi.fn();
     const create = vi.fn(() => ({mount, use, onUnmount}));
+    const disposeSelection = vi.fn();
+    const mountSelection = vi.fn((_options: unknown) => ({dispose: disposeSelection}));
+    vi.doMock('@/src/app/document-translation/selectionRuntime', () => ({mountDocumentSelectionTranslation: mountSelection}));
     vi.doMock('vue', async () => ({...await vi.importActual<typeof import('vue')>('vue'), createApp: create}));
-    const {mountDocumentTranslationApp} = await import('@/src/app/document-translation/page');
-    mountDocumentTranslationApp('#document-root');
-    expect(create).toHaveBeenCalledWith(DocumentApp);
-    expect(use).toHaveBeenCalledWith({documentRoot: (document as any).body, documentTitleKey: 'metadata.documentTitle'});
-    expect(mount).toHaveBeenCalledWith('#document-root');
-    expect(onUnmount).toHaveBeenCalledWith(expect.any(Function));
-    vi.doUnmock('vue');
+    try {
+        const {mountDocumentTranslationApp} = await import('@/src/app/document-translation/page');
+        mountDocumentTranslationApp('#document-root');
+        expect(create).toHaveBeenCalledWith(DocumentApp);
+        expect(use).toHaveBeenCalledWith({documentRoot: (document as any).body, documentTitleKey: 'metadata.documentTitle'});
+        expect(mount).toHaveBeenCalledWith('#document-root');
+        const {document: selectionDocument} = parseHTML('<html><body><p>Selected document text</p></body></html>');
+        const range = selectionDocument.createRange(); range.selectNodeContents(selectionDocument.querySelector('p')!);
+        const selectionOptions = mountSelection.mock.calls[0][0] as unknown as {captureMaterial: (range: Range, quote: string) => unknown; markSelection: (range: Range, kind: 'highlight' | 'underline') => boolean};
+        expect(selectionOptions.captureMaterial(range as unknown as Range, 'Selected document text')).toBeUndefined();
+        expect(captureDocumentMaterialSelection).toHaveBeenCalledWith(range, 'Selected document text');
+        expect(selectionOptions.markSelection(range as unknown as Range, 'underline')).toBe(true);
+        expect(markDocumentSelection).toHaveBeenCalledWith(range, 'underline');
+        expect(onUnmount).toHaveBeenCalledWith(disposeSelection);
+        onUnmount.mock.calls.forEach(([dispose]) => dispose());
+        expect(disposeSelection).toHaveBeenCalledOnce();
+    } finally {vi.doUnmock('vue'); vi.doUnmock('@/src/app/document-translation/selectionRuntime');}
 });
 
 it('glossary gate document settings buttons open the modal and translate back to complete 1/1', async () => {
@@ -1315,4 +2977,113 @@ it('glossary gate document settings buttons open the modal and translate back to
     expect(text(status)).toContain('翻译完成');
     expect(ports.i18n).toHaveBeenCalledWith('document.translationProgress.count', {completed: 1, total: 1, percent: 100});
     expect(walk(root).find(entry => entry.props['data-testid'] === 'document-translation-progress')!.props['aria-valuenow']).toBe(100);
+});
+
+it('saves the reader current visible paragraph and preserves the saved target when the PDF layout becomes unavailable', async () => {
+    await state.loadFiles([file('visible-material.pdf')]); await flush();
+    state.documentQueue[0].historyId = 'a'.repeat(32);
+    const parsed = state.parsedDocument;
+    state.parsedDocument = markRaw({...parsed, segments: [...parsed.segments, {id: 1, source: '  Later Cafe\u0301\noriginal paragraph  '}], binary: {...parsed.binary, pages: [{...parsed.binary.pages[0], segmentIndexes: [0, 1], blocks: [...parsed.binary.pages[0].blocks, {...parsed.binary.pages[0].blocks[0], segmentIndex: 1, y: 300, lines: [{x: 5, y: 300, baseline: 310, width: 50, height: 12, text: '  Later Cafe\u0301\noriginal paragraph  '}]}]}]}});
+    await flush();
+    const captureMaterialLocation = vi.fn(() => 1), resumeLocation = vi.fn(async () => true);
+    state.materialPdfReader = {captureMaterialLocation, resolveMaterialSelection: () => 1, resumePage: async () => {}, resumeLocation, cancelMaterialResume() {}};
+    let saved: any;
+    ports.sendMessage.mockImplementation(async (message: any) => {
+        if (message.type !== 'fluentReadMaterials') return;
+        if (message.action === 'generation') return {success: true, data: 3};
+        if (message.action === 'capture') {saved = {id: 'visible-material', kind: 'document', ...message.input}; return {success: true, data: saved};}
+        return {success: true, data: saved};
+    });
+    await state.saveDocumentMaterial();
+    expect(saved.locator.documentReference.locator.source).toBe('  Later Cafe\u0301\noriginal paragraph  ');
+    expect(saved.locator.documentReference.locator.position).toBe('[5,310]');
+    expect(saved.locator.documentReference.materialId).toBe('a'.repeat(32));
+    expect(state.captureDocumentMaterialSelection({} as Range, 'before public ref')).toBeUndefined();
+    state.materialPdfReader = {captureMaterialLocation, resolveMaterialSelection: () => 1, resumePage: async () => {}, resumeLocation, cancelMaterialResume() {}};
+    const selected = state.captureDocumentMaterialSelection({} as Range, 'selected translated word');
+    expect(selected.locator.quote).toBe('selected translated word'); expect(selected.locator.documentReference.locator.source).toBe(saved.locator.documentReference.locator.source);
+    await state.restoreMaterialDocument(saved.id); await state.applyMaterialResume(); await flush();
+    state.materialPdfReader = {captureMaterialLocation, resolveMaterialSelection: () => 1, resumePage: async () => {}, resumeLocation, cancelMaterialResume() {}}; await flush();
+    expect(resumeLocation).toHaveBeenCalledWith(1);
+    captureMaterialLocation.mockReturnValue(undefined as any); ports.sendMessage.mockClear();
+    await state.saveDocumentMaterial(); expect(state.downloadNotice).toContain('原阅读位置已保留');
+    expect(ports.sendMessage.mock.calls.some(([message]) => message.action === 'capture')).toBe(false);
+});
+
+it.each([
+    ['reader-controls-slot', 'onPointerdownCapture'],
+    ['sidebar-outline', 'onKeydownCapture'],
+])('resumed material accepts trusted navigation intent from external %s and records the new visible paragraph', async (containerClass, eventName) => {
+    ports.pageCount = 3; await state.loadFiles([file('navigation-material.pdf')]); await flush();
+    const fingerprint = 'a'.repeat(32); state.documentQueue[0].historyId = fingerprint;
+    const saved = {id: 'navigation-material', kind: 'document', source: {kind: 'document', fingerprint}, locator: {kind: 'document', page: 1}};
+    const captures: any[] = [];
+    ports.sendMessage.mockImplementation(async (message: any) => {
+        if (message.type !== 'fluentReadMaterials') return;
+        if (message.action === 'capture') {captures.push(message.input); return {success: true, data: saved};}
+        return {success: true, data: message.action === 'generation' ? 3 : saved};
+    });
+    let visibleSegment = 0;
+    const api = {resumePage: async (page: number) => {state.pdfPage = page;}, resumeLocation: async () => true, cancelMaterialResume() {},
+        captureMaterialLocation: () => visibleSegment, resolveMaterialSelection: () => visibleSegment};
+    await state.restoreMaterialDocument(saved.id); await flush(); state.materialPdfReader = api; await flush();
+    expect(state.documentMaterialId).toBe(saved.id);
+    const container = walkHost(root).find(entry => entry.props.class?.split?.(' ').includes(containerClass) && typeof entry.props[eventName] === 'function')!;
+    expect(container).toBeDefined();
+    vi.useFakeTimers();
+    try {
+        // 恢复和程序事件不会开启位置写回；执行真实 SFC 绑定，可信事件位由事件端口提供。
+        container.props[eventName]({isTrusted: false}); visibleSegment = 1; state.pdfPage = 2; await flush(); state.materialPdfReader = api;
+        state.queueMaterialPositionCapture(); await vi.advanceTimersByTimeAsync(1100); expect(captures).toHaveLength(0);
+        // 下一页/目录点击的 pointer 或键盘事件先到外部导航容器，再由阅读器通知新视口。
+        container.props[eventName]({isTrusted: true}); visibleSegment = 2; state.pdfPage = 3; await flush(); state.materialPdfReader = api;
+        state.queueMaterialPositionCapture(); await vi.advanceTimersByTimeAsync(1100);
+        expect(captures).toHaveLength(1); expect(captures[0].positionOnly).toBe(true);
+        expect(captures[0].locator.page).toBe(3); expect(captures[0].locator.documentReference.locator.scope).toBe('pdf:3');
+    } finally {vi.useRealTimers();}
+});
+
+it('trusted reading gestures preempt only an active exact resume while unresolved saved references remain protected', async () => {
+    await state.loadFiles([file('interrupt-material.pdf')]); await flush(); state.documentQueue[0].historyId = 'a'.repeat(32);
+    const paused = deferred<boolean>();
+    const cancelMaterialResume = vi.fn(() => paused.resolve(false));
+    const api = {captureMaterialLocation: () => 0, resolveMaterialSelection: () => 0, resumePage: async () => {}, resumeLocation: vi.fn(() => paused.promise), cancelMaterialResume};
+    state.materialPdfReader = api;
+    const captured = state.documentMaterialSelection(); let record = {id: 'interrupt-material', kind: 'document', ...captured};
+    const writes: any[] = [];
+    ports.sendMessage.mockImplementation(async (message: any) => {
+        if (message.type !== 'fluentReadMaterials') return;
+        if (message.action === 'capture') writes.push(message.input);
+        return {success: true, data: message.action === 'generation' ? 3 : record};
+    });
+    await state.restoreMaterialDocument(record.id); await flush(); state.materialPdfReader = api;
+    const restoring = state.applyMaterialResume(); await flush(); expect(api.resumeLocation).toHaveBeenCalled();
+    const reading = walkHost(root).find(entry => typeof entry.props.onWheelPassive === 'function' && String(entry.props.class).includes('reading-content'))!;
+    reading.props.onWheelPassive({isTrusted: false}); expect(cancelMaterialResume).not.toHaveBeenCalled();
+    reading.props.onWheelPassive({isTrusted: true}); await restoring; await flush();
+    expect(cancelMaterialResume).toHaveBeenCalledOnce(); expect(state.downloadNotice).toContain('已停止自动定位');
+    vi.useFakeTimers();
+    try {state.materialPdfReader = api; state.queueMaterialPositionCapture(); await vi.advanceTimersByTimeAsync(1100); expect(writes).toHaveLength(1);}
+    finally {vi.useRealTimers();}
+    // 无法唯一匹配不属于正在执行的恢复，不能被一次普通滚动变成自动覆盖授权。
+    record = {...record, locator: {...record.locator, documentReference: {...record.locator.documentReference, locator: {...record.locator.documentReference.locator, source: 'Unavailable original'}}}};
+    await state.restoreMaterialDocument(record.id); await state.applyMaterialResume(); await flush();
+    expect(state.downloadNotice).toContain('原文位置已变化或无法唯一匹配');
+    vi.useFakeTimers();
+    try {state.materialPdfReader = api; reading.props.onWheelPassive({isTrusted: true}); state.queueMaterialPositionCapture(); await vi.advanceTimersByTimeAsync(1100); expect(writes).toHaveLength(1);}
+    finally {vi.useRealTimers();}
+    expect(cancelMaterialResume).toHaveBeenCalledOnce();
+});
+
+it('routes quick PDF marks to the current reader and refuses disabled, unavailable or non-PDF documents', async () => {
+    expect(state.markDocumentSelection({} as Range, 'highlight')).toBe(false);
+    await state.loadFiles([file('mark-action.pdf')]); await flush();
+    const markSelection = vi.fn(() => true);
+    state.materialPdfReader = {markSelection};
+    const range = {} as Range;
+    expect(state.markDocumentSelection(range, 'underline')).toBe(true);
+    expect(markSelection).toHaveBeenCalledWith(range, 'underline');
+    state.config.on = false; expect(state.markDocumentSelection(range, 'highlight')).toBe(false);
+    state.config.on = true; state.materialPdfReader = null; expect(state.markDocumentSelection(range, 'highlight')).toBe(false);
+    expect(markSelection).toHaveBeenCalledOnce();
 });

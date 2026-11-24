@@ -130,6 +130,32 @@ describe('自动配置备份 store', () => {
         expect(new Set(state.entries.map((entry) => entry.version)).size).toBe(10);
     });
 
+    it('初次订阅异常仍返回清理函数，后续通知继续隔离异常并保留其他订阅者', async () => {
+        const store = await loadStore();
+        const failure = new Error('controlled subscriber failure');
+        const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+        const throwing = vi.fn(() => {throw failure;});
+        const healthy = vi.fn();
+        let unsubscribe: (() => void) | undefined;
+        let unsubscribeHealthy: (() => void) | undefined;
+        try {
+            expect(() => {unsubscribe = store.subscribeConfigAutoBackups(throwing);}).not.toThrow();
+            expect(unsubscribe).toBeTypeOf('function');
+            expect(warning).toHaveBeenCalledWith('[FluentRead] 自动配置备份订阅通知失败', failure);
+            unsubscribeHealthy = store.subscribeConfigAutoBackups(healthy);
+            await store.captureConfigAutoBackup({savedAt: 'while-subscribed'});
+            expect(throwing).toHaveBeenCalledTimes(2);
+            expect(healthy).toHaveBeenCalledTimes(2);
+            expect(warning).toHaveBeenCalledTimes(2);
+            unsubscribe!();
+            await store.captureConfigAutoBackup({savedAt: 'after-unsubscribe'});
+            expect(throwing).toHaveBeenCalledTimes(2);
+            expect(healthy).toHaveBeenCalledTimes(3);
+        } finally {
+            unsubscribe?.(); unsubscribeHealthy?.(); warning.mockRestore();
+        }
+    });
+
     it('无原子条件写时立即脱敏内存，保留外部订阅并在显式捕获清理旧存储', async () => {
         storageHarness.values.set('local:configAutoBackups', {
             schemaVersion: 1,

@@ -1,77 +1,68 @@
 # Quick start
 
-Learn how to install FluentRead and use its basic translation features.
+Install FluentRead, choose a target language, and read translations alongside the original webpage.
 
 ## Install
 
-Install FluentRead from your browser’s official extension store.
+Use your browser’s extension store:
 
 <BrowserInstall en />
 
-If the Chrome Web Store does not open, download the latest stable package from the [official GitHub release page](https://github.com/FluentRead/FluentRead/releases/latest) and follow the [offline installation instructions](/en/guide/offline-install). You can also try [CRXSOso](https://www.crxsoso.com/webstore/detail/djnlaiohfaaifbibleebjggkghlmcpcj), a third-party distribution website whose version may differ from the official store.
-
-The walkthrough below uses Chrome. Click **Add to Chrome**, review the requested permissions, then choose **Add extension**.
-
-<GuideVisual kind="install" en />
-
-<details class="guide-details">
-<summary>Mobile, userscripts & Thunderbird</summary>
-
-On **Edge for Android** versions that support extensions, find FluentRead through the extension menu. After installation, open FluentRead from the extensions list and translate the page. Use the menu or floating ball on mobile. Check your browser for extension availability on iPhone and iPad.
-
-Other installation options: [Userscript](/en/guide/userscript) · [Thunderbird email translation](/en/guide/thunderbird).
-
-</details>
+If the store is unavailable, follow [offline installation](/en/guide/offline-install). For phones and Safari, see [other devices and versions](/en/guide/mobile-safari). Separate guides cover [userscripts](/en/guide/userscript) and [Thunderbird](/en/guide/thunderbird). Refresh pages that were already open before installation.
 
 ## Pin the extension
 
-Keep FluentRead in your toolbar so you can open it easily.
+In Chrome, click the puzzle-shaped **Extensions** button beside the address bar. Find **FluentRead** and click its pin icon. Use the toolbar icon to open FluentRead’s menu.
 
-In Chrome:
+Hover over the icon to see a short description of page and selection translation in your browser’s language.
 
-1. Click the puzzle-shaped **Extensions** icon beside the address bar.
-2. Find **FluentRead** and click its pin icon.
-3. Click the FluentRead icon that now appears in the toolbar to open its menu.
-
-Other browsers may use different toolbar menu names. Refresh any webpages that were open before you installed the extension.
+<details class="guide-details">
+<summary>See where to pin the icon</summary>
 
 <GuideVisual kind="pin" en />
 
+Other browsers may place the pin control elsewhere in their extension menu.
+
+</details>
+
 ## Translate a webpage
 
-1. Open an article in another language, such as a news story or blog post. Browser settings and extension stores cannot be translated.
-2. Click FluentRead in the toolbar. On first use, choose **Set interface language**, select your language, and click **Confirm**.
-3. Check the target language in the main menu. You can keep the source on **Automatic detection** and use the default **Free translation service**.
-4. Click **Translate this page**. Translations appear below the original paragraphs. Scroll down to keep reading.
-
-The free translation service works without configuration. Your interface language controls the buttons and settings labels; your target language controls the translated content. Choose them separately.
+1. Open an article in another language, such as a news story or blog post.
+2. Click FluentRead. On first use, select an interface language and click **Confirm**.
+3. Choose your **target language**. You can keep **Auto-detect** for the source and **Free translation services** as the provider.
+4. Click **Translate**. Translations appear below the original paragraphs as you read.
+5. To return to the original, open the menu and click **Restore**.
 
 <GuideVisual kind="first-translation" en />
 
-To return to the original, open FluentRead and choose **Restore this page**. Restore first if you want to translate again with another language or provider.
+The **interface language** controls buttons and settings. The **target language** controls translations. Free translation works without an API key.
 
-## Translate selected text
+The default menu keeps controls in fixed positions across languages. Hover over a truncated label to read it in full. Use **Section** beside **Translate** to select a region. For site rules, a green dot means a rule is on and a gray dot means it is off. Click the rule to toggle it.
 
-Open the **Selection translation** card in the extension menu and enable its switch. Select a word or sentence. Click the FluentRead icon beside your selection to see the translation.
+<span id="translate-selected-text"></span>
 
-<GuideVisual kind="selection" en />
+## Selection translation
 
-See [Selection translation](/en/guide/deepseek-harness) for dictionary lookup, read-aloud controls, and sentence explanations.
+Open the **Selection translation** card in the extension menu and turn it on. Select a word or sentence, then click the nearby FluentRead icon. The card offers translation, dictionary lookup, and read-aloud controls. See [selection translation](/en/guide/deepseek-harness).
 
-## Translate a paragraph
+<span id="translate-a-paragraph"></span>
 
-Open the **Hover translation** card and check that the default hover shortcut is enabled. Move your pointer over a paragraph and press **Control**. Its translation appears underneath. Press **Control** again to restore the original paragraph.
+## Hover translation
 
-<GuideVisual kind="hover" en />
+Point at a paragraph and press **Control** to translate it. Press it again to restore the original. If nothing happens, open **Hover translation** in the menu and check that the default hover shortcut is enabled. See [hover translation](/en/guide/hover-translation).
 
-You can change the shortcut and trigger behavior. See [Hover translation](/en/guide/hover-translation).
+<span id="troubleshooting"></span>
 
-## Troubleshooting
+## Common problems
 
-If translation does not start, make sure the extension is enabled and refresh a normal webpage. If the free service is busy, try again later or [switch providers](/en/config/translation-engines). See [Troubleshooting](/en/guide/faq) for other issues.
+- Nothing changes: check that FluentRead is enabled, then refresh a regular webpage. Browser settings and extension stores block translation.
+- The provider is busy: try again later or [choose another provider](/en/config/translation-engines).
+- You changed the language or provider: restore the original, then translate again.
+
+For more help, see [questions and troubleshooting](/en/guide/faq).
 
 ## Related guides
 
-- [Webpage translation](/en/guide/webpage-translation)
-- [Appearance & reading aids](/en/config/appearance)
-- [Translation providers](/en/config/translation-engines)
+- [Page and section translation](/en/guide/webpage-translation)
+- [Appearance and reading aids](/en/config/appearance)
+- [Images, documents, video, and other features](/en/guide/features)

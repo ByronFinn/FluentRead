@@ -33,14 +33,14 @@ const instructions = computed(
       ],
       'first-translation': [
         t('打开外语文章并点击流畅阅读图标', 'Open an article and click FluentRead'),
-        t('首次使用时点击“设置界面语言”', 'Click “Set interface language” on first use'),
+        t('首次打开时，直接选择界面语言', 'On first use, choose your interface language'),
         t('选择界面语言并点击“确认”', 'Choose your language and click “Confirm”'),
         t('确认目标语言和翻译服务', 'Check your target language and translation provider'),
-        t('点击“翻译当前网页”', 'Click “Translate this page”'),
+        t('点击“翻译”按钮', 'Click Translate'),
         t('译文会显示在每段原文下方', 'Read the translation below each original paragraph'),
         t(
-          '需要回到原文时点击“恢复当前网页”',
-          'Choose “Restore this page” to return to the original'
+          '需要回到原文时，打开菜单点击“还原”',
+          'Open the menu and choose Restore to return to the original'
         ),
         t('网页已恢复为原文', 'The original webpage is restored'),
       ],
@@ -77,7 +77,7 @@ const { step, playing, running, reduced, select, replay } = useDemoPlayback(
   root,
   instructions.value.length,
   true,
-  2400
+  4000
 )
 const title = computed(
   () =>
@@ -144,7 +144,7 @@ const pinned = computed(() => props.kind !== 'install' && (props.kind !== 'pin' 
 const menuVisible = computed(
   () =>
     (props.kind === 'pin' && step.value === 3) ||
-    (props.kind === 'first-translation' && [3, 4, 6].includes(step.value)) ||
+    (props.kind === 'first-translation' && [3, 4].includes(step.value)) ||
     (['hover', 'selection'].includes(props.kind) && step.value < 2)
 )
 const translated = computed(
@@ -493,11 +493,12 @@ const translation = computed(() =>
                 : undefined
             "
             :number="step + 1"
-            :restore="kind === 'first-translation' && step === 6"
           />
           <div v-if="kind === 'selection' && step === 4" class="bg-selection-result">
+            <small>{{ t('原文', 'Original') }}</small>
+            <p>{{ original }}</p>
             <small>{{ t('译文', 'Translation') }}</small>
-            <p>{{ translation }}</p>
+            <p class="bg-selection-result-translation">{{ translation }}</p>
             <span>{{ t('朗读原文 · 朗读译文', 'Read original · Read translation') }}</span>
           </div>
         </template>
@@ -650,7 +651,7 @@ const translation = computed(() =>
   background: white;
 }
 .bg-first-translation .bg-viewport {
-  height: 500px;
+  height: 360px;
 }
 .bg-hover .bg-viewport,
 .bg-selection .bg-viewport {
@@ -1002,7 +1003,9 @@ const translation = computed(() =>
   font-size: 10px;
 }
 .bg-selection-result p {
-  margin-block: 8px 14px;
+  margin-block: 4px 8px;
+}
+.bg-selection-result p.bg-selection-result-translation {
   color: var(--vp-c-brand-1);
 }
 .bg-selection-result > span {
@@ -1137,6 +1140,9 @@ const translation = computed(() =>
   outline-offset: 3px;
 }
 @container (max-width: 480px) {
+  .bg-first-translation .bg-viewport {
+    height: 340px;
+  }
   .bg-viewport {
     height: 420px;
   }
